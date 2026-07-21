@@ -591,6 +591,11 @@ mod tests {
                 height: 1,
                 view: 0,
             },
+            proposal_round: wire::ConsensusRound {
+                context_id: parent_context.id(),
+                height: 1,
+                view: 0,
+            },
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment: wire::ExecutionCommitment::without_topups(

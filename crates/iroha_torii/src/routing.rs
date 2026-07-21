@@ -5679,14 +5679,16 @@ pub struct ZkRootsGetRequestDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Response with recent roots and chain height (convenience JSON wrapper).
+/// Response with recent roots and the exact committed state snapshot.
 pub struct ZkRootsGetResponseDto {
     /// Latest root as hex string (32 bytes, lowercase, 0x‑less)
     pub latest: String,
     /// Recent roots (0..N), hex strings
     pub roots: Vec<String>,
-    /// Height at which the snapshot is taken
-    pub height: u32,
+    /// Committed block height at which the roots were read.
+    pub evaluated_block_height: u64,
+    /// Canonical lowercase hash of that committed block.
+    pub evaluated_block_hash: String,
 }
 
 #[derive(
@@ -5740,6 +5742,10 @@ pub struct ZkMerklePathDto {
 )]
 /// Response with current zk-assets confidential-v2 inclusion paths.
 pub struct ZkMerklePathGetResponseDto {
+    /// Committed block height at which the frontier and paths were read.
+    pub evaluated_block_height: u64,
+    /// Canonical lowercase hash of that committed block.
+    pub evaluated_block_hash: String,
     /// Current confidential-v2 Merkle root, encoded as lowercase 32-byte hex.
     pub root: String,
     /// Number of commitments in the current frontier.
@@ -9924,6 +9930,35 @@ fn unique_commitment_index(commitments: &[[u8; 32]], commitment: &[u8; 32]) -> R
     found.ok_or_else(zk_merkle_not_found)
 }
 
+fn zk_witness_snapshot_identity(
+    state_view: &iroha_core::state::StateView<'_>,
+) -> Result<(u64, String, u64)> {
+    let height = u64::try_from(state_view.height()).map_err(|_| {
+        zk_query_conversion_error("committed snapshot height exceeds the response schema")
+    })?;
+    if height == 0 {
+        // Test and bootstrap states can exist before genesis is committed. The
+        // zero identity can never match a usable readiness snapshot.
+        return Ok((0, hex::encode([0_u8; 32]), 0));
+    }
+    let expected_hash = state_view
+        .latest_block_hash()
+        .ok_or_else(|| zk_query_conversion_error("committed snapshot has no latest block hash"))?;
+    let latest_block = state_view
+        .latest_block()
+        .ok_or_else(|| zk_query_conversion_error("committed snapshot block body is unavailable"))?;
+    if latest_block.header().height().get() != height || latest_block.hash() != expected_hash {
+        return Err(zk_query_conversion_error(
+            "committed snapshot height, hash, and block body are inconsistent",
+        ));
+    }
+    Ok((
+        height,
+        hex::encode(expected_hash.as_ref()),
+        latest_block.header().creation_time_ms,
+    ))
+}
+
 /// POST /v1/zk/roots — convenience endpoint returning recent shielded roots as JSON.
 ///
 /// This is an example wrapper for the Norito TLV APIs available via IVM syscalls.
@@ -9934,12 +9969,13 @@ pub async fn handle_v1_zk_roots(
     accept: Option<axum::http::HeaderValue>,
     NoritoJson(req): NoritoJson<ZkRootsGetRequestDto>,
 ) -> Result<Response> {
-    let now_ms = asset_alias_observation_time_ms(&state);
-    let world = state.world_view();
-    let ad = resolve_asset_definition_selector(&world, &req.asset_id, now_ms)?;
-    let zk = state.zk_snapshot();
+    let state_view = state.view();
+    let (evaluated_block_height, evaluated_block_hash, now_ms) =
+        zk_witness_snapshot_identity(&state_view)?;
+    let world = state_view.world();
+    let ad = resolve_asset_definition_selector(world, &req.asset_id, now_ms)?;
     // Bound the requested window by config cap (0 -> cap)
-    let cap = zk.root_history_cap;
+    let cap = state_view.zk.root_history_cap;
     let want = if req.max == 0 {
         cap
     } else {
@@ -9960,8 +9996,8 @@ pub async fn handle_v1_zk_roots(
     let resp = ZkRootsGetResponseDto {
         latest: latest_opt.map(hex::encode).unwrap_or_default(),
         roots: roots_tail.into_iter().map(hex::encode).collect(),
-        // For convenience, report the total number of roots recorded for this asset.
-        height: roots_all.len() as u32,
+        evaluated_block_height,
+        evaluated_block_hash,
     };
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -9998,15 +10034,17 @@ pub async fn handle_v1_zk_merkle_path(
         requested.push(parsed);
     }
 
-    let now_ms = asset_alias_observation_time_ms(&state);
-    let world = state.world_view();
-    let ad = resolve_asset_definition_selector(&world, &req.asset_id, now_ms)?;
+    let state_view = state.view();
+    let (evaluated_block_height, evaluated_block_hash, now_ms) =
+        zk_witness_snapshot_identity(&state_view)?;
+    let world = state_view.world();
+    let ad = resolve_asset_definition_selector(world, &req.asset_id, now_ms)?;
     let st = world.zk_assets().get(&ad).ok_or_else(zk_merkle_not_found)?;
     let root = iroha_core::zk::confidential_v2::compute_confidential_root_v2(&st.commitments)
         .map_err(|err| {
             zk_query_conversion_error(format!("failed to compute current root: {err}"))
         })?;
-    ensure_confidential_v2_asset(&world, &ad, st, &root)?;
+    ensure_confidential_v2_asset(world, &ad, st, &root)?;
 
     let mut paths = Vec::with_capacity(requested.len());
     for commitment in requested {
@@ -10076,6 +10114,8 @@ pub async fn handle_v1_zk_merkle_path(
         None
     };
     let resp = ZkMerklePathGetResponseDto {
+        evaluated_block_height,
+        evaluated_block_hash,
         root: hex::encode(root),
         frontier_len,
         tree_depth,
@@ -10721,7 +10761,8 @@ mod zk_roots_selector_tests {
             norito::json::from_slice(&bytes).expect("json response payload");
         assert_eq!(payload.latest, "");
         assert!(payload.roots.is_empty());
-        assert_eq!(payload.height, 0);
+        assert_eq!(payload.evaluated_block_height, 0);
+        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
     }
 
     #[tokio::test]
@@ -10784,7 +10825,8 @@ mod zk_roots_selector_tests {
             norito::decode_from_bytes(&bytes).expect("norito response payload");
         assert_eq!(payload.latest, "");
         assert!(payload.roots.is_empty());
-        assert_eq!(payload.height, 0);
+        assert_eq!(payload.evaluated_block_height, 0);
+        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
     }
 
     #[tokio::test]
@@ -10822,7 +10864,8 @@ mod zk_roots_selector_tests {
             norito::json::from_slice(&bytes).expect("json response payload");
         assert_eq!(payload.latest, "");
         assert!(payload.roots.is_empty());
-        assert_eq!(payload.height, 0);
+        assert_eq!(payload.evaluated_block_height, 0);
+        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
     }
 
     #[tokio::test]
@@ -10858,7 +10901,8 @@ mod zk_roots_selector_tests {
             norito::json::from_slice(&bytes).expect("json response payload");
         assert_eq!(payload.latest, "");
         assert!(payload.roots.is_empty());
-        assert_eq!(payload.height, 0);
+        assert_eq!(payload.evaluated_block_height, 0);
+        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
     }
 
     #[tokio::test]
@@ -10894,7 +10938,8 @@ mod zk_roots_selector_tests {
             norito::json::from_slice(&bytes).expect("json response payload");
         assert_eq!(payload.latest, "");
         assert!(payload.roots.is_empty());
-        assert_eq!(payload.height, 0);
+        assert_eq!(payload.evaluated_block_height, 0);
+        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
     }
 
     #[tokio::test]
@@ -10930,7 +10975,8 @@ mod zk_roots_selector_tests {
             norito::json::from_slice(&bytes).expect("json response payload");
         assert_eq!(payload.latest, "");
         assert!(payload.roots.is_empty());
-        assert_eq!(payload.height, 0);
+        assert_eq!(payload.evaluated_block_height, 0);
+        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
     }
 
     #[tokio::test]
@@ -10968,7 +11014,8 @@ mod zk_roots_selector_tests {
             norito::json::from_slice(&bytes).expect("json response payload");
         assert_eq!(payload.latest, "");
         assert!(payload.roots.is_empty());
-        assert_eq!(payload.height, 0);
+        assert_eq!(payload.evaluated_block_height, 0);
+        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
     }
 
     #[tokio::test]
@@ -16541,9 +16588,17 @@ async fn submit_asset_transfer_request(
     use base64::Engine as _;
 
     let now_ms = current_time_millis();
-    let (transfer, signing_state) =
+    let (mut transfer, signing_state) =
         normalize_asset_transfer_request_shape(chain_id.as_ref(), request)?;
-    let builder = transfer.transaction_builder(chain_id.as_ref());
+    let builder = quote_app_api_transaction_builder(
+        transfer.transaction_builder(chain_id.as_ref()),
+        queue.as_ref(),
+        state.as_ref(),
+        "asset transfer",
+    )?;
+    let quoted_fee_payment = builder.payload().fee_payment.clone();
+    transfer.fee_payment = quoted_fee_payment.clone();
+    transfer.intent.fee_payment = quoted_fee_payment;
 
     match signing_state {
         AssetTransferSigningState::Prepare => {
@@ -17544,6 +17599,9 @@ async fn submit_contract_call_request(
         .with_metadata(metadata)
         .with_fee_payment_intent(fee_payment.clone())
         .with_executable(dm::Executable::ContractCall(executable));
+    let builder =
+        quote_app_api_transaction_builder(builder, queue.as_ref(), state.as_ref(), endpoint)?;
+    let fee_payment = builder.payload().fee_payment.clone();
     let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
@@ -27115,6 +27173,13 @@ pub async fn handle_post_contract_call_multisig_propose(
         .with_fee_payment_intent(fee_payment.clone())
         .with_metadata(tx_metadata.clone())
         .with_instructions(transaction_instructions);
+    let builder = quote_app_api_transaction_builder(
+        builder,
+        queue.as_ref(),
+        state.as_ref(),
+        ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
+    )?;
+    let fee_payment = builder.payload().fee_payment.clone();
 
     let response = if private_key.is_some() {
         return Err(reject_server_side_signing(
@@ -27219,6 +27284,7 @@ pub async fn handle_post_contract_call_multisig_propose(
             tx_hash_hex: Some(tx_hash_hex.clone()),
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
+            fee_payment: fee_payment.clone(),
             signing_message_b64: None,
         }
     } else {
@@ -27238,6 +27304,7 @@ pub async fn handle_post_contract_call_multisig_propose(
             tx_hash_hex: None,
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
+            fee_payment: fee_payment.clone(),
             signing_message_b64: Some(signing_message_b64),
         }
     };
@@ -27294,6 +27361,13 @@ pub async fn handle_post_contract_call_multisig_approve(
     let builder = builder
         .with_fee_payment_intent(fee_payment)
         .with_instructions([dm::InstructionBox::from(approve_instruction)]);
+    let builder = quote_app_api_transaction_builder(
+        builder,
+        queue.as_ref(),
+        state.as_ref(),
+        ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
+    )?;
+    let fee_payment = builder.payload().fee_payment.clone();
 
     let response =
         if private_key.is_some() {
@@ -27359,6 +27433,7 @@ pub async fn handle_post_contract_call_multisig_approve(
                 tx_hash_hex: Some(tx_hash_hex.clone()),
                 executed_tx_hash_hex: None,
                 creation_time_ms: Some(creation_time_ms),
+                fee_payment: fee_payment.clone(),
                 signing_message_b64: None,
             }
         } else {
@@ -27378,6 +27453,7 @@ pub async fn handle_post_contract_call_multisig_approve(
                 tx_hash_hex: None,
                 executed_tx_hash_hex: None,
                 creation_time_ms: Some(creation_time_ms),
+                fee_payment: fee_payment.clone(),
                 signing_message_b64: Some(signing_message_b64),
             }
         };
@@ -27477,6 +27553,14 @@ pub async fn handle_post_multisig_cancel(
         )
     };
 
+    let builder = quote_app_api_transaction_builder(
+        builder,
+        queue.as_ref(),
+        state.as_ref(),
+        ENDPOINT_MULTISIG_CANCEL,
+    )?;
+    let fee_payment = builder.payload().fee_payment.clone();
+
     let response = if private_key.is_some() {
         return Err(reject_server_side_signing(ENDPOINT_MULTISIG_CANCEL));
     } else if public_key_hex.is_some() || signature_b64.is_some() {
@@ -27559,6 +27643,7 @@ pub async fn handle_post_multisig_cancel(
             tx_hash_hex: Some(tx_hash_hex),
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
+            fee_payment: fee_payment.clone(),
             signing_message_b64: None,
         }
     } else {
@@ -27581,6 +27666,7 @@ pub async fn handle_post_multisig_cancel(
             tx_hash_hex: None,
             executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
+            fee_payment: fee_payment.clone(),
             signing_message_b64: Some(signing_message_b64),
         }
     };
@@ -27680,6 +27766,13 @@ pub async fn handle_post_multisig_propose(
         .with_fee_payment_intent(fee_payment.clone())
         .with_metadata(tx_metadata.clone())
         .with_instructions(transaction_instructions);
+    let builder = quote_app_api_transaction_builder(
+        builder,
+        queue.as_ref(),
+        state.as_ref(),
+        ENDPOINT_MULTISIG_PROPOSE,
+    )?;
+    let fee_payment = builder.payload().fee_payment.clone();
 
     let response =
         if private_key.is_some() {
@@ -27774,6 +27867,7 @@ pub async fn handle_post_multisig_propose(
                 tx_hash_hex: Some(tx_hash_hex.clone()),
                 executed_tx_hash_hex: None,
                 creation_time_ms: Some(creation_time_ms),
+                fee_payment: fee_payment.clone(),
                 signing_message_b64: None,
             }
         } else {
@@ -27793,6 +27887,7 @@ pub async fn handle_post_multisig_propose(
                 tx_hash_hex: None,
                 executed_tx_hash_hex: None,
                 creation_time_ms: Some(creation_time_ms),
+                fee_payment: fee_payment.clone(),
                 signing_message_b64: Some(signing_message_b64),
             }
         };
@@ -27848,6 +27943,13 @@ pub async fn handle_post_multisig_approve(
     let builder = builder
         .with_fee_payment_intent(fee_payment)
         .with_instructions([dm::InstructionBox::from(approve_instruction)]);
+    let builder = quote_app_api_transaction_builder(
+        builder,
+        queue.as_ref(),
+        state.as_ref(),
+        ENDPOINT_MULTISIG_APPROVE,
+    )?;
+    let fee_payment = builder.payload().fee_payment.clone();
 
     let response =
         if private_key.is_some() {
@@ -27911,6 +28013,7 @@ pub async fn handle_post_multisig_approve(
                 tx_hash_hex: Some(tx_hash_hex.clone()),
                 executed_tx_hash_hex: None,
                 creation_time_ms: Some(creation_time_ms),
+                fee_payment: fee_payment.clone(),
                 signing_message_b64: None,
             }
         } else {
@@ -27930,6 +28033,7 @@ pub async fn handle_post_multisig_approve(
                 tx_hash_hex: None,
                 executed_tx_hash_hex: None,
                 creation_time_ms: Some(creation_time_ms),
+                fee_payment: fee_payment.clone(),
                 signing_message_b64: Some(signing_message_b64),
             }
         };
@@ -30659,6 +30763,8 @@ pub struct MultisigContractCallResponseDto {
     /// Creation timestamp for detached signing workflows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
+    /// Exact quote-bound payer, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Optional detached signing message bytes.
     #[norito(default)]
     pub signing_message_b64: Option<String>,
@@ -30694,6 +30800,8 @@ pub struct MultisigCancelResponseDto {
     /// Creation timestamp for detached signing workflows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
+    /// Exact quote-bound payer, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Optional detached signing message bytes.
     #[norito(default)]
     pub signing_message_b64: Option<String>,

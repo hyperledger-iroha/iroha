@@ -524,31 +524,45 @@ def test_historical_tc_lock_commit_exception_is_exact_and_wal_backed() -> None:
     core_source = (module.FORMAL_DIR / "SumeragiV2Core.tla").read_text()
     async_source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text()
 
-    historical = module._top_level_operator_body(
-        core_source, "HistoricalTcLockedPrepareForCommit"
+    historical_source = module._top_level_operator_body(
+        core_source, "HistoricalLockedPrepareSource"
     )
+    historical = module._top_level_operator_body(
+        core_source, "HistoricalLockedPrepareForCommit"
+    )
+    provenance = module._top_level_operator_body(
+        core_source, "HistoricalLockedPrepareRecoveryProvenance"
+    )
+    assert historical_source is not None
     assert historical is not None
+    assert provenance is not None
+    source_body = " ".join(historical_source[0].split())
     historical_body = " ".join(historical[0].split())
     for required in (
         "qc \\in prepareQCs",
         "qc.view < nodeView[node]",
         "qc.view = lockRank[node]",
         "qc.subject = lockSubject[node]",
-        "InstalledTcSelectsPrepareFor(node, qc)",
-        "NoHigherConflictingPrepareKnown(node, qc)",
     ):
-        assert required in historical_body
-
-    conflict_fence = module._top_level_operator_body(
-        core_source, "NoHigherConflictingPrepareKnown"
+        assert required in source_body
+    assert "InstalledTcSelectsPrepareFor(node, qc)" in " ".join(
+        provenance[0].split()
     )
-    assert conflict_fence is not None
-    conflict_body = " ".join(conflict_fence[0].split())
-    assert "vote \\in prepareIntents" in conflict_body
-    assert "vote.view > qc.view" in conflict_body
-    assert "vote.subject # qc.subject" in conflict_body
-    assert "highestRank[node] > qc.view" in conflict_body
-    assert "highestSubject[node] # qc.subject" in conflict_body
+    assert "ExactLockedCommitIntents(node, qc.view, qc.subject) = {}" in (
+        historical_body
+    )
+    assert "NoHigherPrepareOriginKnown(node, qc)" in historical_body
+
+    origin_fence = module._top_level_operator_body(
+        core_source, "NoHigherPrepareOriginKnown"
+    )
+    assert origin_fence is not None
+    origin_body = " ".join(origin_fence[0].split())
+    assert "vote \\in prepareIntents" in origin_body
+    assert "vote.view > qc.view" in origin_body
+    assert "highestRank[node] > qc.view" in origin_body
+    assert "vote.subject" not in origin_body
+    assert "highestSubject" not in origin_body
 
     begin = module._top_level_operator_body(core_source, "BeginLockCommit")
     persist = module._top_level_operator_body(core_source, "PersistLockCommit")
@@ -557,7 +571,7 @@ def test_historical_tc_lock_commit_exception_is_exact_and_wal_backed() -> None:
     begin_body = " ".join(begin[0].split())
     persist_body = " ".join(persist[0].split())
     assert "CurrentOpenPrepareForCommit(node, qc)" in begin_body
-    assert "HistoricalTcLockedPrepareForCommit(node, qc)" in begin_body
+    assert "HistoricalLockedPrepareForCommit(node, qc)" in begin_body
     assert "pendingLockCommit' = pendingLockCommit \\cup {request}" in begin_body
     assert "commitIntents' = commitIntents \\cup {request.vote}" in persist_body
     assert "signVotes' = signVotes \\cup {signRequest}" in persist_body
@@ -575,8 +589,8 @@ def test_historical_tc_lock_commit_exception_is_exact_and_wal_backed() -> None:
         obligation["id"]: obligation
         for obligation in module.load_ledger()["obligations"]
     }
-    assert by_id["historical-tc-lock-commit"]["status"] == "tlaps_proved"
-    assert by_id["timeout-protection"]["status"] == "tlaps_proved"
+    assert by_id["historical-tc-lock-commit"]["status"] == "specified_unproved"
+    assert by_id["timeout-protection"]["status"] == "specified_unproved"
 
 
 def test_historical_timeout_authorization_is_derived_not_duplicated(
@@ -9919,6 +9933,32 @@ DecisionCompletionWitness(node, qc) ==
        /\ request.envelope.subject = qc.subject
   \/ \E candidate \in AsyncCandidateSet:
        DecisionPipelineCandidate(node, qc, candidate)
+
+ExactLockedCommitTimeoutRecoveryWitness(node, qc) ==
+  /\ qc.context = context
+  /\ qc.height = height
+  /\ qc.view = lockRank[node]
+  /\ qc.subject = lockSubject[node]
+  /\ qc.view < nodeView[node]
+  /\ \E timeoutVote \in timeoutIntents:
+       /\ timeoutVote.signer = node
+       /\ timeoutVote.context = qc.context
+       /\ timeoutVote.height = qc.height
+       /\ timeoutVote.view = nodeView[node]
+
+HistoricalLockedCommitRecoveryWitness(node, qc) ==
+  \/ ExactLockedCommitIntents(node, qc.view, qc.subject) # {}
+  \/ \E request \in pendingLockCommit:
+       /\ request.node = node
+       /\ request.qc = qc
+  \/ \E candidate \in AsyncCandidateSet:
+       /\ candidate.node = node
+       /\ candidate.height = qc.context.height
+       /\ candidate.view = qc.view
+       /\ candidate.subject = qc.subject
+       /\ candidate.kind = "BeginLockCommit"
+       /\ CandidateScheduled(candidate)
+  \/ ExactLockedCommitTimeoutRecoveryWitness(node, qc)
 =============================================================================
 """
     path.write_text(canonical, encoding="utf-8")
@@ -9939,6 +9979,18 @@ DecisionCompletionWitness(node, qc) ==
         "       /\\ request.envelope.height = qc.context.height\n",
         "       /\\ request.envelope.view = qc.view\n",
         "       /\\ request.envelope.subject = qc.subject\n",
+        "  /\\ qc.context = context\n",
+        (
+            "  /\\ qc.height = height\n",
+            "  /\\ qc.height >= height\n",
+        ),
+        "  /\\ qc.view < nodeView[node]\n",
+        "       /\\ timeoutVote.context = qc.context\n",
+        (
+            "       /\\ timeoutVote.view = nodeView[node]\n",
+            "       /\\ timeoutVote.view >= nodeView[node]\n",
+        ),
+        "  \\/ ExactLockedCommitTimeoutRecoveryWitness(node, qc)\n",
     )
     for mutation in mutations:
         if isinstance(mutation, tuple):
@@ -9949,7 +10001,7 @@ DecisionCompletionWitness(node, qc) ==
         path.write_text(canonical.replace(needle, replacement, 1), encoding="utf-8")
         errors = module._progress_witness_source_fidelity_errors(formal_dir)
         assert any(
-            "exact current-consumer Decision recovery contract" in error
+            "exact reviewed progress/recovery contract" in error
             for error in errors
         ), errors
 
@@ -9973,10 +10025,22 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
     core_path = formal_dir / "SumeragiV2Core.tla"
     network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     async_path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    integration_path = tmp_path / "integration_tests/tests/sumeragi_v2_runner.rs"
     canonical_core = core_path.read_text(encoding="utf-8")
     canonical_network = network_path.read_text(encoding="utf-8")
     canonical_async = async_path.read_text(encoding="utf-8")
-    assert module._progress_witness_source_fidelity_errors(formal_dir) == []
+    canonical_integration = integration_path.read_text(encoding="utf-8")
+    baseline_errors = module._progress_witness_source_fidelity_errors(formal_dir)
+
+    def assert_new_contract_error(errors: list[str], expected_error: str) -> None:
+        assert not any(expected_error in error for error in baseline_errors), (
+            expected_error,
+            baseline_errors,
+        )
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
 
     core_mutations = (
         (
@@ -9987,36 +10051,46 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
         (
             "     /\\ NoDecisionForNode(node)\n",
             "",
-            "must have one direct, non-disjunctive NoDecisionForNode guard",
+            "must have one direct, NoDecisionForNode guard",
         ),
         (
             "     /\\ NoDecisionForNode(node)\n",
             "     /\\ (NoDecisionForNode(node) \\/ TRUE)\n",
-            "must have one direct, non-disjunctive NoDecisionForNode guard",
+            "must have one direct, NoDecisionForNode guard",
         ),
         (
             "     /\\ NodeIdle(node)\n"
             "     /\\ NoDecisionForNode(node)\n"
-            "     /\\ roundView + 1 \\in Views\n",
+            "     /\\ roundView + 1 \\in Views\n"
+            "     /\\ TCValid(tc)\n"
+            "     /\\ \\/ roundView >= nodeView[node]\n"
+            "        \\/ StrictSameRoundTcUpgrade(node, tc)\n",
             "     /\\ NodeIdle(node)\n"
-            "     /\\ roundView + 1 \\in Views\n",
-            "FormTC must have one direct, non-disjunctive NoDecisionForNode guard",
+            "     /\\ roundView + 1 \\in Views\n"
+            "     /\\ TCValid(tc)\n"
+            "     /\\ \\/ roundView >= nodeView[node]\n"
+            "        \\/ StrictSameRoundTcUpgrade(node, tc)\n",
+            "FormTC must have one direct, NoDecisionForNode guard",
         ),
         (
-            "     /\\ tc.view >= nodeView[node]\n"
+            "     /\\ tc.view + 1 \\in Views\n"
+            "     /\\ \\/ tc.view >= nodeView[node]\n"
+            "        \\/ StrictSameRoundTcUpgrade(node, tc)\n"
             "     /\\ NodeIdle(node)\n"
             "     /\\ NoDecisionForNode(node)\n"
             "     /\\ pendingInstallTC' = pendingInstallTC \\cup {request}\n",
-            "     /\\ tc.view >= nodeView[node]\n"
+            "     /\\ tc.view + 1 \\in Views\n"
+            "     /\\ \\/ tc.view >= nodeView[node]\n"
+            "        \\/ StrictSameRoundTcUpgrade(node, tc)\n"
             "     /\\ NodeIdle(node)\n"
             "     /\\ pendingInstallTC' = pendingInstallTC \\cup {request}\n",
-            "BeginInstallTC must have one direct, non-disjunctive NoDecisionForNode guard",
+            "BeginInstallTC must have one direct, NoDecisionForNode guard",
         ),
         (
             "     /\\ NoDecisionForNode(node)\n"
             "     /\\ vote \\in timeoutIntents\n",
             "     /\\ vote \\in timeoutIntents\n",
-            "ResumeTimeout must have one direct, non-disjunctive NoDecisionForNode guard",
+            "ResumeTimeout must have one direct, NoDecisionForNode guard",
         ),
         (
             "          IF ~NoDecisionForNode(envelope.recipient)\n",
@@ -10045,11 +10119,74 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             canonical_core.replace(needle, replacement, 1), encoding="utf-8"
         )
         errors = module._progress_witness_source_fidelity_errors(formal_dir)
-        assert any(expected_error in error for error in errors), (
-            expected_error,
-            errors,
-        )
+        assert_new_contract_error(errors, expected_error)
         core_path.write_text(canonical_core, encoding="utf-8")
+
+    semantic_core_mutations = (
+        (
+            "NoHigherPrepareOriginKnown",
+            "       /\\ vote.view > qc.view\n",
+            "       /\\ vote.view > qc.view\n"
+            "       /\\ vote.subject # qc.subject\n",
+            "NoHigherPrepareOriginKnown must equal only",
+        ),
+        (
+            "StrictSameRoundTcUpgrade",
+            "  /\\ generation[node] < MaxGeneration\n",
+            "",
+            "StrictSameRoundTcUpgrade must equal only",
+        ),
+        (
+            "ProposalJustified",
+            "          /\\ TcHighRank(installed.tc) = NoRank\n",
+            "          /\\ proposal.justifyRank = TcHighRank(installed.tc)\n",
+            "ProposalJustified must equal only",
+        ),
+        (
+            "SafeToPrepare",
+            "  \\/ /\\ proposal.view = lockRank[node]\n",
+            "  \\/ lockSubject[node] = proposal.subject\n"
+            "  \\/ /\\ proposal.view = lockRank[node]\n",
+            "SafeToPrepare must equal only",
+        ),
+        (
+            "PersistInstallTC",
+            "             IF sameRoundUpgrade THEN @ ELSE tc.view + 1]\n",
+            "             tc.view + 1]\n",
+            "PersistInstallTC must preserve the strict same-round",
+        ),
+    )
+    for symbol, needle, replacement, expected_error in semantic_core_mutations:
+        core_path.write_text(
+            mutate_tla_operator(canonical_core, symbol, needle, replacement),
+            encoding="utf-8",
+        )
+        errors = module._progress_witness_source_fidelity_errors(formal_dir)
+        assert_new_contract_error(errors, expected_error)
+        core_path.write_text(canonical_core, encoding="utf-8")
+
+    integration_helper_mutations = (
+        (
+            "locked_commit_has_exact_progress_witness",
+            "current_view > locked.proposal_round.view",
+            "current_view >= locked.proposal_round.view",
+        ),
+        (
+            "validate_locked_commit_progress_witness",
+            "snapshot.height,\n            snapshot.view,",
+            "snapshot.last_committed_height,\n            snapshot.view,",
+        ),
+    )
+    for symbol, needle, replacement in integration_helper_mutations:
+        mutate_rust_item_source(
+            module, integration_path, symbol, needle, replacement
+        )
+        errors = module._progress_witness_source_fidelity_errors(formal_dir)
+        assert_new_contract_error(
+            errors,
+            f"progress-witness helper {symbol} must match exact reviewed",
+        )
+        integration_path.write_text(canonical_integration, encoding="utf-8")
 
     network_mutations = (
         (
@@ -10085,10 +10222,7 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             canonical_network.replace(needle, replacement, 1), encoding="utf-8"
         )
         errors = module._progress_witness_source_fidelity_errors(formal_dir)
-        assert any(expected_error in error for error in errors), (
-            expected_error,
-            errors,
-        )
+        assert_new_contract_error(errors, expected_error)
         network_path.write_text(canonical_network, encoding="utf-8")
 
     async_mutations = (
@@ -10119,10 +10253,7 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             canonical_async.replace(needle, replacement, 1), encoding="utf-8"
         )
         errors = module._progress_witness_source_fidelity_errors(formal_dir)
-        assert any(expected_error in error for error in errors), (
-            expected_error,
-            errors,
-        )
+        assert_new_contract_error(errors, expected_error)
         async_path.write_text(canonical_async, encoding="utf-8")
 
 
@@ -17138,7 +17269,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 477 tests",
+            "must contain exactly 509 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -17146,9 +17277,9 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=477",
-            "readonly expected_production_liveness_test_count=462",
-            "production liveness source count must be sealed as 477",
+            "readonly expected_production_liveness_test_count=509",
+            "readonly expected_production_liveness_test_count=508",
+            "production liveness source count must be sealed as 509",
         ),
         (
             'production_p2p_unit_list="$(cargo test --locked -p iroha_p2p --lib -- --list)"',
@@ -17208,15 +17339,15 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
     (
         (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
-            "yielding the 465-test, 30-module, 53-leg checkpoint",
-            "yielding the 465-test, 30-module, 52-leg checkpoint",
+            "yielding the 509-test, 38-module, 61-leg checkpoint",
+            "yielding the 509-test, 38-module, 60-leg checkpoint",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "receipt binds the 53 pre-network corridor legs and\n"
-            "their exact 477-test inventory",
-            "receipt binds the 52 pre-network corridor legs and\n"
-            "their exact 477-test inventory",
+            "receipt binds the 61 pre-network corridor legs and\n"
+            "their exact 509-test inventory",
+            "receipt binds the 60 pre-network corridor legs and\n"
+            "their exact 509-test inventory",
         ),
     ),
 )
@@ -17259,9 +17390,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 477",
-            "_PRODUCTION_TEST_COUNT = 462",
-            "production test count must equal the exact shell inventory count 477",
+            "_PRODUCTION_TEST_COUNT = 509",
+            "_PRODUCTION_TEST_COUNT = 508",
+            "production test count must equal the exact shell inventory count 509",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -17277,9 +17408,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=53",
-            "  readonly expected_corridor_leg_count=52",
-            "sealed at fifty-three legs",
+            "  readonly expected_corridor_leg_count=61",
+            "  readonly expected_corridor_leg_count=60",
+            "sealed at sixty-one legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
@@ -18428,6 +18559,9 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "kura::",
                 "nexus::",
                 "merge_sidecar::",
+                "zk::",
+                "block::",
+                "offline::",
                 "peer::",
                 "network::",
                 "consensus_message_control::tests::",
@@ -18438,10 +18572,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 477
-    assert len(set(production_inventory)) == 477
-    assert "readonly expected_production_liveness_test_count=477" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 477" in receipt_source
+    assert len(production_inventory) == 509
+    assert len(set(production_inventory)) == 509
+    assert "readonly expected_production_liveness_test_count=509" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 509" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -18451,12 +18585,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 477
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 509
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
     )
-    assert len(receipt_module._corridor_legs()) == 53
+    assert len(receipt_module._corridor_legs()) == 61
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
     ) == (
@@ -18468,6 +18602,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     ) == (
         "cargo test --locked -p iroha_config --lib "
         "parameters::user::duration_clamp_tests -- --test-threads=1"
+    )
+    assert receipt_module._production_module_command(
+        "block::consensus_v2::finality::tests"
+    ) == (
+        "cargo test --locked -p iroha_data_model --lib "
+        "block::consensus_v2::finality::tests -- --test-threads=1"
     )
     for _, module, expected_count in receipt_module._PRODUCTION_MODULES:
         assert (
@@ -18741,7 +18881,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         assert test_name in release_source
     assert "taira_soak_contract_files=(" in release_source
     assert "did not run exactly 39 passing tests" in release_source
-    assert "expected_corridor_leg_count=53" in release_source
+    assert "expected_corridor_leg_count=61" in release_source
     for leg_id, command in (
         (
             "source-sealed-workspace-clippy",
@@ -18808,8 +18948,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "--lib -- --test-threads=1", unit_ignored_inventory
     )
     assert unit_branch < unit_inventory < unit_ignored_inventory < unit_run
-    assert "expected exactly 115 Sumeragi v2 reducer unit tests" in harness_source
-    assert "reducer unit gate requires all 115 tests to be runnable" in harness_source
+    assert "expected exactly 118 Sumeragi v2 reducer unit tests" in harness_source
+    assert "reducer unit gate requires all 118 tests to be runnable" in harness_source
 
     replay_branch = harness_source.index("--model-replay)")
     replay_inventory = harness_source.index("model_replay_test_list=", replay_branch)

@@ -16,12 +16,14 @@ class ConfidentialAssetToriiClientTest {
     @Test
     fun rootsUsesCanonicalPostPathAndParsesBody() {
         val root = "01".repeat(32)
+        val blockHash = "0a".repeat(32)
         val executor = CapturingExecutor(
             """
             {
               "latest": "$root",
               "roots": ["$root"],
-              "height": 1
+              "evaluated_block_height": 7,
+              "evaluated_block_hash": "$blockHash"
             }
             """.trimIndent(),
         )
@@ -39,7 +41,8 @@ class ConfidentialAssetToriiClientTest {
         assertEquals("""{"asset_id":"usd#bank","max":7}""", executor.lastBody)
         assertEquals(root, response.latest)
         assertEquals(listOf(root), response.roots)
-        assertEquals(1, response.height)
+        assertEquals(7, response.evaluatedBlockHeight)
+        assertEquals(blockHash, response.evaluatedBlockHash)
         assertContentEquals(ByteArray(32) { 1 }, response.getLatestRootBytes())
         assertContentEquals(ByteArray(32) { 1 }, response.getRootBytes(0))
     }
@@ -49,9 +52,12 @@ class ConfidentialAssetToriiClientTest {
         val commitment = "02".repeat(32)
         val sibling = "00".repeat(32)
         val root = "03".repeat(32)
+        val blockHash = "0a".repeat(32)
         val executor = CapturingExecutor(
             """
             {
+              "evaluated_block_height": 7,
+              "evaluated_block_hash": "$blockHash",
               "root": "$root",
               "frontier_len": 1,
               "tree_depth": 1,
@@ -89,6 +95,8 @@ class ConfidentialAssetToriiClientTest {
         assertEquals("application/json", firstHeader(executor.lastRequest, "Content-Type"))
         assertEquals("""{"asset_id":"usd#bank","commitments":["$commitment"]}""", executor.lastBody)
         assertEquals(root, response.root)
+        assertEquals(7, response.evaluatedBlockHeight)
+        assertEquals(blockHash, response.evaluatedBlockHash)
         assertEquals(1, response.frontierLen)
         assertEquals(1, response.treeDepth)
         assertEquals(1, response.requireNextZeroPath().leafIndex)
@@ -96,13 +104,20 @@ class ConfidentialAssetToriiClientTest {
         assertEquals(0, response.paths[0].leafIndex)
         assertEquals(listOf(sibling), response.paths[0].siblings)
         assertContentEquals(byteArrayOf(0), response.paths[0].directions)
+        response.requireEvaluatedSnapshot(7, ByteArray(32) { 0x0a })
+        assertFailsWith<IllegalArgumentException> {
+            response.requireEvaluatedSnapshot(8, ByteArray(32) { 0x0a })
+        }
+        assertFailsWith<IllegalArgumentException> {
+            response.requireEvaluatedSnapshot(7, ByteArray(32) { 0x0b })
+        }
     }
 
     @Test
     fun emptyLatestRootIsNotNullableOnWireButNullInByteHelper() {
         val response = ZkRootsResponse.parse(
             """
-            {"latest":"","roots":[],"height":0}
+            {"latest":"","roots":[],"evaluated_block_height":0,"evaluated_block_hash":"${"00".repeat(32)}"}
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
 
@@ -113,10 +128,10 @@ class ConfidentialAssetToriiClientTest {
     @Test
     fun rootsRejectNonCanonicalHexAndNullLatest() {
         assertFailsWith<IllegalArgumentException> {
-            ZkRootsResponse("AA".repeat(32), emptyList(), 0)
+            ZkRootsResponse("AA".repeat(32), emptyList(), 0, "00".repeat(32))
         }
         assertFailsWith<IllegalArgumentException> {
-            ZkRootsResponse.parse("""{"latest":null,"roots":[],"height":0}""".toByteArray(StandardCharsets.UTF_8))
+            ZkRootsResponse.parse("""{"latest":null,"roots":[],"evaluated_block_height":0,"evaluated_block_hash":"${"00".repeat(32)}"}""".toByteArray(StandardCharsets.UTF_8))
         }
     }
 
@@ -126,10 +141,10 @@ class ConfidentialAssetToriiClientTest {
         val sibling = "00".repeat(32)
         val root = "03".repeat(32)
         assertFailsWith<IllegalArgumentException> {
-            ZkRootsResponse.parse("""{"latest":"","roots":[],"height":"0"}""".toByteArray(StandardCharsets.UTF_8))
+            ZkRootsResponse.parse("""{"latest":"","roots":[],"evaluated_block_height":"0","evaluated_block_hash":"${"00".repeat(32)}"}""".toByteArray(StandardCharsets.UTF_8))
         }
         assertFailsWith<IllegalArgumentException> {
-            ZkRootsResponse.parse("""{"latest":"","roots":[],"height":0.0}""".toByteArray(StandardCharsets.UTF_8))
+            ZkRootsResponse.parse("""{"latest":"","roots":[],"evaluated_block_height":0.0,"evaluated_block_hash":"${"00".repeat(32)}"}""".toByteArray(StandardCharsets.UTF_8))
         }
         assertFailsWith<IllegalArgumentException> {
             ZkMerklePathResponse.parse(
@@ -173,12 +188,12 @@ class ConfidentialAssetToriiClientTest {
 
         assertFailsWith<IllegalArgumentException> {
             ZkRootsResponse.parse(
-                """{"latest":"","roots":[],"height":2147483648}""".toByteArray(StandardCharsets.UTF_8),
+                """{"latest":"","roots":[],"evaluated_block_height":9223372036854775808,"evaluated_block_hash":"${"01".repeat(32)}"}""".toByteArray(StandardCharsets.UTF_8),
             )
         }
         assertFailsWith<IllegalStateException> {
             ZkRootsResponse.parse(
-                """{"latest":"","latest":"$root","roots":[],"height":0}""".toByteArray(StandardCharsets.UTF_8),
+                """{"latest":"","latest":"$root","roots":[],"evaluated_block_height":0,"evaluated_block_hash":"${"00".repeat(32)}"}""".toByteArray(StandardCharsets.UTF_8),
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -321,6 +336,8 @@ class ConfidentialAssetToriiClientTest {
         val witnessJson = witnessNodes.joinToString(",") { """"$it"""" }
         return """
             {
+              "evaluated_block_height": 7,
+              "evaluated_block_hash": "${"0a".repeat(32)}",
               "root": "$root",
               "frontier_len": $frontierLen,
               "tree_depth": $treeDepth,

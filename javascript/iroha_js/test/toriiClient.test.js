@@ -801,6 +801,7 @@ function createSumeragiV2StatusPayload(overrides = {}) {
     last_commit_qc: {
       certificate: {
         round: { context_id: commitContextId, height: 9, view: 1 },
+        proposal_round: { context_id: commitContextId, height: 9, view: 1 },
         phase: { phase: "commit", details: null },
         subject: { ...subject },
         execution_commitment: executionCommitment,
@@ -816,6 +817,11 @@ function createSumeragiV2StatusPayload(overrides = {}) {
       prepare_quorums: [
         {
           round: { context_id: [fakeSumeragiHash(0x14)], height: 10, view: 1 },
+          proposal_round: {
+            context_id: [fakeSumeragiHash(0x14)],
+            height: 10,
+            view: 1,
+          },
           subject: { ...subject },
           execution_commitment: { ...executionCommitment },
           signer_count: 2,
@@ -830,6 +836,11 @@ function createSumeragiV2StatusPayload(overrides = {}) {
         {
           kind: { kind: "proposal", details: null },
           round: { context_id: [fakeSumeragiHash(0x14)], height: 10, view: 1 },
+          proposal_round: {
+            context_id: [fakeSumeragiHash(0x14)],
+            height: 10,
+            view: 1,
+          },
           subject: { ...subject },
           execution_commitment: null,
           stage: { stage: "sent", details: null },
@@ -10906,6 +10917,7 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
   assert.equal(status.height_context.mode.mode, "permissioned");
   assert.equal(status.height_context.quorum.min_signers, 3);
   assert.equal(status.last_commit_qc.certificate.round.height, 9);
+  assert.equal(status.last_commit_qc.certificate.proposal_round.view, 1);
   assert.equal(
     status.last_commit_qc.certificate.execution_commitment.executed_block_wire_hash,
     fakeSumeragiHash(0x37),
@@ -10913,6 +10925,14 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
   assert.equal(status.last_commit_qc.signed_power, 3);
   assert.equal(status.liveness.generation, 2);
   assert.equal(status.liveness.prepare_quorums[0].signer_count, 2);
+  assert.deepEqual(
+    status.liveness.prepare_quorums[0].proposal_round,
+    status.liveness.prepare_quorums[0].round,
+  );
+  assert.deepEqual(
+    status.liveness.outbound_intents[0].proposal_round,
+    status.liveness.outbound_intents[0].round,
+  );
   assert.equal(status.liveness.queues[0].queue.queue, "network_ingress");
   assert.equal(status.liveness.queues[0].service_debt, 2);
   assert.equal(
@@ -10934,6 +10954,150 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
   assert.equal(status.local_peer_removed, false);
   assert.equal("mode_tag" in status, false);
   assert.equal("lane_commitments" in status, false);
+});
+
+test("getSumeragiStatusTyped preserves carried proposal origins", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  const commitQuorum = structuredClone(payload.liveness.prepare_quorums[0]);
+  commitQuorum.round.view = 2;
+  commitQuorum.proposal_round.view = 1;
+  payload.liveness.commit_quorums = [commitQuorum];
+
+  const commitIntent = structuredClone(payload.liveness.outbound_intents[0]);
+  commitIntent.kind.kind = "commit_vote";
+  commitIntent.round.view = 2;
+  commitIntent.proposal_round.view = 1;
+  commitIntent.execution_commitment = structuredClone(
+    commitQuorum.execution_commitment,
+  );
+  payload.liveness.outbound_intents = [commitIntent];
+  payload.last_commit_qc.certificate.round.view = 2;
+  payload.last_commit_qc.certificate.proposal_round.view = 1;
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.equal(status.liveness.commit_quorums[0].round.view, 2);
+  assert.equal(status.liveness.commit_quorums[0].proposal_round.view, 1);
+  assert.equal(status.liveness.outbound_intents[0].round.view, 2);
+  assert.equal(status.liveness.outbound_intents[0].proposal_round.view, 1);
+  assert.equal(status.last_commit_qc.certificate.proposal_round.view, 1);
+
+  const laterCommitPayload = createSumeragiV2StatusPayload();
+  const laterCommitIntent = laterCommitPayload.liveness.outbound_intents[0];
+  laterCommitIntent.kind.kind = "commit_qc";
+  laterCommitIntent.round.view = 3;
+  laterCommitIntent.execution_commitment = structuredClone(
+    laterCommitPayload.last_commit_qc.certificate.execution_commitment,
+  );
+  const laterCommitStatus = await sumeragiClientForPayload(laterCommitPayload)
+    .getSumeragiStatusTyped();
+  assert.equal(laterCommitStatus.liveness.outbound_intents[0].round.view, 3);
+  assert.equal(
+    laterCommitStatus.liveness.outbound_intents[0].proposal_round.view,
+    1,
+  );
+
+  const timeoutPayload = createSumeragiV2StatusPayload();
+  const timeoutIntent = timeoutPayload.liveness.outbound_intents[0];
+  timeoutIntent.kind.kind = "timeout_certificate";
+  delete timeoutIntent.proposal_round;
+  delete timeoutIntent.subject;
+  const timeoutStatus = await sumeragiClientForPayload(timeoutPayload)
+    .getSumeragiStatusTyped();
+  assert.equal(timeoutStatus.liveness.outbound_intents[0].proposal_round, null);
+});
+
+test("getSumeragiStatusTyped enforces vote-quorum proposal geometry", async () => {
+  const missingOrigin = createSumeragiV2StatusPayload();
+  delete missingOrigin.liveness.prepare_quorums[0].proposal_round;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingOrigin).getSumeragiStatusTyped(),
+    /proposal_round/,
+  );
+
+  const prepareReproposal = createSumeragiV2StatusPayload();
+  prepareReproposal.liveness.prepare_quorums[0].proposal_round.view = 0;
+  await assert.rejects(
+    () => sumeragiClientForPayload(prepareReproposal).getSumeragiStatusTyped(),
+    /proposal_round must equal round/,
+  );
+
+  const futureCommitOrigin = createSumeragiV2StatusPayload();
+  const commitQuorum = structuredClone(
+    futureCommitOrigin.liveness.prepare_quorums[0],
+  );
+  commitQuorum.proposal_round.view = 2;
+  futureCommitOrigin.liveness.commit_quorums = [commitQuorum];
+  await assert.rejects(
+    () => sumeragiClientForPayload(futureCommitOrigin).getSumeragiStatusTyped(),
+    /proposal_round.view must not exceed/,
+  );
+
+  const foreignOrigin = createSumeragiV2StatusPayload();
+  foreignOrigin.liveness.prepare_quorums[0].proposal_round.context_id = [
+    fakeSumeragiHash(0x55),
+  ];
+  await assert.rejects(
+    () => sumeragiClientForPayload(foreignOrigin).getSumeragiStatusTyped(),
+    /proposal_round.*active height context/,
+  );
+
+  const wrongHeight = createSumeragiV2StatusPayload();
+  wrongHeight.liveness.prepare_quorums[0].proposal_round.height = 9;
+  await assert.rejects(
+    () => sumeragiClientForPayload(wrongHeight).getSumeragiStatusTyped(),
+    /proposal_round.*active height context/,
+  );
+});
+
+test("getSumeragiStatusTyped enforces outbound-intent proposal geometry", async () => {
+  const missingOrigin = createSumeragiV2StatusPayload();
+  delete missingOrigin.liveness.outbound_intents[0].proposal_round;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingOrigin).getSumeragiStatusTyped(),
+    /inconsistent proposal_round/,
+  );
+
+  const timeoutWithOrigin = createSumeragiV2StatusPayload();
+  timeoutWithOrigin.liveness.outbound_intents[0].kind.kind = "timeout_vote";
+  timeoutWithOrigin.liveness.outbound_intents[0].subject = null;
+  await assert.rejects(
+    () => sumeragiClientForPayload(timeoutWithOrigin).getSumeragiStatusTyped(),
+    /inconsistent proposal_round/,
+  );
+
+  const prepareReproposal = createSumeragiV2StatusPayload();
+  const prepareIntent = prepareReproposal.liveness.outbound_intents[0];
+  prepareIntent.kind.kind = "prepare_vote";
+  prepareIntent.execution_commitment = structuredClone(
+    prepareReproposal.last_commit_qc.certificate.execution_commitment,
+  );
+  prepareIntent.round.view = 2;
+  await assert.rejects(
+    () => sumeragiClientForPayload(prepareReproposal).getSumeragiStatusTyped(),
+    /proposal_round must equal round/,
+  );
+
+  const futureCommitOrigin = createSumeragiV2StatusPayload();
+  const commitIntent = futureCommitOrigin.liveness.outbound_intents[0];
+  commitIntent.kind.kind = "commit_vote";
+  commitIntent.execution_commitment = structuredClone(
+    futureCommitOrigin.last_commit_qc.certificate.execution_commitment,
+  );
+  commitIntent.proposal_round.view = 2;
+  await assert.rejects(
+    () => sumeragiClientForPayload(futureCommitOrigin).getSumeragiStatusTyped(),
+    /proposal_round.view must not exceed/,
+  );
+
+  const foreignOrigin = createSumeragiV2StatusPayload();
+  foreignOrigin.liveness.outbound_intents[0].proposal_round.context_id = [
+    fakeSumeragiHash(0x55),
+  ];
+  await assert.rejects(
+    () => sumeragiClientForPayload(foreignOrigin).getSumeragiStatusTyped(),
+    /proposal_round.*active height context/,
+  );
 });
 
 test("getSumeragiStatusTyped accepts the local-control liveness blocker", async () => {
@@ -11160,9 +11324,40 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
 
   const wrongHeight = createSumeragiV2StatusPayload();
   wrongHeight.last_commit_qc.certificate.round.height = 8;
+  wrongHeight.last_commit_qc.certificate.proposal_round.height = 8;
   await assert.rejects(
     () => sumeragiClientForPayload(wrongHeight).getSumeragiStatusTyped(),
     /does not certify the committed subject/,
+  );
+
+  const missingProposalRound = createSumeragiV2StatusPayload();
+  delete missingProposalRound.last_commit_qc.certificate.proposal_round;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingProposalRound).getSumeragiStatusTyped(),
+    /proposal_round/,
+  );
+
+  const foreignProposalRound = createSumeragiV2StatusPayload();
+  foreignProposalRound.last_commit_qc.certificate.proposal_round.context_id = [
+    fakeSumeragiHash(0x42),
+  ];
+  await assert.rejects(
+    () => sumeragiClientForPayload(foreignProposalRound).getSumeragiStatusTyped(),
+    /proposal_round must match round context/,
+  );
+
+  const wrongProposalHeight = createSumeragiV2StatusPayload();
+  wrongProposalHeight.last_commit_qc.certificate.proposal_round.height = 8;
+  await assert.rejects(
+    () => sumeragiClientForPayload(wrongProposalHeight).getSumeragiStatusTyped(),
+    /proposal_round must match round context/,
+  );
+
+  const futureProposalRound = createSumeragiV2StatusPayload();
+  futureProposalRound.last_commit_qc.certificate.proposal_round.view = 2;
+  await assert.rejects(
+    () => sumeragiClientForPayload(futureProposalRound).getSumeragiStatusTyped(),
+    /proposal_round.view must not exceed/,
   );
 
   const underpowered = createSumeragiV2StatusPayload();

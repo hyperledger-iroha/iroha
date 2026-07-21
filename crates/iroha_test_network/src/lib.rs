@@ -3867,9 +3867,10 @@ fn abbreviated_hash(hash: impl fmt::Display) -> String {
 
 fn format_v2_certificate_ref(certificate: QuorumCertificateRef) -> String {
     format!(
-        "h{}/v{}/{:?}/block={}/exec={}",
+        "h{}/v{}<-v{}/{:?}/block={}/exec={}",
         certificate.round.height,
         certificate.round.view,
+        certificate.proposal_round.view,
         certificate.phase,
         abbreviated_hash(certificate.subject.block_hash),
         abbreviated_hash(certificate.execution_commitment.executed_block_wire_hash),
@@ -3880,9 +3881,10 @@ fn format_v2_vote_quorum(
     quorum: &iroha::data_model::block::consensus_v2::SumeragiV2VoteQuorumStatus,
 ) -> String {
     format!(
-        "h{}/v{}:signers={}/{},power={}/{},block={},exec={}",
+        "h{}/v{}<-v{}:signers={}/{},power={}/{},block={},exec={}",
         quorum.round.height,
         quorum.round.view,
+        quorum.proposal_round.view,
         quorum.signer_count,
         quorum.min_signers,
         quorum.signed_power,

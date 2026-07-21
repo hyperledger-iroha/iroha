@@ -9,6 +9,36 @@ Mixed-executable-batch follow-up is limited to completing the full workspace
 suite and the complete platform SDK suites on toolchains with their required
 native bridges and runtimes available.
 
+## Peer transport V1 release evidence
+
+- Treat the green codec, lifecycle, replay, callback-epoch, delivery-barrier,
+  APDU, and checkpoint suites as automated evidence only. Complete and archive
+  the physical-device matrix before promotion:
+  - iOS-to-iOS over QR camera, Google Nearby, and entitlement/device-eligible
+    Core NFC/CardSession;
+  - Android-to-Android over QR camera, Google Nearby, and IsoDep/HCE; and
+  - iOS-to-Android in both sender/receiver directions over QR, Nearby, and
+    capability-eligible Core NFC/CardSession-to-IsoDep/HCE.
+- Exercise the shared profile-1/schema-1 `IPM1`, `IQR1`/`IRQR`, `IPD1`/`IPN1`,
+  and F049 NFC vectors in every applicable leg. Promotion evidence must cover
+  header-last scans, one lost shard per parity pair, duplicate/conflicting
+  frames, quarantine expiry and clean reuse, app background/foreground,
+  stop/restart with delayed callbacks, completed-session rollover, replay and
+  reordered Nearby records, RF loss before and after each durability boundary,
+  retap/`GET_STATUS` recovery, and explicit profile/kind/schema mismatch
+  rejection.
+- Verify optimization without changing the common wire: same-platform peers
+  must use their mutually supported radio and NFC chunk capabilities, while
+  cross-platform NFC uses the minimum advertised safe limit. Record payload
+  bytes, hashes, terminal delivery updates, exact compact-payment/native-ACK
+  binding, and final durable checkpoints so optimization cannot mask a wire
+  divergence.
+- Re-run the complete Swift package suite with a bridge artifact accepted by
+  the active Swift compiler. Keep Kagemusha native-canonical bytes and bridge
+  ABI 21 unchanged while platform delivery adapters converge on the shared
+  peer-message core. Do not add a backend endpoint or backend reconciliation
+  fallback to close a device-only evidence gap.
+
 ## Wallet activity query follow-ups
 
 - TODO: Add one authenticated, snapshot-stable account activity feed that
@@ -25496,6 +25526,14 @@ validation, verified WAL replay, or quorum-authenticated QC evidence and remain
 recoverable while unbound. Commitment conflicts are rejected before serialized
 runtime ownership.
 
+Authenticated consensus messages share one generic production ownership
+bridge across runtime ingress and Busy-deferred state. It compares the complete
+canonical envelope with the retained `authenticated_wire_identity` and repeats
+that equality after authentication. CommitQC-specific lookup wrappers remain
+test-only regression conveniences; the remaining refinement debt must be
+discharged against the generic full-envelope path rather than a
+reducer-event-only QC exception.
+
 Body-availability rebind now requires the installed destination tag and
 transactionally preflights source plus destination ownership. One exact source
 moves or coalesces into one exact destination; an uninstalled destination is a
@@ -25794,6 +25832,17 @@ not be promoted into a proof of host scheduling or operation latency. The
 sealed release/soak evidence must still demonstrate that operator-provided
 runtime premise on the final signed source.
 
+- rerun and repair the strict induction, Core safety, timeout-view, and
+  dependent Async proof slices for `NoHigherPrepareOriginKnown`,
+  `StrictSameRoundTcUpgrade`, no-high `ProposalJustified` plus exact-origin
+  `SafeToPrepare`, and `ExactLockedCommitTimeoutRecoveryWitness`. The old
+  7,826-obligation induction and 565-obligation downstream Core receipt is
+  historical evidence for the superseded transition relation and cannot
+  promote the current source;
+- execute the fresh source-sealed 509-test, 38-module, 61-leg pre-network
+  corridor. Its proposal-origin additions cover strict same-round TC
+  upgrade/replay, exact locked-Commit recovery ownership, multi-carrier ingress,
+  and persistence failure; inventory presence is not execution evidence;
 - mechanize the complete typed applied-height handoff rather than promoting its
   source tests to a liveness proof. Production independently rereads exact Kura
   sources for historical CommitQC, body, and lane-certificate responses; binds
@@ -25823,8 +25872,8 @@ runtime premise on the final signed source.
 - discharge the ledgered abstract progress-ownership invariant and the Stage-4
   ready/causal, nonce-unique Serve FIFO, and Stage-5 Consensus-I/O FIFO rank
   leaves before composing `protected-service-rank`. Progress ownership consumes
-  the now-proved async type closure; Stage 4 and Serve FIFO also consume the
-  proved exact fair-action refinement; Stage 5 still waits for progress
+  a freshly reproved async type closure; Stage 4 and Serve FIFO also consume a
+  freshly reproved exact fair-action refinement; Stage 5 still waits for progress
   ownership. Keep
   production candidate admission, runtime, ingress, and actor-to-flush identity
   refinement outside these abstract leaves. Rerun the repaired Stage-4 proof

@@ -136,7 +136,7 @@ PendingCertificateWritesAuthorized ==
        /\ TCValid(request.tc)
        /\ request.tc.votes # {}
        /\ request.tc.view + 1 \in Views
-       /\ request.tc.view >= nodeView[request.node]
+       /\ request.tc.view + 1 >= nodeView[request.node]
   /\ \A request \in pendingDecision:
        /\ request.qc \in commitQCs
        /\ request.qc.context = context

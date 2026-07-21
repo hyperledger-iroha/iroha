@@ -3,7 +3,9 @@
 Sumeragi v2 is the only live consensus protocol accepted by this release. It is a breaking
 network revision: validators using another protocol version or consensus fingerprint are rejected
 during admission, and an existing chain must restart from a fresh genesis rather than mix protocol
-versions at one height.
+versions at one height. The first-release decoder accepts only the canonical revision-3 Norito
+shape; it does not infer a missing proposal origin or fall back to a legacy vote, QC, status, or
+finality layout.
 
 The protocol has one executable decision authority, the package-local
 `iroha_core::sumeragi::v2_core::Reducer`. Networking,
@@ -32,12 +34,13 @@ committed at `h` may activate at `h + 1`; certificates from the old context cann
 one.
 
 The next context and its view-zero proposal bind the parent CommitQC by semantic finality identity:
-parent context, height, Commit phase, and block subject. The QC view, aggregate bytes, and signer
-subset are excluded because the same safe parent can acquire valid CommitQCs in multiple views or
-through independently collected quorum subsets. The successor constructor verifies the locally
-carried QC against the exact durable parent context and artifact before opening the height, and the
-adapter retains that parent context and its proofs of possession so every alternate QC carried by a
-view-zero leader is also cryptographically verified before reducer admission.
+parent context, height, immutable proposal-origin round, Commit phase, block subject, and execution
+commitment. The QC finality view, aggregate bytes, and signer subset are excluded because the same
+safe proposal can acquire valid CommitQCs in multiple views or through independently collected
+quorum subsets. The successor constructor verifies the locally carried QC against the exact durable
+parent context and artifact before opening the height, and the adapter retains that parent context
+and its proofs of possession so every alternate QC carried by a view-zero leader is also
+cryptographically verified before reducer admission.
 
 Genesis carries this projection as `sumeragi_v2.nexus_amx_context_hash`. The canonical projection
 binds the validated lane and dataspace catalogs, routing, staking, fees, AXT, lane fusion and
@@ -235,28 +238,45 @@ secure guard; there is no in-memory or insecure signing fallback.
 
 The global protocol has only Prepare and Commit votes.
 
-1. The expected leader broadcasts a proposal and payload manifest. View zero is justified by the
-   parent CommitQC. A later view carries the previous view's TimeoutCertificate and the exact
-   highest PrepareQC selected from that certificate. The Proposal signature authenticates the
-   current leader. If it re-proposes a locked subject, the canonical block body remains unchanged
-   and retains its original creation-view header and block signature.
+Three round identities are deliberately distinct. The reducer owner tag
+`(height, view, generation)` names the process-local lifecycle allowed to start or complete a
+transition. A signed `proposal_round` names the immutable origin of the proposal bytes, manifest,
+header, durable body, and validation receipt. A vote or QC `round` names the round in which that
+Prepare or Commit evidence is certified. The lifecycle owner is never substituted for either wire
+round. Prepare requires `proposal_round == round`; Commit requires the same context and height and
+`proposal_round.view <= round.view`. Both rounds are authenticated by every Vote and QC signature.
+
+1. An unlocked expected leader broadcasts a proposal and payload manifest. View zero is justified
+   by the parent CommitQC. A later unlocked view may carry the previous view's TimeoutCertificate
+   only when that certificate selects no PrepareQC. A Timeout-justified Proposal carrying any
+   selected PrepareQC is structurally invalid. Validators instead install that certificate through
+   the ordinary durable timeout path, retain its exact proposal origin as their lock, and commit
+   that lock directly; they do not create a new proposal origin for equal block bytes. The Proposal
+   signature authenticates the current leader and the proposal round.
 2. A validator reconstructs the complete canonical body, checks all chunk and payload hashes,
-   validates it deterministically against the certified parent, and stores it durably. Only after
-   the body and a Prepare sign-once record are durable may it release a Prepare signature.
+   validates it deterministically against the certified parent, and stores it durably under the
+   exact proposal origin. Only after the body and a Prepare sign-once record are durable may it
+   release a Prepare signature; the Prepare vote and PrepareQC have that same round as their
+   `proposal_round`.
 3. A PrepareQC certifies validity and availability. Its honest signers have the exact body in the
    durable payload store and must serve it after restart.
-4. On a valid current-view PrepareQC, a validator with the exact validated body atomically persists
-   its new lock and Commit sign-once record. Only the persistence acknowledgement releases the
-   Commit signature. The exact TC-promoted historical-lock case described below uses the same
-   persistence-before-sign ordering after body recovery and validation. A received Commit vote,
-   including one from the current view, enters a volatile pool only when its round and subject match
-   this exact durable lock.
+4. On a valid PrepareQC, a validator with the exact validated body atomically persists its lock and
+   a Commit sign-once record. The Commit vote uses the active finality round while retaining the
+   PrepareQC's immutable `proposal_round`; only the persistence acknowledgement releases the
+   signature. The exact TC-promoted lock case described below uses the same
+   persistence-before-sign ordering after body recovery and validation. A received Commit vote
+   enters a volatile pool only when its proposal origin and subject match the exact durable lock.
 5. A CommitQC decides the subject. The node persists the decision before applying or publishing it.
-   A node missing the body records `PendingApply`, fetches from certified signers, validates the
-   exact body, and does not vote at the next height until application completes.
+   Its certification round may be later than its proposal origin. The canonical block header's
+   view-change index, body fetch, deterministic validation, and application all bind the CommitQC's
+   `proposal_round`, not its later certification view. A node missing the body records
+   `PendingApply`, fetches that exact origin from certified signers, validates it, and does not vote
+   at the next height until application completes.
 
-A validator prepares a proposal only when it is unlocked, the subject equals its lock, or the
-proposal's selected PrepareQC safely supersedes that lock. Locks never move to a lower certificate.
+A validator prepares a proposal only when it is unlocked or when a duplicate proposal has the
+exact same origin and subject as its lock. A TC-selected PrepareQC may supersede a lower lock, but
+the selected proposal is then committed directly. Equal bytes at another view are a different
+origin and are rejected instead of being re-proposed. Locks never move to a lower certificate.
 
 ## Certified view changes
 
@@ -277,10 +297,11 @@ authenticated conflict pairs are not yet persisted for penalties. This bounded h
 invalidate a complete earlier-view CommitQC, which remains admissible and decisive.
 
 A current-view Commit which arrives before the matching `LockAndCommit` acknowledgement is ignored
-recoverably. Once that acknowledgement applies the new lock, the adapter advances the locked-Commit
-consumer epoch and may admit the same exact authenticated vote once. The reducer then removes the
-superseded historical Commit pool before releasing its local current Commit signature; it never
-removes that old reconstruction source before successful persistence. Retained outbound Commit
+recoverably. Once that acknowledgement makes the later-finality same-origin intent durable, the
+adapter advances the locked-Commit consumer epoch and may admit the same exact authenticated vote
+once. The reducer then removes every older Commit pool for that proposal origin before releasing
+its local current Commit signature; it never removes the old reconstruction source before
+successful persistence. Retained outbound Commit
 control continues to serve peers, but cannot alone reconstruct the sender's local pool because
 broadcast does not loop back to the sender.
 
@@ -290,17 +311,32 @@ union satisfies both quorums. The deterministic maximum valid PrepareQC is selec
 group. A TC is persisted before entering the next view and any validator may form and rebroadcast
 it; there is no correctness-critical collector.
 
+Another valid TC for the immediately preceding timed-out round may arrive after view entry with a
+PrepareQC that the first quorum omitted. The node persists this certificate only when its selected
+Prepare origin is strictly newer than both the installed highest PrepareQC and the active lock. It
+then upgrades the lock without advancing the lifecycle view again. A same-round replacement with
+no high QC, or with an equal or lower Prepare origin, is rejected as a replay regression.
+
 Installing the TC may make its selected highest PrepareQC the node's active durable lock even when
 that node never created a Commit intent for the PrepareQC's round. TC installation does not itself
 authorize a signature. The reducer first recovers, stores, and deterministically validates the exact
-locked body. Validation may then append one `LockAndCommit` for that historical round and subject;
-only the successful WAL acknowledgement releases the local Commit signature. Every other
-historical round or subject remains behind the timeout fence, and this path never creates a Prepare
-vote.
+locked body at the PrepareQC's `proposal_round`. Validation may then append one `LockAndCommit`
+whose Commit vote is signed in the active finality round but retains that historical proposal
+origin; only the successful WAL acknowledgement releases the local Commit signature. Every other
+proposal origin or subject remains behind the timeout fence, and this path never creates a Prepare
+vote or a replacement proposal.
+
+Validation can finish after the active finality round's `TimeoutIntent` is already durable. In that
+ordering the reducer does not append or sign a Commit in the closed view. The exact acknowledged
+current-view timeout is instead a typed recovery witness for the validated historical lock. The
+next installed TC creates a new owner generation, reacquires and revalidates the same immutable
+proposal origin, and may append `LockAndCommit` in the new open finality round. Stale, wrong-view,
+wrong-signer, volatile-only, or non-exact timeout state is not a progress witness and still fails
+closed.
 
 WAL replay enforces the same boundary in record order. A historical `LockAndCommit` is valid only
 after an installed TC has advanced the view while the exact same PrepareQC is the active lock.
-Without that prerequisite, or when the round or subject differs, replay fails closed. An
+Without that prerequisite, or when the proposal origin or subject differs, replay fails closed. An
 `InstallTimeout` without the later exact `LockAndCommit` therefore resumes body reconstruction and
 validation rather than inferring a Commit signature from the certificate alone.
 
@@ -308,7 +344,7 @@ An earlier-view CommitQC remains decisive even when its final shares are assembl
 after a TC. The timeout fence prevents arbitrary new honest votes in the closed view. Its one exact
 historical-Commit exception cannot change the installed lock. For every old value which can still
 reach a Commit quorum, quorum intersection now proves the exact disjunction the implementation
-supports: either the target TC's selected high directly protects that round and subject, or an
+supports: either the target TC's selected high directly protects that proposal origin and subject, or an
 honest TC/Commit intersection signer has a non-strict timeout/Commit pair whose exact Commit keeps
 durable installed-TC authorization. The target TC may have been formed before that late Commit, so
 claiming that its own high must always protect the Commit would be false. The formal operator
@@ -456,8 +492,8 @@ or duplicating a certified batch entrypoint. Block validation resolves and reval
 sidecar, and Kura commits the carrier block and merge-log record in the same global order, with
 the full entry staged before the block becomes irreversible and monotonic restart reconciliation
 repairing any unpublished merge-log or sparse-carrier suffix. Old-view sidecars and signatures
-cannot be rebound to a later-view proposal; an earlier-view global block that already reaches a
-CommitQC remains decisive only with its exact earlier-view carrier.
+cannot be rebound to a later proposal origin; an earlier-origin global block that reaches a
+later-view CommitQC remains decisive only with its exact original carrier.
 
 Only the exact global merge leader constructs the execution candidate. It advertises and serves
 bounded chunks of that complete candidate; followers validate and deterministically reexecute the
@@ -545,7 +581,7 @@ transient Kura publication failure, and holder outages remain retryable. Registr
 reject only their exact body/work tuple, while hash-wide rejection requires a fully decoded
 reference-matching entry.
 
-On a certified view transition, deferred work not protected by the exact round and subject of the
+On a certified view transition, deferred work not protected by the exact proposal round and subject of the
 TC's selected high PrepareQC is released from the executor and transport. Kura cleanup is cached by
 certified carrier-state transition rather than rescanning its bounded store on every actor loop.
 With neither a lock nor a durable decision, Kura retains only entries eligible for the new exact
@@ -605,6 +641,11 @@ and live session rows with impossible vote/quorum counts. Torii and the Rust cli
 impossible queue bounds, inconsistent commit identity, unsupported protocol versions, and commit
 summaries that do not satisfy both frozen quorum dimensions.
 
+Every proposal-authenticating outbound-intent diagnostic carries its exact `proposal_round` in
+addition to the intent's finality `round`; timeout intents carry no proposal round. Proposal and
+Prepare intents require equal rounds, while Commit intents may retain an earlier authenticated
+proposal origin after a view change.
+
 The JSON projection follows the Norito JSON contract exactly. Fixed byte arrays such as
 `height_context.epoch_seed`, settlement `source_id`, and relay `manifest_root` are uppercase hex
 strings of the exact byte width; they are not JSON byte arrays. Unit enums remain tagged objects:
@@ -628,13 +669,23 @@ and consensus key. Each successful append includes `flush` and `sync_data`; only
 durability acknowledgement to the reducer. Replay happens before consensus ingress opens.
 
 The WAL records Prepare intent, observed PrepareQC/high QC, atomic lock plus Commit intent, timeout
-intent, installed TC, and decision. A `LockAndCommit` for a round older than the replayed current
-view is accepted only when the preceding records leave its exact PrepareQC as the active lock after
-view installation and no higher conflicting-subject local Prepare intent or known PrepareQC exists;
-higher same-subject reproposals do not block reconstruction. The timeout fence still rejects every
-other historical vote. An incomplete final frame is an unacknowledged crash tail and is discarded. A checksum failure, broken hash chain,
+intent, installed TC, and decision. A `LockAndCommit` whose proposal origin is older than the
+replayed current view is accepted only when the preceding records leave its exact PrepareQC as the
+active lock after view installation and no higher proposal-origin local Prepare intent or known
+PrepareQC exists, including evidence for the same subject bytes. Its Commit round is the active
+finality round; its proposal origin remains the lock's exact earlier round. Any higher Prepare
+origin fences reconstruction rather than relabelling that origin or creating a replacement
+proposal. The timeout fence still rejects every other historical vote. An incomplete
+final frame is an unacknowledged crash tail and is discarded. A checksum failure, broken hash chain,
 non-monotonic sequence, identity mismatch, or historical-lock mismatch before that tail fails
 closed. Records are pruned only after the decided block and its certificate are durable in Kura.
+
+Pending persistence and the production refinement boundary carry the WAL record's primary proposal
+origin independently from the reducer owner tag. Records which embed a second certificate, such as
+`LockAndCommit` or timeout evidence with a highest PrepareQC, also carry that certificate's
+auxiliary proposal origin. Begin, acknowledgement, requested capability, and independently
+reconstructed grant must agree on both origins. Mutating both sides to a different origin is still
+rejected because the pending WAL record remains the authoritative identity.
 
 Height-local I/O retirement uses one bounded control deadline covering queue drain and terminal
 acknowledgement. Cooperative workers are joined immediately; a worker still blocked in an

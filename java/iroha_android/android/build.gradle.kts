@@ -3,6 +3,7 @@ import java.security.MessageDigest
 import java.time.Instant
 import org.gradle.api.GradleException
 import org.gradle.api.file.FileSystemLocation
+import org.gradle.api.provider.Provider
 import org.gradle.api.publish.maven.tasks.PublishToMavenLocal
 import org.gradle.api.publish.maven.tasks.PublishToMavenRepository
 
@@ -23,6 +24,9 @@ buildscript {
 }
 
 val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0")
+@Suppress("UNCHECKED_CAST")
+val irohaKotlinSdkVersion =
+    rootProject.extra["irohaKotlinSdkVersionProvider"] as Provider<String>
 val androidArtifactId = "iroha-android"
 group = "org.hyperledger.iroha"
 version = sdkVersion.get()
@@ -88,7 +92,7 @@ fun renderDependencyManifest(
 
 android {
     namespace = "org.hyperledger.iroha.android"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         minSdk = 24
@@ -127,6 +131,7 @@ android {
 
 dependencies {
     api(project(":core"))
+    api("org.hyperledger.iroha.sdk:client-android:${irohaKotlinSdkVersion.get()}")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
@@ -134,6 +139,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.3.3")
     implementation("androidx.camera:camera-lifecycle:1.3.3")
     implementation("com.google.zxing:core:3.5.3")
+    implementation("com.google.android.gms:play-services-nearby:19.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation("androidx.test:runner:1.6.2")
@@ -359,6 +365,7 @@ publishing {
 }
 
 tasks.withType<PublishToMavenRepository>().configureEach {
+    dependsOn(":core:publish")
     if (hasCycloneDx) {
         dependsOn(androidDependencyManifest, tasks.named("cyclonedxBom"), tasks.named("writeAndroidRuntimeManifest"))
     } else {
@@ -367,6 +374,7 @@ tasks.withType<PublishToMavenRepository>().configureEach {
 }
 
 tasks.withType<PublishToMavenLocal>().configureEach {
+    dependsOn(":core:publishToMavenLocal")
     if (hasCycloneDx) {
         dependsOn(androidDependencyManifest, tasks.named("cyclonedxBom"), tasks.named("writeAndroidRuntimeManifest"))
     } else {

@@ -3,6 +3,33 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaRecursiveSpendTests: XCTestCase {
+    func testTopUpWitnessBindingRetriesOnlySnapshotDriftAndKeepsMatchedSnapshot() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: packageRoot
+                .appendingPathComponent("Sources/IrohaSwift/TxBuilder.swift"),
+            encoding: .utf8
+        )
+        let start = try XCTUnwrap(source.range(of: "public func prepareKagemushaTopUpShield("))
+        let tail = source[start.lowerBound...]
+        let end = try XCTUnwrap(tail.range(of: "    /// Generates a new signing key"))
+        let implementation = String(tail[..<end.lowerBound])
+
+        XCTAssertTrue(implementation.contains("for attempt in 0..<3"))
+        XCTAssertTrue(implementation.contains("matching: readiness"))
+        XCTAssertTrue(implementation.contains("if attempt < 2 { continue }"))
+        XCTAssertTrue(implementation.contains(
+            "evaluatedBlockHeight: readiness.evaluatedBlockHeight"
+        ))
+        XCTAssertTrue(implementation.contains(
+            "evaluatedBlockHash: readiness.evaluatedBlockHashBytes"
+        ))
+        XCTAssertFalse(implementation.contains("let currentReadiness"))
+    }
+
     func testReleaseQualifiedStepEqVerifierKeyIDBindsExactManifest() throws {
         let manifest = Data(repeating: 0x42, count: 32)
         XCTAssertEqual(

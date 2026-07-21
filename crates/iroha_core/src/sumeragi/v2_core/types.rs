@@ -202,6 +202,20 @@ impl EventTag {
     pub const fn generation(self) -> Generation {
         self.generation
     }
+
+    /// Whether this tag is a strictly later local incarnation at a
+    /// non-regressing view of the same height.
+    ///
+    /// A second timeout certificate for the same timed-out round may install
+    /// a strictly higher PrepareQC without changing the resulting view.  The
+    /// generation therefore participates in lifecycle ownership independently
+    /// of the view number.
+    #[must_use]
+    pub(crate) const fn strictly_advances(self, previous: Self) -> bool {
+        self.height == previous.height
+            && self.view >= previous.view
+            && self.generation.0 > previous.generation.0
+    }
 }
 
 /// The two voting phases of the global Sumeragi v2 protocol.
@@ -218,6 +232,7 @@ pub enum Phase {
 pub struct CertificateRef {
     context_id: ContextId,
     round: Round,
+    proposal_round: Round,
     phase: Phase,
     subject: Subject,
 }
@@ -226,9 +241,22 @@ impl CertificateRef {
     /// Constructs a certificate reference.
     #[must_use]
     pub const fn new(context_id: ContextId, round: Round, phase: Phase, subject: Subject) -> Self {
+        Self::new_with_proposal_round(context_id, round, round, phase, subject)
+    }
+
+    /// Constructs a certificate reference with an explicit proposal origin.
+    #[must_use]
+    pub const fn new_with_proposal_round(
+        context_id: ContextId,
+        round: Round,
+        proposal_round: Round,
+        phase: Phase,
+        subject: Subject,
+    ) -> Self {
         Self {
             context_id,
             round,
+            proposal_round,
             phase,
             subject,
         }
@@ -246,6 +274,12 @@ impl CertificateRef {
         self.round
     }
 
+    /// Returns the immutable proposal-body origin round.
+    #[must_use]
+    pub const fn proposal_round(self) -> Round {
+        self.proposal_round
+    }
+
     /// Returns the referenced phase.
     #[must_use]
     pub const fn phase(self) -> Phase {
@@ -260,15 +294,16 @@ impl CertificateRef {
 
     /// Returns whether both references certify the same committed decision.
     ///
-    /// A committed subject may acquire valid certificates in multiple views.
-    /// The stable decision identity therefore binds context, height, Commit
-    /// phase, and subject, while deliberately excluding the view.
+    /// A committed proposal may acquire valid certificates in multiple
+    /// finality views. The stable decision identity binds its immutable
+    /// proposal origin while deliberately excluding only the finality view.
     #[must_use]
     pub fn same_commit_decision(self, other: Self) -> bool {
         self.phase == Phase::Commit
             && other.phase == Phase::Commit
             && self.context_id == other.context_id
             && self.round.height == other.round.height
+            && self.proposal_round == other.proposal_round
             && self.subject == other.subject
     }
 }
@@ -409,7 +444,9 @@ impl HeightContext {
             (_, None, true) => return Err(HeightContextError::InvalidParentCommit),
             (_, Some(parent), false)
                 if parent.phase != Phase::Commit
-                    || parent.round.height.checked_add(1) != Some(height) =>
+                    || parent.round.height.checked_add(1) != Some(height)
+                    || parent.proposal_round.height != parent.round.height
+                    || parent.proposal_round.view > parent.round.view =>
             {
                 return Err(HeightContextError::InvalidParentCommit);
             }
@@ -637,6 +674,7 @@ impl SignatureShare {
 pub struct Vote {
     context_id: ContextId,
     round: Round,
+    proposal_round: Round,
     phase: Phase,
     subject: Subject,
     signer: ValidatorId,
@@ -652,9 +690,23 @@ impl Vote {
         subject: Subject,
         signer: ValidatorId,
     ) -> Self {
+        Self::new_with_proposal_round(context_id, round, round, phase, subject, signer)
+    }
+
+    /// Constructs a vote with an explicit immutable proposal origin.
+    #[must_use]
+    pub const fn new_with_proposal_round(
+        context_id: ContextId,
+        round: Round,
+        proposal_round: Round,
+        phase: Phase,
+        subject: Subject,
+        signer: ValidatorId,
+    ) -> Self {
         Self {
             context_id,
             round,
+            proposal_round,
             phase,
             subject,
             signer,
@@ -671,6 +723,12 @@ impl Vote {
     #[must_use]
     pub const fn round(self) -> Round {
         self.round
+    }
+
+    /// Returns the immutable proposal-body origin round.
+    #[must_use]
+    pub const fn proposal_round(self) -> Round {
+        self.proposal_round
     }
 
     /// Returns the vote phase.
@@ -748,6 +806,12 @@ impl QuorumCertificate {
         self.reference.round
     }
 
+    /// Returns the immutable proposal-body origin round.
+    #[must_use]
+    pub const fn proposal_round(&self) -> Round {
+        self.reference.proposal_round
+    }
+
     /// Returns the certificate phase.
     #[must_use]
     pub const fn phase(&self) -> Phase {
@@ -778,6 +842,13 @@ impl QuorumCertificate {
         }
         if self.reference.round.height != context.height {
             return Err(QuorumError::HeightMismatch);
+        }
+        if self.reference.proposal_round.height != context.height
+            || self.reference.proposal_round.view > self.reference.round.view
+            || (self.reference.phase == Phase::Prepare
+                && self.reference.proposal_round != self.reference.round)
+        {
+            return Err(QuorumError::InvalidProposalRound);
         }
         let signers: Vec<_> = self.signatures.iter().map(SignatureShare::signer).collect();
         Quorum::require(context, &signers)

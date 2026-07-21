@@ -2690,7 +2690,8 @@ export class ToriiClient {
   }
 
   /**
-   * List permission tokens granted directly to an account (`GET /v1/accounts/{accountId}/permissions`).
+   * List effective permission tokens for an account, including grants inherited from assigned roles
+   * (`GET /v1/accounts/{accountId}/permissions`).
    * @param {string} accountId
    * @param {{limit?: number, offset?: number, signal?: AbortSignal}} [options]
    * @returns {Promise<{items: Array<{name: string, payload: unknown}>, total: number}>}
@@ -2719,7 +2720,7 @@ export class ToriiClient {
   }
 
   /**
-   * Iterate permission tokens granted directly to an account.
+   * Iterate effective permission tokens, including grants inherited from assigned roles.
    * @param {string} accountId
    * @param {PaginationIteratorOptions} [options]
    * @returns {AsyncGenerator<{name: string, payload: unknown}, void, unknown>}
@@ -15452,7 +15453,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
   }
 
   const generation = parseSumeragiUnsigned(record.generation, `${context}.generation`);
-  const checkedRound = (raw, roundContext) => {
+  const boundRound = (raw, roundContext) => {
     const round = parseSumeragiRound(raw, roundContext);
     if (
       round.context_id[0] !== active.contextId[0] ||
@@ -15460,12 +15461,20 @@ function parseSumeragiLivenessStatus(value, context, active) {
     ) {
       throw new TypeError(`${roundContext} must match the active height context`);
     }
+    return round;
+  };
+  const checkedRound = (raw, roundContext) => {
+    const round = boundRound(raw, roundContext);
     if (round.view > active.view) {
       throw new RangeError(`${roundContext}.view must not exceed the active view`);
     }
     return round;
   };
-  const checkedPartialQuorum = (raw, itemContext, { timeout = false } = {}) => {
+  const checkedPartialQuorum = (
+    raw,
+    itemContext,
+    { timeout = false, phase = null } = {},
+  ) => {
     const expectedFields = timeout
       ? [
           "round",
@@ -15477,6 +15486,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
         ]
       : [
           "round",
+          "proposal_round",
           "subject",
           "execution_commitment",
           "signer_count",
@@ -15533,8 +15543,16 @@ function parseSumeragiLivenessStatus(value, context, active) {
         certificate_formed: certificateFormed,
       });
     }
+    const proposalRound = checkedRound(
+      item.proposal_round,
+      `${itemContext}.proposal_round`,
+    );
+    validateSumeragiProposalRound(proposalRound, round, itemContext, {
+      requireEqual: phase === "prepare",
+    });
     return Object.freeze({
       round,
+      proposal_round: proposalRound,
       subject: parseSumeragiBlockSubject(item.subject, `${itemContext}.subject`),
       execution_commitment: parseSumeragiExecutionCommitment(
         item.execution_commitment,
@@ -15546,9 +15564,13 @@ function parseSumeragiLivenessStatus(value, context, active) {
       total_power: totalPower,
     });
   };
-  const voteQuorums = (field) => Object.freeze(
+  const voteQuorums = (field, phase) => Object.freeze(
     assertSumeragiArrayBound(record[field], 128, `${context}.${field}`).map(
-      (item, index) => checkedPartialQuorum(item, `${context}.${field}[${index}]`),
+      (item, index) => checkedPartialQuorum(
+        item,
+        `${context}.${field}[${index}]`,
+        { phase },
+      ),
     ),
   );
   const timeoutQuorums = Object.freeze(
@@ -15581,6 +15603,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       const allowedFields = new Set([
         "kind",
         "round",
+        "proposal_round",
         "subject",
         "execution_commitment",
         "stage",
@@ -15623,6 +15646,10 @@ function parseSumeragiLivenessStatus(value, context, active) {
             item.execution_commitment,
             `${itemContext}.execution_commitment`,
           );
+      const carriesProposalRound = subjectKinds.has(kind.kind);
+      if (carriesProposalRound !== (item.proposal_round != null)) {
+        throw new TypeError(`${itemContext} has inconsistent proposal_round for ${kind.kind}`);
+      }
       const shapeIsValid =
         (kind.kind === "proposal" && subject !== null && executionCommitment === null) ||
         (subjectKinds.has(kind.kind) && kind.kind !== "proposal" &&
@@ -15631,9 +15658,22 @@ function parseSumeragiLivenessStatus(value, context, active) {
       if (!shapeIsValid) {
         throw new TypeError(`${itemContext} has inconsistent proposal fields`);
       }
+      const round = boundRound(item.round, `${itemContext}.round`);
+      if (kind.kind !== "commit_qc" && round.view > active.view) {
+        throw new RangeError(`${itemContext}.round.view must not exceed the active view`);
+      }
+      const proposalRound = item.proposal_round == null
+        ? null
+        : boundRound(item.proposal_round, `${itemContext}.proposal_round`);
+      if (proposalRound !== null) {
+        validateSumeragiProposalRound(proposalRound, round, itemContext, {
+          requireEqual: ["proposal", "prepare_vote", "prepare_qc"].includes(kind.kind),
+        });
+      }
       return Object.freeze({
         kind,
-        round: checkedRound(item.round, `${itemContext}.round`),
+        round,
+        proposal_round: proposalRound,
         subject,
         execution_commitment: executionCommitment,
         stage,
@@ -15822,8 +15862,8 @@ function parseSumeragiLivenessStatus(value, context, active) {
 
   return Object.freeze({
     generation,
-    prepare_quorums: voteQuorums("prepare_quorums"),
-    commit_quorums: voteQuorums("commit_quorums"),
+    prepare_quorums: voteQuorums("prepare_quorums", "prepare"),
+    commit_quorums: voteQuorums("commit_quorums", "commit"),
     timeout_quorums: timeoutQuorums,
     outbound_intents: outboundIntents,
     work,
@@ -16029,6 +16069,26 @@ function parseSumeragiRound(value, context) {
   });
 }
 
+function validateSumeragiProposalRound(
+  proposalRound,
+  round,
+  context,
+  { requireEqual = false } = {},
+) {
+  if (
+    proposalRound.context_id[0] !== round.context_id[0] ||
+    proposalRound.height !== round.height
+  ) {
+    throw new TypeError(`${context}.proposal_round must match round context and height`);
+  }
+  if (proposalRound.view > round.view) {
+    throw new RangeError(`${context}.proposal_round.view must not exceed round.view`);
+  }
+  if (requireEqual && proposalRound.view !== round.view) {
+    throw new TypeError(`${context}.proposal_round must equal round for prepare`);
+  }
+}
+
 function parseSumeragiBlockSubject(value, context) {
   const record = ensureRecord(value, context);
   return Object.freeze({
@@ -16093,14 +16153,24 @@ function parseSumeragiExecutionCommitment(value, context) {
 
 function parseSumeragiQcReference(value, context) {
   const record = ensureRecord(value, context);
+  const round = parseSumeragiRound(record.round, `${context}.round`);
+  const proposalRound = parseSumeragiRound(
+    record.proposal_round,
+    `${context}.proposal_round`,
+  );
+  const phase = parseSumeragiTaggedUnit(
+    record.phase,
+    "phase",
+    ["prepare", "commit"],
+    `${context}.phase`,
+  );
+  validateSumeragiProposalRound(proposalRound, round, context, {
+    requireEqual: phase.phase === "prepare",
+  });
   return Object.freeze({
-    round: parseSumeragiRound(record.round, `${context}.round`),
-    phase: parseSumeragiTaggedUnit(
-      record.phase,
-      "phase",
-      ["prepare", "commit"],
-      `${context}.phase`,
-    ),
+    round,
+    proposal_round: proposalRound,
+    phase,
     subject: parseSumeragiBlockSubject(record.subject, `${context}.subject`),
     execution_commitment: parseSumeragiExecutionCommitment(
       record.execution_commitment,

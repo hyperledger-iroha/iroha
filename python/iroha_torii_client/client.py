@@ -6778,6 +6778,7 @@ class SumeragiV2QcReference:
     """Stable semantic reference to a v2 quorum certificate."""
 
     round: SumeragiV2Round
+    proposal_round: SumeragiV2Round
     phase: str
     subject: SumeragiV2BlockSubject
     execution_commitment: SumeragiV2ExecutionCommitment
@@ -6822,6 +6823,7 @@ class SumeragiV2VoteQuorumStatus:
     """Partial dual quorum for one exact round and proposal."""
 
     round: SumeragiV2Round
+    proposal_round: SumeragiV2Round
     subject: SumeragiV2BlockSubject
     execution_commitment: SumeragiV2ExecutionCommitment
     signer_count: int
@@ -6848,6 +6850,7 @@ class SumeragiV2OutboundIntentStatus:
 
     kind: str
     round: SumeragiV2Round
+    proposal_round: Optional[SumeragiV2Round]
     subject: Optional[SumeragiV2BlockSubject]
     execution_commitment: Optional[SumeragiV2ExecutionCommitment]
     stage: str
@@ -7350,20 +7353,27 @@ class _SumeragiV2StatusParser:
             )
         generation = cls._unsigned(record.get("generation"), f"{context}.generation")
 
-        def checked_round(raw: Any, round_context: str) -> SumeragiV2Round:
+        def bound_round(raw: Any, round_context: str) -> SumeragiV2Round:
             parsed = cls._round(raw, context=round_context)
             if parsed.context_id != context_id or parsed.height != height:
                 raise RuntimeError(f"{round_context} must match the active height context")
+            return parsed
+
+        def checked_round(raw: Any, round_context: str) -> SumeragiV2Round:
+            parsed = bound_round(raw, round_context)
             if parsed.view > view:
                 raise RuntimeError(f"{round_context}.view must not exceed the active view")
             return parsed
 
-        def vote_quorum(raw: Any, quorum_context: str) -> SumeragiV2VoteQuorumStatus:
+        def vote_quorum(
+            raw: Any, quorum_context: str, *, phase: str
+        ) -> SumeragiV2VoteQuorumStatus:
             quorum = cls._exact_mapping(
                 raw,
                 quorum_context,
                 {
                     "round",
+                    "proposal_round",
                     "subject",
                     "execution_commitment",
                     "signer_count",
@@ -7396,8 +7406,19 @@ class _SumeragiV2StatusParser:
                 or (height_context.mode == "permissioned" and signed_power != signer_count)
             ):
                 raise RuntimeError(f"{quorum_context} disagrees with the frozen dual quorum")
+            round_ = checked_round(quorum.get("round"), f"{quorum_context}.round")
+            proposal_round = checked_round(
+                quorum.get("proposal_round"), f"{quorum_context}.proposal_round"
+            )
+            cls._validate_proposal_round(
+                proposal_round,
+                round_,
+                context=quorum_context,
+                require_equal=phase == "prepare",
+            )
             return SumeragiV2VoteQuorumStatus(
-                round=checked_round(quorum.get("round"), f"{quorum_context}.round"),
+                round=round_,
+                proposal_round=proposal_round,
                 subject=cls._subject(
                     quorum.get("subject"), context=f"{quorum_context}.subject"
                 ),
@@ -7411,12 +7432,12 @@ class _SumeragiV2StatusParser:
                 total_power=total_power,
             )
 
-        def vote_quorums(field: str) -> List[SumeragiV2VoteQuorumStatus]:
+        def vote_quorums(field: str, *, phase: str) -> List[SumeragiV2VoteQuorumStatus]:
             raw_values = cls._array(
                 record.get(field), f"{context}.{field}", maximum=cls.MAX_VALIDATORS
             )
             return [
-                vote_quorum(item, f"{context}.{field}[{index}]")
+                vote_quorum(item, f"{context}.{field}[{index}]", phase=phase)
                 for index, item in enumerate(raw_values)
             ]
 
@@ -7500,6 +7521,7 @@ class _SumeragiV2StatusParser:
             outbound_fields = {
                 "kind",
                 "round",
+                "proposal_round",
                 "subject",
                 "execution_commitment",
                 "stage",
@@ -7522,6 +7544,12 @@ class _SumeragiV2StatusParser:
             )
             raw_subject = item.get("subject")
             raw_execution = item.get("execution_commitment")
+            raw_proposal_round = item.get("proposal_round")
+            carries_proposal_round = kind in proposal_kinds
+            if carries_proposal_round != (raw_proposal_round is not None):
+                raise RuntimeError(
+                    f"{item_context} has inconsistent proposal_round for {kind}"
+                )
             shape_is_valid = (
                 (kind == "proposal" and raw_subject is not None and raw_execution is None)
                 or (
@@ -7537,10 +7565,30 @@ class _SumeragiV2StatusParser:
             )
             if not shape_is_valid:
                 raise RuntimeError(f"{item_context} has inconsistent proposal fields")
+            round_ = bound_round(item.get("round"), f"{item_context}.round")
+            if kind != "commit_qc" and round_.view > view:
+                raise RuntimeError(
+                    f"{item_context}.round.view must not exceed the active view"
+                )
+            proposal_round = (
+                None
+                if raw_proposal_round is None
+                else bound_round(
+                    raw_proposal_round, f"{item_context}.proposal_round"
+                )
+            )
+            if proposal_round is not None:
+                cls._validate_proposal_round(
+                    proposal_round,
+                    round_,
+                    context=item_context,
+                    require_equal=kind in {"proposal", "prepare_vote", "prepare_qc"},
+                )
             outbound_intents.append(
                 SumeragiV2OutboundIntentStatus(
                     kind=kind,
-                    round=checked_round(item.get("round"), f"{item_context}.round"),
+                    round=round_,
+                    proposal_round=proposal_round,
                     subject=(
                         None
                         if raw_subject is None
@@ -7745,8 +7793,8 @@ class _SumeragiV2StatusParser:
 
         return SumeragiV2LivenessStatus(
             generation=generation,
-            prepare_quorums=vote_quorums("prepare_quorums"),
-            commit_quorums=vote_quorums("commit_quorums"),
+            prepare_quorums=vote_quorums("prepare_quorums", phase="prepare"),
+            commit_quorums=vote_quorums("commit_quorums", phase="commit"),
             timeout_quorums=timeout_quorums,
             outbound_intents=outbound_intents,
             work=work,
@@ -8016,6 +8064,30 @@ class _SumeragiV2StatusParser:
             view=cls._unsigned(record.get("view"), f"{context}.view"),
         )
 
+    @staticmethod
+    def _validate_proposal_round(
+        proposal_round: SumeragiV2Round,
+        round_: SumeragiV2Round,
+        *,
+        context: str,
+        require_equal: bool,
+    ) -> None:
+        if (
+            proposal_round.context_id != round_.context_id
+            or proposal_round.height != round_.height
+        ):
+            raise RuntimeError(
+                f"{context}.proposal_round must match round context and height"
+            )
+        if proposal_round.view > round_.view:
+            raise RuntimeError(
+                f"{context}.proposal_round.view must not exceed round.view"
+            )
+        if require_equal and proposal_round != round_:
+            raise RuntimeError(
+                f"{context}.proposal_round must equal round for prepare"
+            )
+
     @classmethod
     def _subject(cls, value: Any, *, context: str) -> SumeragiV2BlockSubject:
         record = cls._mapping(value, context)
@@ -8035,14 +8107,26 @@ class _SumeragiV2StatusParser:
     @classmethod
     def _qc(cls, value: Any, *, context: str) -> SumeragiV2QcReference:
         record = cls._mapping(value, context)
+        round_ = cls._round(record.get("round"), context=f"{context}.round")
+        proposal_round = cls._round(
+            record.get("proposal_round"), context=f"{context}.proposal_round"
+        )
+        phase = cls._tagged(
+            record.get("phase"),
+            tag="phase",
+            allowed={"prepare", "commit"},
+            context=f"{context}.phase",
+        )
+        cls._validate_proposal_round(
+            proposal_round,
+            round_,
+            context=context,
+            require_equal=phase == "prepare",
+        )
         return SumeragiV2QcReference(
-            round=cls._round(record.get("round"), context=f"{context}.round"),
-            phase=cls._tagged(
-                record.get("phase"),
-                tag="phase",
-                allowed={"prepare", "commit"},
-                context=f"{context}.phase",
-            ),
+            round=round_,
+            proposal_round=proposal_round,
+            phase=phase,
             subject=cls._subject(record.get("subject"), context=f"{context}.subject"),
             execution_commitment=cls._execution_commitment(
                 record.get("execution_commitment"),

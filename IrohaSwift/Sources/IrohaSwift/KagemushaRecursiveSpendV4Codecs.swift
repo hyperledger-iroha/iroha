@@ -222,6 +222,39 @@ enum KagemushaRecursiveSpendCodecsV4 {
         )
     }
 
+    static func encodePeerSplitChangePrepareRequest(
+        _ request: KagemushaRecursiveSpendPeerSplitChangePrepareRequestV4
+    ) throws -> Data {
+        var writer = CompactNoritoWriter()
+        defer { writer.wipe() }
+        writer.writeField(uint16(request.version))
+        writer.writeField(try sequence(request.bundles.enumerated().map {
+            try nestedPayload(
+                $0.element.noritoArchive,
+                schema: KagemushaRecursiveSpend.bundleWireNameV4,
+                field: "peerSplitChangePrepareRequestV4.bundles[\($0.offset)]"
+            )
+        }))
+        writer.writeField(try sequence(request.inputOpenings.enumerated().map {
+            try noteOpening(
+                $0.element,
+                field: "peerSplitChangePrepareRequestV4.inputOpenings[\($0.offset)]"
+            )
+        }))
+        writer.writeField(try nestedPayload(
+            request.recipientRequest.archive,
+            schema: KagemushaRecursiveSpend.recipientRequestWireName,
+            field: "peerSplitChangePrepareRequestV4.recipientRequest"
+        ))
+        writer.writeField(try scaledAmount(request.changeAmount))
+        writer.writeField(request.operationID)
+        writer.writeField(request.entropy)
+        return frame(
+            KagemushaRecursiveSpend.peerSplitChangePrepareRequestWireNameV4,
+            payload: writer.data
+        )
+    }
+
     private static func appendInput(
         _ input: KagemushaRecursiveSpendAppendInputV4
     ) throws -> Data {

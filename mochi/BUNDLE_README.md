@@ -56,7 +56,12 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
 The bundle keeps everything relative so the archive can be expanded anywhere
 on disk or inside CI artefact stores. All generated state (peer configs,
 genesis manifests, logs, Kura storage) lives under the data root configured in
-the sample manifest.
+the sample manifest. Per-peer runtime storage separates `storage/kura`,
+`storage/snapshot`, and `storage/torii`; Kura's authenticated catalog root never
+contains snapshot or Torii files. Exported snapshot metadata records the exact
+`kura-subdirectory-v1` storage layout, and restore fails closed on unmarked or
+unknown layouts. An explicit snapshot root always starts with its required empty
+`generations/` directory.
 Generated `config.toml` files include a short MOCHI header with the resolved
 chain id and (when available) consensus fingerprint so operators can confirm
 they are launching the intended genesis profile.
@@ -143,8 +148,8 @@ manifest_store_dir = "/path/to/da_manifests"
 The Settings dialog exposes lane catalogs, DA toggles, and DA spool roots, plus
 a per-lane Kura/merge-log path preview (the generated peer configs include the
 same paths in their header). Use the Maintenance bar to reset a single lane:
-MOCHI wipes the lane storage, re-applies the lane catalog via Torii, and restarts
-peers as needed. The Lane status panel surfaces DA cursors, relay lag, RBC bytes,
+MOCHI submits a signed retire/add lifecycle replacement via Torii and leaves the
+authenticated storage transition to Kura. The Lane status panel surfaces DA cursors, relay lag, RBC bytes,
 and relay ingest state per peer so operators can spot lagging lanes quickly.
 The Settings dialog also includes a profile override field that accepts preset
 slugs or inline TOML tables for custom peer counts/consensus modes.

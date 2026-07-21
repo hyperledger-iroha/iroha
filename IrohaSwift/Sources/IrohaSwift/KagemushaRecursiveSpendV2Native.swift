@@ -29,6 +29,13 @@ extension NoritoNativeBridge {
         UInt64,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias KagemushaRecipientLineageVerifyV1Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64, UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias KagemushaV2TwoArchiveThreeOutFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -272,6 +279,50 @@ extension NoritoNativeBridge {
             archive: requestArchive,
             milliseconds: verifiedAtMilliseconds
         )
+    }
+
+    func kagemushaRecipientRegistrationLineageVerifyV1(
+        requestArchive: Data,
+        lineageArchive: Data,
+        verifiedAtMilliseconds: UInt64,
+        expectedEvaluatedBlockHeight: UInt64,
+        expectedEvaluatedBlockHash: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard verifiedAtMilliseconds > 0,
+              expectedEvaluatedBlockHeight > 0,
+              expectedEvaluatedBlockHash.count == 32,
+              expectedEvaluatedBlockHash.contains(where: { $0 != 0 }) else {
+            throw NativeBridgeError.kagemushaProve
+        }
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+            as: KagemushaRecipientLineageVerifyV1Fn.self
+        ) else { return nil }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = requestArchive.withUnsafeBytes { requestBuffer in
+            lineageArchive.withUnsafeBytes { lineageBuffer in
+                expectedEvaluatedBlockHash.withUnsafeBytes { hashBuffer in
+                    function(
+                        requestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(requestBuffer.count),
+                        lineageBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(lineageBuffer.count),
+                        verifiedAtMilliseconds,
+                        expectedEvaluatedBlockHeight,
+                        hashBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(hashBuffer.count),
+                        &output,
+                        &outputLength
+                    )
+                }
+            }
+        }
+        return try copyKagemushaV2Output(status: status, pointer: output, length: outputLength)
+        #else
+        return nil
+        #endif
     }
 
     func kagemushaRequestAuthorizationSigningBytesV2(

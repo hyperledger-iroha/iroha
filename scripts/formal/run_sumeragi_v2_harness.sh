@@ -101,9 +101,9 @@ case "$1" in
     while IFS= read -r test_name; do
       [[ -n "$test_name" ]] && listed_unit_tests+=("$test_name")
     done < <(sed -n 's/: test$//p' <<<"$unit_test_list")
-    if ((${#listed_unit_tests[@]} != 115)); then
+    if ((${#listed_unit_tests[@]} != 118)); then
       printf '%s\n' "${listed_unit_tests[@]}" >&2
-      echo "expected exactly 115 Sumeragi v2 reducer unit tests" >&2
+      echo "expected exactly 118 Sumeragi v2 reducer unit tests" >&2
       exit 1
     fi
     unit_ignored_test_list="$(
@@ -116,7 +116,7 @@ case "$1" in
     done < <(sed -n 's/: test$//p' <<<"$unit_ignored_test_list")
     if ((${#listed_ignored_unit_tests[@]} != 0)); then
       printf '%s\n' "${listed_ignored_unit_tests[@]}" >&2
-      echo "reducer unit gate requires all 115 tests to be runnable" >&2
+      echo "reducer unit gate requires all 118 tests to be runnable" >&2
       exit 1
     fi
     cargo test --locked --offline -p iroha_sumeragi_core \

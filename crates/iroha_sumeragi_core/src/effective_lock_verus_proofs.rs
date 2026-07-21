@@ -478,7 +478,7 @@ pub fn verified_production_exact_body_owner_rebind(
                 && owner.key == previous.key
                 && owner.manifest_hash == previous.manifest_hash
                 && previous.tag.height == rebound_tag.height
-                && previous.tag.view < rebound_tag.view
+                && previous.tag.view <= rebound_tag.view
                 && previous.tag.generation < rebound_tag.generation
         }),
 {

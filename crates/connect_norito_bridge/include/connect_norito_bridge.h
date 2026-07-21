@@ -353,6 +353,17 @@ int32_t connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4(
     uint8_t** out_result_ptr,
     unsigned long* out_result_len);
 
+// Canonical bridge-local peer-split change request: version (u16), ordered
+// bundles (1..2), matching local openings, signed recipient request, exact
+// change amount, operation id, and entropy. The secret result is canonical
+// `KagemushaRecursiveSpendPeerSplitChangePrepareResultV4` and must be released
+// only with `connect_norito_kagemusha_secret_free_buffer`.
+int32_t connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_result_ptr,
+    unsigned long* out_result_len);
+
 int32_t connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2(
     const uint8_t* payload_norito_ptr,
     unsigned long payload_norito_len,
@@ -373,6 +384,18 @@ int32_t connect_norito_kagemusha_recipient_payment_request_verify_v2(
     uint64_t verified_at_ms,
     uint8_t** out_digest_ptr,
     unsigned long* out_digest_len);
+
+int32_t connect_norito_kagemusha_recipient_registration_lineage_verify_v1(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* lineage_norito_ptr,
+    unsigned long lineage_norito_len,
+    uint64_t verified_at_ms,
+    uint64_t expected_evaluated_block_height,
+    const uint8_t* expected_evaluated_block_hash_ptr,
+    unsigned long expected_evaluated_block_hash_len,
+    uint8_t** out_lineage_ptr,
+    unsigned long* out_lineage_len);
 
 // Authorization signing uses a canonical local-only unsigned preparation.
 // It contains no signature or authenticatorData and cannot decode as an

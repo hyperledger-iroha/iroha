@@ -160,27 +160,27 @@ else
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_DEVICE" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$DEVICE_TRIPLE" \
+    cargo build --locked -p "$LIB_CRATE_NAME" --lib --release --target "$DEVICE_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the iOS device build"
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_ARM" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_ARM_TRIPLE" \
+    cargo build --locked -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_ARM_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the arm64 simulator build"
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_X64" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_X64_TRIPLE" \
+    cargo build --locked -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_X64_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the x86_64 simulator build"
   env MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_MACOS" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$MACOS_TRIPLE" \
+    cargo build --locked -p "$LIB_CRATE_NAME" --lib --release --target "$MACOS_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the macOS build"
 fi

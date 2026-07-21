@@ -1055,7 +1055,7 @@ macro_rules! exact_body_owner_rebind_body {
     ($current:expr, $previous:expr, $rebound_tag:expr, $owner_type:ident) => {{
         if !exact_body_owner_equal_body!($current, $previous)
             || $previous.tag.height != $rebound_tag.height
-            || $previous.tag.view >= $rebound_tag.view
+            || $previous.tag.view > $rebound_tag.view
             || $previous.tag.generation >= $rebound_tag.generation
         {
             None
@@ -1335,6 +1335,9 @@ macro_rules! pending_projection_is_absent_body {
             && canonical_identity_is_zero_body!($pending.context_id)
             && $pending.height == 0u64
             && $pending.view == 0u64
+            && !$pending.proposal_present
+            && $pending.proposal_height == 0u64
+            && $pending.proposal_view == 0u64
             && canonical_identity_is_zero_body!($pending.subject)
     }};
 }
@@ -1347,6 +1350,9 @@ macro_rules! pending_projection_equal_body {
             && canonical_identity_equal_body!($left.context_id, $right.context_id)
             && $left.height == $right.height
             && $left.view == $right.view
+            && $left.proposal_present == $right.proposal_present
+            && $left.proposal_height == $right.proposal_height
+            && $left.proposal_view == $right.proposal_view
             && canonical_identity_equal_body!($left.subject, $right.subject)
     }};
 }
@@ -1363,6 +1369,9 @@ macro_rules! pending_projection_matches_boundary_body {
             && $pending.continuation == $boundary.continuation
             && $pending.persistence_id == $boundary.persistence_id
             && canonical_identity_equal_body!($pending.context_id, $boundary.context_identity)
+            && $pending.proposal_present == $boundary.proposal_present
+            && $pending.proposal_height == $boundary.proposal_height
+            && $pending.proposal_view == $boundary.proposal_view
             && canonical_identity_equal_body!($pending.subject, $boundary.subject_identity)
     }};
 }
@@ -1405,6 +1414,45 @@ macro_rules! pending_round_can_acknowledge_body {
     }};
 }
 
+macro_rules! wal_record_proposal_round_is_exact_body {
+    ($record_kind:expr, $pending:expr, $boundary:expr) => {{
+        match $record_kind {
+            refinement_tag_value!(WAL_RECORD_PROPOSAL_INTENT)
+            | refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
+            | refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE) => {
+                $pending.proposal_present
+                    && $pending.proposal_height == $pending.height
+                    && $pending.proposal_view == $pending.view
+            }
+            refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT) => {
+                $pending.proposal_present
+                    && $pending.proposal_height == $pending.height
+                    && $pending.proposal_view <= $pending.view
+                    && $boundary.auxiliary_present
+                    && $boundary.auxiliary_context_id == $boundary.context_id
+                    && $boundary.auxiliary_height == $pending.proposal_height
+                    && $boundary.auxiliary_view == $pending.proposal_view
+                    && $boundary.auxiliary_proposal_height == $pending.proposal_height
+                    && $boundary.auxiliary_proposal_view == $pending.proposal_view
+                    && $boundary.auxiliary_phase == 1u8
+                    && $boundary.auxiliary_subject == $boundary.subject.subject
+            }
+            refinement_tag_value!(WAL_RECORD_DECISION) => {
+                $pending.proposal_present
+                    && $pending.proposal_height == $pending.height
+                    && $pending.proposal_view <= $pending.view
+            }
+            refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT)
+            | refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) => {
+                !$pending.proposal_present
+                    && $pending.proposal_height == 0u64
+                    && $pending.proposal_view == 0u64
+            }
+            _ => false,
+        }
+    }};
+}
+
 macro_rules! wal_record_continuation_is_exact_body {
     ($record_kind:expr, $continuation:expr) => {{
         match $record_kind {
@@ -1425,6 +1473,25 @@ macro_rules! wal_record_continuation_is_exact_body {
             }
             _ => false,
         }
+    }};
+}
+
+macro_rules! wal_record_round_matches_owner_body {
+    ($record_kind:expr, $pending:expr, $owner:expr) => {{
+        $pending.height == $owner.height
+            && match $record_kind {
+                refinement_tag_value!(WAL_RECORD_PROPOSAL_INTENT)
+                | refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
+                | refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
+                | refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT) => $pending.view == $owner.view,
+                refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE) => $pending.view <= $owner.view,
+                refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) => {
+                    $pending.view < u64::MAX
+                        && ($owner.view <= $pending.view || $pending.view + 1u64 == $owner.view)
+                }
+                refinement_tag_value!(WAL_RECORD_DECISION) => true,
+                _ => false,
+            }
     }};
 }
 
@@ -1463,14 +1530,20 @@ macro_rules! persist_slot_matches_boundary_body {
                 && $slot.requested.context_id == $boundary.context_id
                 && $slot.requested.height == $pending.height
                 && $slot.requested.view == $pending.view
-                && (if $pending.record_kind == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) {
-                    $slot.requested.auxiliary_subject == $boundary.subject.subject
-                } else {
-                    $slot.requested.subject == $boundary.subject.subject
-                })
+                && $slot.requested.proposal_height == $boundary.proposal_height
+                && $slot.requested.proposal_view == $boundary.proposal_view
+                && $slot.requested.subject == $boundary.subject.subject
                 && $slot.requested.tag.height == $boundary.tag.height
                 && $slot.requested.tag.view == $boundary.tag.view
                 && $slot.requested.tag.generation == $boundary.tag.generation
+                && $slot.requested.auxiliary_present == $boundary.auxiliary_present
+                && $slot.requested.auxiliary_context_id == $boundary.auxiliary_context_id
+                && $slot.requested.auxiliary_height == $boundary.auxiliary_height
+                && $slot.requested.auxiliary_view == $boundary.auxiliary_view
+                && $slot.requested.auxiliary_proposal_height == $boundary.auxiliary_proposal_height
+                && $slot.requested.auxiliary_proposal_view == $boundary.auxiliary_proposal_view
+                && $slot.requested.auxiliary_phase == $boundary.auxiliary_phase
+                && $slot.requested.auxiliary_subject == $boundary.auxiliary_subject
         } else {
             true
         }
@@ -1485,7 +1558,58 @@ macro_rules! tag_projection_equal_body {
     }};
 }
 
-// These six expressions are the source-shared production/Verus kernels for
+// A validated lock must retain exactly one durable reconstruction witness.
+// The expression is shared verbatim with Verus and derives exactness from
+// primitive round, context, subject, signer, and persistence observations.
+// A durable timeout is deliberately admissible only for a historical lock:
+// it witnesses that the current finality view closed before LockAndCommit
+// could be appended and that the next certified view transition can retry the
+// immutable proposal origin. It never authorizes a Commit in the closed view.
+macro_rules! locked_commit_progress_witness_body {
+    ($projection:expr) => {{
+        let lock_is_active = $projection.locked_context_id == $projection.context_id
+            && $projection.locked_height == $projection.current_height;
+        let lock_is_historical =
+            lock_is_active && $projection.locked_view < $projection.current_view;
+        let commit_is_exact = lock_is_active
+            && $projection.commit_intent_present
+            && $projection.local_validator_present
+            && $projection.commit_context_id == $projection.context_id
+            && $projection.commit_height == $projection.current_height
+            && $projection.commit_view >= $projection.locked_view
+            && $projection.commit_proposal_height == $projection.locked_height
+            && $projection.commit_proposal_view == $projection.locked_view
+            && $projection.commit_phase == 2u8
+            && $projection.commit_subject == $projection.locked_subject
+            && $projection.commit_signer == $projection.local_validator
+            && ($projection.commit_signature_pending || $projection.commit_pooled);
+        let pending_lock_and_commit_is_exact = lock_is_active
+            && !$projection.commit_intent_present
+            && $projection.local_validator_present
+            && $projection.pending.record_kind == refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
+            && $projection.pending.continuation == refinement_tag_value!(CONTINUATION_SIGN)
+            && $projection.pending.persistence_id > 0u64
+            && $projection.pending.context_id == $projection.context_id
+            && $projection.pending.height == $projection.current_height
+            && $projection.pending.view == $projection.current_view
+            && $projection.pending.proposal_present
+            && $projection.pending.proposal_height == $projection.locked_height
+            && $projection.pending.proposal_view == $projection.locked_view
+            && $projection.pending.subject == $projection.locked_subject;
+        let durable_timeout_is_exact = !$projection.commit_intent_present
+            && lock_is_historical
+            && $projection.local_validator_present
+            && $projection.timeout_intent_present
+            && $projection.timeout_intent_durable
+            && $projection.timeout_context_id == $projection.context_id
+            && $projection.timeout_height == $projection.current_height
+            && $projection.timeout_view == $projection.current_view
+            && $projection.timeout_signer == $projection.local_validator;
+        commit_is_exact || pending_lock_and_commit_is_exact || durable_timeout_is_exact
+    }};
+}
+
+// These seven expressions are the source-shared production/Verus kernels for
 // the progress-witness refinement.  Every field is a primitive observation at
 // the enforcing production seam; in particular, callers cannot supply an
 // already-computed "valid" or "owned" bit.
@@ -1499,20 +1623,34 @@ macro_rules! production_durable_intent_trace_body {
             );
         let persist_effects =
             effect_count_body!($projection.effects, refinement_tag_value!(EFFECT_PERSIST));
-        // A completion delivered after crash recovery retains the exact WAL
-        // id issued by the crashed generation.  It is an admissible empty
-        // stutter only when the completion kind is persistence-specific and
-        // its actor tag is no longer the live owner.  Current-owner or other
-        // nonzero-id inputs still fail closed.
-        let stale_persistence_completion = ($projection.event_kind
+        let tag_matches_owner =
+            tag_projection_equal_body!($projection.event_tag, $projection.owner_tag_before);
+        let persistence_completion = $projection.event_kind
             == refinement_tag_value!(EVENT_PERSISTED)
-            || $projection.event_kind == refinement_tag_value!(EVENT_PERSISTENCE_FAILED))
-            && $projection.event_persistence_id > 0u64
-            && !tag_projection_equal_body!($projection.event_tag, $projection.owner_tag_before);
+            || $projection.event_kind == refinement_tag_value!(EVENT_PERSISTENCE_FAILED);
         effect_slots_authorized_body!($projection.effects)
             && persist_effects <= 1u64
             && $projection.durable_sequence_after >= $projection.durable_sequence_before
-            && (if boundary_exact
+            && (if !tag_matches_owner {
+                boundary_capability_is_absent_body!($projection.boundary_claimed)
+                    && boundary_capability_is_absent_body!($projection.boundary_granted)
+                    && tag_projection_equal_body!(
+                        $projection.owner_tag_before,
+                        $projection.owner_tag_after
+                    )
+                    && $projection.durable_sequence_after == $projection.durable_sequence_before
+                    && pending_projection_equal_body!(
+                        $projection.pending_before,
+                        $projection.pending_after
+                    )
+                    && $projection.effects.len == 0u8
+                    && persist_effects == 0u64
+                    && (if persistence_completion {
+                        $projection.event_persistence_id > 0u64
+                    } else {
+                        $projection.event_persistence_id == 0u64
+                    })
+            } else if boundary_exact
                 && $projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
             {
                 pending_projection_is_absent_body!($projection.pending_before)
@@ -1538,14 +1676,40 @@ macro_rules! production_durable_intent_trace_body {
                         $projection.pending_after,
                         $projection.owner_tag_after
                     )
+                    && wal_record_round_matches_owner_body!(
+                        $projection.boundary_claimed.record_kind,
+                        $projection.pending_after,
+                        $projection.owner_tag_before
+                    )
+                    && wal_record_proposal_round_is_exact_body!(
+                        $projection.boundary_claimed.record_kind,
+                        $projection.pending_after,
+                        $projection.boundary_claimed
+                    )
                     && wal_record_continuation_is_exact_body!(
                         $projection.boundary_claimed.record_kind,
                         $projection.boundary_claimed.continuation
                     )
+                    && (if $projection.boundary_claimed.record_kind
+                        == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT)
+                    {
+                        if $projection.boundary_claimed.auxiliary_present {
+                            $projection.boundary_claimed.auxiliary_phase == 1u8
+                                && $projection.boundary_claimed.subject.subject
+                                    == $projection.boundary_claimed.auxiliary_subject
+                        } else {
+                            true
+                        }
+                    } else {
+                        true
+                    })
                     && event_can_start_wal_record_body!(
                         $projection.event_kind,
                         $projection.boundary_claimed.record_kind
                     )
+                    && $projection.durable_sequence_before < u64::MAX
+                    && $projection.pending_after.persistence_id
+                        == $projection.durable_sequence_before + 1u64
                     && $projection.durable_sequence_after == $projection.durable_sequence_before
                     && $projection.event_kind != refinement_tag_value!(EVENT_PERSISTED)
                     && $projection.event_persistence_id == 0u64
@@ -1614,10 +1778,37 @@ macro_rules! production_durable_intent_trace_body {
                         $projection.owner_tag_after,
                         $projection.boundary_claimed.tag
                     )
+                    && wal_record_round_matches_owner_body!(
+                        $projection.boundary_claimed.record_kind,
+                        $projection.pending_before,
+                        $projection.owner_tag_before
+                    )
+                    && wal_record_proposal_round_is_exact_body!(
+                        $projection.boundary_claimed.record_kind,
+                        $projection.pending_before,
+                        $projection.boundary_claimed
+                    )
+                    && (if $projection.boundary_claimed.record_kind
+                        == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT)
+                    {
+                        $projection.owner_tag_after.height == $projection.owner_tag_before.height
+                            && $projection.owner_tag_after.view
+                                == $projection.pending_before.view + 1u64
+                            && $projection.owner_tag_before.generation < u64::MAX
+                            && $projection.owner_tag_after.generation
+                                == $projection.owner_tag_before.generation + 1u64
+                    } else {
+                        tag_projection_equal_body!(
+                            $projection.owner_tag_before,
+                            $projection.owner_tag_after
+                        )
+                    })
                     && pending_projection_is_absent_body!($projection.pending_after)
                     && $projection.durable_sequence_before < u64::MAX
                     && $projection.durable_sequence_after
                         == $projection.durable_sequence_before + 1u64
+                    && $projection.pending_before.persistence_id
+                        == $projection.durable_sequence_after
                     && $projection.event_kind == refinement_tag_value!(EVENT_PERSISTED)
                     && $projection.event_persistence_id
                         == $projection.boundary_claimed.persistence_id
@@ -1697,7 +1888,13 @@ macro_rules! production_durable_intent_trace_body {
                         $projection.pending_before,
                         $projection.pending_after
                     )
-                    && ($projection.event_persistence_id == 0u64 || stale_persistence_completion)
+                    && (if persistence_completion {
+                        pending_projection_is_absent_body!($projection.pending_before)
+                            && $projection.effects.len == 0u8
+                            && $projection.event_persistence_id > 0u64
+                    } else {
+                        $projection.event_persistence_id == 0u64
+                    })
                     && persist_effects == 0u64
             })
     }};
@@ -1710,7 +1907,10 @@ macro_rules! production_decision_identity_is_canonical_body {
             refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
             refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
         ) && $decision.height > 0u64
+            && $decision.proposal_height == $decision.height
+            && $decision.proposal_view <= $decision.view
             && ($decision.phase == 1u8 || $decision.phase == 2u8)
+            && ($decision.phase != 1u8 || $decision.proposal_view == $decision.view)
             && canonical_identity_is_typed_body!(
                 $decision.subject,
                 refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
@@ -1746,6 +1946,8 @@ macro_rules! production_decision_identity_equal_body {
             && canonical_identity_equal_body!($left.context_id, $right.context_id)
             && $left.height == $right.height
             && $left.view == $right.view
+            && $left.proposal_height == $right.proposal_height
+            && $left.proposal_view == $right.proposal_view
             && $left.phase == $right.phase
             && canonical_identity_equal_body!($left.subject, $right.subject)
             && canonical_identity_equal_body!($left.block_hash, $right.block_hash)
@@ -1851,7 +2053,7 @@ macro_rules! production_decision_recovery_trace_body {
             )
             && $projection.expected_height == $projection.frozen_height
             && $projection.replay_tag.height == $projection.frozen_height
-            && $projection.replay_tag.view == $projection.commit_qc.decision.view
+            && tag_projection_equal_body!($projection.replay_tag, $projection.owner_tag)
             && $projection.replay_tag.generation == $projection.replay_generation
             && production_quorum_certificate_is_canonical_body!($projection.commit_qc)
             && $projection.commit_qc.decision.phase == 2u8
@@ -1864,8 +2066,8 @@ macro_rules! production_decision_recovery_trace_body {
                 $projection.commit_qc.decision.block_hash,
                 $projection.expected_block_hash
             )
-            && $projection.manifest_round.height == $projection.commit_qc.decision.height
-            && $projection.manifest_round.view == $projection.commit_qc.decision.view
+            && $projection.manifest_round.height == $projection.commit_qc.decision.proposal_height
+            && $projection.manifest_round.view == $projection.commit_qc.decision.proposal_view
             && $projection.manifest_round.generation == 0u64
             && canonical_identity_equal_body!(
                 $projection.manifest_subject,
@@ -1885,7 +2087,8 @@ macro_rules! production_decision_recovery_trace_body {
                 $projection.frozen_context_id
             )
             && $projection.durable_body.height == $projection.frozen_height
-            && $projection.durable_body.view == $projection.commit_qc.decision.view
+            && $projection.durable_body.view == $projection.manifest_round.view
+            && $projection.durable_body.view == $projection.commit_qc.decision.proposal_view
             && canonical_identity_equal_body!(
                 $projection.durable_body.subject,
                 $projection.commit_qc.decision.subject
@@ -2426,7 +2629,13 @@ macro_rules! production_application_trace_body {
     ($projection:expr) => {{
         $projection.context_height > 0u64
             && $projection.task_tag.height == $projection.context_height
-            && $projection.task_tag.view == $projection.commit_qc.decision.view
+            // The lifecycle owner and CommitQC round are distinct domains.
+            // Finality may arrive from either side of the local view; only the
+            // independently captured current owner must equal the task tag.
+            && tag_projection_equal_body!(
+                $projection.task_tag,
+                $projection.owner_tag
+            )
             && $projection.task_tag.generation == $projection.task_generation
             && production_quorum_certificate_is_canonical_body!($projection.commit_qc)
             && $projection.commit_qc.decision.phase == 2u8
@@ -2441,7 +2650,10 @@ macro_rules! production_application_trace_body {
                 $projection.context_id
             )
             && $projection.validated_body.height == $projection.context_height
-            && $projection.validated_body.view == $projection.commit_qc.decision.view
+            // Proposal origin and finality round are distinct. The body must
+            // match the CommitQC's authenticated immutable origin exactly.
+            && $projection.validated_body.view
+                == $projection.commit_qc.decision.proposal_view
             && canonical_identity_equal_body!(
                 $projection.validated_body.subject,
                 $projection.commit_qc.decision.subject
@@ -2643,6 +2855,8 @@ macro_rules! wal_retirement_authorized_body {
         $decision_certificate_context:expr,
         $decision_certificate_height:expr,
         $decision_certificate_view:expr,
+        $decision_proposal_height:expr,
+        $decision_proposal_view:expr,
         $decision_certificate_phase:expr,
         $commit_phase:expr,
         $decision_certificate_subject:expr,
@@ -2652,6 +2866,8 @@ macro_rules! wal_retirement_authorized_body {
         $receipt_certificate_context:expr,
         $receipt_certificate_height:expr,
         $receipt_certificate_view:expr,
+        $receipt_proposal_height:expr,
+        $receipt_proposal_view:expr,
         $receipt_certificate_phase:expr,
         $receipt_certificate_subject:expr $(,)?
     ) => {{
@@ -2664,16 +2880,20 @@ macro_rules! wal_retirement_authorized_body {
             && $decision_certificate_context == $receipt_certificate_context
             && $decision_certificate_height == $receipt_certificate_height
             && $decision_certificate_view == $receipt_certificate_view
+            && $decision_proposal_height == $receipt_proposal_height
+            && $decision_proposal_view == $receipt_proposal_view
             && $decision_certificate_phase == $commit_phase
             && $decision_certificate_phase == $receipt_certificate_phase
             && $decision_certificate_subject == $receipt_certificate_subject
             && $decision_context == $decision_certificate_context
             && $decision_height == $decision_certificate_height
+            && $decision_height == $decision_proposal_height
+            && $decision_proposal_view <= $decision_certificate_view
             && $decision_subject == $decision_certificate_subject
     }};
 }
 
-/// Primitive `(height, view, generation)` projection.
+/// Primitive `(height, view, generation)` lifecycle projection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TagProjection {
     pub(crate) height: u64,
@@ -2740,8 +2960,9 @@ where
 /// Rebind one exact body-pipeline consumer to a strictly newer incarnation.
 ///
 /// The height, round/subject key, and manifest identity remain immutable;
-/// both view and generation must strictly advance. This is only a safety
-/// transition. It does not claim the asynchronous rebind will be scheduled.
+/// the view cannot regress and the generation must strictly advance. This is
+/// only a safety transition. It does not claim the asynchronous rebind will be
+/// scheduled.
 #[allow(dead_code)] // Called by the production executor, outside the pure harness crate.
 pub fn plan_exact_body_owner_rebind<K, M>(
     current: ExactBodyOwnerProjection<K, M>,
@@ -3011,6 +3232,51 @@ pub struct ProductionDurableIntentTraceProjection {
     pub(crate) durable_sequence_after: u64,
 }
 
+/// Primitive ownership facts for one validated, undecided durable lock.
+///
+/// The kernel accepts an active exact Commit, an exact pending
+/// `LockAndCommit`, or an exact acknowledged timeout for the current view.
+/// The last form is a recovery witness only: the reducer still refuses to
+/// append or sign a Commit after that timeout closes the view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LockedCommitProgressWitnessProjection {
+    pub(crate) context_id: CanonicalIdentityProjection,
+    pub(crate) current_height: u64,
+    pub(crate) current_view: u64,
+    pub(crate) local_validator_present: bool,
+    pub(crate) local_validator: ValidatorId,
+    pub(crate) locked_context_id: CanonicalIdentityProjection,
+    pub(crate) locked_height: u64,
+    pub(crate) locked_view: u64,
+    pub(crate) locked_subject: CanonicalIdentityProjection,
+    pub(crate) commit_intent_present: bool,
+    pub(crate) commit_context_id: CanonicalIdentityProjection,
+    pub(crate) commit_height: u64,
+    pub(crate) commit_view: u64,
+    pub(crate) commit_proposal_height: u64,
+    pub(crate) commit_proposal_view: u64,
+    pub(crate) commit_phase: u8,
+    pub(crate) commit_subject: CanonicalIdentityProjection,
+    pub(crate) commit_signer: ValidatorId,
+    pub(crate) commit_signature_pending: bool,
+    pub(crate) commit_pooled: bool,
+    pub(crate) pending: PendingProjection,
+    pub(crate) timeout_intent_present: bool,
+    pub(crate) timeout_intent_durable: bool,
+    pub(crate) timeout_context_id: CanonicalIdentityProjection,
+    pub(crate) timeout_height: u64,
+    pub(crate) timeout_view: u64,
+    pub(crate) timeout_signer: ValidatorId,
+}
+
+/// Check that a validated lock retains one exact durable progress witness.
+#[must_use]
+pub(crate) fn locked_commit_progress_witness_is_valid(
+    projection: LockedCommitProgressWitnessProjection,
+) -> bool {
+    locked_commit_progress_witness_body!(projection)
+}
+
 /// Complete semantic decision identity repeated by a certificate or receipt.
 ///
 /// Every digest is a lossless four-word projection of an existing canonical
@@ -3021,6 +3287,8 @@ pub struct ProductionDecisionIdentityProjection {
     pub(crate) context_id: CanonicalIdentityProjection,
     pub(crate) height: u64,
     pub(crate) view: u64,
+    pub(crate) proposal_height: u64,
+    pub(crate) proposal_view: u64,
     pub(crate) phase: u8,
     pub(crate) subject: CanonicalIdentityProjection,
     pub(crate) block_hash: CanonicalIdentityProjection,
@@ -3061,6 +3329,7 @@ pub struct ProductionDecisionRecoveryTraceProjection {
     pub(crate) frozen_context_id: CanonicalIdentityProjection,
     pub(crate) frozen_height: u64,
     pub(crate) replay_tag: TagProjection,
+    pub(crate) owner_tag: TagProjection,
     pub(crate) replay_generation: u64,
     pub(crate) commit_qc: ProductionQuorumCertificateIdentityProjection,
     pub(crate) manifest_round: TagProjection,
@@ -3286,6 +3555,7 @@ pub struct ProductionReliableFlushApplicationProjection {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionApplicationTraceProjection {
     pub(crate) task_tag: TagProjection,
+    pub(crate) owner_tag: TagProjection,
     pub(crate) task_generation: u64,
     pub(crate) context_id: CanonicalIdentityProjection,
     pub(crate) context_height: u64,
@@ -3438,6 +3708,12 @@ pub struct PendingProjection {
     pub(crate) context_id: CanonicalIdentityProjection,
     pub(crate) height: u64,
     pub(crate) view: u64,
+    /// Whether the WAL record authenticates a proposal-body origin.
+    pub(crate) proposal_present: bool,
+    /// Immutable proposal-origin height, or zero when absent.
+    pub(crate) proposal_height: u64,
+    /// Immutable proposal-origin view, or zero when absent.
+    pub(crate) proposal_view: u64,
     pub(crate) subject: CanonicalIdentityProjection,
 }
 
@@ -3454,14 +3730,19 @@ pub struct EffectCapabilityKey {
     pub(crate) context_id: ContextId,
     pub(crate) height: u64,
     pub(crate) view: u64,
+    pub(crate) proposal_height: u64,
+    pub(crate) proposal_view: u64,
     pub(crate) phase: u8,
     pub(crate) subject: Subject,
     pub(crate) actor: ValidatorId,
     pub(crate) persistence_id: u64,
     pub(crate) record_kind: u8,
+    pub(crate) auxiliary_present: bool,
     pub(crate) auxiliary_context_id: ContextId,
     pub(crate) auxiliary_height: u64,
     pub(crate) auxiliary_view: u64,
+    pub(crate) auxiliary_proposal_height: u64,
+    pub(crate) auxiliary_proposal_view: u64,
     pub(crate) auxiliary_phase: u8,
     pub(crate) auxiliary_subject: Subject,
     pub(crate) manifest_payload: Digest,
@@ -3483,14 +3764,19 @@ impl EffectCapabilityKey {
             context_id: ContextId::repeat(0),
             height: 0,
             view: 0,
+            proposal_height: 0,
+            proposal_view: 0,
             phase: 0,
             subject: Subject::repeat(0),
             actor: ValidatorId::repeat(0),
             persistence_id: 0,
             record_kind: WAL_RECORD_NONE,
+            auxiliary_present: false,
             auxiliary_context_id: ContextId::repeat(0),
             auxiliary_height: 0,
             auxiliary_view: 0,
+            auxiliary_proposal_height: 0,
+            auxiliary_proposal_view: 0,
             auxiliary_phase: 0,
             auxiliary_subject: Subject::repeat(0),
             manifest_payload: Digest::repeat(0),
@@ -3581,6 +3867,21 @@ pub struct BoundaryCapabilityKey {
     pub(crate) tag: TagProjection,
     pub(crate) subject: SubjectProjection,
     pub(crate) subject_identity: CanonicalIdentityProjection,
+    /// Whether the primary WAL identity authenticates a proposal-body origin.
+    pub(crate) proposal_present: bool,
+    /// Immutable primary proposal-origin height, or zero when absent.
+    pub(crate) proposal_height: u64,
+    /// Immutable primary proposal-origin view, or zero when absent.
+    pub(crate) proposal_view: u64,
+    /// Whether the WAL record carries an auxiliary certificate reference.
+    pub(crate) auxiliary_present: bool,
+    pub(crate) auxiliary_context_id: ContextId,
+    pub(crate) auxiliary_height: u64,
+    pub(crate) auxiliary_view: u64,
+    pub(crate) auxiliary_proposal_height: u64,
+    pub(crate) auxiliary_proposal_view: u64,
+    pub(crate) auxiliary_phase: u8,
+    pub(crate) auxiliary_subject: Subject,
     pub(crate) replay_plan: ReplayPlanProjection,
 }
 
@@ -3605,6 +3906,17 @@ impl BoundaryCapabilityKey {
                 subject: Subject::repeat(0),
             },
             subject_identity: CanonicalIdentityProjection::zero(),
+            proposal_present: false,
+            proposal_height: 0,
+            proposal_view: 0,
+            auxiliary_present: false,
+            auxiliary_context_id: ContextId::repeat(0),
+            auxiliary_height: 0,
+            auxiliary_view: 0,
+            auxiliary_proposal_height: 0,
+            auxiliary_proposal_view: 0,
+            auxiliary_phase: 0,
+            auxiliary_subject: Subject::repeat(0),
             replay_plan: ReplayPlanProjection::empty(),
         }
     }
@@ -3860,14 +4172,19 @@ macro_rules! capability_key_equal_body {
             && $left.context_id == $right.context_id
             && $left.height == $right.height
             && $left.view == $right.view
+            && $left.proposal_height == $right.proposal_height
+            && $left.proposal_view == $right.proposal_view
             && $left.phase == $right.phase
             && $left.subject == $right.subject
             && $left.actor == $right.actor
             && $left.persistence_id == $right.persistence_id
             && $left.record_kind == $right.record_kind
+            && $left.auxiliary_present == $right.auxiliary_present
             && $left.auxiliary_context_id == $right.auxiliary_context_id
             && $left.auxiliary_height == $right.auxiliary_height
             && $left.auxiliary_view == $right.auxiliary_view
+            && $left.auxiliary_proposal_height == $right.auxiliary_proposal_height
+            && $left.auxiliary_proposal_view == $right.auxiliary_proposal_view
             && $left.auxiliary_phase == $right.auxiliary_phase
             && $left.auxiliary_subject == $right.auxiliary_subject
             && $left.manifest_payload == $right.manifest_payload
@@ -4218,6 +4535,17 @@ macro_rules! boundary_capability_equal_body {
             && $left.tag.generation == $right.tag.generation
             && subject_projection_equal_body!($left.subject, $right.subject)
             && canonical_identity_equal_body!($left.subject_identity, $right.subject_identity)
+            && $left.proposal_present == $right.proposal_present
+            && $left.proposal_height == $right.proposal_height
+            && $left.proposal_view == $right.proposal_view
+            && $left.auxiliary_present == $right.auxiliary_present
+            && $left.auxiliary_context_id == $right.auxiliary_context_id
+            && $left.auxiliary_height == $right.auxiliary_height
+            && $left.auxiliary_view == $right.auxiliary_view
+            && $left.auxiliary_proposal_height == $right.auxiliary_proposal_height
+            && $left.auxiliary_proposal_view == $right.auxiliary_proposal_view
+            && $left.auxiliary_phase == $right.auxiliary_phase
+            && $left.auxiliary_subject == $right.auxiliary_subject
             && replay_plan_well_formed_body!($left.replay_plan, $left.replay_effect_kind)
             && replay_plan_well_formed_body!($right.replay_plan, $right.replay_effect_kind)
             && replay_plan_equal_body!($left.replay_plan, $right.replay_plan)
@@ -4237,6 +4565,10 @@ macro_rules! boundary_capability_is_absent_body {
             && $boundary.tag.generation == 0u64
             && !$boundary.subject.present
             && canonical_identity_is_zero_body!($boundary.subject_identity)
+            && !$boundary.proposal_present
+            && $boundary.proposal_height == 0u64
+            && $boundary.proposal_view == 0u64
+            && !$boundary.auxiliary_present
             && $boundary.replay_plan.len == 0u8
             && replay_plan_well_formed_body!(
                 $boundary.replay_plan,
@@ -4259,6 +4591,15 @@ macro_rules! boundary_identity_is_canonical_body {
             )
         } else {
             canonical_identity_is_zero_body!($boundary.subject_identity)
+        }) && (if $boundary.proposal_present {
+            $boundary.proposal_height > 0u64
+        } else {
+            $boundary.proposal_height == 0u64 && $boundary.proposal_view == 0u64
+        }) && (if $boundary.auxiliary_present {
+            $boundary.auxiliary_height > 0u64
+                && ($boundary.auxiliary_phase == 1u8 || $boundary.auxiliary_phase == 2u8)
+        } else {
+            true
         })
     }};
 }
@@ -4404,6 +4745,10 @@ macro_rules! enter_view_projection_gate_body {
             } else {
                 incoming
             };
+            let strict_same_round_upgrade = timeout.view < u64::MAX
+                && timeout.view + 1u64 == $projection.before_tag.view
+                && incoming.present
+                && (!local.present || incoming.view > local.view);
             $projection.enter_count == 1u64
                 && enter_view_locked_prepare_qc_identity_body!($projection)
                 && $projection.pending_record_kind == 6u8
@@ -4412,7 +4757,7 @@ macro_rules! enter_view_projection_gate_body {
                 && canonical_identity_equal_body!(timeout.context_id, $projection.context_id)
                 && timeout.height == $projection.before_tag.height
                 && $projection.after_tag.height == $projection.before_tag.height
-                && $projection.before_tag.view <= timeout.view
+                && ($projection.before_tag.view <= timeout.view || strict_same_round_upgrade)
                 && timeout.view < u64::MAX
                 && $projection.after_tag.view == timeout.view + 1u64
                 && $projection.before_tag.generation < u64::MAX
@@ -5743,8 +6088,120 @@ mod tests {
         );
     }
 
+    fn progress_identity(byte: u64) -> CanonicalIdentityProjection {
+        CanonicalIdentityProjection {
+            domain: 1,
+            kind: 1,
+            word0: byte,
+            word1: byte,
+            word2: byte,
+            word3: byte,
+        }
+    }
+
+    fn durable_timeout_progress_witness() -> LockedCommitProgressWitnessProjection {
+        LockedCommitProgressWitnessProjection {
+            context_id: progress_identity(1),
+            current_height: 7,
+            current_view: 3,
+            local_validator_present: true,
+            local_validator: ValidatorId::repeat(4),
+            locked_context_id: progress_identity(1),
+            locked_height: 7,
+            locked_view: 1,
+            locked_subject: progress_identity(2),
+            timeout_intent_present: true,
+            timeout_intent_durable: true,
+            timeout_context_id: progress_identity(1),
+            timeout_height: 7,
+            timeout_view: 3,
+            timeout_signer: ValidatorId::repeat(4),
+            ..LockedCommitProgressWitnessProjection::default()
+        }
+    }
+
     #[test]
-    fn durable_intent_refinement_rejects_each_identity_family_mutation() {
+    fn locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations() {
+        let timeout = durable_timeout_progress_witness();
+        assert!(locked_commit_progress_witness_is_valid(timeout));
+
+        let mut stale_timeout = timeout;
+        stale_timeout.timeout_view -= 1;
+        assert!(!locked_commit_progress_witness_is_valid(stale_timeout));
+
+        let mut wrong_timeout = timeout;
+        wrong_timeout.timeout_signer = ValidatorId::repeat(5);
+        assert!(!locked_commit_progress_witness_is_valid(wrong_timeout));
+
+        let mut wrong_lock_context = timeout;
+        wrong_lock_context.locked_context_id = progress_identity(9);
+        assert!(!locked_commit_progress_witness_is_valid(wrong_lock_context));
+
+        let mut wrong_lock_height = timeout;
+        wrong_lock_height.locked_height += 1;
+        assert!(!locked_commit_progress_witness_is_valid(wrong_lock_height));
+
+        let mut volatile_timeout = timeout;
+        volatile_timeout.timeout_intent_durable = false;
+        assert!(!locked_commit_progress_witness_is_valid(volatile_timeout));
+
+        let mut pending = timeout;
+        pending.timeout_intent_present = false;
+        pending.timeout_intent_durable = false;
+        pending.pending = PendingProjection {
+            record_kind: WAL_RECORD_LOCK_AND_COMMIT,
+            continuation: CONTINUATION_SIGN,
+            persistence_id: 9,
+            context_id: pending.context_id,
+            height: pending.current_height,
+            view: pending.current_view,
+            proposal_present: true,
+            proposal_height: pending.locked_height,
+            proposal_view: pending.locked_view,
+            subject: pending.locked_subject,
+        };
+        assert!(locked_commit_progress_witness_is_valid(pending));
+
+        let mut nonexact_pending = pending;
+        nonexact_pending.pending.proposal_view += 1;
+        assert!(!locked_commit_progress_witness_is_valid(nonexact_pending));
+
+        let mut foreign_height_pending = pending;
+        foreign_height_pending.locked_height += 1;
+        foreign_height_pending.pending.proposal_height = foreign_height_pending.locked_height;
+        assert!(!locked_commit_progress_witness_is_valid(
+            foreign_height_pending
+        ));
+
+        let mut commit = timeout;
+        commit.timeout_intent_present = false;
+        commit.timeout_intent_durable = false;
+        commit.commit_intent_present = true;
+        commit.commit_context_id = commit.context_id;
+        commit.commit_height = commit.current_height;
+        commit.commit_view = commit.current_view;
+        commit.commit_proposal_height = commit.locked_height;
+        commit.commit_proposal_view = commit.locked_view;
+        commit.commit_phase = 2;
+        commit.commit_subject = commit.locked_subject;
+        commit.commit_signer = commit.local_validator;
+        commit.commit_signature_pending = true;
+        assert!(locked_commit_progress_witness_is_valid(commit));
+
+        let mut nonexact_commit = commit;
+        nonexact_commit.commit_subject.word0 ^= 1;
+        assert!(!locked_commit_progress_witness_is_valid(nonexact_commit));
+
+        let mut foreign_height_commit = commit;
+        foreign_height_commit.locked_height += 1;
+        foreign_height_commit.commit_proposal_height = foreign_height_commit.locked_height;
+        assert!(!locked_commit_progress_witness_is_valid(
+            foreign_height_commit
+        ));
+    }
+
+    #[test]
+    fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
         let durable_intent = durable_begin_trace();
         assert!(production_durable_intent_trace_refines_progress_witness_kernel(durable_intent));
         assert!(durable_intent.durable_sequence_after >= durable_intent.durable_sequence_before);
@@ -5776,13 +6233,427 @@ mod tests {
         wrong_wal_id.boundary_granted.persistence_id += 1;
         assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_wal_id));
 
+        let mut consistently_skipped_wal_id = durable_intent;
+        consistently_skipped_wal_id.pending_after.persistence_id += 1;
+        consistently_skipped_wal_id.boundary_claimed.persistence_id += 1;
+        consistently_skipped_wal_id.boundary_granted.persistence_id += 1;
+        consistently_skipped_wal_id
+            .effects
+            .slot0
+            .requested
+            .persistence_id += 1;
+        consistently_skipped_wal_id
+            .effects
+            .slot0
+            .granted
+            .persistence_id += 1;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                consistently_skipped_wal_id
+            ),
+            "a mutually consistent projection must not skip the next durable WAL id"
+        );
+
         let mut wrong_effect = durable_intent;
         wrong_effect.effects.slot0.granted.persistence_id += 1;
         assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_effect));
+
+        let mut timeout_with_high_qc = durable_intent;
+        timeout_with_high_qc.event_kind = 5;
+        timeout_with_high_qc.boundary_claimed.record_kind = WAL_RECORD_INSTALL_TIMEOUT;
+        timeout_with_high_qc.boundary_claimed.continuation = CONTINUATION_INSTALL_TIMEOUT;
+        timeout_with_high_qc.boundary_claimed.proposal_present = false;
+        timeout_with_high_qc.boundary_claimed.proposal_height = 0;
+        timeout_with_high_qc.boundary_claimed.proposal_view = 0;
+        timeout_with_high_qc.boundary_granted = timeout_with_high_qc.boundary_claimed;
+        timeout_with_high_qc.pending_after.record_kind = WAL_RECORD_INSTALL_TIMEOUT;
+        timeout_with_high_qc.pending_after.continuation = CONTINUATION_INSTALL_TIMEOUT;
+        timeout_with_high_qc.pending_after.view += 4;
+        timeout_with_high_qc.pending_after.proposal_present = false;
+        timeout_with_high_qc.pending_after.proposal_height = 0;
+        timeout_with_high_qc.pending_after.proposal_view = 0;
+        timeout_with_high_qc.boundary_claimed.auxiliary_present = true;
+        timeout_with_high_qc.boundary_claimed.auxiliary_context_id =
+            timeout_with_high_qc.boundary_claimed.context_id;
+        timeout_with_high_qc.boundary_claimed.auxiliary_height =
+            timeout_with_high_qc.owner_tag_before.height;
+        timeout_with_high_qc.boundary_claimed.auxiliary_view =
+            timeout_with_high_qc.owner_tag_before.view;
+        timeout_with_high_qc
+            .boundary_claimed
+            .auxiliary_proposal_height = timeout_with_high_qc.owner_tag_before.height;
+        timeout_with_high_qc
+            .boundary_claimed
+            .auxiliary_proposal_view = timeout_with_high_qc.owner_tag_before.view;
+        timeout_with_high_qc.boundary_claimed.auxiliary_phase = 1;
+        timeout_with_high_qc.boundary_claimed.auxiliary_subject =
+            timeout_with_high_qc.boundary_claimed.subject.subject;
+        timeout_with_high_qc.boundary_granted = timeout_with_high_qc.boundary_claimed;
+        timeout_with_high_qc.effects.slot0.requested.record_kind = WAL_RECORD_INSTALL_TIMEOUT;
+        timeout_with_high_qc.effects.slot0.requested.view = timeout_with_high_qc.pending_after.view;
+        timeout_with_high_qc.effects.slot0.requested.proposal_height = 0;
+        timeout_with_high_qc.effects.slot0.requested.proposal_view = 0;
+        timeout_with_high_qc.effects.slot0.requested.subject =
+            timeout_with_high_qc.boundary_claimed.subject.subject;
+        timeout_with_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_present = true;
+        timeout_with_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_context_id = timeout_with_high_qc.boundary_claimed.auxiliary_context_id;
+        timeout_with_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_height = timeout_with_high_qc.boundary_claimed.auxiliary_height;
+        timeout_with_high_qc.effects.slot0.requested.auxiliary_view =
+            timeout_with_high_qc.boundary_claimed.auxiliary_view;
+        timeout_with_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_proposal_height = timeout_with_high_qc
+            .boundary_claimed
+            .auxiliary_proposal_height;
+        timeout_with_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_proposal_view = timeout_with_high_qc
+            .boundary_claimed
+            .auxiliary_proposal_view;
+        timeout_with_high_qc.effects.slot0.requested.auxiliary_phase =
+            timeout_with_high_qc.boundary_claimed.auxiliary_phase;
+        timeout_with_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_subject = timeout_with_high_qc.boundary_claimed.subject.subject;
+        timeout_with_high_qc.effects.slot0.granted = timeout_with_high_qc.effects.slot0.requested;
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(timeout_with_high_qc)
+        );
+
+        let mut wrong_timeout_high_qc = timeout_with_high_qc;
+        wrong_timeout_high_qc.effects.slot0.requested.subject = Subject::repeat(9);
+        wrong_timeout_high_qc.effects.slot0.granted.subject = Subject::repeat(9);
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(wrong_timeout_high_qc)
+        );
+
+        let mut substituted_timeout_evidence = timeout_with_high_qc;
+        substituted_timeout_evidence
+            .effects
+            .slot0
+            .requested
+            .auxiliary_subject = Subject::repeat(9);
+        substituted_timeout_evidence
+            .effects
+            .slot0
+            .granted
+            .auxiliary_subject = Subject::repeat(9);
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                substituted_timeout_evidence
+            )
+        );
+
+        let mut timeout_without_high_qc = timeout_with_high_qc;
+        let absent_subject = Subject::default();
+        let absent_subject_identity = CanonicalIdentityProjection::from_bytes(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_CONSENSUS_SUBJECT,
+            *absent_subject.as_bytes(),
+        );
+        timeout_without_high_qc.boundary_claimed.subject.subject = absent_subject;
+        timeout_without_high_qc.boundary_claimed.subject_identity = absent_subject_identity;
+        timeout_without_high_qc.boundary_claimed.auxiliary_present = false;
+        timeout_without_high_qc
+            .boundary_claimed
+            .auxiliary_context_id = ContextId::repeat(0);
+        timeout_without_high_qc.boundary_claimed.auxiliary_height = 0;
+        timeout_without_high_qc.boundary_claimed.auxiliary_view = 0;
+        timeout_without_high_qc
+            .boundary_claimed
+            .auxiliary_proposal_height = 0;
+        timeout_without_high_qc
+            .boundary_claimed
+            .auxiliary_proposal_view = 0;
+        timeout_without_high_qc.boundary_claimed.auxiliary_phase = 0;
+        timeout_without_high_qc.boundary_claimed.auxiliary_subject = Subject::repeat(0);
+        timeout_without_high_qc.boundary_granted = timeout_without_high_qc.boundary_claimed;
+        timeout_without_high_qc.pending_after.subject = absent_subject_identity;
+        timeout_without_high_qc.effects.slot0.requested.subject = absent_subject;
+        timeout_without_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_present = false;
+        timeout_without_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_context_id = ContextId::repeat(0);
+        timeout_without_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_height = 0;
+        timeout_without_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_view = 0;
+        timeout_without_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_proposal_height = 0;
+        timeout_without_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_proposal_view = 0;
+        timeout_without_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_phase = 0;
+        timeout_without_high_qc
+            .effects
+            .slot0
+            .requested
+            .auxiliary_subject = Subject::repeat(0);
+        timeout_without_high_qc.effects.slot0.granted =
+            timeout_without_high_qc.effects.slot0.requested;
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(
+                timeout_without_high_qc
+            )
+        );
+
+        let mut regressive_timeout = timeout_with_high_qc;
+        regressive_timeout.pending_after.view = regressive_timeout.owner_tag_before.view - 1;
+        regressive_timeout.effects.slot0.requested.view = regressive_timeout.pending_after.view;
+        regressive_timeout.effects.slot0.granted.view = regressive_timeout.pending_after.view;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(regressive_timeout)
+        );
+
+        let mut overflowing_timeout = timeout_with_high_qc;
+        overflowing_timeout.pending_after.view = u64::MAX;
+        overflowing_timeout.effects.slot0.requested.view = u64::MAX;
+        overflowing_timeout.effects.slot0.granted.view = u64::MAX;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(overflowing_timeout)
+        );
+
+        let mut wrong_record_height = durable_intent;
+        wrong_record_height.pending_after.height += 1;
+        wrong_record_height.effects.slot0.requested.height += 1;
+        wrong_record_height.effects.slot0.granted.height += 1;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(wrong_record_height)
+        );
+
+        let mut stale_generation = durable_intent;
+        stale_generation.event_tag.generation += 1;
+        stale_generation.pending_after = stale_generation.pending_before;
+        stale_generation.boundary_claimed = BoundaryCapabilityKey::none();
+        stale_generation.boundary_granted = BoundaryCapabilityKey::none();
+        stale_generation.effects = EffectTrace::empty();
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_generation));
+
+        let mut stale_height = stale_generation;
+        stale_height.event_tag = stale_height.owner_tag_before;
+        stale_height.event_tag.height += 1;
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_height));
+
+        let mut stale_view = stale_generation;
+        stale_view.event_tag = stale_view.owner_tag_before;
+        stale_view.event_tag.view += 1;
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_view));
+
+        let mut stale_while_pending = stale_generation;
+        stale_while_pending.pending_before = durable_intent.pending_after;
+        stale_while_pending.pending_after = durable_intent.pending_after;
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(stale_while_pending)
+        );
+
+        let mut stale_owner_mutation = stale_generation;
+        stale_owner_mutation.owner_tag_after.generation += 1;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(stale_owner_mutation)
+        );
+
+        let mut stale_pending_mutation = stale_generation;
+        stale_pending_mutation.pending_after.persistence_id += 1;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                stale_pending_mutation
+            )
+        );
+
+        let mut stale_sequence_mutation = stale_generation;
+        stale_sequence_mutation.durable_sequence_after += 1;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                stale_sequence_mutation
+            )
+        );
+
+        let mut stale_boundary = stale_generation;
+        stale_boundary.boundary_claimed = durable_intent.boundary_claimed;
+        stale_boundary.boundary_granted = durable_intent.boundary_granted;
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(stale_boundary));
+
+        let mut stale_effect = stale_generation;
+        assert!(push_authorized(&mut stale_effect.effects, EFFECT_REPORT));
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(stale_effect));
+
+        let mut stale_non_completion_id = stale_generation;
+        stale_non_completion_id.event_persistence_id = 91;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                stale_non_completion_id
+            )
+        );
+
+        let mut stale_persisted = stale_generation;
+        stale_persisted.event_kind = EVENT_PERSISTED;
+        stale_persisted.event_persistence_id = 91;
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_persisted));
+
+        let mut stale_persistence_failed = stale_persisted;
+        stale_persistence_failed.event_kind = EVENT_PERSISTENCE_FAILED;
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(
+                stale_persistence_failed
+            )
+        );
+
+        let mut unmatched_persisted = stale_persisted;
+        unmatched_persisted.event_tag = unmatched_persisted.owner_tag_before;
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(unmatched_persisted)
+        );
+
+        let mut unmatched_persistence_failed = unmatched_persisted;
+        unmatched_persistence_failed.event_kind = EVENT_PERSISTENCE_FAILED;
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(
+                unmatched_persistence_failed
+            )
+        );
+
+        let mut completion_with_effect = unmatched_persisted;
+        assert!(push_authorized(
+            &mut completion_with_effect.effects,
+            EFFECT_REPORT
+        ));
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                completion_with_effect
+            )
+        );
+
+        let mut completion_while_pending = unmatched_persisted;
+        completion_while_pending.pending_before = durable_intent.pending_after;
+        completion_while_pending.pending_after = durable_intent.pending_after;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                completion_while_pending
+            )
+        );
+
+        let mut matching_non_completion_id = unmatched_persisted;
+        matching_non_completion_id.event_kind = 0;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                matching_non_completion_id
+            )
+        );
     }
 
     #[test]
-    fn durable_intent_accepts_a_stale_event_only_as_an_empty_owner_stutter() {
+    fn later_view_lock_and_commit_binds_finality_owner_and_proposal_origin() {
+        let begin = lock_and_commit_begin_trace();
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(begin));
+
+        let mut origin_as_lifecycle_round = begin;
+        origin_as_lifecycle_round.pending_after.view = begin.pending_after.proposal_view;
+        origin_as_lifecycle_round.effects.slot0.requested.view = begin.pending_after.proposal_view;
+        origin_as_lifecycle_round.effects.slot0.granted.view = begin.pending_after.proposal_view;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                origin_as_lifecycle_round
+            ),
+            "the pending WAL owner is the Commit finality round, not its proposal origin"
+        );
+
+        let mut substituted_primary_origin = begin;
+        substituted_primary_origin
+            .effects
+            .slot0
+            .requested
+            .proposal_view += 1;
+        substituted_primary_origin
+            .effects
+            .slot0
+            .granted
+            .proposal_view += 1;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                substituted_primary_origin
+            )
+        );
+
+        let mut substituted_auxiliary_origin = begin;
+        substituted_auxiliary_origin
+            .effects
+            .slot0
+            .requested
+            .auxiliary_proposal_view += 1;
+        substituted_auxiliary_origin
+            .effects
+            .slot0
+            .granted
+            .auxiliary_proposal_view += 1;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                substituted_auxiliary_origin
+            )
+        );
+
+        let mut acknowledge = begin;
+        acknowledge.event_kind = EVENT_PERSISTED;
+        acknowledge.event_persistence_id = begin.pending_after.persistence_id;
+        acknowledge.pending_before = begin.pending_after;
+        acknowledge.pending_after = PendingProjection::default();
+        acknowledge.boundary_claimed.kind = BOUNDARY_ACKNOWLEDGE_WAL;
+        acknowledge.boundary_granted = acknowledge.boundary_claimed;
+        acknowledge.effects = EffectTrace::empty();
+        acknowledge.durable_sequence_after = acknowledge.durable_sequence_before + 1;
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(acknowledge));
+
+        let mut substituted_ack_origin = acknowledge;
+        substituted_ack_origin.boundary_claimed.proposal_view += 1;
+        substituted_ack_origin.boundary_granted.proposal_view += 1;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                substituted_ack_origin
+            ),
+            "acknowledgement must retain the proposal origin from the pending record"
+        );
+    }
+
+    #[test]
+    fn durable_intent_accepts_only_empty_persistence_completion_stutters() {
         let owner = TagProjection {
             height: 4,
             view: 2,
@@ -5818,7 +6689,7 @@ mod tests {
         let mut current_owner_completion = stale_persisted;
         current_owner_completion.event_tag = owner;
         assert!(
-            !production_durable_intent_trace_refines_progress_witness_kernel(
+            production_durable_intent_trace_refines_progress_witness_kernel(
                 current_owner_completion
             )
         );
@@ -5826,7 +6697,13 @@ mod tests {
         let mut current_owner_failure = stale_persistence_failed;
         current_owner_failure.event_tag = owner;
         assert!(
-            !production_durable_intent_trace_refines_progress_witness_kernel(current_owner_failure)
+            production_durable_intent_trace_refines_progress_witness_kernel(current_owner_failure)
+        );
+
+        let mut zero_id_completion = current_owner_completion;
+        zero_id_completion.event_persistence_id = 0;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(zero_id_completion)
         );
 
         let mut non_persistence_payload = stale_persisted;
@@ -5853,14 +6730,40 @@ mod tests {
         begin.event_kind = 5;
         begin.boundary_claimed.record_kind = WAL_RECORD_INSTALL_TIMEOUT;
         begin.boundary_claimed.continuation = CONTINUATION_INSTALL_TIMEOUT;
-        begin.boundary_granted = begin.boundary_claimed;
+        begin.boundary_claimed.proposal_present = false;
+        begin.boundary_claimed.proposal_height = 0;
+        begin.boundary_claimed.proposal_view = 0;
+        begin.boundary_claimed.auxiliary_present = true;
+        begin.boundary_claimed.auxiliary_context_id = begin.boundary_claimed.context_id;
+        begin.boundary_claimed.auxiliary_height = begin.owner_tag_before.height;
+        begin.boundary_claimed.auxiliary_view = begin.owner_tag_before.view;
+        begin.boundary_claimed.auxiliary_proposal_height = begin.owner_tag_before.height;
+        begin.boundary_claimed.auxiliary_proposal_view = begin.owner_tag_before.view;
+        begin.boundary_claimed.auxiliary_phase = 1;
+        begin.boundary_claimed.auxiliary_subject = begin.boundary_claimed.subject.subject;
         begin.pending_after.record_kind = WAL_RECORD_INSTALL_TIMEOUT;
         begin.pending_after.continuation = CONTINUATION_INSTALL_TIMEOUT;
         begin.pending_after.view = 5;
+        begin.pending_after.proposal_present = false;
+        begin.pending_after.proposal_height = 0;
+        begin.pending_after.proposal_view = 0;
         begin.effects.slot0.requested.record_kind = WAL_RECORD_INSTALL_TIMEOUT;
         begin.effects.slot0.requested.view = 5;
-        begin.effects.slot0.requested.subject = Subject::default();
+        begin.effects.slot0.requested.proposal_height = 0;
+        begin.effects.slot0.requested.proposal_view = 0;
+        begin.effects.slot0.requested.subject = begin.boundary_claimed.subject.subject;
+        begin.effects.slot0.requested.auxiliary_present = true;
+        begin.effects.slot0.requested.auxiliary_context_id =
+            begin.boundary_claimed.auxiliary_context_id;
+        begin.effects.slot0.requested.auxiliary_height = begin.boundary_claimed.auxiliary_height;
+        begin.effects.slot0.requested.auxiliary_view = begin.boundary_claimed.auxiliary_view;
+        begin.effects.slot0.requested.auxiliary_proposal_height =
+            begin.boundary_claimed.auxiliary_proposal_height;
+        begin.effects.slot0.requested.auxiliary_proposal_view =
+            begin.boundary_claimed.auxiliary_proposal_view;
+        begin.effects.slot0.requested.auxiliary_phase = begin.boundary_claimed.auxiliary_phase;
         begin.effects.slot0.requested.auxiliary_subject = begin.boundary_claimed.subject.subject;
+        begin.boundary_granted = begin.boundary_claimed;
         begin.effects.slot0.granted = begin.effects.slot0.requested;
         assert!(production_durable_intent_trace_refines_progress_witness_kernel(begin));
 
@@ -5878,19 +6781,13 @@ mod tests {
             )
         );
 
-        let mut conflated_primary_subject = begin;
-        conflated_primary_subject.effects.slot0.requested.subject =
-            begin.boundary_claimed.subject.subject;
-        conflated_primary_subject
-            .effects
-            .slot0
-            .requested
-            .auxiliary_subject = Subject::default();
-        conflated_primary_subject.effects.slot0.granted =
-            conflated_primary_subject.effects.slot0.requested;
+        let mut missing_primary_subject = begin;
+        missing_primary_subject.effects.slot0.requested.subject = Subject::default();
+        missing_primary_subject.effects.slot0.granted =
+            missing_primary_subject.effects.slot0.requested;
         assert!(
             !production_durable_intent_trace_refines_progress_witness_kernel(
-                conflated_primary_subject
+                missing_primary_subject
             )
         );
 
@@ -5960,6 +6857,8 @@ mod tests {
             context_id: context,
             height: 9,
             view: 4,
+            proposal_height: 9,
+            proposal_view: 4,
             phase: 2,
             subject,
             block_hash,
@@ -6000,6 +6899,11 @@ mod tests {
                 view: 4,
                 generation: 12,
             },
+            owner_tag: TagProjection {
+                height: 9,
+                view: 4,
+                generation: 12,
+            },
             replay_generation: 12,
             commit_qc,
             manifest_round: TagProjection {
@@ -6022,13 +6926,78 @@ mod tests {
         assert!(recovery.expected_height - recovery.state_height <= 1);
         assert_eq!(recovery.durable_body.height, recovery.frozen_height);
         assert_eq!(recovery.stage, 1);
+        let historical_body = ProductionDurableBodyIdentityProjection {
+            view: 2,
+            ..durable_body
+        };
+        let historical_commit_qc = ProductionQuorumCertificateIdentityProjection {
+            decision: ProductionDecisionIdentityProjection {
+                proposal_view: 2,
+                ..decision
+            },
+            ..commit_qc
+        };
+        assert!(production_decision_trace_refines_recovery_witness_kernel(
+            ProductionDecisionRecoveryTraceProjection {
+                commit_qc: historical_commit_qc,
+                manifest_round: TagProjection {
+                    view: 2,
+                    ..recovery.manifest_round
+                },
+                durable_body: historical_body,
+                validated_body: historical_body,
+                ..recovery
+            }
+        ));
         assert!(!production_decision_trace_refines_recovery_witness_kernel(
             ProductionDecisionRecoveryTraceProjection {
-                validated_execution_commitment: identity(
-                    IDENTITY_DOMAIN_PAYLOAD,
-                    IDENTITY_KIND_EXECUTION_COMMITMENT,
-                    10,
-                ),
+                commit_qc: historical_commit_qc,
+                manifest_round: TagProjection {
+                    view: 3,
+                    ..recovery.manifest_round
+                },
+                durable_body: historical_body,
+                validated_body: historical_body,
+                ..recovery
+            }
+        ));
+        assert!(!production_decision_trace_refines_recovery_witness_kernel(
+            ProductionDecisionRecoveryTraceProjection {
+                commit_qc: historical_commit_qc,
+                manifest_round: TagProjection {
+                    view: 5,
+                    ..recovery.manifest_round
+                },
+                durable_body: ProductionDurableBodyIdentityProjection {
+                    view: 5,
+                    ..durable_body
+                },
+                validated_body: ProductionDurableBodyIdentityProjection {
+                    view: 5,
+                    ..durable_body
+                },
+                ..recovery
+            }
+        ));
+        for view in [3, 7] {
+            let owner_tag = TagProjection {
+                view,
+                ..recovery.owner_tag
+            };
+            assert!(production_decision_trace_refines_recovery_witness_kernel(
+                ProductionDecisionRecoveryTraceProjection {
+                    replay_tag: owner_tag,
+                    owner_tag,
+                    ..recovery
+                }
+            ));
+        }
+        assert!(!production_decision_trace_refines_recovery_witness_kernel(
+            ProductionDecisionRecoveryTraceProjection {
+                owner_tag: TagProjection {
+                    view: 5,
+                    ..recovery.owner_tag
+                },
                 ..recovery
             }
         ));
@@ -6339,6 +7308,11 @@ mod tests {
                 view: 4,
                 generation: 12,
             },
+            owner_tag: TagProjection {
+                height: 9,
+                view: 4,
+                generation: 12,
+            },
             task_generation: 12,
             context_id: context,
             context_height: 9,
@@ -6367,6 +7341,58 @@ mod tests {
         assert_eq!(application.artifact_height, application.context_height);
         assert_eq!(application.completion_work_id, application.task_work_id);
         assert_eq!(application.artifact_context_id, application.context_id);
+        let historical_application = ProductionApplicationTraceProjection {
+            commit_qc: historical_commit_qc,
+            validated_body: ProductionDurableBodyIdentityProjection {
+                view: 2,
+                ..application.validated_body
+            },
+            kura_decision: historical_commit_qc.decision,
+            artifact_commit_qc: historical_commit_qc,
+            ..application
+        };
+        assert!(
+            production_application_trace_refines_decision_completion_kernel(historical_application)
+        );
+        assert!(
+            !production_application_trace_refines_decision_completion_kernel(
+                ProductionApplicationTraceProjection {
+                    validated_body: ProductionDurableBodyIdentityProjection {
+                        view: 5,
+                        ..application.validated_body
+                    },
+                    ..application
+                }
+            )
+        );
+        for view in [3, 7] {
+            let owner_tag = TagProjection {
+                view,
+                generation: 15,
+                ..application.owner_tag
+            };
+            assert!(
+                production_application_trace_refines_decision_completion_kernel(
+                    ProductionApplicationTraceProjection {
+                        task_tag: owner_tag,
+                        owner_tag,
+                        task_generation: 15,
+                        ..application
+                    }
+                )
+            );
+        }
+        assert!(
+            !production_application_trace_refines_decision_completion_kernel(
+                ProductionApplicationTraceProjection {
+                    owner_tag: TagProjection {
+                        view: 5,
+                        ..application.owner_tag
+                    },
+                    ..application
+                }
+            )
+        );
         assert!(
             !production_application_trace_refines_decision_completion_kernel(
                 ProductionApplicationTraceProjection {
@@ -6583,6 +7609,9 @@ mod tests {
                 subject,
             },
             subject_identity,
+            proposal_present: true,
+            proposal_height: tag.height,
+            proposal_view: tag.view,
             ..BoundaryCapabilityKey::none()
         };
         let persist = EffectCapabilityKey {
@@ -6591,6 +7620,8 @@ mod tests {
             context_id: context,
             height: tag.height,
             view: tag.view,
+            proposal_height: tag.height,
+            proposal_view: tag.view,
             subject,
             persistence_id: boundary.persistence_id,
             record_kind: boundary.record_kind,
@@ -6612,6 +7643,9 @@ mod tests {
                 context_id: context_identity,
                 height: tag.height,
                 view: tag.view,
+                proposal_present: true,
+                proposal_height: tag.height,
+                proposal_view: tag.view,
                 subject: subject_identity,
             },
             boundary_claimed: boundary,
@@ -6620,6 +7654,48 @@ mod tests {
             durable_sequence_before: 7,
             durable_sequence_after: 7,
         }
+    }
+
+    fn lock_and_commit_begin_trace() -> ProductionDurableIntentTraceProjection {
+        let mut trace = durable_begin_trace();
+        let origin_view = trace.owner_tag_before.view - 1;
+        trace.event_kind = 10;
+        trace.pending_after.record_kind = WAL_RECORD_LOCK_AND_COMMIT;
+        trace.pending_after.proposal_present = true;
+        trace.pending_after.proposal_height = trace.owner_tag_before.height;
+        trace.pending_after.proposal_view = origin_view;
+        trace.boundary_claimed.record_kind = WAL_RECORD_LOCK_AND_COMMIT;
+        trace.boundary_claimed.proposal_present = true;
+        trace.boundary_claimed.proposal_height = trace.owner_tag_before.height;
+        trace.boundary_claimed.proposal_view = origin_view;
+        trace.boundary_claimed.auxiliary_present = true;
+        trace.boundary_claimed.auxiliary_context_id = trace.boundary_claimed.context_id;
+        trace.boundary_claimed.auxiliary_height = trace.owner_tag_before.height;
+        trace.boundary_claimed.auxiliary_view = origin_view;
+        trace.boundary_claimed.auxiliary_proposal_height = trace.owner_tag_before.height;
+        trace.boundary_claimed.auxiliary_proposal_view = origin_view;
+        trace.boundary_claimed.auxiliary_phase = 1;
+        trace.boundary_claimed.auxiliary_subject = trace.boundary_claimed.subject.subject;
+        trace.boundary_granted = trace.boundary_claimed;
+
+        let persist = {
+            let persist = &mut trace.effects.slot0.requested;
+            persist.record_kind = WAL_RECORD_LOCK_AND_COMMIT;
+            persist.proposal_height = trace.owner_tag_before.height;
+            persist.proposal_view = origin_view;
+            persist.phase = 2;
+            persist.auxiliary_present = true;
+            persist.auxiliary_context_id = trace.boundary_claimed.auxiliary_context_id;
+            persist.auxiliary_height = trace.boundary_claimed.auxiliary_height;
+            persist.auxiliary_view = trace.boundary_claimed.auxiliary_view;
+            persist.auxiliary_proposal_height = trace.boundary_claimed.auxiliary_proposal_height;
+            persist.auxiliary_proposal_view = trace.boundary_claimed.auxiliary_proposal_view;
+            persist.auxiliary_phase = trace.boundary_claimed.auxiliary_phase;
+            persist.auxiliary_subject = trace.boundary_claimed.auxiliary_subject;
+            *persist
+        };
+        trace.effects.slot0.granted = persist;
+        trace
     }
 
     fn push_authorized(trace: &mut EffectTrace, kind: u8) -> bool {
@@ -6725,6 +7801,19 @@ mod tests {
         assert_eq!(rebound.key, previous.key);
         assert_eq!(rebound.manifest_hash, previous.manifest_hash);
 
+        let same_view = plan_exact_body_owner_rebind(
+            previous,
+            previous,
+            TagProjection {
+                height: 9,
+                view: 4,
+                generation: 8,
+            },
+        )
+        .expect("same-view higher-generation rebind is accepted");
+        assert_eq!(same_view.key, previous.key);
+        assert_eq!(same_view.manifest_hash, previous.manifest_hash);
+
         for wrong in [
             TagProjection {
                 height: 10,
@@ -6733,7 +7822,7 @@ mod tests {
             },
             TagProjection {
                 height: 9,
-                view: 4,
+                view: 3,
                 generation: 8,
             },
             TagProjection {

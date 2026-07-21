@@ -1018,6 +1018,83 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
+  /**
+   * Prepares sender change for an ordinary one- or two-input peer split.
+   * Native reauthenticates the ordered inputs, shared context, receiver request, and exact value
+   * conservation before deriving an owned opening under a peer-split-only domain.
+   */
+  public static PeerSplitChangePreparationV4 preparePeerSplitChangeV4(
+      final List<SpendableBranchV4> inputs,
+      final VerifiedRecipientPaymentRequest recipientRequest,
+      final KagemushaScaledAmount changeAmount,
+      final byte[] operationId,
+      final byte[] entropy) {
+    requireArtifactBridge();
+    Objects.requireNonNull(inputs, "inputs");
+    Objects.requireNonNull(recipientRequest, "recipientRequest");
+    Objects.requireNonNull(changeAmount, "changeAmount");
+    if (inputs.isEmpty() || inputs.size() > MAXIMUM_INPUTS_PER_TRANSITION) {
+      throw new IllegalArgumentException("inputs must contain one or two spendable branches");
+    }
+    final byte[] operation = requireDigest(operationId, "operationId");
+    final byte[] freshEntropy = requireDigest(entropy, "entropy");
+    if (Arrays.equals(operation, freshEntropy)) {
+      Arrays.fill(operation, (byte) 0);
+      Arrays.fill(freshEntropy, (byte) 0);
+      throw new IllegalArgumentException("entropy must be distinct from operationId");
+    }
+    final byte[][] bundles = new byte[inputs.size()][];
+    final byte[][] openings = new byte[inputs.size()][];
+    byte[] signedRequest = null;
+    byte[] atomicUnits = null;
+    byte[][] fields = null;
+    NoteOpening opening = null;
+    try {
+      for (int index = 0; index < inputs.size(); index++) {
+        final SpendableBranchV4 input = Objects.requireNonNull(inputs.get(index), "inputs entry");
+        bundles[index] = input.bundle().noritoEncoded();
+        openings[index] = input.opening().noritoEncoded();
+      }
+      signedRequest = recipientRequest.request().noritoEncoded();
+      atomicUnits = utf8(changeAmount.atomicUnits(), "atomicUnits");
+      fields = nativePreparePeerSplitChangeV4(
+          bundles,
+          openings,
+          signedRequest,
+          atomicUnits,
+          changeAmount.scale(),
+          operation,
+          freshEntropy);
+      requireFieldCount(fields, 7, "V4 peer-split change preparation");
+      for (int index = 1; index <= 4; index++) {
+        requireDigest(fields[index], "peerSplitChangeField" + index);
+      }
+      final KagemushaScaledAmount projectedAmount = amount(fields[5], fields[6]);
+      if (!projectedAmount.equals(changeAmount)) {
+        throw new IllegalStateException("native Kagemusha peer-split change amount changed");
+      }
+      opening = new NoteOpening(fields[0]);
+      final NoteOpening preparedOpening = opening;
+      opening = null;
+      return new PeerSplitChangePreparationV4(
+          preparedOpening,
+          fields[1],
+          fields[2],
+          fields[3],
+          fields[4],
+          projectedAmount);
+    } finally {
+      if (opening != null) opening.destroy();
+      SecretArchiveWiper.wipeAll(fields);
+      if (atomicUnits != null) Arrays.fill(atomicUnits, (byte) 0);
+      if (signedRequest != null) Arrays.fill(signedRequest, (byte) 0);
+      for (final byte[] value : openings) if (value != null) Arrays.fill(value, (byte) 0);
+      for (final byte[] value : bundles) if (value != null) Arrays.fill(value, (byte) 0);
+      Arrays.fill(freshEntropy, (byte) 0);
+      Arrays.fill(operation, (byte) 0);
+    }
+  }
+
   public static VerifiedRecipientPaymentRequest verifyRecipientPaymentRequest(
       final RecipientPaymentRequest request, final long verifiedAtMilliseconds) {
     requireArtifactBridge();
@@ -1033,6 +1110,43 @@ public final class KagemushaRecursiveSpendProver {
             "requestDigest"),
         verifiedAtMilliseconds,
         projection);
+  }
+
+  /**
+   * Verifies a proof-bearing receiver registration lineage against the exact signed request.
+   * Native authenticates the tuple/lifetime, admitting transaction and Merkle paths, policy,
+   * header, and historical V2 finality certificate before returning the owned archive.
+   */
+  public static RecipientRegistrationLineage verifyRecipientRegistrationLineage(
+      final RecipientPaymentRequest request,
+      final byte[] lineageArchive,
+      final long verifiedAtMilliseconds,
+      final long expectedEvaluatedBlockHeight,
+      final byte[] expectedEvaluatedBlockHash) {
+    requireArtifactBridge();
+    Objects.requireNonNull(request, "request");
+    if (verifiedAtMilliseconds <= 0) {
+      throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
+    }
+    if (expectedEvaluatedBlockHeight <= 0) {
+      throw new IllegalArgumentException("expectedEvaluatedBlockHeight must be positive");
+    }
+    final byte[] expectedHash =
+        requireDigest(expectedEvaluatedBlockHash, "expectedEvaluatedBlockHash");
+    final byte[] bounded =
+        requireBoundedBytes(lineageArchive, "lineageArchive", MAX_TORII_RESPONSE_BYTES);
+    try {
+      return new RecipientRegistrationLineage(
+          nativeVerifyRecipientRegistrationLineageV1(
+              request.noritoEncoded(),
+              bounded,
+              verifiedAtMilliseconds,
+              expectedEvaluatedBlockHeight,
+              expectedHash));
+    } finally {
+      Arrays.fill(expectedHash, (byte) 0);
+      Arrays.fill(bounded, (byte) 0);
+    }
   }
 
   public static RecipientRequestProjection projectRecipientPaymentRequest(
@@ -1993,7 +2107,8 @@ public final class KagemushaRecursiveSpendProver {
       if (header.compression() != NoritoHeader.COMPRESSION_NONE
           || header.flags() != NoritoHeader.COMPACT_LEN
           || decoded.payload().length == 0
-          || archive.length != NoritoHeader.HEADER_LENGTH + decoded.payload().length
+          || archive.length
+              != NoritoHeader.HEADER_LENGTH + peerArchivePadding(schema) + decoded.payload().length
           || !Arrays.equals(
               header.encode(), Arrays.copyOfRange(archive, 0, NoritoHeader.HEADER_LENGTH))) {
         throw new IllegalArgumentException(field + " must use canonical compact Norito framing");
@@ -2004,6 +2119,15 @@ public final class KagemushaRecursiveSpendProver {
       Arrays.fill(archive, (byte) 0);
       throw failure;
     }
+  }
+
+  private static int peerArchivePadding(final String schema) {
+    return switch (schema) {
+      case "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
+          "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" -> 8;
+      case "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2" -> 0;
+      default -> 0;
+    };
   }
 
   /** Immutable canonical Norito archive; proof and accumulator bytes remain opaque. */
@@ -2059,9 +2183,20 @@ public final class KagemushaRecursiveSpendProver {
     private RecipientPaymentRequest(final byte[] archive) {
       super(
           archive,
-          "KagemushaRecipientPaymentRequestV2",
+          "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
           "recipientPaymentRequest",
           MAX_PEER_ARCHIVE_BYTES_V2);
+    }
+  }
+
+  /** Native-verified proof that the request's exact receiver registration is finalized. */
+  public static final class RecipientRegistrationLineage extends CanonicalArchive {
+    private RecipientRegistrationLineage(final byte[] archive) {
+      super(
+          archive,
+          "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage",
+          "recipientRegistrationLineage",
+          MAX_TORII_RESPONSE_BYTES);
     }
   }
 
@@ -2069,7 +2204,7 @@ public final class KagemushaRecursiveSpendProver {
     private PeerPayment(final byte[] archive) {
       super(
           archive,
-          "KagemushaRecursiveSpendPeerPaymentV4",
+          "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4",
           "peerPayment",
           MAX_PEER_ARCHIVE_BYTES_V4);
     }
@@ -2079,7 +2214,7 @@ public final class KagemushaRecursiveSpendProver {
     private ReceiverAcknowledgement(final byte[] archive) {
       super(
           archive,
-          "KagemushaReceiverAcknowledgementV2",
+          "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2",
           "receiverAcknowledgement",
           MAX_PEER_ARCHIVE_BYTES_V2);
     }
@@ -2241,6 +2376,94 @@ public final class KagemushaRecursiveSpendProver {
 
     private void requireOpen() {
       if (closed) throw new IllegalStateException("redemption change preparation has been destroyed");
+    }
+  }
+
+  /** Owns native-derived ordinary peer-split change until {@link #takeOpening()} transfers it. */
+  public static final class PeerSplitChangePreparationV4 implements AutoCloseable {
+    private NoteOpening opening;
+    private final byte[] rho;
+    private final byte[] diversifier;
+    private final byte[] commitment;
+    private final byte[] spendNullifier;
+    private final KagemushaScaledAmount amount;
+    private boolean closed;
+
+    PeerSplitChangePreparationV4(
+        final NoteOpening opening,
+        final byte[] rho,
+        final byte[] diversifier,
+        final byte[] commitment,
+        final byte[] spendNullifier,
+        final KagemushaScaledAmount amount) {
+      final NoteOpening ownedOpening = Objects.requireNonNull(opening, "opening");
+      byte[] rhoCopy = null;
+      byte[] diversifierCopy = null;
+      byte[] commitmentCopy = null;
+      byte[] nullifierCopy = null;
+      try {
+        if (ownedOpening.isDestroyed()) {
+          throw new IllegalStateException("opening has already been destroyed");
+        }
+        rhoCopy = requireDigest(rho, "rho");
+        diversifierCopy = requireDigest(diversifier, "diversifier");
+        commitmentCopy = requireDigest(commitment, "commitment");
+        nullifierCopy = requireDigest(spendNullifier, "spendNullifier");
+        if (Arrays.equals(rhoCopy, diversifierCopy)) {
+          throw new IllegalStateException("native Kagemusha peer-split opening coordinates collide");
+        }
+        this.opening = ownedOpening;
+        this.rho = rhoCopy;
+        this.diversifier = diversifierCopy;
+        this.commitment = commitmentCopy;
+        this.spendNullifier = nullifierCopy;
+        this.amount = Objects.requireNonNull(amount, "amount");
+      } catch (final Throwable failure) {
+        if (nullifierCopy != null) Arrays.fill(nullifierCopy, (byte) 0);
+        if (commitmentCopy != null) Arrays.fill(commitmentCopy, (byte) 0);
+        if (diversifierCopy != null) Arrays.fill(diversifierCopy, (byte) 0);
+        if (rhoCopy != null) Arrays.fill(rhoCopy, (byte) 0);
+        ownedOpening.destroy();
+        throw failure;
+      }
+    }
+
+    public synchronized NoteOpening takeOpening() {
+      requireOpen();
+      if (opening == null) {
+        throw new IllegalStateException("peer-split change opening has already been transferred");
+      }
+      final NoteOpening owned = opening;
+      opening = null;
+      return owned;
+    }
+
+    public synchronized byte[] rho() { requireOpen(); return Arrays.copyOf(rho, rho.length); }
+    public synchronized byte[] diversifier() {
+      requireOpen(); return Arrays.copyOf(diversifier, diversifier.length);
+    }
+    public synchronized byte[] commitment() {
+      requireOpen(); return Arrays.copyOf(commitment, commitment.length);
+    }
+    public synchronized byte[] spendNullifier() {
+      requireOpen(); return Arrays.copyOf(spendNullifier, spendNullifier.length);
+    }
+    public synchronized KagemushaScaledAmount amount() { requireOpen(); return amount; }
+
+    @Override
+    public synchronized void close() {
+      if (closed) return;
+      if (opening != null) opening.destroy();
+      opening = null;
+      Arrays.fill(rho, (byte) 0);
+      Arrays.fill(diversifier, (byte) 0);
+      Arrays.fill(commitment, (byte) 0);
+      Arrays.fill(spendNullifier, (byte) 0);
+      closed = true;
+    }
+
+    private void requireOpen() {
+      if (closed) throw new IllegalStateException("peer-split change preparation has been destroyed");
     }
   }
 
@@ -3855,12 +4078,13 @@ public final class KagemushaRecursiveSpendProver {
     public OperationRejection rejection() { return rejection; }
   }
 
-  /** Strict typed client for the four first-release Kagemusha Torii routes. */
+  /** Strict typed client for the five first-release Kagemusha Torii routes. */
   public static final class ToriiClient {
     public static final String READINESS_PATH = "/v1/offline/readiness";
     public static final String TOP_UP_PATH = "/v1/offline/top-up";
     public static final String REDEEM_PATH = "/v1/offline/redeem";
     public static final String OPERATIONS_PATH = "/v1/offline/operations";
+    public static final String RECEIVER_LINEAGE_PATH = "/v1/offline/receiver-lineage";
     public static final String NORITO_MEDIA_TYPE = "application/x-norito";
 
     private final String baseUri;
@@ -3903,6 +4127,42 @@ public final class KagemushaRecursiveSpendProver {
                   .build(),
               200)
           .thenApply(response -> new Readiness(response.body()));
+    }
+
+    public CompletableFuture<RecipientRegistrationLineage> getRecipientRegistrationLineage(
+        final RecipientPaymentRequest request,
+        final Readiness readiness,
+        final long verifiedAtMilliseconds) {
+      final RecipientPaymentRequest requiredRequest = Objects.requireNonNull(request, "request");
+      if (verifiedAtMilliseconds <= 0) {
+        throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
+      }
+      final ReadinessProjection readinessProjection =
+          projectReadiness(Objects.requireNonNull(readiness, "readiness"));
+      final RecipientRequestProjection requestProjection =
+          projectRecipientPaymentRequest(requiredRequest);
+      if (!readinessProjection.assetDefinitionId().equals(requestProjection.assetDefinitionId())) {
+        throw new IllegalArgumentException(
+            "readiness asset must match the recipient request asset");
+      }
+      return execute(
+              TransportRequest.builder()
+                  .setMethod("POST")
+                  .setUri(URI.create(baseUri + RECEIVER_LINEAGE_PATH))
+                  .addHeader("Accept", NORITO_MEDIA_TYPE)
+                  .addHeader("Content-Type", NORITO_MEDIA_TYPE)
+                  .setBody(requiredRequest.noritoEncoded())
+                  .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
+                  .build(),
+              200)
+          .thenApply(
+              response ->
+                  verifyRecipientRegistrationLineage(
+                      requiredRequest,
+                      response.body(),
+                      verifiedAtMilliseconds,
+                      readinessProjection.evaluatedBlockHeight(),
+                      readinessProjection.evaluatedBlockHash()));
     }
 
     public CompletableFuture<OperationReference> submitTopUp(
@@ -4329,6 +4589,12 @@ public final class KagemushaRecursiveSpendProver {
       byte[] diversifier);
   private static native byte[] nativeCreateRecipientRequestV2(byte[] payload, byte[] signature);
   private static native byte[] nativeVerifyRecipientRequestV2(byte[] request, long verifiedAtMilliseconds);
+  private static native byte[] nativeVerifyRecipientRegistrationLineageV1(
+      byte[] request,
+      byte[] lineage,
+      long verifiedAtMilliseconds,
+      long expectedEvaluatedBlockHeight,
+      byte[] expectedEvaluatedBlockHash);
   private static native byte[] nativeBuildOutputMembershipFrontierV4(
       int leafIndex, byte[] flattenedSiblings, byte[] directions, byte[] root);
   private static native byte[][] nativeDeriveOutputMembershipPathsV4(
@@ -4392,6 +4658,14 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[][] nativePrepareRedemptionChangeV4(
       byte[] bundle, byte[] inputOpening, byte[] atomicUnits, int scale,
       byte[] operationId, byte[] entropy);
+  private static native byte[][] nativePreparePeerSplitChangeV4(
+      byte[][] bundles,
+      byte[][] inputOpenings,
+      byte[] recipientRequest,
+      byte[] atomicUnits,
+      int scale,
+      byte[] operationId,
+      byte[] entropy);
   private static native byte[] nativePrepareNoteOpeningV2(
       byte[] spendKey, byte[] rho, byte[] diversifier);
   private static native byte[][] nativeProjectRecipientRequestV2(byte[] request);

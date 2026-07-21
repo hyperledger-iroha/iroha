@@ -572,6 +572,24 @@ DurableCommitProgressWitness ==
     ActiveLockedCommitIntent(node, vote)
       => CommitIntentProgressWitness(node, vote)
 
+(***************************************************************************
+If validation of an exact TC-promoted lock completes after the node has
+durably timed out its current finality view, the timeout intent owns the retry
+frontier.  It does not authorize Commit in the closed view.  A later certified
+view transition preserves the immutable lock origin and restarts recovery.
+***************************************************************************)
+ExactLockedCommitTimeoutRecoveryWitness(node, qc) ==
+  /\ qc.context = context
+  /\ qc.height = height
+  /\ qc.view = lockRank[node]
+  /\ qc.subject = lockSubject[node]
+  /\ qc.view < nodeView[node]
+  /\ \E timeoutVote \in timeoutIntents:
+       /\ timeoutVote.signer = node
+       /\ timeoutVote.context = qc.context
+       /\ timeoutVote.height = qc.height
+       /\ timeoutVote.view = nodeView[node]
+
 HistoricalLockedCommitRecoveryWitness(node, qc) ==
   \/ ExactLockedCommitIntents(node, qc.view, qc.subject) # {}
   \/ \E request \in pendingLockCommit:
@@ -584,14 +602,16 @@ HistoricalLockedCommitRecoveryWitness(node, qc) ==
        /\ candidate.subject = qc.subject
        /\ candidate.kind = "BeginLockCommit"
        /\ CandidateScheduled(candidate)
+  \/ ExactLockedCommitTimeoutRecoveryWitness(node, qc)
 
 (***************************************************************************
 Once the exact TC-promoted historical lock has a current-generation durable
 validation witness, the serialized reducer must already own either its exact
 Commit intent, the WAL request that will create it, or the validation
-successor that begins that request.  The historical guard also forbids
-retroactively signing below a higher conflicting-subject local Prepare intent
-or known PrepareQC; a higher reproposal of the same subject is harmless.
+successor that begins that request.  If the current finality view closed while
+validation was in flight, its exact durable local timeout owns the retry until
+the next certified view transition.  The historical guard also forbids
+retroactively signing below any higher local Prepare origin or known PrepareQC.
 ***************************************************************************)
 HistoricalLockedCommitRecoveryProgress ==
   \A node \in AsyncCurrentResponsiveVoters, qc \in prepareQCs:

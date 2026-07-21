@@ -34,6 +34,38 @@ class SumeragiV2WireFixtureTest {
     }
 
     @Test
+    fun `later view commit fixtures preserve proposal origin`() {
+        fun message(name: String): SumeragiV2Wire.ConsensusMessageV2 =
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                fixtureRows().single { it.kind == "message" && it.name == name }.hex.hexBytes(),
+            )
+
+        val vote = (
+            message("commit_vote_later_view").payload
+                as SumeragiV2Wire.ConsensusPayload.VoteMessage
+            ).value
+        val certificate = (
+            message("commit_quorum_certificate_later_view").payload
+                as SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage
+            ).value
+        val response = (
+            message("commit_certificate_response").payload
+                as SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage
+            ).value
+
+        assertEquals(SumeragiV2Wire.GlobalPhase.COMMIT, vote.phase)
+        assertEquals(9L, vote.round.view)
+        assertEquals(1L, vote.proposalRound.view)
+        assertEquals(vote.round.contextId, vote.proposalRound.contextId)
+        assertEquals(vote.round.height, vote.proposalRound.height)
+        assertEquals(vote.round, certificate.round)
+        assertEquals(vote.proposalRound, certificate.proposalRound)
+        assertEquals(vote.subject, certificate.subject)
+        assertEquals(vote.executionCommitment, certificate.executionCommitment)
+        assertEquals(certificate.reference(), response.certificate.reference())
+    }
+
+    @Test
     fun `timeout vote carries the complete prepare certificate`() {
         val rows = fixtureRows()
         val timeoutVote = (
@@ -53,6 +85,8 @@ class SumeragiV2WireFixtureTest {
 
         val embeddedPrepare = requireNotNull(timeoutVote.highestPrepareQc)
         assertEquals(standalonePrepare, embeddedPrepare)
+        assertEquals(embeddedPrepare.round, embeddedPrepare.proposalRound)
+        assertEquals(embeddedPrepare.proposalRound, embeddedPrepare.reference().proposalRound)
         assertEquals(listOf(0L, 1L, 2L), embeddedPrepare.signers)
         assertEquals(48, embeddedPrepare.aggregateSignature().size)
 
@@ -61,6 +95,7 @@ class SumeragiV2WireFixtureTest {
         }
         val changedPrepare = SumeragiV2Wire.QuorumCertificate(
             embeddedPrepare.round,
+            embeddedPrepare.proposalRound,
             embeddedPrepare.phase,
             embeddedPrepare.subject,
             embeddedPrepare.executionCommitment,
@@ -128,6 +163,8 @@ class SumeragiV2WireFixtureTest {
                 as SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage
             ).value
         assertEquals(SumeragiV2Wire.GlobalPhase.COMMIT, response.certificate.phase)
+        assertEquals(9L, response.certificate.round.view)
+        assertEquals(1L, response.certificate.proposalRound.view)
         assertEquals(48, response.signature().size)
         assertEquals(response.requestHash, request.requestHash())
         response.validateAgainst(request)
@@ -193,6 +230,7 @@ class SumeragiV2WireFixtureTest {
         )
         val changedSubjectCertificate = SumeragiV2Wire.QuorumCertificate(
             response.certificate.round,
+            response.certificate.proposalRound,
             response.certificate.phase,
             changedSubject,
             response.certificate.executionCommitment,
@@ -217,6 +255,7 @@ class SumeragiV2WireFixtureTest {
         )
         val changedExecutionCertificate = SumeragiV2Wire.QuorumCertificate(
             response.certificate.round,
+            response.certificate.proposalRound,
             response.certificate.phase,
             response.certificate.subject,
             changedExecutionCommitment,
@@ -337,8 +376,14 @@ class SumeragiV2WireFixtureTest {
         assertEquals(3L, decoded.liveness.generation)
         assertEquals(1, decoded.liveness.prepareQuorums.size)
         assertEquals(1, decoded.liveness.commitQuorums.size)
+        assertEquals(1L, decoded.liveness.prepareQuorums.single().round.view)
+        assertEquals(1L, decoded.liveness.prepareQuorums.single().proposalRound.view)
+        assertEquals(3L, decoded.liveness.commitQuorums.single().round.view)
+        assertEquals(1L, decoded.liveness.commitQuorums.single().proposalRound.view)
         assertEquals(1, decoded.liveness.timeoutQuorums.size)
         assertEquals(SumeragiV2Wire.OutboundIntentKind.COMMIT_VOTE, decoded.liveness.outboundIntents.single().kind)
+        assertEquals(3L, decoded.liveness.outboundIntents.single().round.view)
+        assertEquals(1L, decoded.liveness.outboundIntents.single().proposalRound?.view)
         assertEquals(1, decoded.liveness.queues.size)
         assertEquals(SumeragiV2Wire.QueueKind.EFFECT_DISPATCH, decoded.liveness.queues.single().queue)
         assertEquals(SumeragiV2Wire.LivenessBlocker.LOCAL_CONTROL_PENDING, decoded.liveness.blocker)
@@ -429,6 +474,8 @@ class SumeragiV2WireFixtureTest {
             "proposal",
             "vote",
             "quorum_certificate",
+            "commit_vote_later_view",
+            "commit_quorum_certificate_later_view",
             "timeout_vote",
             "timeout_certificate",
             "payload_manifest",

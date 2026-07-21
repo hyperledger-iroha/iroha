@@ -29,7 +29,8 @@ that cutover, use the local-package form documented below.
 1. In Xcode select **File → Add Package Dependencies…**
 2. Enter `https://github.com/hyperledger/iroha-swift` and select the exact
    first-release version `0.1.0`.
-3. Add the `IrohaSwift` library product to your application target.
+3. Add the `IrohaSwift` library product to your application target. Apps using
+   NFC or Nearby peer transfer must also add `IrohaSwiftMobileTransports`.
 
 ### Swift Package Manager (`Package.swift`)
 
@@ -45,10 +46,70 @@ targets: [
     .target(
         name: "YourApp",
         dependencies: [
-            .product(name: "IrohaSwift", package: "iroha-swift")
+            .product(name: "IrohaSwift", package: "iroha-swift"),
+            .product(name: "IrohaSwiftMobileTransports", package: "iroha-swift")
         ]
     )
 ]
+```
+
+Peer-transfer apps import both modules:
+
+```swift
+import IrohaSwift
+import IrohaSwiftMobileTransports
+```
+
+The host app, not SwiftPM, owns Apple privacy strings and entitlements. Add the
+keys used by the rails you enable (replace only the human-readable strings):
+
+```xml
+<!-- Info.plist: needed only when the app captures QR with the camera. -->
+<key>NSCameraUsageDescription</key>
+<string>Scan an offline-transfer QR code.</string>
+
+<!-- Info.plist: Google Nearby. Keep the Bonjour service exact. -->
+<key>NSBonjourServices</key>
+<array>
+    <string>_F2EBA4BCB49B._tcp</string>
+</array>
+<key>NSBluetoothAlwaysUsageDescription</key>
+<string>Discover a nearby device for an offline transfer.</string>
+<key>NSLocalNetworkUsageDescription</key>
+<string>Exchange an offline transfer with a nearby device.</string>
+
+<!-- Info.plist: Core NFC reader mode. Keep the AID exact. -->
+<key>NFCReaderUsageDescription</key>
+<string>Exchange an offline transfer over NFC.</string>
+<key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
+<array>
+    <string>F049524F48415045455201</string>
+</array>
+```
+
+Reader builds also need the Near Field Communication Tag Reading capability,
+which produces this entitlement:
+
+```xml
+<key>com.apple.developer.nfc.readersession.formats</key>
+<array>
+    <string>TAG</string>
+</array>
+```
+
+Receiver/CardSession builds additionally require an Apple-provisioned HCE
+profile containing the following entitlements. Do not make CardSession a
+runtime fallback: require iOS 17.4 or newer and proceed only when
+`IrohaPeerNfcCardSessionControllerV1.availability(...)` reports an eligible
+device.
+
+```xml
+<key>com.apple.developer.nfc.hce</key>
+<true/>
+<key>com.apple.developer.nfc.hce.iso7816.select-identifier-prefixes</key>
+<array>
+    <string>F049524F48415045455201</string>
+</array>
 ```
 
 When working from the monorepo, use `.package(name: "IrohaSwift", path: "../../IrohaSwift")`
@@ -230,6 +291,133 @@ requests by the shared transport-security check.
 canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 `IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only while native-backed algorithms use `NoritoBridge`.
+
+### Offline peer transport V1
+
+`IrohaPeerWireMessageV1` is the only first-release request/payment/ACK envelope.
+Profile `1` requires schema `1` and allows a 24,576-byte encoded body; profile
+`2` requires schema `0x0102` and allows a 12,288-byte bounded handoff. Canonical
+bytes are capped at 32 KiB. Offline Note bytes remain opaque. Its text-based
+apps can use `IrohaPeerCanonicalTextPayloadCodecV1` for an exact UTF-8 round
+trip; the codec rejects profile `2`, whose bytes must instead be a kind-matched
+ABI21 archive. Profile-2 construction and decode validate NRT0 v0.0, no
+compression, exact compact-length flags, CRC64, the authoritative
+fully-qualified schema, and static padding (request/payment 8, ACK 0) without
+requiring the native bridge. The typed adapter performs deeper semantics.
+The shared `fixtures/offline/kagemusha_peer_transport_v2.json` vector pins the
+same qualified 49-byte structural archive through IPM1, IQR1, NFC, and an
+authenticated Nearby record. Its one-byte body is structural-only and must not
+be sent to the typed adapter.
+
+QR uses bounded multi-stream `IQR1` scanning with idle and absolute expiry.
+Its standard values are hard V1 ceilings: three active streams, twelve
+pre-header frames, 3,072 pre-header bytes, 30 seconds idle, and 180 seconds
+absolute; custom policies may only tighten them.
+Bind optional expected profile, kind, and schema when constructing the scan
+session; wrong-schema streams are quarantined before completion. The
+`.peerOptimized` compression policy is shared by all rails and uses zlib only
+when it saves at least 32 bytes and one 256-byte shard. If wallet-domain
+validation rejects a structurally valid completion, call
+`scanSession.quarantine(streamID:)` before resuming capture. Scan input is exact
+IQR1 text with no whitespace trimming; explicit Swift scanner uptimes are
+throwing and must be finite and nonnegative.
+Nearby uses Google Connections point-to-point service
+`org.hyperledger.iroha.offline.transfer.v1`, mandatory matching 4...12 ASCII digits,
+and canonical Base64URL-no-padding ASCII IPD1 discovery. Only the sender may
+start with the zero bootstrap; it adopts the receiver's advertised nonzero
+request context before the `IPN1` certificate-bound P-256/HKDF/AES-GCM
+session. The adapter marks
+a BYTES send complete only after its terminal transfer update succeeds. NFC
+uses AID `F049524F48415045455201`, exact ISC1 sender checkpoints, 244-byte IPA1
+durable BEGIN records, IDA1 durable ACK records, min(local, peer) chunk
+negotiation, and GET_STATUS recovery after
+ambiguous RF loss. The complete reader runner applies a whole-exchange
+73,996-action default even when a peer advertises one-byte chunks. One NFC
+profile policy binds request, payment, and acknowledgement to the same profile;
+mixed-profile sessions fail closed. Its
+`loadOrCreateDurableCheckpoint` callback is one atomic load-or-create/debit/store
+boundary and must return the exact durable request- and peer-bound ISC1; the
+runner validates it before BEGIN_PAYMENT. `updateDurableCheckpoint` separately
+installs the ACK-bearing ISC1 before CONFIRM_ACK. Failure at either durability
+boundary emits neither the command it gates nor a replacement debit.
+
+Wire limits are hard-capped at 32 KiB canonical, 24,576 Offline Note encoded,
+and 12,288 bounded Kagemusha encoded bytes. NFC messages cannot exceed 24,660
+bytes. Nearby timeouts must be finite, positive, and at most 300 seconds; its
+receive budget admits the four-record V1 transcript and fails closed on a
+fifth. Epoch invalidation suppresses callbacks not yet admitted; an
+already-admitted application callback may finish.
+Listener callbacks are bounded and reject overload. Terminal send completions
+remain exact-once through a separately bounded fallback; if both callback lanes
+are stalled and saturated, the final nonblocking path runs inline and therefore
+does not promise the configured callback context or global FIFO order.
+
+The portable wire, QR, Nearby cryptography, and NFC state machines live in
+`IrohaSwift`; Google Nearby and Core NFC lifecycle adapters live in
+`IrohaSwiftMobileTransports`. These `IrohaPeer*V1` APIs have no
+MultipeerConnectivity, legacy AID, raw-text, or unauthenticated BYTES fallback.
+That scope does not remove the independent Kagemusha ABI21 bulk family.
+
+The application entry points are:
+
+- QR: produce display strings with
+  `IrohaPeerQRCodecV1.staticCompleteTextCandidate(...)` or
+  `animatedFrameTexts(...)`; feed scanner text to
+  `IrohaPeerQRScanSessionV1.ingest(...)`, and call `reset()` when the camera
+  session or expected kind changes.
+- Nearby: authenticate records with `IrohaPeerNearbySessionV1`, and own radio
+  lifecycle through `IrohaPeerNearbyConnectionsTransportV1.startAdvertising`,
+  `startDiscovering`, `send`, and `stop`. A `send` completion means delivery
+  only after the exact payload's terminal transfer update is `.success`; queue
+  acceptance is never success.
+- NFC: use `IrohaPeerNfcReaderServiceV1.run(...)` for reader mode and
+  `IrohaPeerNfcCardSessionControllerV1.start(...)` for an eligible receiver.
+  The admission callback receives an ephemeral context and must atomically
+  persist and return a distinct `IrohaPeerNfcDurablePaymentAdmissionV1`; pass
+  that decoded IPA1 back as `restoredPaymentAdmission` after relaunch. Admission
+  and commit callbacks are idempotent because their default and maximum
+  five-second deadline makes a timeout ambiguous. A callback that ignores task
+  cancellation cannot hold the CardSession past that deadline. Admission and
+  COMMIT share one process-wide, queue-free lease: timeout/cancel does not
+  release it until the actual callback returns, and retaps fail immediately
+  with a distinct saturation failure instead of spawning more tasks. A callback
+  that never returns therefore requires process restart. Its late value is not
+  installed or published and is loaded from durable storage on the next start.
+  IPA1 resumes at byte zero; IDA1 wins after COMMIT. Exact/restored BEGIN
+  and COMMIT replays publish the idempotent `.paymentAdmitted` and
+  `.acknowledgementReady` state events.
+  Reader contact retries default to three attempts over three seconds and are
+  hard-capped at ten attempts and 30 seconds. A connect slot is claimed before
+  an attempt, so duplicate detection callbacks cannot consume retry budget.
+  Apps with a custom transceiver can call the portable
+  `IrohaPeerNfcReaderExchangeV1.run(...)` directly, preserving both durable
+  checkpoint callbacks.
+
+The bounded Retail V1 Kagemusha handoff uses profile `2` and only schema `0x0102`.
+`IrohaPeerKagemushaAdapterV1` rejects every other schema before invoking the
+native archive decoder, and its IPM1 adapter fails explicitly above the 12,288
+byte encoded-body ceiling. The independent ABI21 APIs remain
+`KagemushaQRStreamCodec`, `KagemushaNFCProtocol`, and
+`KagemushaNearbyExchange`, with distinct `PKK2*`/`PKKQ1`, F050, and
+Bonjour/Multipeer identifiers. They are never negotiated, reinterpreted, or
+used as fallback for Retail V1. Full QR, NFC, and native ABI21 archives up to
+32 MiB continue to use those rails; Kagemusha Nearby's JSON/text envelope has
+its own smaller bound. The profile identifier must not be used for a different
+sidecar or demo encoding.
+
+This transport hardening is client-side and requires no backend API change.
+
+The canonical cross-SDK vectors live in `../fixtures/offline/peer_*.json`.
+From this directory, run the portable/mobile suites and the mainline Kagemusha
+adapter boundary with:
+
+```bash
+swift test --filter IrohaPeer
+swift test --filter KagemushaPeerTransportTests
+```
+
+See the [peer transport V1 guide](../docs/source/peer_transport_v1.md) for byte
+layouts, fixture hashes, Android permissions, and durability boundaries.
 
 ### Kagemusha offline cash lifecycle
 

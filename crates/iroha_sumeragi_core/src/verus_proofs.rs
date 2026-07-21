@@ -15,6 +15,27 @@
 
 use vstd::{assert_seqs_equal, prelude::*};
 
+use crate::refinement::{
+    BOUNDARY_ACKNOWLEDGE_WAL, BOUNDARY_BEGIN_WAL, BOUNDARY_COMPLETE_APPLICATION, BOUNDARY_NONE,
+    BOUNDARY_RESUME_AFTER_REPLAY, CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_INCOMING,
+    CERTIFICATE_EVIDENCE_LOCAL, CONTINUATION_DECIDE, CONTINUATION_INSTALL_TIMEOUT,
+    CONTINUATION_NONE, CONTINUATION_SIGN, EFFECT_PERSIST, EVENT_PERSISTED,
+    EVENT_PERSISTENCE_FAILED, EVENT_RESUME_AFTER_REPLAY, EVENT_SIGNED, IDENTITY_DOMAIN_CONTEXT,
+    IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_PEER,
+    IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
+    IDENTITY_KIND_CONSENSUS_CONTEXT, IDENTITY_KIND_CONSENSUS_SUBJECT,
+    IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+    IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_FINALITY_ARTIFACT, IDENTITY_KIND_MERGE_ENTRY,
+    IDENTITY_KIND_NETWORK_RESPONSE, IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_PEER,
+    IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_REFERENCE_DIGEST, IDENTITY_KIND_REPLY_PAYLOAD,
+    IDENTITY_KIND_SIDECAR_CHUNK, IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST,
+    IDENTITY_KIND_SIDECAR_RESPONSE, IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, REPLAY_EFFECT_NONE, WAL_RECORD_DECISION,
+    WAL_RECORD_INSTALL_TIMEOUT, WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_NONE,
+    WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT, WAL_RECORD_PROPOSAL_INTENT,
+    WAL_RECORD_TIMEOUT_INTENT,
+};
+
 // These expressions are instantiated both as specifications and as executable
 // Verus functions.  The PrepareIntent and TimeoutIntent WAL guards below are
 // derived directly from primitive vote and frozen-context fields.  The
@@ -33,6 +54,8 @@ macro_rules! same_certificate_body {
                     && $left.height == $right.height
                     && $left.prepare == $right.prepare
                     && $left.view == $right.view
+                    && $left.proposal_height == $right.proposal_height
+                    && $left.proposal_view == $right.proposal_view
                     && $left.subject == $right.subject))
     }};
 }
@@ -606,6 +629,10 @@ pub struct CertificateProjection {
     pub prepare: bool,
     /// Certificate view at the frozen height.
     pub view: int,
+    /// Immutable proposal height authenticated by the certificate.
+    pub proposal_height: int,
+    /// Immutable proposal view authenticated by the certificate.
+    pub proposal_view: int,
     /// Certified subject identity.
     pub subject: int,
     /// Number of canonical distinct voting-validator signers.
@@ -626,6 +653,8 @@ pub open spec fn absent_certificate() -> CertificateProjection {
         height: 0,
         prepare: true,
         view: 0,
+        proposal_height: 0,
+        proposal_view: 0,
         subject: 0,
         signer_count: 0,
         signer_power: 0,
@@ -639,6 +668,22 @@ pub open spec fn same_certificate(
     right: CertificateProjection,
 ) -> bool {
     same_certificate_body!(left, right)
+}
+
+/// Stable Commit decision identity, excluding only the finality view.
+pub open spec fn same_commit_decision(
+    left: CertificateProjection,
+    right: CertificateProjection,
+) -> bool {
+    left.present
+        && right.present
+        && !left.prepare
+        && !right.prepare
+        && left.context == right.context
+        && left.height == right.height
+        && left.proposal_height == right.proposal_height
+        && left.proposal_view == right.proposal_view
+        && left.subject == right.subject
 }
 
 /// Equality of the complete carried certificate, including its signer and
@@ -663,6 +708,8 @@ pub open spec fn valid_prepare(certificate: CertificateProjection) -> bool {
         && certificate.prepare
         && 0 <= certificate.height <= machine_u64_max()
         && 0 <= certificate.view <= machine_u64_max()
+        && certificate.proposal_height == certificate.height
+        && certificate.proposal_view == certificate.view
 }
 
 /// A well-formed projected CommitQC.
@@ -671,6 +718,8 @@ pub open spec fn valid_commit(certificate: CertificateProjection) -> bool {
         && !certificate.prepare
         && 0 <= certificate.height <= machine_u64_max()
         && 0 <= certificate.view <= machine_u64_max()
+        && certificate.proposal_height == certificate.height
+        && 0 <= certificate.proposal_view <= certificate.view
 }
 
 /// Equal-view certificates do not conflict and a higher one may replace one.
@@ -1158,6 +1207,10 @@ pub struct WalRetirementProjection {
     pub decision_certificate_height: int,
     /// CommitQC view carried by the reducer decision.
     pub decision_certificate_view: int,
+    /// Immutable proposal height carried by the reducer decision.
+    pub decision_proposal_height: int,
+    /// Immutable proposal view carried by the reducer decision.
+    pub decision_proposal_view: int,
     /// Commit phase discriminator carried by the reducer decision.
     pub decision_certificate_phase: int,
     /// CommitQC subject carried by the reducer decision.
@@ -1174,6 +1227,10 @@ pub struct WalRetirementProjection {
     pub receipt_certificate_height: int,
     /// Trusted Kura certificate view.
     pub receipt_certificate_view: int,
+    /// Trusted Kura proposal height.
+    pub receipt_proposal_height: int,
+    /// Trusted Kura proposal view.
+    pub receipt_proposal_view: int,
     /// Trusted Kura certificate phase.
     pub receipt_certificate_phase: int,
     /// Trusted Kura certificate subject.
@@ -1197,6 +1254,8 @@ pub open spec fn wal_retirement_authorized(step: WalRetirementProjection) -> boo
         step.decision_certificate_context,
         step.decision_certificate_height,
         step.decision_certificate_view,
+        step.decision_proposal_height,
+        step.decision_proposal_view,
         step.decision_certificate_phase,
         wal_commit_phase_code(),
         step.decision_certificate_subject,
@@ -1206,6 +1265,8 @@ pub open spec fn wal_retirement_authorized(step: WalRetirementProjection) -> boo
         step.receipt_certificate_context,
         step.receipt_certificate_height,
         step.receipt_certificate_view,
+        step.receipt_proposal_height,
+        step.receipt_proposal_view,
         step.receipt_certificate_phase,
         step.receipt_certificate_subject,
     )
@@ -1228,6 +1289,10 @@ pub proof fn wal_retirement_requires_exact_durable_kura_receipt(
         step.decision_certificate_context == step.receipt_certificate_context,
         step.decision_certificate_height == step.receipt_certificate_height,
         step.decision_certificate_view == step.receipt_certificate_view,
+        step.decision_proposal_height == step.receipt_proposal_height,
+        step.decision_proposal_view == step.receipt_proposal_view,
+        step.decision_height == step.decision_proposal_height,
+        step.decision_proposal_view <= step.decision_certificate_view,
         step.decision_certificate_phase == wal_commit_phase_code(),
         step.decision_certificate_phase == step.receipt_certificate_phase,
         step.decision_certificate_subject == step.receipt_certificate_subject,
@@ -1271,6 +1336,10 @@ pub enum WalRecordProjection {
         height: int,
         /// Vote view.
         view: int,
+        /// Vote proposal height.
+        proposal_height: int,
+        /// Vote proposal view.
+        proposal_view: int,
         /// Vote subject.
         subject: int,
         /// Frozen-roster index of the vote signer.
@@ -1291,6 +1360,12 @@ pub enum WalRecordProjection {
         prepare: CertificateProjection,
         /// Commit vote view.
         vote_view: int,
+        /// Commit vote height.
+        vote_height: int,
+        /// Immutable proposal height carried by the Commit vote.
+        vote_proposal_height: int,
+        /// Immutable proposal view carried by the Commit vote.
+        vote_proposal_view: int,
         /// Commit vote subject.
         vote_subject: int,
         /// Projection of local Commit vote validation.
@@ -1424,6 +1499,58 @@ pub open spec fn unique_insert_allowed(
     !intents.dom().contains(view) || intents[view] == subject
 }
 
+/// Whether durable local Prepare evidence ranks any proposal origin above the
+/// candidate historical Commit. This is the exact safety projection of
+/// `DurableState::has_higher_prepare_evidence`: proposal origin is part of
+/// decision identity, so equal subject bytes do not make a higher Prepare
+/// compatible with an older-origin Commit.
+pub open spec fn has_higher_prepare_evidence(
+    before: WalStateProjection,
+    prepare: CertificateProjection,
+) -> bool {
+    (exists |higher_view: int|
+        before.prepare_intents.dom().contains(higher_view)
+            && higher_view > prepare.view)
+        || (before.highest_prepare.present
+            && before.highest_prepare.height == prepare.height
+            && before.highest_prepare.view > prepare.view)
+}
+
+/// The two production-legal round branches for `LockAndCommit`.
+///
+/// A current-round Commit remains behind that round's timeout fence.  The
+/// only historical exception reconstructs the exact retained lock and is
+/// rejected after any higher local Prepare or highest PrepareQC, including
+/// one for equal subject bytes at a different proposal origin.
+pub open spec fn lock_and_commit_round_is_admissible(
+    before: WalStateProjection,
+    prepare: CertificateProjection,
+    vote_view: int,
+    vote_proposal_view: int,
+) -> bool {
+    vote_view == before.view
+        && !before.timeout_intents.dom().contains(vote_view)
+        && (vote_proposal_view == vote_view
+            || (vote_proposal_view < before.view
+                && same_certificate(before.locked, prepare)
+                && !has_higher_prepare_evidence(before, prepare)))
+}
+
+/// A second TC for the immediately preceding round may install only a
+/// strictly higher selected Prepare origin while retaining the current view.
+pub open spec fn strict_same_round_timeout_upgrade(
+    before: WalStateProjection,
+    tc_view: int,
+    selected_prepare: CertificateProjection,
+) -> bool {
+    tc_view + 1 == before.view
+        && before.last_timeout_view == tc_view
+        && selected_prepare.present
+        && (!before.highest_prepare.present
+            || selected_prepare.view > before.highest_prepare.view)
+        && (!before.locked.present || selected_prepare.view > before.locked.view)
+}
+
 /// A projected frame passes every production pre-state check, but has not yet
 /// changed the state.  This is the guard half of `DurableState::apply`.
 pub open spec fn wal_frame_admissible(
@@ -1450,12 +1577,16 @@ pub open spec fn wal_frame_admissible(
                 context,
                 height,
                 view,
+                proposal_height,
+                proposal_view,
                 subject,
                 signer,
                 is_prepare,
             } => {
                 context == before.context
                     && height == before.height
+                    && proposal_height == height
+                    && proposal_view == view
                     && is_prepare
                     && signer == before.local_validator
                     && 0 <= signer
@@ -1476,6 +1607,9 @@ pub open spec fn wal_frame_admissible(
             WalRecordProjection::LockAndCommit {
                 prepare,
                 vote_view,
+                vote_height,
+                vote_proposal_height,
+                vote_proposal_view,
                 vote_subject,
                 local_vote_valid,
                 certificate_valid,
@@ -1483,10 +1617,18 @@ pub open spec fn wal_frame_admissible(
                 local_vote_valid
                     && certificate_valid
                     && valid_prepare(prepare)
-                    && vote_view == before.view
-                    && vote_view == prepare.view
+                    && vote_height == before.height
+                    && vote_proposal_height == vote_height
+                    && vote_proposal_height == prepare.proposal_height
+                    && vote_proposal_view == prepare.proposal_view
                     && vote_subject == prepare.subject
-                    && !before.timeout_intents.dom().contains(vote_view)
+                    && lock_and_commit_round_is_admissible(
+                        before,
+                        prepare,
+                        vote_view,
+                        vote_proposal_view,
+                    )
+                    && !before.decision.present
                     && unique_insert_allowed(before.commit_intents, vote_view, vote_subject)
                     && compatible_highest_update(before.highest_prepare, prepare)
                     && (!before.locked.present
@@ -1520,7 +1662,12 @@ pub open spec fn wal_frame_admissible(
                 selected_prepare,
             } => {
                 certificate_valid
-                    && tc_view >= before.view
+                    && (tc_view >= before.view
+                        || strict_same_round_timeout_upgrade(
+                            before,
+                            tc_view,
+                            selected_prepare,
+                        ))
                     && 0 <= tc_view < machine_u64_max()
                     && (!selected_prepare.present || valid_prepare(selected_prepare))
                     && (!selected_prepare.present || selected_prepare.view <= tc_view)
@@ -1538,7 +1685,7 @@ pub open spec fn wal_frame_admissible(
                 certificate_valid
                     && valid_commit(certificate)
                     && (!before.decision.present
-                        || same_certificate(before.decision, certificate))
+                        || same_commit_decision(before.decision, certificate))
             }
         }
 }
@@ -1610,6 +1757,7 @@ pub open spec fn wal_apply(
             WalRecordProjection::LockAndCommit {
                 prepare,
                 vote_view,
+                vote_proposal_view,
                 vote_subject,
                 ..
             } => {
@@ -1654,7 +1802,12 @@ pub open spec fn wal_apply(
                 selected_prepare,
                 ..
             } => {
-                after.view == tc_view + 1
+                after.view
+                    == if strict_same_round_timeout_upgrade(before, tc_view, selected_prepare) {
+                        before.view
+                    } else {
+                        tc_view + 1
+                    }
                     && after.proposal_intents =~= before.proposal_intents
                     && after.prepare_intents =~= before.prepare_intents
                     && after.commit_intents =~= before.commit_intents
@@ -2037,7 +2190,9 @@ pub proof fn observe_prepare_branch_postcondition(
 }
 
 /// LockAndCommit atomically installs the exact lock and matching unique Commit
-/// intent in the same acknowledged frame.
+/// intent in the same acknowledged frame.  Its current-round branch remains
+/// behind the timeout fence; its only historical branch reconstructs the
+/// exact retained lock without crossing any higher Prepare-origin evidence.
 pub proof fn lock_and_commit_branch_is_atomic(
     before: WalStateProjection,
     frame: WalFrameProjection,
@@ -2050,15 +2205,26 @@ pub proof fn lock_and_commit_branch_is_atomic(
             WalRecordProjection::LockAndCommit {
                 prepare,
                 vote_view,
+                vote_proposal_view,
                 vote_subject,
                 ..
             } => {
                 same_certificate(after.locked, prepare)
                     && after.commit_intents.dom().contains(vote_view)
                     && after.commit_intents[vote_view] == vote_subject
-                    && prepare.view == vote_view
+                    && prepare.view == vote_proposal_view
                     && prepare.subject == vote_subject
                     && lock_extends(before.locked, after.locked)
+                    && lock_and_commit_round_is_admissible(
+                        before,
+                        prepare,
+                        vote_view,
+                        vote_proposal_view,
+                    )
+                    && !before.timeout_intents.dom().contains(vote_view)
+                    && (vote_proposal_view < before.view
+                        ==> (same_certificate(before.locked, prepare)
+                            && !has_higher_prepare_evidence(before, prepare)))
             }
             _ => true,
         },
@@ -2139,8 +2305,9 @@ pub proof fn timeout_intent_branch_postcondition(
     }
 }
 
-/// InstallTimeout is the only durable branch that advances view; its selected
-/// PrepareQC cannot regress the lock.
+/// InstallTimeout is the only durable branch that can advance view; a strict
+/// same-round high-QC upgrade retains the view and every branch preserves the
+/// lock rank.
 pub proof fn install_timeout_branch_postcondition(
     before: WalStateProjection,
     frame: WalFrameProjection,
@@ -2150,10 +2317,21 @@ pub proof fn install_timeout_branch_postcondition(
         wal_apply(before, frame, after),
     ensures
         match frame.record {
-            WalRecordProjection::InstallTimeout { tc_view, .. } => {
+            WalRecordProjection::InstallTimeout {
+                tc_view,
+                selected_prepare,
+                ..
+            } => {
                 after.last_timeout_view == tc_view
-                    && after.view == tc_view + 1
-                    && after.view > before.view
+                    && (if strict_same_round_timeout_upgrade(
+                        before,
+                        tc_view,
+                        selected_prepare,
+                    ) {
+                        after.view == before.view
+                    } else {
+                        after.view == tc_view + 1 && after.view > before.view
+                    })
                     && lock_extends(before.locked, after.locked)
             }
             _ => true,
@@ -2939,7 +3117,8 @@ pub proof fn reducer_step_preserves_effect_ordering(
         effects.persist ==> after.pending,
         signing_effect_is_safe(after, effects.sign),
         apply_effect_is_safe(after, effects),
-        effects.enter_view ==> after.durable.view > before.durable.view,
+        effects.enter_view ==> after.durable.view >= before.durable.view,
+        effects.enter_view ==> after.generation == before.generation + 1,
 {
     match path {
         ReducerPathProjection::AcknowledgePersistence => {
@@ -3093,12 +3272,46 @@ pub struct ProductionDurableIntentTraceProjection {
     pub durable_sequence_after: u64,
 }
 
+/// Verus-side primitive ownership facts for one validated durable lock.
+#[derive(Copy, Clone)]
+pub struct LockedCommitProgressWitnessProjection {
+    pub context_id: CanonicalIdentityProjection,
+    pub current_height: u64,
+    pub current_view: u64,
+    pub local_validator_present: bool,
+    pub local_validator: int,
+    pub locked_context_id: CanonicalIdentityProjection,
+    pub locked_height: u64,
+    pub locked_view: u64,
+    pub locked_subject: CanonicalIdentityProjection,
+    pub commit_intent_present: bool,
+    pub commit_context_id: CanonicalIdentityProjection,
+    pub commit_height: u64,
+    pub commit_view: u64,
+    pub commit_proposal_height: u64,
+    pub commit_proposal_view: u64,
+    pub commit_phase: u8,
+    pub commit_subject: CanonicalIdentityProjection,
+    pub commit_signer: int,
+    pub commit_signature_pending: bool,
+    pub commit_pooled: bool,
+    pub pending: ProductionPendingProjection,
+    pub timeout_intent_present: bool,
+    pub timeout_intent_durable: bool,
+    pub timeout_context_id: CanonicalIdentityProjection,
+    pub timeout_height: u64,
+    pub timeout_view: u64,
+    pub timeout_signer: int,
+}
+
 /// Verus-side complete semantic Decision identity.
 #[derive(Copy, Clone)]
 pub struct ProductionDecisionIdentityProjection {
     pub context_id: CanonicalIdentityProjection,
     pub height: u64,
     pub view: u64,
+    pub proposal_height: u64,
+    pub proposal_view: u64,
     pub phase: u8,
     pub subject: CanonicalIdentityProjection,
     pub block_hash: CanonicalIdentityProjection,
@@ -3139,6 +3352,7 @@ pub struct ProductionDecisionRecoveryTraceProjection {
     pub frozen_context_id: CanonicalIdentityProjection,
     pub frozen_height: u64,
     pub replay_tag: ProductionTagProjection,
+    pub owner_tag: ProductionTagProjection,
     pub replay_generation: u64,
     pub commit_qc: ProductionQuorumCertificateIdentityProjection,
     pub manifest_round: ProductionTagProjection,
@@ -3337,6 +3551,7 @@ pub struct ProductionReliableFlushApplicationProjection {
 #[derive(Copy, Clone)]
 pub struct ProductionApplicationTraceProjection {
     pub task_tag: ProductionTagProjection,
+    pub owner_tag: ProductionTagProjection,
     pub task_generation: u64,
     pub context_id: CanonicalIdentityProjection,
     pub context_height: u64,
@@ -3538,6 +3753,13 @@ pub closed spec fn production_durable_intent_trace_projection(
     projection
 }
 
+/// Exact typed locked-Commit progress projection consumed by the cross-tool theorem.
+pub closed spec fn locked_commit_progress_witness_projection(
+    projection: LockedCommitProgressWitnessProjection,
+) -> LockedCommitProgressWitnessProjection {
+    projection
+}
+
 /// Exact typed pending-Decision projection consumed by the cross-tool theorem.
 pub closed spec fn production_decision_recovery_trace_projection(
     projection: ProductionDecisionRecoveryTraceProjection,
@@ -3648,6 +3870,13 @@ pub closed spec fn production_durable_intent_trace_refines_progress_witness_kern
     projection: ProductionDurableIntentTraceProjection,
 ) -> bool {
     production_durable_intent_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the validated-lock progress-witness production kernel.
+pub closed spec fn locked_commit_progress_witness_is_valid_kernel(
+    projection: LockedCommitProgressWitnessProjection,
+) -> bool {
+    locked_commit_progress_witness_body!(projection)
 }
 
 /// Exact Verus mirror of the pending-Decision recovery production kernel.
@@ -3886,11 +4115,45 @@ pub proof fn production_durable_intent_trace_refines_progress_witness(
         effect_slots_authorized_body!(projection.effects),
         effect_count_body!(projection.effects, refinement_tag_value!(EFFECT_PERSIST)) <= 1u64,
         projection.durable_sequence_after >= projection.durable_sequence_before,
+        projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+            ==> projection.durable_sequence_before < u64::MAX,
+        projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+            ==> projection.pending_after.persistence_id
+                == projection.durable_sequence_before + 1,
+        projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+            ==> projection.durable_sequence_after == projection.durable_sequence_before,
+        projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+            ==> projection.durable_sequence_before < u64::MAX,
+        projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+            ==> projection.durable_sequence_after
+                == projection.durable_sequence_before + 1,
+        projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+            ==> projection.pending_before.persistence_id
+                == projection.durable_sequence_after,
 {
     reveal(production_durable_intent_trace_refines_progress_witness_kernel);
     reveal(production_durable_intent_trace_projection);
     assert(production_durable_intent_trace_refines_progress_witness_kernel(
         production_durable_intent_trace_projection(projection),
+    ));
+}
+
+/// An exact active Commit, pending LockAndCommit, or durable current-view
+/// timeout retains a reconstruction path for the immutable locked origin.
+pub proof fn locked_commit_progress_witness_is_valid(
+    projection: LockedCommitProgressWitnessProjection,
+)
+    requires
+        locked_commit_progress_witness_body!(projection),
+    ensures
+        locked_commit_progress_witness_is_valid_kernel(
+            locked_commit_progress_witness_projection(projection),
+        ),
+{
+    reveal(locked_commit_progress_witness_is_valid_kernel);
+    reveal(locked_commit_progress_witness_projection);
+    assert(locked_commit_progress_witness_is_valid_kernel(
+        locked_commit_progress_witness_projection(projection),
     ));
 }
 
@@ -3910,6 +4173,11 @@ pub proof fn production_decision_trace_refines_recovery_witness(
         projection.expected_height - projection.state_height <= 1u64,
         projection.durable_body.height == projection.frozen_height,
         projection.stage == 1u8,
+        projection.replay_tag.height == projection.owner_tag.height,
+        projection.replay_tag.view == projection.owner_tag.view,
+        projection.replay_tag.generation == projection.owner_tag.generation,
+        projection.manifest_round.view == projection.durable_body.view,
+        projection.durable_body.view == projection.commit_qc.decision.proposal_view,
 {
     reveal(production_decision_trace_refines_recovery_witness_kernel);
     reveal(production_decision_recovery_trace_projection);
@@ -4104,6 +4372,10 @@ pub proof fn production_application_trace_refines_decision_completion(
             projection.artifact_context_id,
             projection.context_id
         ),
+        projection.task_tag.height == projection.owner_tag.height,
+        projection.task_tag.view == projection.owner_tag.view,
+        projection.task_tag.generation == projection.owner_tag.generation,
+        projection.validated_body.view == projection.commit_qc.decision.proposal_view,
 {
     reveal(production_application_trace_refines_decision_completion_kernel);
     reveal(production_application_trace_projection);
@@ -4231,14 +4503,19 @@ pub struct ProductionEffectCapabilityKeyProjection {
     pub context_id: int,
     pub height: u64,
     pub view: u64,
+    pub proposal_height: u64,
+    pub proposal_view: u64,
     pub phase: u8,
     pub subject: int,
     pub actor: int,
     pub persistence_id: u64,
     pub record_kind: u8,
+    pub auxiliary_present: bool,
     pub auxiliary_context_id: int,
     pub auxiliary_height: u64,
     pub auxiliary_view: u64,
+    pub auxiliary_proposal_height: u64,
+    pub auxiliary_proposal_view: u64,
     pub auxiliary_phase: u8,
     pub auxiliary_subject: int,
     pub manifest_payload: int,
@@ -4344,6 +4621,9 @@ pub struct ProductionPendingProjection {
     pub context_id: CanonicalIdentityProjection,
     pub height: u64,
     pub view: u64,
+    pub proposal_present: bool,
+    pub proposal_height: u64,
+    pub proposal_view: u64,
     pub subject: CanonicalIdentityProjection,
 }
 
@@ -4360,6 +4640,17 @@ pub struct ProductionBoundaryCapabilityKeyProjection {
     pub tag: ProductionTagProjection,
     pub subject: ProductionSubjectProjection,
     pub subject_identity: CanonicalIdentityProjection,
+    pub proposal_present: bool,
+    pub proposal_height: u64,
+    pub proposal_view: u64,
+    pub auxiliary_present: bool,
+    pub auxiliary_context_id: int,
+    pub auxiliary_height: u64,
+    pub auxiliary_view: u64,
+    pub auxiliary_proposal_height: u64,
+    pub auxiliary_proposal_view: u64,
+    pub auxiliary_phase: u8,
+    pub auxiliary_subject: int,
     pub replay_plan: ProductionReplayPlanProjection,
 }
 

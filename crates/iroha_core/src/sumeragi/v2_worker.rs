@@ -80,7 +80,7 @@ use super::{
         EffectExecutorStatus, EffectRuntime, EffectTransportError, EffectWorkId,
         PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
     },
-    v2_lane_work::{DurableLaneRolloverAuthority, V2LaneWorkEffect},
+    v2_lane_work::{DurableLaneRolloverAuthority, V2LaneWorkEffect, lane_output_identity},
     v2_runtime::RuntimeQueueLaneSnapshot,
     v2_transport::{AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk},
 };
@@ -1778,7 +1778,8 @@ enum LockedCandidatePhysicalOwner {
 /// Disk acquisition identity is the immutable subject. Certified view changes
 /// may only advance the reducer incarnation which consumes the result. Ready
 /// bytes remain bounded to one body and can therefore be delivered again after
-/// a later view rebind without enqueueing another physical disk read.
+/// a later view or same-view generation rebind without enqueueing another
+/// physical disk read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LockedCandidateAcquisition {
     round: wire::ConsensusRound,
@@ -1815,11 +1816,7 @@ impl LockedCandidateAcquisition {
             return Err("Sumeragi v2 locked-body acquisition changed height context".to_owned());
         }
         let same_consumer = consumer == self.consumer;
-        if !same_consumer
-            && (consumer.height() != self.consumer.height()
-                || consumer.view() <= self.consumer.view()
-                || consumer.generation() <= self.consumer.generation())
-        {
+        if !same_consumer && !consumer.strictly_advances(self.consumer) {
             return Err(
                 "Sumeragi v2 locked-body acquisition consumer did not advance monotonically"
                     .to_owned(),
@@ -7534,6 +7531,22 @@ impl ProductionV2Services {
         }
     }
 
+    fn current_lane_output_rollover_claim(
+        &self,
+        message: &BlockMessage,
+    ) -> Result<ExactOutputRolloverClaim, String> {
+        let Some((proposal_height, _)) = lane_output_identity(message) else {
+            return Err("Sumeragi v2 lane output has no typed lane identity".to_owned());
+        };
+        if proposal_height != self.context.height {
+            return Err(format!(
+                "Sumeragi v2 lane output proposal height {proposal_height} differs from immutable height context {}",
+                self.context.height
+            ));
+        }
+        Ok(ExactOutputRolloverClaim::Lane(self.exact_output_scope()))
+    }
+
     /// Retry every currently schedulable exact semantic-output target.
     ///
     /// Returns `true` while an exact actor-backpressured target remains owned.
@@ -7662,6 +7675,7 @@ impl ProductionV2Services {
         let (messages, peers, routes, reply_route_history, ingress_ownership, rollover_claim) =
             match effect {
                 V2LaneWorkEffect::PostLaneBlock { peer, message } => {
+                    let rollover_claim = self.current_lane_output_rollover_claim(message)?;
                     let wire = BlockMessageWire::try_preencoded(Arc::new(message.clone()))
                         .map_err(|error| error.to_string())?;
                     (
@@ -7670,7 +7684,7 @@ impl ProductionV2Services {
                         vec![ExactTargetRoute::Topology],
                         None,
                         None,
-                        ExactOutputRolloverClaim::Lane(self.exact_output_scope()),
+                        rollover_claim,
                     )
                 }
                 V2LaneWorkEffect::PostDurableLaneCertificate {
@@ -8421,7 +8435,7 @@ impl ProductionV2Services {
             | BlockMessage::LaneBlockVote(_)
             | BlockMessage::LaneBlockQc(_)
             | BlockMessage::LaneBlockCertificate(_) => {
-                ExactOutputRolloverClaim::Lane(self.exact_output_scope())
+                self.current_lane_output_rollover_claim(&message)?
             }
             _ => return Err("guarded v2 output has no typed rollover claim".to_owned()),
         };
@@ -8447,7 +8461,7 @@ impl ProductionV2Services {
             | BlockMessage::LaneBlockVote(_)
             | BlockMessage::LaneBlockQc(_)
             | BlockMessage::LaneBlockCertificate(_) => {
-                ExactOutputRolloverClaim::Lane(self.exact_output_scope())
+                self.current_lane_output_rollover_claim(&message)?
             }
             _ => return Err("guarded v2 reply has no typed rollover claim".to_owned()),
         };
@@ -9029,8 +9043,7 @@ impl V2EffectServices for ProductionV2Services {
             || certificate.round.context_id != self.context.id()
             || certificate.round.height != self.context.height
             || certificate.round.view.checked_add(1) != Some(tag.view())
-            || tag.view() <= self.active_tag.view()
-            || tag.generation() <= self.active_tag.generation()
+            || !tag.strictly_advances(self.active_tag)
         {
             return Err(
                 "Sumeragi v2 service rejected non-monotonic certified view ownership".to_owned(),
@@ -9220,10 +9233,15 @@ pub(super) mod tests {
             Ok(())
         }
 
+        fn authoritative_tag(&self) -> Option<EventTag> {
+            None
+        }
+
         fn decided_body(
             &self,
         ) -> Result<
             Option<(
+                wire::ConsensusRound,
                 wire::ConsensusRound,
                 wire::BlockSubject,
                 wire::ExecutionCommitment,
@@ -13507,6 +13525,14 @@ pub(super) mod tests {
                 subject,
             )
             .expect("rebind the same acquisition to a later view");
+        let same_view_rebound = EventTag::new(1, 1, Generation::new(3));
+        service
+            .request_locked_candidate(
+                same_view_rebound,
+                locked_candidate_round(&service, 0),
+                subject,
+            )
+            .expect("rebind the same acquisition to a newer same-view generation");
 
         let commands = command_rx.try_iter().collect::<Vec<_>>();
         assert!(matches!(
@@ -13518,7 +13544,7 @@ pub(super) mod tests {
             .as_ref()
             .expect("one acquisition owner");
         assert_eq!(acquisition.subject, subject);
-        assert_eq!(acquisition.consumer, locked_candidate_tag(1));
+        assert_eq!(acquisition.consumer, same_view_rebound);
         assert_eq!(acquisition.pending_count(), 1);
         detach_locked_candidate_io(&mut service);
     }
@@ -14094,6 +14120,7 @@ pub(super) mod tests {
     ) -> BodyFetchTask {
         let certificate = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: wire::ExecutionCommitment::without_topups(
@@ -15118,12 +15145,12 @@ pub(super) mod tests {
         let task = BodyFetchTask::ordinary_for_test(47, tag, payload.manifest().clone());
         let rebound_tag = EventTag::new(
             service.context.height,
-            proposal.round.view + 1,
+            proposal.round.view,
             Generation::new(service.context.height + 1),
         );
         let rebound = task
             .rebind_consumer(rebound_tag)
-            .expect("later view rebinds immutable fetch work");
+            .expect("later same-view generation rebinds immutable fetch work");
         service
             .enqueue_body_fetch(task.clone())
             .expect("open exact live reconstruction session");
@@ -15151,12 +15178,12 @@ pub(super) mod tests {
         let task = BodyFetchTask::ordinary_for_test(48, tag, payload.manifest().clone());
         let rebound_tag = EventTag::new(
             service.context.height,
-            proposal.round.view + 1,
+            proposal.round.view,
             Generation::new(service.context.height + 1),
         );
         let rebound = task
             .rebind_consumer(rebound_tag)
-            .expect("later view rebinds queued reconstruction");
+            .expect("later same-view generation rebinds queued reconstruction");
         service
             .local_completions
             .push_back(LocalCompletion::Reconstructed {
@@ -15946,6 +15973,7 @@ pub(super) mod tests {
         let validated = ValidatedBodyReceipt::for_test(durable);
         let certificate = wire::QuorumCertificate {
             round: proposal.round,
+            proposal_round: proposal.round,
             phase: wire::GlobalPhase::Commit,
             subject: proposal.subject,
             execution_commitment: validated.execution_commitment(),
@@ -16454,6 +16482,7 @@ pub(super) mod tests {
         );
         let preimage = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -16475,6 +16504,7 @@ pub(super) mod tests {
             .collect::<Vec<_>>();
         let certificate = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -17869,6 +17899,61 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn entered_view_accepts_same_view_higher_generation_supersession() {
+        let (mut service, _) = fixture();
+        let initial = service.active_tag;
+        let view_one = EventTag::new(
+            initial.height(),
+            initial.view() + 1,
+            Generation::new(initial.generation().get() + 1),
+        );
+        service
+            .entered_view(
+                view_one,
+                timeout_certificate_at_view(&service, initial.view()),
+            )
+            .expect("install the first certified successor view");
+        let payload = outbound_payload_at_view(&service, view_one.view());
+        service
+            .register_outbound_payload(view_one, payload)
+            .expect("retain work owned by the first view-one generation");
+
+        assert!(
+            service
+                .entered_view(
+                    view_one,
+                    timeout_certificate_at_view(&service, view_one.view() - 1),
+                )
+                .is_err(),
+            "an equal lifecycle tag is not a supersession"
+        );
+        let rebound = EventTag::new(
+            view_one.height(),
+            view_one.view(),
+            Generation::new(view_one.generation().get() + 1),
+        );
+        assert!(
+            service
+                .entered_view(
+                    rebound,
+                    timeout_certificate_at_view(&service, view_one.view()),
+                )
+                .is_err(),
+            "the certificate must still identify the immediate predecessor round"
+        );
+        service
+            .entered_view(
+                rebound,
+                timeout_certificate_at_view(&service, view_one.view() - 1),
+            )
+            .expect("a stricter same-round TC installs a new same-view generation");
+
+        assert_eq!(service.active_tag, rebound);
+        assert!(service.outbound_chunks.is_empty());
+        assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
     fn outbound_payload_retention_is_constant_across_many_view_changes() {
         let (mut service, _) = fixture();
         let mut max_manifests = 0usize;
@@ -18006,6 +18091,7 @@ pub(super) mod tests {
         );
         let vote = |phase| wire::Vote {
             round,
+            proposal_round: round,
             phase,
             subject,
             execution_commitment,

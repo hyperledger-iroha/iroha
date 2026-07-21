@@ -3686,7 +3686,7 @@ impl MergeSidecarTransport {
         let chunk_index = usize::try_from(projection.chunk_index).map_err(|_| {
             MergeSidecarError::FlushIdentityMismatch("chunk index is not representable")
         })?;
-        let expected_cursor_after =
+        let expected_chunk_cursor_after =
             chunk_index
                 .checked_add(1)
                 .ok_or(MergeSidecarError::FlushIdentityMismatch(
@@ -3699,8 +3699,8 @@ impl MergeSidecarTransport {
             || projection.message_cursor_before != 0
             || projection.message_cursor_after != 1
             || projection.chunk_cursor_before != chunk_index
-            || projection.chunk_cursor_after != expected_cursor_after
-            || expected_cursor_after > count
+            || projection.chunk_cursor_after != expected_chunk_cursor_after
+            || expected_chunk_cursor_after > count
         {
             return Err(MergeSidecarError::FlushIdentityMismatch(
                 "response or per-source cursor changed before acknowledgement",
@@ -3724,7 +3724,7 @@ impl MergeSidecarTransport {
             gate,
             outbound,
             occurrence,
-            expected_cursor_after,
+            expected_chunk_cursor_after,
             count,
         )?;
 

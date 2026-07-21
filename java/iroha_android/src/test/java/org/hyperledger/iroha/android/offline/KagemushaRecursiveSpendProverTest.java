@@ -917,7 +917,7 @@ public final class KagemushaRecursiveSpendProverTest {
       KagemushaRecursiveSpendProver.appendSpendV4(
           append,
           KagemushaRecursiveSpendProver.decodeRecipientPaymentRequest(
-              archive("KagemushaRecipientPaymentRequestV2")),
+              archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2")),
           0);
     } catch (final IllegalArgumentException expected) {
       invalidTimestampRejected = true;
@@ -992,7 +992,7 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.restoreInitBranchV4(init, opening, 0));
     final KagemushaRecursiveSpendProver.PeerPayment payment =
         KagemushaRecursiveSpendProver.decodePeerPayment(
-            archive("KagemushaRecursiveSpendPeerPaymentV4"));
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4"));
     assertThrowsIllegalArgument(() ->
         KagemushaRecursiveSpendProver.restorePeerPaymentBranchV4(payment, opening, 0));
 
@@ -1043,17 +1043,18 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void canonicalPeerCodecsAreTypedAndDefensive() {
-    final byte[] requestArchive = archive("KagemushaRecipientPaymentRequestV2");
+    final byte[] requestArchive = archive(
+        "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2");
     final KagemushaRecursiveSpendProver.RecipientPaymentRequest request =
         KagemushaRecursiveSpendProver.decodeRecipientPaymentRequest(requestArchive);
     requestArchive[requestArchive.length - 1] ^= 1;
     assert request.noritoEncoded()[request.noritoEncoded().length - 1] == 0x51;
 
     assert KagemushaRecursiveSpendProver.decodePeerPayment(
-            archive("KagemushaRecursiveSpendPeerPaymentV4"))
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4"))
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     assert KagemushaRecursiveSpendProver.decodeReceiverAcknowledgement(
-            archive("KagemushaReceiverAcknowledgementV2"))
+            archive("iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2"))
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     assert KagemushaRecursiveSpendProver.decodeNoteMembershipWitness(
             archive("KagemushaNoteMembershipWitnessV2"))
@@ -1062,7 +1063,7 @@ public final class KagemushaRecursiveSpendProverTest {
     boolean rejected = false;
     try {
       KagemushaRecursiveSpendProver.decodePeerPayment(
-          archive("KagemushaRecipientPaymentRequestV2"));
+          archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"));
     } catch (final IllegalArgumentException expected) {
       rejected = true;
     }
@@ -1076,7 +1077,8 @@ public final class KagemushaRecursiveSpendProverTest {
     }
     assert malformedRejected;
 
-    final byte[] corrupted = archive("KagemushaRecursiveSpendPeerPaymentV4");
+    final byte[] corrupted = archive(
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4");
     corrupted[corrupted.length - 1] = 0;
     boolean checksumRejected = false;
     try {
@@ -1103,20 +1105,25 @@ public final class KagemushaRecursiveSpendProverTest {
             CRC64.compute(payload),
             NoritoHeader.COMPACT_LEN,
             NoritoHeader.COMPRESSION_NONE);
-    final byte[] archive = new byte[NoritoHeader.HEADER_LENGTH + payload.length];
+    final int padding = schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2")
+        || schema.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4")
+        ? 8 : 0;
+    final byte[] archive = new byte[NoritoHeader.HEADER_LENGTH + padding + payload.length];
     System.arraycopy(header.encode(), 0, archive, 0, NoritoHeader.HEADER_LENGTH);
-    System.arraycopy(payload, 0, archive, NoritoHeader.HEADER_LENGTH, payload.length);
+    System.arraycopy(payload, 0, archive, NoritoHeader.HEADER_LENGTH + padding, payload.length);
     return archive;
   }
 
   private static void peerTransportGoldenVectorsAreExact() {
     final KagemushaPeerTransport.Payload request =
         KagemushaPeerTransport.Payload.decode(
-            archive("KagemushaRecipientPaymentRequestV2"),
+            archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"),
             KagemushaPeerTransport.Kind.RECEIVE_REQUEST);
     final String text = KagemushaPeerTransport.encode(request);
     assert text.equals(
-        "PKK2R.TlJUMAAA27ZYXi51qDW87RkAOqt6zQABAAAAAAAAAN6BMN0_Z661AlE");
+        "PKK2R.TlJUMAAAE2-AZVN4JnUypxEZ9G5vCgABAAAAAAAAAN6BMN0_Z661AgAAAAAAAAAAUQ");
     assert KagemushaPeerTransport.decode(text).kind()
         == KagemushaPeerTransport.Kind.RECEIVE_REQUEST;
     assert KagemushaPeerTransport.decodeUserPresented(" \n" + text + "\t",
@@ -1131,14 +1138,14 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void qrNfcAndNearbyGoldenVectorsAreExact() {
     final KagemushaPeerTransport.Payload request =
         KagemushaPeerTransport.Payload.decode(
-            archive("KagemushaRecipientPaymentRequestV2"),
+            archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"),
             KagemushaPeerTransport.Kind.RECEIVE_REQUEST);
     final List<String> frames = KagemushaQrStream.encode(
         request, KagemushaQrStream.Options.STANDARD);
     assert frames.equals(Arrays.asList(
-        "PKKQ1.S1EBALu6J7gkvW_mKvRoE04Tc9IAAAABAC4BAQQAAQAAAQABAAAAKbu6J7gkvW_mKvRoE04Tc9L3Ile8Baahf0wb7ZGckATmMK4Faw",
-        "PKKQ1.S1EBAbu6J7gkvW_mKvRoE04Tc9IAAAABAClOUlQwAADbtlheLnWoNbztGQA6q3rNAAEAAAAAAAAA3oEw3T9nrrUCUZiX9lk",
-        "PKKQ1.S1EBAru6J7gkvW_mKvRoE04Tc9IAAAABAQBOUlQwAADbtlheLnWoNbztGQA6q3rNAAEAAAAAAAAA3oEw3T9nrrUCUQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4vsCHg"));
+        "PKKQ1.S1EBAJ9UjpnKuy-JNddeTUuZxs8AAAABAC4BAQQAAQAAAQABAAAAMZ9UjpnKuy-JNddeTUuZxs_S31egUt70_UP06en4wRpstXHZdQ",
+        "PKKQ1.S1EBAZ9UjpnKuy-JNddeTUuZxs8AAAABADFOUlQwAAATb4BlU3gmdTKnERn0bm8KAAEAAAAAAAAA3oEw3T9nrrUCAAAAAAAAAABRW8j1XA",
+        "PKKQ1.S1EBAp9UjpnKuy-JNddeTUuZxs8AAAABAQBOUlQwAAATb4BlU3gmdTKnERn0bm8KAAEAAAAAAAAA3oEw3T9nrrUCAAAAAAAAAABRAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA010SmQ"));
     final KagemushaQrStream.Decoder decoder = new KagemushaQrStream.Decoder();
     assert !decoder.ingest(frames.get(0)).isComplete();
     final KagemushaQrStream.DecodeResult recovered = decoder.ingest(frames.get(2));
@@ -1149,9 +1156,9 @@ public final class KagemushaRecursiveSpendProverTest {
     final List<byte[]> apdus = KagemushaNfcProtocol.writePayloadApdus(
         KagemushaNfcProtocol.PayloadKind.RECEIVE_REQUEST, rawArchive, 220);
     assert hex(apdus.get(0)).equals(
-        "8020040026040100000029bbba27b824bd6fe62af468134e1373d2f72257bc05a6a17f4c1bed919c9004e6");
+        "80200400260401000000319f548e99cabb2f8935d75e4d4b99c6cfd2df57a052def4fd43f4e9e9f8c11a6c");
     assert hex(apdus.get(1)).equals(
-        "802104002d000000004e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb50251");
+        "8021040035000000004e5254300000136f80655378267532a71119f46e6f0a000100000000000000de8130dd3f67aeb502000000000000000051");
     assert hex(apdus.get(2)).equals("8022040000");
     assert KagemushaNfcProtocol.AID_HEX.equals("F0504B45504B524E464301");
     assert KagemushaNfcProtocol.SAFE_CHUNK_BYTES == 220;
@@ -1161,7 +1168,7 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final byte[] nearby = KagemushaNearby.encode(request, KagemushaNearby.PairingSymbol.STARS);
     assert new String(nearby, StandardCharsets.UTF_8).equals(
-        "{\"contentType\":\"text/vnd.pk.kagemusha-v2.receive-request\",\"kind\":\"receive_request\",\"pairingChallenge\":\"nearby_pairing_stars\",\"payload\":\"UEtLMlIuVGxKVU1BQUEyN1pZWGk1MXFEVzg3UmtBT3F0NnpRQUJBQUFBQUFBQUFONkJNTjBfWjY2MUFsRQ\"}");
+        "{\"contentType\":\"text/vnd.pk.kagemusha-v2.receive-request\",\"kind\":\"receive_request\",\"pairingChallenge\":\"nearby_pairing_stars\",\"payload\":\"UEtLMlIuVGxKVU1BQUFFMi1BWlZONEpuVXlweEVaOUc1dkNnQUJBQUFBQUFBQUFONkJNTjBfWjY2MUFnQUFBQUFBQUFBQVVR\"}");
     assert KagemushaNearby.decode(nearby).payload().kind()
         == KagemushaPeerTransport.Kind.RECEIVE_REQUEST;
     assert !KagemushaNearby.IS_AVAILABLE;

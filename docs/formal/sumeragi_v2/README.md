@@ -5,7 +5,9 @@ Sumeragi v2 consensus protocol. There is no legacy Sumeragi proof corridor.
 The model fixes protocol revision 3 and is parameterized over arbitrary finite
 frozen rosters; production separately enforces the release limit of 128
 validators. Mechanization status is recorded per obligation in the proof
-ledger.
+ledger. The first-release implementation likewise has one canonical decoder:
+an omitted `proposal_round` is invalid rather than interpreted as the vote or
+certificate round.
 
 ## Modules
 
@@ -126,6 +128,13 @@ ledger.
   MiB, respectively. The byte-abstract asynchronous model uses its existing
   completion and progress representatives; proving the concrete class and byte
   mapping remains part of the production-refinement obligation.
+  Cross-queue duplicate detection is likewise message-generic in production:
+  `deferred_authenticated_message_owner` compares the complete canonical
+  envelope with the Busy-deferred occurrence's retained
+  `authenticated_wire_identity`, and runtime ingress repeats the exact check
+  after authentication. QC-specific lookup wrappers exist only under
+  `cfg(test)` to keep focused CommitQC regressions readable; they are not a
+  narrower production ownership path or proof evidence.
   Resource lanes are keyed by the authenticated transport hop (`via`), while
   validation, response routing, and exact-wire coalescing retain the semantic
   origin. `SumeragiV2ReplyRouteOwnership` composes canonical semantic identity
@@ -255,6 +264,15 @@ the already-computed production leader start. Certificates must satisfy both
 `3 * signer_count > 2 * voter_count` and
 `3 * signer_power > 2 * total_power`; observers never pad either threshold.
 
+The source-shared reducer separates three round domains. Its lifecycle owner
+tag is the current `(height, view, generation)` authorized to make a local
+transition. The signed `proposal_round` is the immutable origin of the proposal
+manifest, block header, body, and validation receipt. The Vote/QC `round` is
+the certification or finality round. Prepare requires equal proposal and vote
+rounds. Commit requires equal context and height and permits only
+`proposal_round.view <= round.view`. The owner tag is neither a proposal-origin
+field nor an inferred certificate round.
+
 Honest Proposal, Prepare, Commit, and Timeout signatures require their matching
 acknowledged WAL intent. A timeout vote carries the full highest durable
 PrepareQC, and a TC contains disjoint signer groups whose union independently
@@ -262,21 +280,38 @@ satisfies both quorum thresholds. Installing a TC may move one validator to
 `tc.view + 1`; it does not require other validators to install first. Prepare
 intent replay remains current-view and timeout-fenced. An already-durable
 Commit intent may resume signing after a timeout or later TC only when it still
-matches the validator's exact active lock round and subject; unrelated
-historical Commit intents remain fenced. TC acknowledgement performs the same
-exact-lock check before queuing a Commit re-sign. If the TC instead promotes an
-exact lock for which this node lacks Commit intent, installation does not sign.
-After exact body storage and current-generation validation, the normal
-`BeginLockCommit`/WAL path may create that historical intent only when no
-higher conflicting-subject local Prepare intent or known PrepareQC exists;
-higher same-subject reproposals do not block reconstruction. The local
+matches the validator's exact active lock proposal origin and subject;
+unrelated proposal origins and superseded Commit finality intents remain
+fenced. TC acknowledgement performs the same
+exact-origin check before queuing a Commit re-sign in the active finality round.
+If the TC instead promotes an exact lock for which this node lacks a Commit
+intent, installation does not sign. After exact body storage and
+current-generation validation, the normal `BeginLockCommit`/WAL path may create
+that later-finality intent only when no higher local Prepare origin or known
+PrepareQC exists. A higher same-subject Prepare still names a different
+proposal origin and therefore fences the historical Commit. The local
 signature completion inserts the vote directly into the new volatile pool
 because the P2P broadcast excludes its sender. An old-view CommitQC remains
 decisive after a view change. All received Commit votes require the exact active
-durable lock. A premature current-view Commit stutters recoverably; once the
-matching `LockAndCommit` acknowledgement applies the newer lock, it prunes the
-superseded historical Commit pool before signing and advances the adapter's
-consumer epoch so that exact vote may enter once.
+durable lock origin and subject. A premature current-view Commit stutters
+recoverably. Once the matching `LockAndCommit` acknowledgement makes a later
+finality intent durable, it prunes every older Commit pool for that same origin
+before signing and advances the adapter's consumer epoch so the exact vote may
+enter once. Recovery and progress witnessing select only the newest durable
+Commit intent for the active `(proposal_round, subject)`.
+
+An installed lock is committed directly. Equal canonical bytes proposed in a
+later view would have a different proposal origin and are rejected; a selected
+higher PrepareQC installs its own exact origin instead of authorizing another
+re-proposal.
+
+The source-shared refinement projection carries a pending WAL record's primary
+proposal origin independently from its lifecycle owner. When the record embeds
+another certificate, it also carries that certificate's auxiliary proposal
+origin. The begin boundary, acknowledgement boundary, requested `Persist`
+capability, and independently reconstructed grant must match both origins and
+the pending record. There is no correlated requested/granted substitution path
+which can rename either origin.
 
 A certified chain slot is created only from the exact valid CommitQC in a
 durable decision receipt for the canonical parent context. Each validator
@@ -318,16 +353,14 @@ Prepare vote. An invalid body for an already durable decision remains a
 fail-closed error, matching the production progress-witness check.
 
 Every available, durable, validated, and invalid body record binds its exact
-view. The only view-independent body state is `retainedLockedBodies`, created
-when a Commit lock is persisted and accepted only by `RebindRetainedBody`.
-Rebinding stages an exact target-view available record; target-view storage and
-a generation-bound validation marker must then complete. When the exact
-canonical bytes already have a durable validation witness in an earlier view
-of the same height context, production promotes its deterministic execution
-commitment into that new marker instead of executing the body again. Retained
-authority or an old marker alone cannot authorize voting or application, and
-decision application checks durable and validated evidence at the CommitQC's
-exact view.
+proposal origin. `retainedLockedBodies` preserves that origin across lifecycle
+generation and finality-view changes. Recovery may move ownership to a new
+process-local consumer, but it cannot rewrite the manifest or validation
+receipt to the consumer's view. Retained authority alone cannot authorize
+voting or application: the body, deterministic execution commitment, and
+validation receipt must match the CommitQC's authenticated `proposal_round`.
+The canonical header view-change index also equals that proposal-origin view,
+not a later Commit certification view.
 
 The production authority boundary is stricter than signature validity alone.
 An individual Vote may consume an execution commitment only after the exact
@@ -463,10 +496,11 @@ The abstract protected-rank prerequisites are now isolated as
 `async-progress-ownership-invariant`,
 `protected-service-rank-stage4-ready-causal`,
 `protected-service-rank-serve-fifo`, and
-`protected-service-rank-stage5-consensus-fifo`. All four are now
+`protected-service-rank-stage5-consensus-fifo`. All four were
 `tlaps_proved`. Progress ownership consumes the proved async type closure;
-Stage 4 and Stage 5 consume progress ownership, and the three rank leaves use
-their exact proved fair-action prerequisites. The
+Stage 4 and Stage 5 consume
+progress ownership, and the three rank leaves use their exact fair-action
+prerequisites. The
 aggregate `protected-service-rank` obligation depends on every one of these
 leaves, without conflating the abstract model with production admission,
 runtime, ingress, or actor-to-flush ownership. The 54-entry ledger therefore
@@ -506,19 +540,22 @@ generation `FetchBody` candidate. Generic body/validation/application stage
 preservation and the Rust-to-TLA trace mapping remain in the independent
 progress-witness debts. The universal `AsyncTypeInvariantObligation` and its
 concrete runner-preservation prerequisite are now ledgered `tlaps_proved` under
-the fresh strict slices summarized below; the timeout-view, locked-body
-reproposal, rotating-leader, and application liveness declarations remain
+the fresh strict slices summarized below; the timeout-view, locked-origin
+direct-commit, rotating-leader, and application liveness declarations remain
 `specified_unproved` as well. The rotating-leader declaration is a two-stage
 claim: reach a view where the responsive honest scheduled leader itself is
 active (or decide first), then decide from that leader state. The application
 ledger entry now names the proofless per-validator
 `ApplicationCompletionProgressObligation`: after GST, each responsive
 validator's own durable decision must lead to its own durable application.
-The intervening `LockedBodyReproposalProgressObligation` rejects vacuous view
-movement: every stable available retained lock must eventually commit at its
-old round, be reproposed unchanged later, or be legitimately decided or
-superseded by a higher certified Prepare lock.
-The executable Core action now closes the corresponding safe-value hole:
+The legacy-named `LockedBodyReproposalProgressObligation` rejects vacuous view
+movement. Its first-release statement must be read as locked-origin progress:
+every stable available retained lock must eventually be committed directly at
+that immutable proposal origin, be decided, or be superseded by a higher
+certified Prepare lock. Re-proposing the same bytes at another origin is not an
+allowed implementation progress step; renaming and restating that still-unproved
+TLA+ symbol is part of the fresh formal-source closure.
+The executable Core action also retains the narrower safe-value guard:
 `LocalProposalReproposesJustifiedHigh` requires every nonempty
 `LocalProposalJustification` high certificate to name the proposed subject.
 The focused inductive theorem proves that projection from
@@ -527,8 +564,8 @@ in durable WAL replay, the adapter's exact lock projection, the runner's exact
 body load and subject check, executor admission, and the fresh-candidate
 rejection in `v2_candidate`; vacuous/disconnected formal guards and weakened
 WAL, runner, or candidate seams fail the mutation test. This structural result
-does not prove the temporal old-round/unchanged-reproposal/supersession
-disjunction, so the locked-body ledger entry remains `specified_unproved`.
+does not prove locked-origin temporal progress, so the locked-body ledger entry
+remains `specified_unproved`.
 `ApplicationLivenessObligation` derives the aggregate clause used by height
 composition from that premise using durable application monotonicity, the
 frozen responsive-voter set, and finite induction over validator prefixes. It
@@ -699,7 +736,8 @@ progress-witness refinement follows that model theorem. Productive deadlock
 freedom additionally waits for model-witness preservation and the aggregate
 protected-service-rank theorem, and timeout/view liveness waits for productive
 deadlock freedom. Starvation freedom depends on the proved service-rank theorem;
-rotating-leader progress depends on the locked-body reproposal obligation; and
+rotating-leader progress depends on the legacy-named locked-origin direct-commit
+obligation; and
 genesis handoff and indexed height liveness each depend on proved
 rotating-leader, application liveness, and successor-activation starvation.
 The successor/exact-recovery production bridge remains independently required
@@ -709,8 +747,8 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 477 named tests
-across 30 Rust modules. The preceding 298-name inventory was produced from the
+Before network startup, the executable wrapper inventories 509 named tests
+across 38 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -759,6 +797,12 @@ source-swapped response/chunk rejection, alternate-source runtime and orphan-
 chunk ownership, actor-global ordinals across tenures, and checked
 `iroha_config` source/capacity geometry at its arithmetic and root-parse
 boundaries.
+The proposal-origin, multi-carrier, and persistence-failure closure then adds
+41 exact regressions and retires nine superseded selectors, yielding the
+509-test, 38-module, 61-leg checkpoint. It binds reducer and deferred
+identities, equivocation evidence, aggregate signatures, finality/header
+geometry, compact offline QCs, and parent height-context identity to the
+authenticated origin.
 These tests deliberately do not claim remote application acknowledgement,
 relay second-hop completion, or unbounded
 broadcast admission. The 264-name baseline added 32 regressions for atomic lane
@@ -774,13 +818,15 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 53 legs, including separate exact
+the complete pre-network corridor now spans 61 legs, including separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, the daemon genesis
-module, and source-sealed command-success legs. The inventory
-executes the `iroha_p2p` library with its empty default feature set. It does not
-claim the feature-gated QUIC first-packet geometry tests as part of those
-thirty modules or fifty-three legs. The inventory includes five native-AMX lane-work
+module, and source-sealed command-success legs. Its finality, offline compact-QC,
+and height-context proposal-origin modules each use a dedicated
+`iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
+empty default feature set. It does not claim the feature-gated QUIC first-packet
+geometry tests as part of those thirty-eight modules or sixty-one legs. The
+inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
 recovery, post-decision timeout/TC quiescence, and the exact
@@ -855,8 +901,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 53 pre-network legs and the exact
-477-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 61 pre-network legs and the exact
+509-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and
@@ -1032,12 +1078,15 @@ accepts a bare tick, whereas the productive claim rejects it until a concrete
 deadline, evidence, rank, or decision repair exists. These bounded checks do
 not discharge the productive release obligation.
 
-The model-trace
-replayer drives the exact production
-reducer API. The source-linked Verus harness proves the reducer/WAL and
-scheduler kernels, runs the required adversarial simulations, and retains its
-log under `target/formal/sumeragi_v2/`. The ignored 100,000-height chaos test is
-an additional implementation stress gate, not deductive evidence.
+The model-trace replayer drives the exact production reducer API. For the
+current proposal-origin source, the isolated source-shared harness passed
+118/118 reducer/WAL/refinement tests, all 8 model-trace replay tests, and all 9
+named fast-network simulations. A 2026-07-21 100,000-height chaos run completed
+the permissioned and NPoS 50,000-height prefixes, 400,000 validator
+finalizations, and zero failures in 91.29 seconds. These are unsealed
+implementation results, not deductive evidence. The checked-in pinned Verus
+receipt predates the proposal-origin changes and was not rerun for this source;
+it must not be cited as discharge of the changed obligations.
 
 ## Trusted computing boundary
 

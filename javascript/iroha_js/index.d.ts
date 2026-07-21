@@ -3315,6 +3315,67 @@ export interface PermissionedIterableOptions {
 
 export type ToriiCountMode = "bounded" | "exact";
 
+export interface ToriiBrowserCountedListOptions {
+  limit?: NumericLike;
+  offset?: NumericLike;
+  countMode?: ToriiCountMode;
+  count_mode?: ToriiCountMode;
+  signal?: AbortSignal;
+}
+
+export type ToriiBrowserAccountPermissionsListOptions =
+  ToriiBrowserCountedListOptions;
+
+export interface ToriiBrowserAccountHistoryListOptions
+  extends ToriiBrowserCountedListOptions {
+  assetId?: string;
+  asset_id?: string;
+}
+
+export interface ToriiBrowserContractActivityListOptions
+  extends ToriiBrowserCountedListOptions {
+  authority?: string;
+  contractAddress?: string;
+  contract_address?: string;
+  contractAlias?: string;
+  contract_alias?: string;
+  contractEntrypoint?: string;
+  contract_entrypoint?: string;
+  sinceTimestampMs?: NumericLike;
+  since_timestamp_ms?: NumericLike;
+  untilTimestampMs?: NumericLike;
+  until_timestamp_ms?: NumericLike;
+  resultOk?: boolean;
+  result_ok?: boolean;
+}
+
+export interface ToriiBrowserContractEventListOptions
+  extends ToriiBrowserCountedListOptions {
+  authority?: string;
+  contractAddress?: string;
+  contract_address?: string;
+  contractAlias?: string;
+  contract_alias?: string;
+  module?: string;
+  eventKind?: string;
+  event_kind?: string;
+  participant?: string;
+  assetId?: string;
+  asset_id?: string;
+  provenance?: "emitted" | "derived";
+  sinceTimestampMs?: NumericLike;
+  since_timestamp_ms?: NumericLike;
+  untilTimestampMs?: NumericLike;
+  until_timestamp_ms?: NumericLike;
+  resultOk?: boolean;
+  result_ok?: boolean;
+}
+
+export interface ToriiBrowserContractEventStreamOptions
+  extends Omit<ToriiBrowserContractEventListOptions, keyof ToriiBrowserCountedListOptions> {
+  signal?: AbortSignal;
+}
+
 export interface IterableListOptions extends PermissionedIterableOptions {
   limit?: NumericLike;
   offset?: NumericLike;
@@ -3529,6 +3590,35 @@ export interface ToriiIterableListResponse<T = unknown> {
   items: ReadonlyArray<T>;
   total: number;
 }
+
+/** Exact wire shape returned by Torii app-list routes. */
+export interface ToriiBrowserCountedListResponse<T = unknown> {
+  items: ReadonlyArray<T>;
+  /** Present only when `count_mode` is `exact`. */
+  total?: number;
+  has_more: boolean;
+  count_mode: ToriiCountMode;
+}
+
+export type ToriiBrowserAccountPermissionsListResponse<
+  T = ToriiAccountPermissionItem,
+> = ToriiBrowserCountedListResponse<T>;
+
+export interface ToriiBrowserAccountHistoryListResponse<
+  T = ToriiAccountHistoryItem,
+> extends ToriiBrowserCountedListResponse<T> {
+  indexed_height: number;
+  indexed_block_hash: string | null;
+  query_source: "account_history_index";
+}
+
+export type ToriiBrowserContractActivityListResponse<
+  T = ToriiContractActivityItem,
+> = ToriiBrowserCountedListResponse<T>;
+
+export type ToriiBrowserContractEventListResponse<
+  T = ToriiContractEventItem,
+> = ToriiBrowserCountedListResponse<T>;
 
 export interface AliasResolutionDto {
   alias: string;
@@ -3998,6 +4088,26 @@ export interface ToriiAccountTransactionItem {
   asset_id?: string | string[];
 }
 
+export interface ToriiAccountHistoryItem {
+  id: string;
+  source: string;
+  type: string;
+  timestamp_ms?: number;
+  status: string;
+  result_ok?: boolean;
+  direction: string;
+  account_id: string;
+  counterparty_account_id?: string;
+  asset_id?: string;
+  asset_definition_id?: string;
+  amount?: string;
+  tx_hash?: string;
+  operation_id?: string;
+  expires_at_ms?: number;
+  finalized_at_ms?: number;
+  requesting_fi_id?: string;
+}
+
 export interface ToriiContractActivityItem {
   authority?: string;
   timestamp_ms?: number;
@@ -4013,7 +4123,7 @@ export interface ToriiContractActivityItem {
 export interface ToriiContractEventItem {
   event_id: string;
   schema_version: number;
-  provenance: string;
+  provenance: "emitted" | "derived";
   authority?: string;
   timestamp_ms?: number;
   tx_hash_hex: string;
@@ -4617,6 +4727,13 @@ export interface ToriiSseEvent<T = ToriiEventPayload> {
   raw: string | null;
 }
 
+export interface ToriiContractEventStreamErrorPayload {
+  code: string;
+  message: string;
+  dropped_messages: number | null;
+  replay_available: boolean;
+}
+
 export interface ToriiWebSocketEvent<T = unknown> {
   event: string | null;
   data: T | string;
@@ -4629,9 +4746,10 @@ export interface AccountPermissionsListOptions {
   signal?: AbortSignal;
 }
 
+/** An effective permission, including grants inherited from assigned roles. */
 export interface ToriiAccountPermissionItem {
   name: string;
-  payload: unknown;
+  payload: JsonValue;
 }
 
 export class ConnectRetryPolicy {
@@ -5568,16 +5686,20 @@ type ToriiRuntimeNamespaceExport =
   | "verifyIdentifierResolutionReceipt";
 
 type NoritoRuntimeNamespaceExport =
-    "noritoDecodeInstruction"
+    "noritoDecodeBlockProofs"
+  | "noritoDecodeInstruction"
   | "noritoDecodePrivacyProofEnvelope"
   | "noritoEncodeInstruction"
+  | "noritoEncodeInstructionBoxArchive"
   | "noritoEncodeContractManifestSignaturePayload"
   | "noritoEncodeMultisigContractCallApproveRequest"
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
   | "noritoEncodePrivacyProofEnvelope"
   | "noritoEncodeTransactionPayloadBatch"
-  | "validateNoritoFrame";
+  | "validateNoritoFrame"
+  | "verifyBlockMerkleProof"
+  | "verifyBlockProofs";
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
@@ -7381,6 +7503,7 @@ export interface ToriiSumeragiV2ExecutionCommitment {
 
 export interface ToriiSumeragiV2QcReference {
   round: ToriiSumeragiV2Round;
+  proposal_round: ToriiSumeragiV2Round;
   phase: ToriiSumeragiV2GlobalPhase;
   subject: ToriiSumeragiV2BlockSubject;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment;
@@ -7427,6 +7550,7 @@ export interface ToriiSumeragiV2CommitQcStatus {
 
 export interface ToriiSumeragiV2VoteQuorumStatus {
   round: ToriiSumeragiV2Round;
+  proposal_round: ToriiSumeragiV2Round;
   subject: ToriiSumeragiV2BlockSubject;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment;
   signer_count: number;
@@ -7464,6 +7588,7 @@ export type ToriiSumeragiV2OutboundIntentStage = Readonly<{
 export interface ToriiSumeragiV2OutboundIntentStatus {
   kind: ToriiSumeragiV2OutboundIntentKind;
   round: ToriiSumeragiV2Round;
+  proposal_round: ToriiSumeragiV2Round | null;
   subject: ToriiSumeragiV2BlockSubject | null;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment | null;
   stage: ToriiSumeragiV2OutboundIntentStage;
@@ -11682,6 +11807,69 @@ export interface ToriiBrowserRequestOptions {
   successStatuses?: ReadonlyArray<number>;
 }
 
+export interface ToriiLedgerHeadersOptions {
+  from?: number | string | bigint;
+  limit?: number | string | bigint;
+  signal?: AbortSignal;
+}
+
+export interface ToriiBlockMerkleProof {
+  readonly leaf_index: number;
+  readonly audit_path: ReadonlyArray<string | null>;
+}
+
+export interface ToriiBlockReceiptProof {
+  readonly leaf: string;
+  readonly proof: ToriiBlockMerkleProof;
+}
+
+export interface ToriiBlockProofTransferSmtWitness {
+  readonly root_before: string;
+  readonly root_after: string;
+  readonly path_bits: ReadonlyArray<number>;
+  readonly siblings: ReadonlyArray<string>;
+}
+
+export interface ToriiBlockProofTransferDeltaTranscript {
+  readonly from_account: string;
+  readonly to_account: string;
+  readonly asset_definition: string;
+  readonly amount: string;
+  readonly from_balance_before: string;
+  readonly from_balance_after: string;
+  readonly to_balance_before: string;
+  readonly to_balance_after: string;
+  readonly from_smt_witness: ToriiBlockProofTransferSmtWitness;
+  readonly to_smt_witness: ToriiBlockProofTransferSmtWitness;
+}
+
+export interface ToriiBlockProofTransferTranscript {
+  readonly batch_hash: string;
+  readonly deltas: ReadonlyArray<ToriiBlockProofTransferDeltaTranscript>;
+  readonly authority_digest: string;
+  readonly poseidon_preimage_digest: string | null;
+}
+
+export interface ToriiBlockProofs {
+  readonly block_height: string;
+  readonly entry_hash: string;
+  readonly entry_root: string;
+  readonly entry_proof: ToriiBlockReceiptProof;
+  readonly result_root: string | null;
+  readonly result_proof: ToriiBlockReceiptProof | null;
+  readonly fastpq_transcripts: Readonly<
+    Record<string, ReadonlyArray<ToriiBlockProofTransferTranscript>>
+  >;
+}
+
+export interface ToriiBlockProofVerification {
+  readonly valid: boolean;
+  readonly entry_hash_matches: boolean;
+  readonly entry_proof_valid: boolean;
+  readonly result_pair_consistent: boolean;
+  readonly result_proof_valid: boolean | null;
+}
+
 export interface ToriiBrowserTransactionStatusOptions
   extends ToriiBrowserRequestOptions {
   scope?: "local" | "auto" | "global";
@@ -11726,6 +11914,24 @@ export interface ToriiBrowserContractDeploymentStateResponse {
   chain_discriminant: string;
 }
 
+export interface CanonicalJsonRequestSignerInput {
+  message: Buffer;
+  messageBase64: string;
+  method: string;
+  path: string;
+  query?: string | URLSearchParams;
+  body: string;
+  timestampMs: number;
+  nonce: string;
+}
+
+export type CanonicalJsonRequestSignature =
+  | Buffer
+  | Uint8Array
+  | ArrayBuffer
+  | ArrayBufferView
+  | string;
+
 export interface ToriiBrowserContractDeploymentStateOptions
   extends ToriiBrowserRequestOptions {
   authAccountId?: string;
@@ -11750,6 +11956,23 @@ export declare class ToriiBrowserHttpError extends Error {
   readonly response: Response;
   readonly status: number;
   readonly bodyText: string;
+}
+
+/** Terminal non-replayable loss reported by, or inferred for, a live Torii stream. */
+export declare class ToriiBrowserStreamGapError extends Error {
+  readonly code: string;
+  readonly droppedMessages: number | null;
+  readonly replayAvailable: boolean;
+  readonly payload: ToriiContractEventStreamErrorPayload | null;
+  constructor(
+    message: string,
+    options?: {
+      code?: string;
+      droppedMessages?: number | null;
+      replayAvailable?: boolean;
+      payload?: ToriiContractEventStreamErrorPayload | null;
+    },
+  );
 }
 
 export declare class ToriiBrowserClient {
@@ -11820,6 +12043,15 @@ export declare class ToriiBrowserClient {
     accountId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
+  /** List effective direct and role-inherited permissions for an account. */
+  listAccountPermissions<T = ToriiAccountPermissionItem>(
+    accountId: string,
+    options?: ToriiBrowserAccountPermissionsListOptions,
+  ): Promise<ToriiBrowserAccountPermissionsListResponse<T>>;
+  listAccountHistory<T = ToriiAccountHistoryItem>(
+    accountId: string,
+    options?: ToriiBrowserAccountHistoryListOptions,
+  ): Promise<ToriiBrowserAccountHistoryListResponse<T>>;
   queryAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
     options?: TransactionQueryOptions,
@@ -11830,6 +12062,15 @@ export declare class ToriiBrowserClient {
   queryVisibleTransactions<T = ToriiAccountTransactionItem>(
     options?: TransactionQueryOptions,
   ): Promise<ToriiIterableListResponse<T>>;
+  listContractActivity<T = ToriiContractActivityItem>(
+    options?: ToriiBrowserContractActivityListOptions,
+  ): Promise<ToriiBrowserContractActivityListResponse<T>>;
+  listContractEvents<T = ToriiContractEventItem>(
+    options?: ToriiBrowserContractEventListOptions,
+  ): Promise<ToriiBrowserContractEventListResponse<T>>;
+  streamContractEvents<T = ToriiContractEventItem>(
+    options?: ToriiBrowserContractEventStreamOptions,
+  ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;
   listAssetHolders(
     assetDefinitionId: string,
     options?: Record<string, unknown>,
@@ -11873,6 +12114,20 @@ export declare class ToriiBrowserClient {
     identifier: string | number | bigint,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
+  listLedgerHeaders(options?: ToriiLedgerHeadersOptions): Promise<unknown>;
+  getLedgerStateRoot(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
+  getLedgerStateProof(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
+  getLedgerBlockProof(
+    height: number | string | bigint,
+    entryHash: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiBlockProofs>;
   getExplorerMetrics(options?: Record<string, unknown>): Promise<unknown>;
   getExplorerHealth(options?: Record<string, unknown>): Promise<unknown>;
   listExplorerTransactions(options?: Record<string, unknown>): Promise<unknown>;
@@ -11920,7 +12175,8 @@ export declare class ToriiBrowserClient {
   submitMultisigContractCallApprove(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
+  ): Promise<unknown>;
+  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
   getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
   getKaigiRelay(
@@ -13380,6 +13636,17 @@ export function sm2FixtureFromSeed(
 ): Sm2Fixture;
 
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
+export function noritoDecodeBlockProofs(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+): ToriiBlockProofs;
+export function verifyBlockMerkleProof(
+  leaf: string | ArrayBufferView | ArrayBuffer | Buffer,
+  proof: ToriiBlockMerkleProof,
+  root: string | ArrayBufferView | ArrayBuffer | Buffer,
+): boolean;
+export function verifyBlockProofs(
+  proofs: ToriiBlockProofs,
+): ToriiBlockProofVerification;
 /** Encode a canonical compact `InstructionBox` archive for a transaction. */
 export function noritoEncodeInstructionBoxArchive(
   instruction: object | string | ArrayBufferView | ArrayBuffer | Buffer,

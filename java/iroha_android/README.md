@@ -50,6 +50,176 @@ It uses the local snapshot repository when it exists and otherwise uses the
 in-repo project dependency. Set `irohaAndroidVersion` to match the
 published coordinates when consuming from Maven.
 
+The Java peer facades reuse the Kotlin SDK artifacts published as
+`org.hyperledger.iroha.sdk:core-jvm` and `client-android`. Their Maven version
+is pinned by `irohaKotlinSdkVersion` in `gradle.properties`; update that pin
+when publishing a new compatible Kotlin transport release. An explicit
+`-PirohaKotlinSdkVersion` overrides the pin, followed by the optional shared
+`irohaSdkVersion` property and finally `irohaAndroidVersion` when the more
+specific properties are absent. Composite builds substitute the in-tree
+Kotlin projects while preserving these exact coordinates in generated POMs.
+
+## Offline peer transport V1 (Java)
+
+The first-release peer transport has one wire family only: IPM1 messages,
+IQR1/IRQR QR frames, authenticated IPN1 Nearby records, and the NFC application
+identifier `F049524F48415045455201`. The new `IrohaPeer*V1` APIs never fall
+back to the older Kagemusha QR, Nearby service, or NFC APDU formats.
+
+Create the common envelope with `IrohaPeerWireMessageV1`. QR senders call
+`IrohaPeerQRCodecV1.encode(...)`; receivers feed camera text to
+`IrohaPeerQRScanSessionV1.ingest(...)`. The scan session is bounded and its default
+policy keeps at most three streams, limits header-last buffering, expires both
+idle and absolute-age state, removes successful streams, and quarantines a
+stream after conflicting frames. Bind optional expected profile, kind, and
+schema in the scan-session constructor, and call `reset()` whenever the camera
+session changes. After application-domain rejection of a structurally valid
+completion, call the bounded `scanSession.quarantine(streamId)` API before
+resuming capture. Scan input is exact IQR1 text; leading or trailing whitespace
+is rejected. Camera capture belongs to the application, so declare and request
+`android.permission.CAMERA` when the UI uses it.
+Those defaults are hard V1 ceilings: three active streams, twelve pre-header
+frames, 3,072 pre-header bytes, 30 seconds idle, and 180 seconds absolute.
+Custom limit objects may only tighten them.
+
+Google Nearby Connections is pinned to `19.3.0` and uses exact service ID
+`org.hyperledger.iroha.offline.transfer.v1` with
+`Strategy.P2P_POINT_TO_POINT`. Create discovery records through
+`IrohaPeerNearbyAndroidV1.discoveryContext(...)` (or the sender-only bootstrap
+sentinel), require the listener's 4-to-12 ASCII-digit verification decision, and feed
+received BYTES only into `IrohaPeerNearbySecureChannelV1`. The transitive Kotlin
+`IrohaPeerNearbyConnectionsTransportV1` owns advertising, discovery, send, and
+stop lifecycle. A send completion is success only after the exact payload's
+framework update is terminal `PayloadTransferUpdate.Status.SUCCESS`; enqueue or
+connection acceptance is never delivery success.
+IPN1 plaintext records are capped at 32,704 bytes; the encrypted record must
+remain within 32 KiB after its 54-byte framing overhead, and adapters reserve
+64 bytes by default.
+Authentication records are capped at 32 KiB, operation timeouts at 300
+seconds, and one receive phase admits the four-record V1 transcript. Android
+defers callback-executor submission until after releasing the lifecycle
+monitor, including for an injected direct executor. Epoch invalidation
+suppresses callbacks not yet admitted; an already-admitted callback may finish.
+Listener callbacks reject bounded overload. Terminal send completions remain
+exact-once through a separately bounded serial fallback; saturation of both a
+stalled configured executor and that fallback uses a nonblocking inline path,
+which cannot promise the configured context or global FIFO order.
+
+For NFC reader mode, `IrohaPeerAndroidNfcV1.transceiver(tag)` derives local
+read/write limits from `IsoDep.maxTransceiveLength` and extended-length
+support; a short WRITE chunk is capped at 203 bytes. HCE applications use
+`IrohaPeerAndroidNfcV1.receiverBridge(...)`. Its COMMIT callback must persist
+the exact payment outcome and IDA1 acknowledgement before completing; only
+then can the bridge return status `9000`. The two-tap sender's
+`IrohaPeerNfcSenderCheckpointStoreV1.loadOrCreateDurableCheckpoint` callback
+atomically loads an exact request- and peer-bound ISC1 or creates, debits, and
+stores it, returning only the durable value. The runner validates it before
+BEGIN_PAYMENT, so store failure sends no BEGIN_PAYMENT and restart cannot debit
+a replacement payment. The separate
+`IrohaPeerNfcSenderCheckpointUpdaterV1.updateDurableCheckpoint` callback
+installs the ACK-bearing ISC1 before CONFIRM_ACK; update failure sends no
+confirmation. The sender treats GET_STATUS as authoritative after a retap.
+Use `IrohaPeerNfcV1.runReaderExchange(...)` for the complete shared Kotlin
+runner; Java supplies only callbacks for transceive, atomic checkpoint
+load-or-create, and the monotonic ACK update, so it cannot drift into a second
+NFC state machine. One NFC profile policy binds request, payment, and
+acknowledgement to the same profile; mixed-profile sessions fail closed. A
+complete NFC IPM1 value is capped at 24,660 bytes, and the portable runner's
+whole-exchange default is 73,996 actions.
+The bridge's separate BEGIN callback receives a transient payment-admission
+context and must atomically store and return a
+`IrohaPeerNfcDurablePaymentAdmissionV1` containing the exact 244-byte IPA1.
+Restore that record with the Java facade; never reconstruct it from summary
+fields. Both BEGIN and COMMIT callbacks have a five-second fail-closed deadline
+and must be idempotent because a timeout makes the durable result ambiguous.
+Late callbacks cannot mutate a newer tap. IPA1 resumes at byte zero, while IDA1
+takes precedence after COMMIT and ACK-phase BEGIN is rejected.
+The NFC value and the 32-KiB canonical, 24,576-byte Offline Note encoded, and
+12,288-byte bounded Kagemusha encoded wire limits are hard constructor
+ceilings.
+
+The AAR merges the version-bounded Nearby/NFC permissions and ships
+`@xml/iroha_peer_nfc_v1_aids`. A wallet must still register its concrete HCE
+service explicitly. The service subclasses the transitive Kotlin
+`IrohaPeerAsyncHostApduServiceV1` and returns one stable bridge from its
+`commandHandler` property:
+
+```xml
+<service
+    android:name=".OfflinePeerHostApduService"
+    android:exported="true"
+    android:permission="android.permission.BIND_NFC_SERVICE">
+    <intent-filter>
+        <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+    </intent-filter>
+    <meta-data
+        android:name="android.nfc.cardemulation.host_apdu_service"
+        android:resource="@xml/iroha_peer_nfc_v1_aids" />
+</service>
+```
+
+The merged manifest includes `NFC`, legacy `ACCESS_WIFI_STATE` /
+`CHANGE_WIFI_STATE`, legacy `BLUETOOTH` / `BLUETOOTH_ADMIN`,
+`ACCESS_COARSE_LOCATION` through API 28, `ACCESS_FINE_LOCATION` on APIs 29–31,
+`BLUETOOTH_ADVERTISE` / `BLUETOOTH_CONNECT` / `BLUETOOTH_SCAN` from API 31,
+`NEARBY_WIFI_DEVICES` from API 32, and `ACCESS_LOCAL_NETWORK` from API 37.
+Before starting a rail, the host app requests every applicable dangerous
+permission for the running OS and role. Discoverers need scan, advertisers need
+advertise, established connections need connect, and Android 37+ needs local
+network permission when the platform requires it. `NFC` and legacy
+Wi-Fi/Bluetooth state permissions are manifest-only; a missing permission is
+never a reason to use an unauthenticated fallback.
+
+The Java build consumes the default SDK's pure-JVM NFC/IPN1 state machines and
+Android radio adapters through explicit Gradle composite substitutions during
+repository development. Published artifacts carry the equivalent transitive
+dependencies, so Java and Kotlin do not maintain divergent cryptographic or
+APDU implementations. Shared vectors live in `fixtures/offline/peer_*.json`.
+
+Profile `1` requires schema `1` and a maximum 24,576-byte encoded body. Profile
+`2` requires schema `0x0102` and is a 12,288-byte bounded handoff for a mainline
+typed Kagemusha native archive. Generic IPM validates its exact ABI21 envelope
+without native code; production code then performs deeper semantic decoding
+through `IrohaPeerKagemushaAdapterV1`. Full ABI21
+QR/NFC/native archives up to 32 MiB continue to use the independent
+`KagemushaQrStream`, `KagemushaNfcProtocol`, and `KagemushaNearby`
+facades with distinct `PKK2*`/`PKKQ1`, F050, and Bonjour identifiers.
+Kagemusha Nearby's JSON/text envelope has its own smaller bound. Those rails
+are never negotiated, reinterpreted, or used as fallback for Retail Offline
+Peer V1. The no-old-AID/raw-text/unauthenticated-Nearby rule applies to
+`IrohaPeer*V1`, not the retained ABI21 family. Do not use profile `2` for a
+sidecar/demo representation.
+
+These transport changes are client-side and require no backend API change.
+
+IPM1 profile-1 canonical application bytes are opaque. Offline Note apps can
+use `IrohaPeerCanonicalTextPayloadCodecV1` for an exact UTF-8 round trip; the
+codec rejects profile 2. Profile-2 construction and decode instead enforce
+native-independent ABI21 NRT0 framing, the authoritative fully-qualified kind
+schema, CRC64, exact compact-length flags, and static padding
+(request/payment 8, ACK 0). Deeper semantics remain in the typed adapter.
+`../../fixtures/offline/kagemusha_peer_transport_v2.json` additionally pins a
+qualified 49-byte structural archive through exact IPM1, IQR1, NFC, and
+authenticated Nearby bytes in Swift, Kotlin, and Java. Its one-byte body is
+structural-only and must not be passed to the typed adapter.
+`PEER_OPTIMIZED` compression is cross-rail and
+uses zlib only when it saves at least 32 bytes and one 256-byte shard.
+
+From `java/iroha_android`, the normal checks below exercise the Java facades,
+shared fixture parity, Kotlin dependency wiring, manifest contract, and Android
+adapters:
+
+```bash
+./gradlew :core:check :android:testDebugUnitTest
+```
+
+For a fast portable peer-only iteration, use:
+
+```bash
+./gradlew :core:test \
+  --tests 'org.hyperledger.iroha.android.offline.IrohaPeer*'
+```
+
 ## Fee quotes and sponsorship
 
 Every transaction payload requires a typed `FeePaymentIntent`. Authority-paid

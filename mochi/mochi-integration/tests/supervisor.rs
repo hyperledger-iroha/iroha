@@ -529,10 +529,16 @@ fn supervisor_builder_cleans_preexisting_storage() -> Result<()> {
                 "storage dir should only contain snapshot for {alias}"
             );
 
-            let mut snapshot_entries = fs::read_dir(storage_dir.join("snapshot"))?;
+            let snapshot_dir = storage_dir.join("snapshot");
+            let snapshot_entries = fs::read_dir(&snapshot_dir)?
+                .map(|entry| entry.map(|value| value.file_name()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            assert_eq!(snapshot_entries, vec!["generations"]);
             assert!(
-                snapshot_entries.next().is_none(),
-                "snapshot dir should be empty"
+                fs::read_dir(snapshot_dir.join("generations"))?
+                    .next()
+                    .is_none(),
+                "snapshot generations should be empty"
             );
         }
     }
@@ -614,10 +620,15 @@ fn supervisor_wipe_and_regenerate_resets_storage_and_genesis() -> Result<()> {
                 snapshot_dir.exists(),
                 "snapshot directory should exist for {alias}"
             );
-            let mut entries = fs::read_dir(&snapshot_dir)?;
+            let entries = fs::read_dir(&snapshot_dir)?
+                .map(|entry| entry.map(|value| value.file_name()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            assert_eq!(entries, vec!["generations"]);
             assert!(
-                entries.next().is_none(),
-                "snapshot directory should be empty for {alias}"
+                fs::read_dir(snapshot_dir.join("generations"))?
+                    .next()
+                    .is_none(),
+                "snapshot generations should be empty for {alias}"
             );
         }
     }

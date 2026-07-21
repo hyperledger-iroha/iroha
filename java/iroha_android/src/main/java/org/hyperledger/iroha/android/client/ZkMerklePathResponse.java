@@ -7,6 +7,8 @@ import java.util.Objects;
 
 /** Response body emitted by {@code POST /v1/zk/merkle-path}. */
 public final class ZkMerklePathResponse {
+  private final long evaluatedBlockHeight;
+  private final String evaluatedBlockHash;
   private final String root;
   private final int frontierLen;
   private final int treeDepth;
@@ -14,11 +16,23 @@ public final class ZkMerklePathResponse {
   private final List<Entry> paths;
 
   public ZkMerklePathResponse(
+      final long evaluatedBlockHeight,
+      final String evaluatedBlockHash,
       final String root,
       final int frontierLen,
       final int treeDepth,
       final Entry nextZeroPath,
       final List<Entry> paths) {
+    if (evaluatedBlockHeight < 0) {
+      throw new IllegalArgumentException("evaluated_block_height must be non-negative");
+    }
+    this.evaluatedBlockHash =
+        ZkRootsResponse.normalizeRootHex(evaluatedBlockHash, "evaluated_block_hash");
+    if ((evaluatedBlockHeight == 0L) != this.evaluatedBlockHash.equals("0".repeat(64))) {
+      throw new IllegalArgumentException(
+          "the zero block hash is reserved for evaluated_block_height=0");
+    }
+    this.evaluatedBlockHeight = evaluatedBlockHeight;
     this.root = ZkRootsResponse.normalizeRootHex(root, "root");
     if (frontierLen < 0) {
       throw new IllegalArgumentException("frontier_len must be non-negative");
@@ -63,6 +77,34 @@ public final class ZkMerklePathResponse {
 
   public String root() {
     return root;
+  }
+
+  public long evaluatedBlockHeight() {
+    return evaluatedBlockHeight;
+  }
+
+  public String evaluatedBlockHash() {
+    return evaluatedBlockHash;
+  }
+
+  public byte[] evaluatedBlockHashBytes() {
+    return ZkRootsResponse.decodeHex32(evaluatedBlockHash, "evaluated_block_hash");
+  }
+
+  public ZkMerklePathResponse requireEvaluatedSnapshot(
+      final long expectedHeight, final byte[] expectedBlockHash) {
+    if (expectedHeight != evaluatedBlockHeight) {
+      throw new IllegalArgumentException("Merkle witness height does not match readiness");
+    }
+    if (!java.util.Arrays.equals(expectedBlockHash, evaluatedBlockHashBytes())) {
+      throw new IllegalArgumentException("Merkle witness block hash does not match readiness");
+    }
+    return this;
+  }
+
+  public ZkMerklePathResponse requireSameSnapshot(final ZkRootsResponse roots) {
+    return requireEvaluatedSnapshot(
+        roots.evaluatedBlockHeight(), roots.evaluatedBlockHashBytes());
   }
 
   public int frontierLen() {

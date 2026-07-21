@@ -17,6 +17,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
+
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, bls_normal_pop_prove};
 use iroha_data_model::{parameter::system::SumeragiConsensusMode, peer::PeerId, prelude::ChainId};
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
@@ -42,6 +45,7 @@ const DEFAULT_TORII_BASE_PORT: u16 = 8080;
 const DEFAULT_P2P_BASE_PORT: u16 = 1337;
 const GENESIS_FILE_NAME: &str = "genesis.json";
 const GENESIS_SIGNED_FILE_NAME: &str = "genesis.signed.nrt";
+const SNAPSHOT_GENERATIONS_DIR_NAME: &str = "generations";
 const SMOKE_MAX_ATTEMPTS: usize = 3;
 const LOCAL_MCP_PROFILE: &str = "writer";
 const LOCAL_MCP_TOOL_PREFIX: &str = "iroha.";
@@ -1331,14 +1335,6 @@ impl SupervisorBuilder {
             set_table_bool(&mut nexus_config, "enabled", false);
         }
         let mut sumeragi_config = self.sumeragi_config.clone();
-        set_table_string(
-            &mut sumeragi_config,
-            "consensus_mode",
-            match self.profile.consensus_mode {
-                SumeragiConsensusMode::Permissioned => "permissioned",
-                SumeragiConsensusMode::Npos => "npos",
-            },
-        );
         let mut torii_config = self.torii_config.clone();
         normalize_peer_config_overrides(
             &mut nexus_config,
@@ -1359,7 +1355,7 @@ impl SupervisorBuilder {
             .unwrap_or(true);
         if nexus_enabled && self.profile.consensus_mode != SumeragiConsensusMode::Npos {
             return Err(SupervisorError::Config(
-                "nexus.enabled = true requires sumeragi.consensus_mode = \"npos\"".to_owned(),
+                "nexus.enabled = true requires an NPoS signed-genesis consensus mode".to_owned(),
             ));
         }
 
@@ -1388,6 +1384,7 @@ impl SupervisorBuilder {
             &paths,
             &chain_id,
             &specs,
+            &peer_config_overrides,
             self.profile.consensus_mode,
             self.genesis_profile,
             self.vrf_seed_hex.as_deref(),
@@ -1433,11 +1430,6 @@ fn set_table_u32(target: &mut Option<toml::Table>, key: &str, value: u32) {
     table.insert(key.to_owned(), toml::Value::Integer(i64::from(value)));
 }
 
-fn set_table_string(target: &mut Option<toml::Table>, key: &str, value: impl Into<String>) {
-    let table = target.get_or_insert_with(toml::Table::new);
-    table.insert(key.to_owned(), toml::Value::String(value.into()));
-}
-
 fn merge_table(target: &mut toml::Table, overlay: &toml::Table) {
     for (key, value) in overlay {
         target.insert(key.clone(), value.clone());
@@ -1481,19 +1473,6 @@ fn lane_aliases(nexus: Option<&toml::Table>) -> BTreeMap<u32, String> {
     }
 
     entries
-}
-
-fn lane_alias_for_id(nexus: Option<&toml::Table>, lane_id: u32) -> Result<String> {
-    let entries = lane_aliases(nexus);
-    if let Some(alias) = entries.get(&lane_id) {
-        return Ok(alias.clone());
-    }
-    if entries.is_empty() && lane_id == 0 {
-        return Ok(default_lane_alias(0));
-    }
-    Err(SupervisorError::Config(format!(
-        "nexus lane {lane_id} is not configured"
-    )))
 }
 
 fn lane_path_comments(storage_root: &Path, nexus: Option<&toml::Table>) -> Vec<String> {
@@ -2298,9 +2277,6 @@ impl Supervisor {
             let storage_dst = alias_dir.join("storage");
             copy_dir_recursive(peer.storage_dir(), &storage_dst)?;
 
-            let snapshot_dst = alias_dir.join("snapshot");
-            copy_dir_recursive(peer.snapshot_dir(), &snapshot_dst)?;
-
             let config_dst = alias_dir.join("config.toml");
             if let Some(parent) = config_dst.parent() {
                 fs::create_dir_all(parent)?;
@@ -2355,6 +2331,10 @@ impl Supervisor {
         );
         metadata.insert("snapshot".to_owned(), Value::String(snapshot_name));
         metadata.insert(
+            "storage_layout".to_owned(),
+            Value::String(SNAPSHOT_STORAGE_LAYOUT.to_owned()),
+        );
+        metadata.insert(
             "genesis_hash".to_owned(),
             Value::String(genesis_hash.to_string()),
         );
@@ -2369,7 +2349,7 @@ impl Supervisor {
     }
 
     /// Restore a previously exported snapshot, rehydrating peer storage,
-    /// snapshot directories, logs, and genesis manifests.
+    /// logs, and genesis manifests.
     pub fn restore_snapshot<P: AsRef<Path>>(&mut self, snapshot: P) -> Result<PathBuf> {
         let candidate = snapshot.as_ref();
         let snapshot_root = if candidate.is_absolute() {
@@ -2505,7 +2485,6 @@ impl Supervisor {
             peer.wipe_storage()?;
 
             copy_dir_recursive(&alias_dir.join("storage"), peer.storage_dir())?;
-            copy_dir_recursive(&alias_dir.join("snapshot"), peer.snapshot_dir())?;
             copy_file_if_exists(&alias_dir.join("config.toml"), peer.config_path())?;
             copy_file_if_exists(&alias_dir.join("latest.log"), peer.log_path())?;
         }
@@ -2546,6 +2525,7 @@ impl Supervisor {
             &self.paths,
             &self.chain_id,
             &specs,
+            &self.peer_config_overrides,
             self.profile.consensus_mode,
             self.genesis.profile,
             self.genesis.vrf_seed_hex.as_deref(),
@@ -2565,27 +2545,6 @@ impl Supervisor {
         }
         self.genesis = genesis;
         self.compatibility = None;
-
-        if was_running {
-            self.start_all()?;
-        }
-
-        Ok(())
-    }
-
-    /// Wipe per-lane storage segments for the requested lane id.
-    ///
-    /// If peers were running before this call they are restarted afterwards.
-    pub fn reset_lane_storage(&mut self, lane_id: u32) -> Result<()> {
-        let alias = lane_alias_for_id(self.peer_config_overrides.nexus.as_ref(), lane_id)?;
-        let was_running = self.is_any_running();
-        if was_running {
-            self.stop_all()?;
-        }
-
-        for peer in &self.peers {
-            peer.wipe_lane_storage(lane_id, &alias)?;
-        }
 
         if was_running {
             self.start_all()?;
@@ -2675,6 +2634,10 @@ impl PeerHandle {
         &self.spec.snapshot_dir
     }
 
+    pub(crate) fn kura_store_dir(&self) -> &Path {
+        &self.spec.kura_dir
+    }
+
     fn wipe_storage(&self) -> Result<()> {
         if self.is_running() {
             return Err(SupervisorError::PeerStillRunning {
@@ -2685,31 +2648,7 @@ impl PeerHandle {
             fs::remove_dir_all(self.storage_dir())?;
         }
         fs::create_dir_all(self.storage_dir())?;
-        fs::create_dir_all(self.snapshot_dir())?;
-        Ok(())
-    }
-
-    fn wipe_lane_storage(&self, lane_id: u32, alias: &str) -> Result<()> {
-        if self.is_running() {
-            return Err(SupervisorError::PeerStillRunning {
-                alias: self.spec.alias.clone(),
-            });
-        }
-        let slug = lane_slug(alias, lane_id);
-        let blocks_dir = self
-            .storage_dir()
-            .join("blocks")
-            .join(format!("lane_{lane_id:03}_{slug}"));
-        let merge_log = self
-            .storage_dir()
-            .join("merge_ledger")
-            .join(format!("lane_{lane_id:03}_{slug}_merge.log"));
-        if blocks_dir.exists() {
-            fs::remove_dir_all(&blocks_dir)?;
-        }
-        if merge_log.exists() {
-            fs::remove_file(&merge_log)?;
-        }
+        fs::create_dir_all(self.snapshot_dir().join(SNAPSHOT_GENERATIONS_DIR_NAME))?;
         Ok(())
     }
 
@@ -3131,6 +3070,7 @@ struct PeerSpec {
     p2p_public: String,
     config_path: PathBuf,
     storage_dir: PathBuf,
+    kura_dir: PathBuf,
     snapshot_dir: PathBuf,
     keys: PeerKeys,
 }
@@ -3146,8 +3086,13 @@ impl PeerSpec {
         let storage_dir = peer_dir.join("storage");
         fs::create_dir_all(&storage_dir)?;
 
+        // Kura authenticates a pristine store root before establishing its
+        // configured-catalog baseline. Keep its root separate from the other
+        // per-peer runtime directories and let Kura create it on first start.
+        let kura_dir = storage_dir.join("kura");
+
         let snapshot_dir = storage_dir.join("snapshot");
-        fs::create_dir_all(&snapshot_dir)?;
+        fs::create_dir_all(snapshot_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME))?;
 
         let config_path = peer_dir.join("config.toml");
 
@@ -3166,6 +3111,7 @@ impl PeerSpec {
             p2p_public: format!("127.0.0.1:{p2p_port}"),
             config_path,
             storage_dir,
+            kura_dir,
             snapshot_dir,
             keys: PeerKeys {
                 public_key,
@@ -3290,7 +3236,7 @@ impl PeerSpec {
         let mut kura = toml::Table::new();
         kura.insert(
             "store_dir".into(),
-            toml::Value::String(self.storage_dir.display().to_string()),
+            toml::Value::String(self.kura_dir.display().to_string()),
         );
         root.insert("kura".into(), toml::Value::Table(kura));
 
@@ -3321,10 +3267,22 @@ impl PeerSpec {
             merge_table(&mut root, overlay);
         }
 
+        let expected_kura_dir = self.kura_dir.display().to_string();
+        let configured_kura_dir = root
+            .get("kura")
+            .and_then(toml::Value::as_table)
+            .and_then(|table| table.get("store_dir"))
+            .and_then(toml::Value::as_str);
+        if configured_kura_dir != Some(expected_kura_dir.as_str()) {
+            return Err(SupervisorError::Config(format!(
+                "temporary config overlays must preserve Mochi's managed Kura root `{expected_kura_dir}`"
+            )));
+        }
+
         let header = Self::config_header(
             chain_id,
             genesis,
-            &self.storage_dir,
+            &self.kura_dir,
             config_overrides.nexus.as_ref(),
         );
         let config_str = toml::to_string_pretty(&toml::Value::Table(root))?;
@@ -3385,12 +3343,79 @@ struct GenesisMaterial {
     consensus_fingerprint: Option<String>,
 }
 
+#[derive(Debug)]
+struct TemporaryGenesisKeyFile {
+    path: PathBuf,
+}
+
+impl TemporaryGenesisKeyFile {
+    #[cfg(unix)]
+    fn create(genesis_dir: &Path, key_pair: &KeyPair) -> Result<Self> {
+        const MAX_CREATE_ATTEMPTS: u8 = 32;
+        // Kagami rejects private-key paths containing any symbolic-link
+        // component. macOS commonly exposes its temporary directory through
+        // `/var`, so resolve the managed directory before deriving the file.
+        let genesis_dir = fs::canonicalize(genesis_dir)?;
+
+        for attempt in 0..MAX_CREATE_ATTEMPTS {
+            let path = genesis_dir.join(format!(
+                ".mochi-genesis-signing-key-{}-{}-{attempt}",
+                std::process::id(),
+                timestamp_ms()
+            ));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true).mode(0o600);
+            let mut file = match options.open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let guard = Self { path };
+            let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
+            file.write_all(canonical.as_bytes())?;
+            file.write_all(b"\n")?;
+            file.sync_all()?;
+            return Ok(guard);
+        }
+
+        Err(SupervisorError::Config(format!(
+            "failed to allocate an owner-only genesis signing key beneath `{}`",
+            genesis_dir.display()
+        )))
+    }
+
+    #[cfg(not(unix))]
+    fn create(_genesis_dir: &Path, _key_pair: &KeyPair) -> Result<Self> {
+        Err(SupervisorError::Config(
+            "config-bound genesis signing requires owner-only private-key file support".to_owned(),
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryGenesisKeyFile {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_file(&self.path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            eprintln!(
+                "warning: failed to remove temporary genesis signing key `{}`: {error}",
+                self.path.display()
+            );
+        }
+    }
+}
+
 impl GenesisMaterial {
     fn create(
         binaries: &mut BinaryPaths,
         paths: &NetworkPaths,
         chain_id: &str,
         peers: &[PeerSpec],
+        config_overrides: &PeerConfigOverrides,
         consensus_mode: SumeragiConsensusMode,
         genesis_profile: Option<GenesisProfile>,
         vrf_seed_hex: Option<&str>,
@@ -3417,16 +3442,34 @@ impl GenesisMaterial {
         let manifest = genesis::with_topology(manifest, topology);
         let json = norito::json::to_vec_pretty(&manifest)?;
         fs::write(&manifest_path, json)?;
-        let genesis_block = manifest.clone().build_and_sign(&key_pair)?;
-        let framed = genesis_block.0.encode_wire().map_err(|err| {
-            SupervisorError::Config(format!("failed to encode signed genesis wire: {err}"))
+
+        let mut material = Self {
+            key_pair,
+            manifest_path,
+            block_path,
+            profile: genesis_profile,
+            vrf_seed_hex: vrf_seed_hex.map(|value| value.to_owned()),
+            verify_report: None,
+            consensus_fingerprint: None,
+        };
+        let primary = peers.first().ok_or_else(|| {
+            SupervisorError::Config("Mochi genesis requires at least one peer".to_owned())
         })?;
-        fs::write(&block_path, framed)?;
+        // Kagami must stage genesis against the exact peer configuration that
+        // irohad will consume. The paths and public key are already stable, so
+        // render the primary config once before signing, then let the caller
+        // rewrite every peer config with the final bound fingerprint header.
+        primary.write_config(chain_id, &material, peers, config_overrides, &[])?;
+        let manifest = material.sign_manifest_with_kagami(
+            binaries,
+            primary.config_path.as_path(),
+            consensus_mode,
+        )?;
 
         let verify_report = if let Some(profile) = genesis_profile {
             Some(Self::verify_manifest_with_kagami(
                 binaries,
-                &manifest_path,
+                &material.manifest_path,
                 profile,
                 vrf_seed_hex,
             )?)
@@ -3447,16 +3490,75 @@ impl GenesisMaterial {
                     .consensus_fingerprint()
                     .map(|value| value.to_string())
             });
+        material.verify_report = verify_report;
+        material.consensus_fingerprint = consensus_fingerprint;
+        Ok(material)
+    }
 
-        Ok(Self {
-            key_pair,
-            manifest_path,
-            block_path,
-            profile: genesis_profile,
-            vrf_seed_hex: vrf_seed_hex.map(|value| value.to_owned()),
-            verify_report,
-            consensus_fingerprint,
-        })
+    fn sign_manifest_with_kagami(
+        &self,
+        binaries: &mut BinaryPaths,
+        config_path: &Path,
+        consensus_mode: SumeragiConsensusMode,
+    ) -> Result<RawGenesisTransaction> {
+        let kagami = binaries.ensure_kagami_ready()?;
+        let genesis_dir = self.manifest_path.parent().ok_or_else(|| {
+            SupervisorError::Config(format!(
+                "genesis manifest path `{}` has no parent directory",
+                self.manifest_path.display()
+            ))
+        })?;
+        let private_key_file = TemporaryGenesisKeyFile::create(genesis_dir, &self.key_pair)?;
+        let mut command = Command::new(kagami);
+        command
+            .current_dir(genesis_dir)
+            .arg("genesis")
+            .arg("sign")
+            .arg(&self.manifest_path)
+            .arg("--out-file")
+            .arg(&self.block_path)
+            .arg("--bound-manifest-out")
+            .arg(&self.manifest_path)
+            .arg("--private-key-file")
+            .arg(private_key_file.path())
+            .arg("--config")
+            .arg(config_path)
+            .arg("--consensus-mode")
+            .arg(match consensus_mode {
+                SumeragiConsensusMode::Permissioned => "permissioned",
+                SumeragiConsensusMode::Npos => "npos",
+            })
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let output = command.output().map_err(|error| {
+            SupervisorError::KagamiInvocation(format!(
+                "failed to invoke `kagami genesis sign`: {error}"
+            ))
+        })?;
+        drop(private_key_file);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(SupervisorError::KagamiInvocation(format!(
+                "`kagami genesis sign` exited with status {}: {stderr}",
+                output.status
+            )));
+        }
+        let signed_metadata = fs::metadata(&self.block_path).map_err(|error| {
+            SupervisorError::KagamiInvocation(format!(
+                "`kagami genesis sign` did not create `{}`: {error}",
+                self.block_path.display()
+            ))
+        })?;
+        if !signed_metadata.is_file() || signed_metadata.len() == 0 {
+            return Err(SupervisorError::KagamiInvocation(format!(
+                "`kagami genesis sign` emitted an empty signed block at `{}`",
+                self.block_path.display()
+            )));
+        }
+
+        RawGenesisTransaction::from_path(&self.manifest_path).map_err(Into::into)
     }
 
     fn generate_manifest(
@@ -3713,6 +3815,7 @@ fn default_snapshot_slug() -> String {
 }
 
 const SNAPSHOT_LABEL_MAX_LEN: usize = 64;
+const SNAPSHOT_STORAGE_LAYOUT: &str = "kura-subdirectory-v1";
 
 fn sanitize_snapshot_label(label: &str) -> Option<String> {
     let mut sanitized = String::with_capacity(label.len().min(SNAPSHOT_LABEL_MAX_LEN));
@@ -3800,6 +3903,21 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
                 metadata_path.display()
             ))
         })?;
+    let storage_layout = object
+        .get("storage_layout")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            SupervisorError::Config(format!(
+                "snapshot metadata `{}` missing `storage_layout` string; legacy aggregate Kura snapshots cannot be restored safely",
+                metadata_path.display()
+            ))
+        })?;
+    if storage_layout != SNAPSHOT_STORAGE_LAYOUT {
+        return Err(SupervisorError::Config(format!(
+            "snapshot metadata `{}` uses unsupported storage layout `{storage_layout}`; expected `{SNAPSHOT_STORAGE_LAYOUT}`",
+            metadata_path.display()
+        )));
+    }
     let genesis_hash = object
         .get("genesis_hash")
         .and_then(Value::as_str)
@@ -3929,7 +4047,7 @@ fn hash_directory(root: &Path) -> io::Result<Hash> {
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::{
         collections::HashSet,
         env,
@@ -4227,7 +4345,7 @@ exit 0
             let script_path = root.join("kagami_stub.sh");
             let chain_discriminant = iroha_data_model::account::address::chain_discriminant();
             let manifest = format!(
-                "{{\"chain\":\"00000000-0000-0000-0000-000000000000\",\"chain_discriminant\":{chain_discriminant},\"ivm_dir\":\".\",\"consensus_mode\":\"Permissioned\",\"transactions\":[{{\"instructions\":[]}}]}}"
+                "{{\"chain\":\"00000000-0000-0000-0000-000000000000\",\"chain_discriminant\":{chain_discriminant},\"ivm_dir\":\".\",\"consensus_mode\":\"Permissioned\",\"wire_protocol_version\":3,\"sumeragi_v2\":{{\"da_layout\":{{\"encoding\":{{\"encoding\":\"reed_solomon16\",\"details\":null}},\"chunk_size_bytes\":262144,\"data_shards\":4,\"parity_shards\":2,\"max_payload_size_bytes\":16777216,\"max_chunk_count\":1024}},\"nexus_amx_context_hash\":\"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3\"}},\"transactions\":[{{\"instructions\":[]}}]}}"
             );
             let script = format!(
                 r#"#!/bin/sh
@@ -4243,15 +4361,62 @@ case "$1" in
     exit 0
     ;;
   genesis)
+    case "$2" in
+      generate)
+        cat <<'JSON'
+{manifest}
+JSON
+        exit 0
+        ;;
+      sign)
+        if [ "$MOCHI_KAGAMI_FAIL_SIGN" = "1" ]; then
+          echo "requested kagami sign failure" >&2
+          exit 23
+        fi
+        manifest_path="$3"
+        shift 3
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            --out-file)
+              out_file="$2"
+              shift 2
+              ;;
+            --bound-manifest-out)
+              bound_manifest_out="$2"
+              shift 2
+              ;;
+            --private-key-file)
+              private_key_file="$2"
+              shift 2
+              ;;
+            --config)
+              config_file="$2"
+              shift 2
+              ;;
+            *)
+              shift
+              ;;
+          esac
+        done
+        test -s "$private_key_file"
+        test -s "$config_file"
+        printf 'stub-signed-genesis' > "$out_file"
+        if [ "$bound_manifest_out" != "$manifest_path" ]; then
+          cp "$manifest_path" "$bound_manifest_out"
+        fi
+        exit 0
+        ;;
+      *)
+        echo "unsupported kagami genesis command: $2" >&2
+        exit 1
+        ;;
+    esac
     ;;
   *)
     echo "unsupported kagami stub command: $1" >&2
     exit 1
     ;;
 esac
-cat <<'JSON'
-{manifest}
-JSON
 "#
             );
             fs::write(&script_path, script).expect("write kagami stub");
@@ -4310,15 +4475,58 @@ case "$1" in
     exit 0
     ;;
   genesis)
+    case "$2" in
+      generate)
+        cat <<'JSON'
+{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{chain_discriminant},"ivm_dir":".","consensus_mode":"Permissioned","wire_protocol_version":3,"sumeragi_v2":{{"da_layout":{{"encoding":{{"encoding":"reed_solomon16","details":null}},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024}},"nexus_amx_context_hash":"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3"}},"transactions":[{{"instructions":[]}}]}}
+JSON
+        exit 0
+        ;;
+      sign)
+        manifest_path="$3"
+        shift 3
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            --out-file)
+              out_file="$2"
+              shift 2
+              ;;
+            --bound-manifest-out)
+              bound_manifest_out="$2"
+              shift 2
+              ;;
+            --private-key-file)
+              private_key_file="$2"
+              shift 2
+              ;;
+            --config)
+              config_file="$2"
+              shift 2
+              ;;
+            *)
+              shift
+              ;;
+          esac
+        done
+        test -s "$private_key_file"
+        test -s "$config_file"
+        printf 'stub-signed-genesis' > "$out_file"
+        if [ "$bound_manifest_out" != "$manifest_path" ]; then
+          cp "$manifest_path" "$bound_manifest_out"
+        fi
+        exit 0
+        ;;
+      *)
+        echo "unsupported kagami genesis command: $2" >&2
+        exit 1
+        ;;
+    esac
     ;;
   *)
     echo "unsupported kagami stub command: $1" >&2
     exit 1
     ;;
 esac
-cat <<'JSON'
-{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{chain_discriminant},"ivm_dir":".","consensus_mode":"Permissioned","transactions":[{{"instructions":[]}}]}}
-JSON
 "#
             );
             fs::write(&script_path, script).expect("write standalone kagami stub");
@@ -4615,7 +4823,8 @@ JSON
         assert_eq!(supervisor.chain_id(), "test-chain");
         assert_eq!(supervisor.peers().len(), 1);
 
-        let config_path = supervisor.peers()[0].config_path().to_path_buf();
+        let peer = &supervisor.peers()[0];
+        let config_path = peer.config_path().to_path_buf();
         let contents = fs::read_to_string(config_path).expect("config readable");
         let value: toml::Table = toml::from_str(&contents).expect("valid toml");
         let expected_torii = "0.0.0.0:9000"
@@ -4631,13 +4840,12 @@ JSON
             value.get("chain").and_then(toml::Value::as_str),
             Some("test-chain")
         );
-        assert_eq!(
+        assert!(
             value
                 .get("sumeragi")
                 .and_then(toml::Value::as_table)
-                .and_then(|table| table.get("consensus_mode"))
-                .and_then(toml::Value::as_str),
-            Some("permissioned")
+                .is_none_or(|table| !table.contains_key("consensus_mode")),
+            "consensus mode is signed-genesis state, not a mutable peer setting"
         );
         assert_eq!(
             value
@@ -4696,6 +4904,50 @@ JSON
                 .and_then(|table| table.get("public_address"))
                 .and_then(toml::Value::as_str),
             Some(expected_public.as_str())
+        );
+        let expected_kura = peer.storage_dir().join("kura");
+        let expected_snapshot = peer.storage_dir().join("snapshot");
+        let expected_torii_data = peer.storage_dir().join("torii");
+        assert_eq!(peer.kura_store_dir(), expected_kura);
+        assert_eq!(
+            value
+                .get("kura")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("store_dir"))
+                .and_then(toml::Value::as_str),
+            Some(expected_kura.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            value
+                .get("snapshot")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("store_dir"))
+                .and_then(toml::Value::as_str),
+            Some(expected_snapshot.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            value
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("data_dir"))
+                .and_then(toml::Value::as_str),
+            Some(expected_torii_data.to_string_lossy().as_ref())
+        );
+        assert!(
+            !expected_kura.exists(),
+            "Mochi must leave a new Kura root absent so Kura can establish its authenticated catalog"
+        );
+        let snapshot_generations = expected_snapshot.join(SNAPSHOT_GENERATIONS_DIR_NAME);
+        assert!(
+            snapshot_generations.is_dir(),
+            "an explicit snapshot root must contain its authenticated generations directory"
+        );
+        assert!(
+            fs::read_dir(snapshot_generations)
+                .expect("snapshot generations directory")
+                .next()
+                .is_none(),
+            "new snapshot generations directory should be empty"
         );
         let streaming = value
             .get("streaming")
@@ -4899,7 +5151,7 @@ JSON
         let _env = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("tempdir");
         let stub = KagamiStub::install(temp.path());
-        SupervisorBuilder::new(ProfilePreset::SinglePeer)
+        let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
             .data_root(temp.path())
             .build()
             .expect("build supervisor");
@@ -4916,6 +5168,107 @@ JSON
         assert!(
             log.contains("--consensus-mode") && log.contains("permissioned"),
             "expected permissioned consensus mode to be pinned for kagami: {log}"
+        );
+        assert!(
+            log.contains("genesis sign")
+                && log.contains("--config")
+                && log.contains("--bound-manifest-out")
+                && log.contains("--private-key-file"),
+            "expected config-bound kagami signing with persisted manifest metadata: {log}"
+        );
+        assert!(
+            !log.split_whitespace()
+                .any(|argument| argument == "--private-key"),
+            "the genesis private key must never be exposed on the kagami command line: {log}"
+        );
+        let genesis_dir = supervisor
+            .genesis_manifest()
+            .parent()
+            .expect("genesis directory");
+        assert!(
+            fs::read_dir(genesis_dir)
+                .expect("read genesis directory")
+                .all(|entry| {
+                    !entry
+                        .expect("genesis entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".mochi-genesis-signing-key-")
+                }),
+            "temporary genesis signing keys must be removed after kagami exits"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_genesis_key_file_is_owner_only_and_removed_on_drop() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let key_pair = KeyPair::random();
+        let key_file =
+            TemporaryGenesisKeyFile::create(temp.path(), &key_pair).expect("create key file");
+        let path = key_file.path().to_path_buf();
+        let metadata = fs::metadata(&path).expect("temporary key metadata");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::read_to_string(&path).expect("read temporary key"),
+            format!("{}\n", ExposedPrivateKey(key_pair.private_key().clone()))
+        );
+
+        drop(key_file);
+        assert!(!path.exists(), "temporary key should be removed on drop");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_genesis_key_file_resolves_symlinked_directory_components() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let real_genesis_dir = temp.path().join("real-genesis");
+        fs::create_dir(&real_genesis_dir).expect("create real genesis directory");
+        let linked_genesis_dir = temp.path().join("linked-genesis");
+        symlink(&real_genesis_dir, &linked_genesis_dir).expect("link genesis directory");
+
+        let key_file = TemporaryGenesisKeyFile::create(&linked_genesis_dir, &KeyPair::random())
+            .expect("create key through symlinked directory");
+        assert!(
+            key_file
+                .path()
+                .starts_with(fs::canonicalize(&real_genesis_dir).expect("canonical genesis dir")),
+            "private key path must contain no symlinked directory component: {}",
+            key_file.path().display()
+        );
+    }
+
+    #[test]
+    fn kagami_sign_failure_is_reported_and_removes_temporary_key() {
+        if !ports_available("kagami_sign_failure_is_reported_and_removes_temporary_key") {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _stub = KagamiStub::install(temp.path());
+        let _failure = EnvVarGuard::set("MOCHI_KAGAMI_FAIL_SIGN", OsStr::new("1"));
+
+        let error = match SupervisorBuilder::new(ProfilePreset::SinglePeer)
+            .data_root(temp.path())
+            .build()
+        {
+            Ok(_) => panic!("requested kagami sign failure should fail supervisor build"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, SupervisorError::KagamiInvocation(ref message) if message.contains("`kagami genesis sign`") && message.contains("exit status: 23") && message.contains("requested kagami sign failure")),
+            "unexpected signing failure: {error}"
+        );
+        let mut files = Vec::new();
+        collect_files_recursive(temp.path(), &mut files).expect("collect temporary files");
+        assert!(
+            files.iter().all(|path| {
+                !path.file_name().is_some_and(|name| {
+                    name.to_string_lossy()
+                        .starts_with(".mochi-genesis-signing-key-")
+                })
+            }),
+            "temporary genesis signing key leaked after failure: {files:?}"
         );
     }
 
@@ -5095,6 +5448,11 @@ JSON
             metadata.get("created_at_ms").is_some(),
             "metadata should include creation timestamp"
         );
+        assert_eq!(
+            metadata.get("storage_layout").and_then(Value::as_str),
+            Some(SNAPSHOT_STORAGE_LAYOUT),
+            "metadata should pin the Kura subdirectory layout"
+        );
         let genesis_hash = metadata
             .get("genesis_hash")
             .and_then(Value::as_str)
@@ -5121,7 +5479,10 @@ JSON
             let storage_copy = alias_root
                 .join("storage")
                 .join(format!("sentinel-{idx}.bin"));
-            let snapshot_copy = alias_root.join("snapshot").join("marker.txt");
+            let snapshot_copy = alias_root
+                .join("storage")
+                .join("snapshot")
+                .join("marker.txt");
             let config_copy = alias_root.join("config.toml");
             let log_copy = alias_root.join("latest.log");
 
@@ -5542,6 +5903,108 @@ JSON
     }
 
     #[test]
+    fn restore_snapshot_rejects_missing_storage_layout() {
+        if !ports_available("restore_snapshot_rejects_missing_storage_layout") {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _stub = KagamiStub::install(temp.path());
+        let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+            .data_root(temp.path())
+            .build()
+            .expect("build supervisor");
+        let snapshot_root = supervisor
+            .export_snapshot(Some("Legacy Storage Layout"))
+            .expect("export snapshot");
+        let metadata_path = snapshot_root.join("metadata.json");
+        let mut metadata: Value =
+            json::from_slice(&fs::read(&metadata_path).expect("read metadata"))
+                .expect("parse metadata");
+        metadata
+            .as_object_mut()
+            .expect("metadata object")
+            .remove("storage_layout");
+        fs::write(
+            &metadata_path,
+            json::to_vec_pretty(&metadata).expect("serialize metadata"),
+        )
+        .expect("write metadata");
+        let live_sentinel = supervisor.peers()[0]
+            .storage_dir()
+            .join("live-layout-sentinel.bin");
+        fs::write(&live_sentinel, b"live-state").expect("write live sentinel");
+
+        let err = supervisor
+            .restore_snapshot(&snapshot_root)
+            .expect_err("unversioned storage layout must fail closed");
+        match err {
+            SupervisorError::Config(message) => assert!(
+                message.contains("missing `storage_layout`")
+                    && message.contains("cannot be restored safely"),
+                "unexpected error: {message}"
+            ),
+            other => panic!("expected SupervisorError::Config, got {other:?}"),
+        }
+        assert_eq!(
+            fs::read(live_sentinel).expect("read live sentinel"),
+            b"live-state",
+            "layout rejection must happen before live storage is mutated"
+        );
+    }
+
+    #[test]
+    fn restore_snapshot_rejects_unknown_storage_layout() {
+        if !ports_available("restore_snapshot_rejects_unknown_storage_layout") {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _stub = KagamiStub::install(temp.path());
+        let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+            .data_root(temp.path())
+            .build()
+            .expect("build supervisor");
+        let snapshot_root = supervisor
+            .export_snapshot(Some("Unknown Storage Layout"))
+            .expect("export snapshot");
+        let metadata_path = snapshot_root.join("metadata.json");
+        let mut metadata: Value =
+            json::from_slice(&fs::read(&metadata_path).expect("read metadata"))
+                .expect("parse metadata");
+        metadata.as_object_mut().expect("metadata object").insert(
+            "storage_layout".into(),
+            Value::String("future-layout-v99".into()),
+        );
+        fs::write(
+            &metadata_path,
+            json::to_vec_pretty(&metadata).expect("serialize metadata"),
+        )
+        .expect("write metadata");
+        let live_sentinel = supervisor.peers()[0]
+            .storage_dir()
+            .join("live-layout-sentinel.bin");
+        fs::write(&live_sentinel, b"live-state").expect("write live sentinel");
+
+        let err = supervisor
+            .restore_snapshot(&snapshot_root)
+            .expect_err("unknown storage layout must fail closed");
+        match err {
+            SupervisorError::Config(message) => assert!(
+                message.contains("unsupported storage layout `future-layout-v99`")
+                    && message.contains(SNAPSHOT_STORAGE_LAYOUT),
+                "unexpected error: {message}"
+            ),
+            other => panic!("expected SupervisorError::Config, got {other:?}"),
+        }
+        assert_eq!(
+            fs::read(live_sentinel).expect("read live sentinel"),
+            b"live-state",
+            "layout rejection must happen before live storage is mutated"
+        );
+    }
+
+    #[test]
     fn supervisor_respects_explicit_kagami_override() {
         if !ports_available("supervisor_respects_explicit_kagami_override") {
             return;
@@ -5690,6 +6153,20 @@ JSON
             assert!(
                 !snapshot_file.exists(),
                 "wipe should remove stale snapshot file for peer {}",
+                peer.alias()
+            );
+            let generations = peer.snapshot_dir().join(SNAPSHOT_GENERATIONS_DIR_NAME);
+            assert!(
+                generations.is_dir(),
+                "wipe should recreate the snapshot generations directory for peer {}",
+                peer.alias()
+            );
+            assert!(
+                fs::read_dir(generations)
+                    .expect("snapshot generations directory")
+                    .next()
+                    .is_none(),
+                "wipe should leave snapshot generations empty for peer {}",
                 peer.alias()
             );
         }
@@ -5867,7 +6344,7 @@ JSON
             .expect_err("permissioned localnet should reject nexus");
         match err {
             SupervisorError::Config(message) => assert!(
-                message.contains("sumeragi.consensus_mode = \"npos\""),
+                message.contains("NPoS signed-genesis consensus mode"),
                 "unexpected error: {message}"
             ),
             other => panic!("expected SupervisorError::Config, got {other:?}"),
@@ -6093,6 +6570,72 @@ JSON
     }
 
     #[test]
+    fn peer_spec_rejects_kura_store_override() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let profile = NetworkProfile::default();
+        let paths = NetworkPaths::from_root(temp.path(), &profile);
+        paths.ensure().expect("paths");
+        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let genesis = test_genesis_material(&paths);
+        let mut kura = toml::Table::new();
+        kura.insert(
+            "store_dir".into(),
+            toml::Value::String("/tmp/unmanaged-kura".into()),
+        );
+        let mut overlay = toml::Table::new();
+        overlay.insert("kura".into(), toml::Value::Table(kura));
+
+        let err = spec
+            .write_config(
+                "demo-chain",
+                &genesis,
+                std::slice::from_ref(&spec),
+                &PeerConfigOverrides::default(),
+                &[overlay],
+            )
+            .expect_err("Kura root override must fail closed");
+        match err {
+            SupervisorError::Config(message) => assert!(
+                message.contains("must preserve Mochi's managed Kura root")
+                    && message.contains(spec.kura_dir.to_string_lossy().as_ref()),
+                "unexpected error: {message}"
+            ),
+            other => panic!("expected SupervisorError::Config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peer_spec_rejects_non_string_kura_store_overlay() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let profile = NetworkProfile::default();
+        let paths = NetworkPaths::from_root(temp.path(), &profile);
+        paths.ensure().expect("paths");
+        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let genesis = test_genesis_material(&paths);
+        let mut kura = toml::Table::new();
+        kura.insert("store_dir".into(), toml::Value::Integer(7));
+        let mut overlay = toml::Table::new();
+        overlay.insert("kura".into(), toml::Value::Table(kura));
+
+        let err = spec
+            .write_config(
+                "demo-chain",
+                &genesis,
+                std::slice::from_ref(&spec),
+                &PeerConfigOverrides::default(),
+                &[overlay],
+            )
+            .expect_err("malformed Kura root override must fail closed");
+        match err {
+            SupervisorError::Config(message) => assert!(
+                message.contains("must preserve Mochi's managed Kura root"),
+                "unexpected error: {message}"
+            ),
+            other => panic!("expected SupervisorError::Config, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn peer_spec_config_header_includes_lane_paths() {
         let temp = tempfile::tempdir().expect("temp dir");
         let profile = NetworkProfile::default();
@@ -6127,25 +6670,25 @@ JSON
         let lane0_slug = lane_slug("Core Lane", 0);
         let lane1_slug = lane_slug("Gov+Ops", 1);
         let lane0_blocks = spec
-            .storage_dir
+            .kura_dir
             .join("blocks")
             .join(format!("lane_000_{lane0_slug}"))
             .display()
             .to_string();
         let lane1_blocks = spec
-            .storage_dir
+            .kura_dir
             .join("blocks")
             .join(format!("lane_001_{lane1_slug}"))
             .display()
             .to_string();
         let lane0_merge = spec
-            .storage_dir
+            .kura_dir
             .join("merge_ledger")
             .join(format!("lane_000_{lane0_slug}_merge.log"))
             .display()
             .to_string();
         let lane1_merge = spec
-            .storage_dir
+            .kura_dir
             .join("merge_ledger")
             .join(format!("lane_001_{lane1_slug}_merge.log"))
             .display()
@@ -6185,76 +6728,6 @@ JSON
         assert_eq!(info.mcp_url, "http://127.0.0.1:8080/v1/mcp");
         assert!(info.account_id.is_some());
         assert!(info.private_key.is_some());
-    }
-
-    #[test]
-    fn reset_lane_storage_removes_lane_segments() {
-        if !ports_available("reset_lane_storage_removes_lane_segments") {
-            return;
-        }
-        let _env = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("temp dir");
-        let _stub = KagamiStub::install(temp.path());
-
-        let mut lane0 = toml::Table::new();
-        lane0.insert("alias".into(), toml::Value::String("core".into()));
-        lane0.insert("index".into(), toml::Value::Integer(0));
-        let mut lane1 = toml::Table::new();
-        lane1.insert("alias".into(), toml::Value::String("Gov+Ops".into()));
-        lane1.insert("index".into(), toml::Value::Integer(1));
-        let mut nexus = toml::Table::new();
-        nexus.insert("enabled".into(), toml::Value::Boolean(true));
-        nexus.insert("lane_count".into(), toml::Value::Integer(2));
-        nexus.insert(
-            "lane_catalog".into(),
-            toml::Value::Array(vec![toml::Value::Table(lane0), toml::Value::Table(lane1)]),
-        );
-        let mut supervisor =
-            SupervisorBuilder::with_profile(npos_preset_profile(ProfilePreset::SinglePeer))
-                .data_root(temp.path())
-                .nexus_config(nexus)
-                .build()
-                .expect("build supervisor");
-
-        let peer = supervisor.peers().first().expect("peer available");
-        let lane0_slug = lane_slug("core", 0);
-        let lane1_slug = lane_slug("Gov+Ops", 1);
-        let lane0_blocks = peer
-            .storage_dir()
-            .join("blocks")
-            .join(format!("lane_000_{lane0_slug}"));
-        let lane1_blocks = peer
-            .storage_dir()
-            .join("blocks")
-            .join(format!("lane_001_{lane1_slug}"));
-        let lane0_merge = peer
-            .storage_dir()
-            .join("merge_ledger")
-            .join(format!("lane_000_{lane0_slug}_merge.log"));
-        let lane1_merge = peer
-            .storage_dir()
-            .join("merge_ledger")
-            .join(format!("lane_001_{lane1_slug}_merge.log"));
-
-        fs::create_dir_all(&lane0_blocks).expect("lane0 blocks");
-        fs::create_dir_all(&lane1_blocks).expect("lane1 blocks");
-        fs::create_dir_all(lane0_merge.parent().expect("merge parent")).expect("merge ledger dir");
-        fs::write(&lane0_merge, b"lane0").expect("lane0 merge");
-        fs::write(&lane1_merge, b"lane1").expect("lane1 merge");
-
-        assert!(lane0_blocks.exists());
-        assert!(lane1_blocks.exists());
-        assert!(lane0_merge.exists());
-        assert!(lane1_merge.exists());
-
-        supervisor
-            .reset_lane_storage(1)
-            .expect("reset lane storage");
-
-        assert!(lane0_blocks.exists(), "lane0 blocks should remain");
-        assert!(lane0_merge.exists(), "lane0 merge should remain");
-        assert!(!lane1_blocks.exists(), "lane1 blocks should be removed");
-        assert!(!lane1_merge.exists(), "lane1 merge should be removed");
     }
 
     #[test]

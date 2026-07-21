@@ -7020,41 +7020,35 @@ PROOF
 THEOREM ReplyAdmitFlushEstablishesSelectedItemBinding ==
   \A owner \in ReplyOwners, semantic \in ReplySemantics,
      source \in ReplySources:
-    LET selected ==
-          ReplyPipelineItemFor(owner, semantic, source)
-        admitted ==
-          ReplyPipelineItemWithPhase(selected, "Admitted")
-    IN /\ ReplyPipelineInductiveInvariant
-       /\ AdmitReplyPipelineItem(owner, semantic, source)
-       /\ selected.flushRequired
-       => /\ admitted \in rpItems'
-          /\ ReplyPipelineItemCoreBinding(admitted)'
-          /\ ReplyPipelineItemRouteBinding(admitted)'
-          /\ ReplyPipelineItemPhaseBinding(admitted)'
+    \A selected:
+      /\ selected = ReplyPipelineItemFor(owner, semantic, source)
+      /\ ReplyPipelineInductiveInvariant
+      /\ AdmitReplyPipelineItem(owner, semantic, source)
+      /\ selected.flushRequired
+      => LET admitted ==
+               ReplyPipelineItemWithPhase(selected, "Admitted")
+         IN /\ admitted \in rpItems'
+            /\ ReplyPipelineItemCoreBinding(admitted)'
+            /\ ReplyPipelineItemRouteBinding(admitted)'
+            /\ ReplyPipelineItemPhaseBinding(admitted)'
 PROOF
   <1>1. ASSUME NEW owner \in ReplyOwners,
                 NEW semantic \in ReplySemantics,
                 NEW source \in ReplySources,
-                LET selected ==
-                      ReplyPipelineItemFor(owner, semantic, source)
-                    admitted ==
-                      ReplyPipelineItemWithPhase(
-                        selected, "Admitted")
-                IN /\ ReplyPipelineInductiveInvariant
-                   /\ AdmitReplyPipelineItem(
-                        owner, semantic, source)
-                   /\ selected.flushRequired
-         PROVE LET selected ==
-                     ReplyPipelineItemFor(owner, semantic, source)
-                   admitted ==
-                     ReplyPipelineItemWithPhase(
-                       selected, "Admitted")
+                NEW selected,
+                selected =
+                  ReplyPipelineItemFor(owner, semantic, source),
+                ReplyPipelineInductiveInvariant,
+                AdmitReplyPipelineItem(owner, semantic, source),
+                selected.flushRequired
+         PROVE LET admitted ==
+                     ReplyPipelineItemWithPhase(selected, "Admitted")
                IN /\ admitted \in rpItems'
                   /\ ReplyPipelineItemCoreBinding(admitted)'
                   /\ ReplyPipelineItemRouteBinding(admitted)'
                   /\ ReplyPipelineItemPhaseBinding(admitted)'
     <2> DEFINE SelectedItem ==
-          ReplyPipelineItemFor(owner, semantic, source)
+          selected
     <2> DEFINE AdmittedItem ==
           ReplyPipelineItemWithPhase(SelectedItem, "Admitted")
     <2>1a. SelectedItem \in rpItems

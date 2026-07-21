@@ -188,6 +188,78 @@ once for the transaction rather than once per item. Trigger actions may store
 the same `Batch` form. One trigger invocation executes the items atomically and
 shares its deterministic trigger gas budget across the complete sequence.
 
+## Sumeragi v2 Consensus Evidence Layout
+
+Sumeragi v2 votes and quorum certificates authenticate two distinct rounds:
+the round in which validators issued the vote and the immutable round in which
+the proposal body originated. The first-release canonical struct field order
+is:
+
+```text
+Vote:
+round
+proposal_round
+phase
+subject
+execution_commitment
+signer
+signature
+
+QuorumCertificateRef:
+round
+proposal_round
+phase
+subject
+execution_commitment
+
+QuorumCertificate:
+round
+proposal_round
+phase
+subject
+execution_commitment
+signers
+aggregate_signature
+
+SumeragiV2VoteQuorumStatus:
+round
+proposal_round
+subject
+execution_commitment
+signer_count
+signed_power
+min_signers
+total_power
+
+SumeragiV2OutboundIntentStatus:
+kind
+round
+proposal_round
+subject
+execution_commitment
+stage
+```
+
+`proposal_round` is mandatory and is included in the vote signature preimage.
+For Prepare evidence it must equal `round`. For Commit evidence it must use the
+same context and height and may name an earlier view, but never a later one.
+Body requests, durable manifests, validation receipts, finality artifacts, and
+application recovery bind exactly to `proposal_round`; they must not infer it
+from a local lock or substitute the Commit certification round. The unreleased
+Vote/QC layout without this field has no decoder or compatibility fallback.
+Liveness vote-quorum rows carry the same mandatory origin. Outbound proposal,
+Prepare-vote, Commit-vote, Prepare-QC, and Commit-QC intents carry
+`Some(proposal_round)`; timeout-vote and timeout-certificate intents carry
+`None`. This status field is diagnostic, but it obeys the same context, height,
+and non-future-origin rules as the authenticated evidence it describes.
+
+The successor [`HeightContext`](crates/iroha_data_model/src/block/consensus_v2.rs)
+identity projection also includes the complete parent `proposal_round`. It
+continues to exclude only the parent CommitQC's later certification view,
+signer subset, and aggregate signature. Consequently nodes that learned the
+same proposal through different later-view certificates derive one successor
+context, while origin-distinct parent decisions cannot alias.
+
 ## Hardware Acceleration Validation
 
 Norito hardware acceleration is performance-only. Accelerated paths must either

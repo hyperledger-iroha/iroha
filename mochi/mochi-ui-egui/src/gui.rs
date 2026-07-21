@@ -6036,12 +6036,16 @@ impl MochiApp {
     ) -> Option<LanePathPreview> {
         let peer = supervisor.peers().first()?;
         let peer_alias = peer.alias().to_owned();
-        let storage_root = supervisor.paths().peer_dir(&peer_alias).join("storage");
+        let kura_root = supervisor
+            .paths()
+            .peer_dir(&peer_alias)
+            .join("storage")
+            .join("kura");
         let slug = lane_slug(alias, lane_id);
-        let blocks_dir = storage_root
+        let blocks_dir = kura_root
             .join("blocks")
             .join(format!("lane_{lane_id:03}_{slug}"));
-        let merge_log = storage_root
+        let merge_log = kura_root
             .join("merge_ledger")
             .join(format!("lane_{lane_id:03}_{slug}_merge.log"));
         Some(LanePathPreview {
@@ -6071,7 +6075,7 @@ impl MochiApp {
             .and_then(|supervisor| supervisor.peers().first())
             .map(|peer| peer.alias().to_owned())
             .unwrap_or_else(|| "peer0".to_owned());
-        let storage_root = paths.peer_dir(&peer_alias).join("storage");
+        let kura_root = paths.peer_dir(&peer_alias).join("storage").join("kura");
 
         let mut aliases = BTreeMap::new();
         let mut max_index: Option<u32> = None;
@@ -6118,10 +6122,10 @@ impl MochiApp {
             .into_iter()
             .map(|(lane_id, alias)| {
                 let slug = lane_slug(&alias, lane_id);
-                let blocks_dir = storage_root
+                let blocks_dir = kura_root
                     .join("blocks")
                     .join(format!("lane_{lane_id:03}_{slug}"));
-                let merge_log = storage_root
+                let merge_log = kura_root
                     .join("merge_ledger")
                     .join(format!("lane_{lane_id:03}_{slug}_merge.log"));
                 LanePathPreview {
@@ -6188,18 +6192,13 @@ impl MochiApp {
             return Err(error);
         }
 
-        // The replacement is now final. Stop every process before deleting its
-        // lane files so no live Kura handle can race the reset.
-        supervisor
-            .stop_all()
-            .map_err(|err| format!("Failed to stop peers after lifecycle finality: {err}"))?;
-        supervisor
-            .reset_lane_storage(lane_id)
-            .map_err(|err| format!("Failed to reset finalized lane storage: {err}"))?;
-        if was_running {
+        // The signed retire/add replacement owns the lane incarnation and its
+        // authenticated storage geometry. Never delete bound Kura paths after
+        // finality; doing so makes the next authenticated open fail closed.
+        if !was_running {
             supervisor
-                .start_all()
-                .map_err(|err| format!("Failed to restart peers after lane reset: {err}"))?;
+                .stop_all()
+                .map_err(|err| format!("Failed to restore the stopped network state: {err}"))?;
         }
         Ok(())
     }
@@ -6654,7 +6653,7 @@ impl MochiApp {
                             egui::Button::new("Reset lane"),
                         )
                         .on_hover_text(if lane_reset_available {
-                            "Wipe lane storage and re-apply the lane catalog"
+                            "Apply a signed retire/add lifecycle replacement"
                         } else {
                             "No Nexus lane catalog configured"
                         });
@@ -7175,10 +7174,10 @@ impl MochiApp {
                     .open(&mut open)
                     .show(ctx, |ui| {
                         ui.label(
-                            "Reset a single Nexus lane by wiping its storage and reapplying the lane catalog.",
+                            "Reset a single Nexus lane with a signed retire/add lifecycle replacement.",
                         );
                         ui.small(
-                            "Peers may restart briefly; Torii must be reachable to apply the lifecycle plan.",
+                            "Kura manages the authenticated storage incarnation; Torii must be reachable to apply the plan.",
                         );
                         ui.add_space(8.0);
                         if candidates.is_empty() {
@@ -12105,7 +12104,7 @@ fn compose_launch_recipe(
     readiness_smoke: bool,
 ) -> String {
     let mut parts = vec![
-        "cargo run -p mochi-ui -- sandbox serve".to_owned(),
+        "cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve".to_owned(),
         format!("--profile {}", shell_quote(profile)),
     ];
     if !workspace_root.trim().is_empty() {
@@ -13361,7 +13360,9 @@ mod tests {
             true,
             false,
         );
-        assert!(recipe.starts_with("cargo run -p mochi-ui -- sandbox serve"));
+        assert!(
+            recipe.starts_with("cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve")
+        );
         assert!(recipe.contains("--profile single-peer"));
         assert!(recipe.contains("--workspace-root '/tmp/mochi data'"));
         assert!(recipe.contains("--chain-id mochi-local"));
@@ -13807,6 +13808,8 @@ mod tests {
         let preview = &previews[0];
         let blocks = preview.blocks_dir.to_string_lossy();
         let merge = preview.merge_log.to_string_lossy();
+        assert!(blocks.contains("storage/kura/blocks"));
+        assert!(merge.contains("storage/kura/merge_ledger"));
         assert!(blocks.contains("lane_000_core_lane"));
         assert!(merge.contains("lane_000_core_lane_merge.log"));
     }
@@ -14116,10 +14119,17 @@ mod tests {
                 "snapshot directory should exist for {}",
                 peer.alias()
             );
-            let mut entries = fs::read_dir(&snapshot_dir).expect("snapshot dir entries");
+            let entries = fs::read_dir(&snapshot_dir)
+                .expect("snapshot dir entries")
+                .map(|entry| entry.expect("snapshot entry").file_name())
+                .collect::<Vec<_>>();
+            assert_eq!(entries, vec!["generations"]);
             assert!(
-                entries.next().is_none(),
-                "snapshot directory should remain empty for {}",
+                fs::read_dir(snapshot_dir.join("generations"))
+                    .expect("snapshot generations")
+                    .next()
+                    .is_none(),
+                "snapshot generations should remain empty for {}",
                 peer.alias()
             );
         }

@@ -277,6 +277,7 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
 /// Prepare or Commit vote.
 public struct SumeragiV2Vote: Equatable, Sendable {
     public let round: SumeragiV2ConsensusRound
+    public let proposalRound: SumeragiV2ConsensusRound
     public let phase: SumeragiV2GlobalPhase
     public let subject: SumeragiV2BlockSubject
     public let executionCommitment: SumeragiV2ExecutionCommitment
@@ -285,6 +286,7 @@ public struct SumeragiV2Vote: Equatable, Sendable {
 
     public init(
         round: SumeragiV2ConsensusRound,
+        proposalRound: SumeragiV2ConsensusRound,
         phase: SumeragiV2GlobalPhase,
         subject: SumeragiV2BlockSubject,
         executionCommitment: SumeragiV2ExecutionCommitment,
@@ -292,6 +294,7 @@ public struct SumeragiV2Vote: Equatable, Sendable {
         signature: Data
     ) {
         self.round = round
+        self.proposalRound = proposalRound
         self.phase = phase
         self.subject = subject
         self.executionCommitment = executionCommitment
@@ -301,8 +304,9 @@ public struct SumeragiV2Vote: Equatable, Sendable {
 
     public func encode() -> Data {
         sumeragiV2Struct(
-            round.encode(), phase.encode(), subject.encode(), executionCommitment.encode(),
-            sumeragiV2U32(signer), sumeragiV2ByteVector(signature)
+            round.encode(), proposalRound.encode(), phase.encode(), subject.encode(),
+            executionCommitment.encode(), sumeragiV2U32(signer),
+            sumeragiV2ByteVector(signature)
         )
     }
 
@@ -310,6 +314,9 @@ public struct SumeragiV2Vote: Equatable, Sendable {
         var reader = SumeragiV2Reader(data)
         let value = try Self(
             round: SumeragiV2ConsensusRound.decode(reader.field("vote round")),
+            proposalRound: SumeragiV2ConsensusRound.decode(
+                reader.field("vote proposal round")
+            ),
             phase: SumeragiV2GlobalPhase.decode(reader.field("vote phase")),
             subject: SumeragiV2BlockSubject.decode(reader.field("vote subject")),
             executionCommitment: SumeragiV2ExecutionCommitment.decode(
@@ -326,17 +333,20 @@ public struct SumeragiV2Vote: Equatable, Sendable {
 /// Stable reference to a quorum certificate.
 public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
     public let round: SumeragiV2ConsensusRound
+    public let proposalRound: SumeragiV2ConsensusRound
     public let phase: SumeragiV2GlobalPhase
     public let subject: SumeragiV2BlockSubject
     public let executionCommitment: SumeragiV2ExecutionCommitment
 
     public init(
         round: SumeragiV2ConsensusRound,
+        proposalRound: SumeragiV2ConsensusRound,
         phase: SumeragiV2GlobalPhase,
         subject: SumeragiV2BlockSubject,
         executionCommitment: SumeragiV2ExecutionCommitment
     ) {
         self.round = round
+        self.proposalRound = proposalRound
         self.phase = phase
         self.subject = subject
         self.executionCommitment = executionCommitment
@@ -344,7 +354,8 @@ public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
 
     public func encode() -> Data {
         sumeragiV2Struct(
-            round.encode(), phase.encode(), subject.encode(), executionCommitment.encode()
+            round.encode(), proposalRound.encode(), phase.encode(), subject.encode(),
+            executionCommitment.encode()
         )
     }
 
@@ -352,6 +363,9 @@ public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
         var reader = SumeragiV2Reader(data)
         let value = try Self(
             round: SumeragiV2ConsensusRound.decode(reader.field("qc ref round")),
+            proposalRound: SumeragiV2ConsensusRound.decode(
+                reader.field("qc ref proposal round")
+            ),
             phase: SumeragiV2GlobalPhase.decode(reader.field("qc ref phase")),
             subject: SumeragiV2BlockSubject.decode(reader.field("qc ref subject")),
             executionCommitment: SumeragiV2ExecutionCommitment.decode(
@@ -366,6 +380,7 @@ public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
 /// Aggregate Prepare or Commit certificate.
 public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
     public let round: SumeragiV2ConsensusRound
+    public let proposalRound: SumeragiV2ConsensusRound
     public let phase: SumeragiV2GlobalPhase
     public let subject: SumeragiV2BlockSubject
     public let executionCommitment: SumeragiV2ExecutionCommitment
@@ -374,6 +389,7 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
 
     public init(
         round: SumeragiV2ConsensusRound,
+        proposalRound: SumeragiV2ConsensusRound,
         phase: SumeragiV2GlobalPhase,
         subject: SumeragiV2BlockSubject,
         executionCommitment: SumeragiV2ExecutionCommitment,
@@ -382,6 +398,7 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
     ) throws {
         try sumeragiV2RequireIncreasing(signers, label: "quorum certificate signers")
         self.round = round
+        self.proposalRound = proposalRound
         self.phase = phase
         self.subject = subject
         self.executionCommitment = executionCommitment
@@ -391,8 +408,8 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
 
     public func encode() -> Data {
         sumeragiV2Struct(
-            round.encode(), phase.encode(), subject.encode(), executionCommitment.encode(),
-            sumeragiV2Vector(signers, encode: sumeragiV2U32),
+            round.encode(), proposalRound.encode(), phase.encode(), subject.encode(),
+            executionCommitment.encode(), sumeragiV2Vector(signers, encode: sumeragiV2U32),
             sumeragiV2ByteVector(aggregateSignature)
         )
     }
@@ -400,6 +417,7 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
     public var reference: SumeragiV2QuorumCertificateRef {
         SumeragiV2QuorumCertificateRef(
             round: round,
+            proposalRound: proposalRound,
             phase: phase,
             subject: subject,
             executionCommitment: executionCommitment
@@ -410,6 +428,9 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
         var reader = SumeragiV2Reader(data)
         let value = try Self(
             round: SumeragiV2ConsensusRound.decode(reader.field("qc round")),
+            proposalRound: SumeragiV2ConsensusRound.decode(
+                reader.field("qc proposal round")
+            ),
             phase: SumeragiV2GlobalPhase.decode(reader.field("qc phase")),
             subject: SumeragiV2BlockSubject.decode(reader.field("qc subject")),
             executionCommitment: SumeragiV2ExecutionCommitment.decode(
@@ -1355,6 +1376,7 @@ public struct SumeragiV2CommitQCStatus: Equatable, Sendable {
 /// Partial dual-quorum state for one exact proposal round.
 public struct SumeragiV2VoteQuorumStatus: Equatable, Sendable {
     public let round: SumeragiV2ConsensusRound
+    public let proposalRound: SumeragiV2ConsensusRound
     public let subject: SumeragiV2BlockSubject
     public let executionCommitment: SumeragiV2ExecutionCommitment
     public let signerCount: UInt32
@@ -1362,10 +1384,12 @@ public struct SumeragiV2VoteQuorumStatus: Equatable, Sendable {
     public let minSigners: UInt32
     public let totalPower: UInt64
 
-    public init(round: SumeragiV2ConsensusRound, subject: SumeragiV2BlockSubject,
+    public init(round: SumeragiV2ConsensusRound, proposalRound: SumeragiV2ConsensusRound,
+                subject: SumeragiV2BlockSubject,
                 executionCommitment: SumeragiV2ExecutionCommitment, signerCount: UInt32,
                 signedPower: UInt64, minSigners: UInt32, totalPower: UInt64) {
         self.round = round
+        self.proposalRound = proposalRound
         self.subject = subject
         self.executionCommitment = executionCommitment
         self.signerCount = signerCount
@@ -1375,8 +1399,9 @@ public struct SumeragiV2VoteQuorumStatus: Equatable, Sendable {
     }
 
     fileprivate func encode() -> Data {
-        sumeragiV2Struct(round.encode(), subject.encode(), executionCommitment.encode(),
-                         sumeragiV2U32(signerCount), sumeragiV2U64(signedPower),
+        sumeragiV2Struct(round.encode(), proposalRound.encode(), subject.encode(),
+                         executionCommitment.encode(), sumeragiV2U32(signerCount),
+                         sumeragiV2U64(signedPower),
                          sumeragiV2U32(minSigners), sumeragiV2U64(totalPower))
     }
 
@@ -1384,6 +1409,9 @@ public struct SumeragiV2VoteQuorumStatus: Equatable, Sendable {
         var reader = SumeragiV2Reader(data)
         let value = try Self(
             round: SumeragiV2ConsensusRound.decode(reader.field("liveness vote round")),
+            proposalRound: SumeragiV2ConsensusRound.decode(
+                reader.field("liveness vote proposal round")
+            ),
             subject: SumeragiV2BlockSubject.decode(reader.field("liveness vote subject")),
             executionCommitment: SumeragiV2ExecutionCommitment.decode(reader.field("liveness vote execution")),
             signerCount: sumeragiV2DecodeU32(reader.field("liveness vote signer count")),
@@ -1466,23 +1494,54 @@ public enum SumeragiV2OutboundIntentStage: UInt32, Equatable, Sendable {
 public struct SumeragiV2OutboundIntentStatus: Equatable, Sendable {
     public let kind: SumeragiV2OutboundIntentKind
     public let round: SumeragiV2ConsensusRound
+    public let proposalRound: SumeragiV2ConsensusRound?
     public let subject: SumeragiV2BlockSubject?
     public let executionCommitment: SumeragiV2ExecutionCommitment?
     public let stage: SumeragiV2OutboundIntentStage
 
     public init(kind: SumeragiV2OutboundIntentKind, round: SumeragiV2ConsensusRound,
+                proposalRound: SumeragiV2ConsensusRound?,
                 subject: SumeragiV2BlockSubject?,
                 executionCommitment: SumeragiV2ExecutionCommitment?,
-                stage: SumeragiV2OutboundIntentStage) {
+                stage: SumeragiV2OutboundIntentStage) throws {
+        let shapeIsValid: Bool
+        switch kind {
+        case .proposal:
+            shapeIsValid = proposalRound != nil && subject != nil && executionCommitment == nil
+        case .timeoutVote, .timeoutCertificate:
+            shapeIsValid = proposalRound == nil && subject == nil && executionCommitment == nil
+        case .prepareVote, .commitVote, .prepareQC, .commitQC:
+            shapeIsValid = proposalRound != nil && subject != nil && executionCommitment != nil
+        }
+        guard shapeIsValid else {
+            throw SumeragiV2WireError.invalid("invalid outbound intent shape for \(kind)")
+        }
+        if let proposalRound {
+            guard proposalRound.contextID == round.contextID,
+                  proposalRound.height == round.height,
+                  proposalRound.view <= round.view else {
+                throw SumeragiV2WireError.invalid("invalid outbound intent proposal round")
+            }
+            if kind == .proposal || kind == .prepareVote || kind == .prepareQC {
+                guard proposalRound == round else {
+                    throw SumeragiV2WireError.invalid(
+                        "Prepare/proposal outbound intent origin must match its round"
+                    )
+                }
+            }
+        }
         self.kind = kind
         self.round = round
+        self.proposalRound = proposalRound
         self.subject = subject
         self.executionCommitment = executionCommitment
         self.stage = stage
     }
 
     fileprivate func encode() -> Data {
-        sumeragiV2Struct(kind.encode(), round.encode(), sumeragiV2Option(subject?.encode()),
+        sumeragiV2Struct(kind.encode(), round.encode(),
+                         sumeragiV2Option(proposalRound?.encode()),
+                         sumeragiV2Option(subject?.encode()),
                          sumeragiV2Option(executionCommitment?.encode()), stage.encode())
     }
 
@@ -1491,6 +1550,10 @@ public struct SumeragiV2OutboundIntentStatus: Equatable, Sendable {
         let value = try Self(
             kind: SumeragiV2OutboundIntentKind.decode(reader.field("liveness outbound kind")),
             round: SumeragiV2ConsensusRound.decode(reader.field("liveness outbound round")),
+            proposalRound: sumeragiV2DecodeOption(
+                reader.field("liveness outbound proposal round"),
+                decode: SumeragiV2ConsensusRound.decode
+            ),
             subject: sumeragiV2DecodeOption(reader.field("liveness outbound subject"), decode: SumeragiV2BlockSubject.decode),
             executionCommitment: sumeragiV2DecodeOption(reader.field("liveness outbound execution"), decode: SumeragiV2ExecutionCommitment.decode),
             stage: SumeragiV2OutboundIntentStage.decode(reader.field("liveness outbound stage"))

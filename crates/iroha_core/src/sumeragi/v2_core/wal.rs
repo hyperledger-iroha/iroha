@@ -833,6 +833,8 @@ impl WalRetirementAuthorization {
             self.certificate.context_id(),
             self.certificate.round().height(),
             self.certificate.round().view(),
+            self.certificate.proposal_round().height(),
+            self.certificate.proposal_round().view(),
             self.certificate.phase(),
             Phase::Commit,
             self.certificate.subject(),
@@ -842,6 +844,8 @@ impl WalRetirementAuthorization {
             receipt_certificate.context_id(),
             receipt_certificate.round().height(),
             receipt_certificate.round().view(),
+            receipt_certificate.proposal_round().height(),
+            receipt_certificate.proposal_round().view(),
             receipt_certificate.phase(),
             receipt_certificate.subject(),
         )
@@ -888,8 +892,8 @@ pub enum WalRecord {
     ///
     /// A carried `PrepareQC` may promote the durable lock. After the exact
     /// locked body is validated, a later [`Self::LockAndCommit`] may record a
-    /// Commit intent for that historical round even though its timeout fence
-    /// is already durable.
+    /// Commit intent in the current finality round while retaining that
+    /// historical round as its authenticated proposal origin.
     InstallTimeout(TimeoutCertificate),
     /// Persist a `CommitQC` decision before applying the block.
     Decision(QuorumCertificate),
@@ -1041,7 +1045,7 @@ impl DurableState {
                 {
                     return Err(ReplayError::InvalidProposalIntent);
                 }
-                let proposal_high = match proposal.justification() {
+                match proposal.justification() {
                     ProposalJustification::ParentCommit(parent)
                         if proposal.round().view() == 0
                             && match (*parent, context.parent_commit()) {
@@ -1050,30 +1054,18 @@ impl DurableState {
                                     carried.same_commit_decision(frozen)
                                 }
                                 (None, Some(_)) | (Some(_), None) => false,
-                            } =>
-                    {
-                        None
-                    }
+                            } => {}
                     ProposalJustification::Timeout(certificate)
                         if proposal.round().view() > 0
                             && certificate.validate(context).is_ok()
                             && certificate.round().view().checked_add(1)
                                 == Some(proposal.round().view())
-                            && certificate.highest_prepare().is_none_or(|highest| {
-                                highest.subject() == proposal.manifest().subject()
-                            }) =>
-                    {
-                        certificate.highest_prepare()
-                    }
+                            && certificate.highest_prepare().is_none() => {}
                     _ => return Err(ReplayError::InvalidProposalIntent),
-                };
+                }
                 if let Some(locked) = &self.locked
-                    && locked.subject() != proposal.manifest().subject()
-                    && proposal_high.is_none_or(|highest| {
-                        highest.phase() != Phase::Prepare
-                            || highest.subject() != proposal.manifest().subject()
-                            || highest.round().view() <= locked.round().view()
-                    })
+                    && (locked.proposal_round() != proposal.round()
+                        || locked.subject() != proposal.manifest().subject())
                 {
                     return Err(ReplayError::InvalidProposalIntent);
                 }
@@ -1107,22 +1099,27 @@ impl DurableState {
                 validate_qc(context, prepare, Phase::Prepare)?;
                 Self::validate_local_vote(context, local_validator, *vote, Phase::Commit)?;
                 let current_round = vote.round().view() == self.current_view;
-                let historical_locked_round = vote.round().view() < self.current_view
+                let historical_locked_origin = vote.proposal_round().view() < self.current_view
                     && self
                         .locked
                         .as_ref()
                         .is_some_and(|locked| locked.reference() == prepare.reference())
-                    && !self.has_higher_conflicting_prepare_evidence(vote.round(), vote.subject());
-                if !current_round && !historical_locked_round {
+                    && !self.has_higher_prepare_evidence(vote.proposal_round());
+                if !current_round
+                    || (!historical_locked_origin && vote.proposal_round() != vote.round())
+                {
                     return Err(ReplayError::InvalidLocalVote);
                 }
                 if self.decision.is_some() {
                     return Err(ReplayError::InvalidLocalVote);
                 }
-                if vote.round() != prepare.round() || vote.subject() != prepare.subject() {
+                if vote.proposal_round() != prepare.proposal_round()
+                    || prepare.proposal_round() != prepare.round()
+                    || vote.subject() != prepare.subject()
+                {
                     return Err(ReplayError::CommitDoesNotMatchPrepare);
                 }
-                if !historical_locked_round && self.timeout_intents.contains_key(&vote.round()) {
+                if self.timeout_intents.contains_key(&vote.round()) {
                     return Err(ReplayError::ViewClosed(vote.round()));
                 }
                 if let Some(locked) = &self.locked
@@ -1133,7 +1130,7 @@ impl DurableState {
                     return Err(ReplayError::LockRegression);
                 }
                 insert_unique_vote(&mut self.commit_intents, *vote)?;
-                if !historical_locked_round
+                if !historical_locked_origin
                     || self
                         .highest_prepare
                         .as_ref()
@@ -1167,10 +1164,32 @@ impl DurableState {
                 certificate
                     .validate(context)
                     .map_err(|_| ReplayError::InvalidCertificate)?;
-                if certificate.round().view() < self.current_view {
+                let selected = certificate.highest_prepare().cloned();
+                // A second valid TC for the round which installed the current
+                // view may reveal a PrepareQC omitted by the first quorum.
+                // Admit only a strict origin-rank upgrade over every installed
+                // Prepare witness. This changes the lock, not the lifecycle
+                // view; equal, lower, and unprepared replacements fail closed.
+                let strict_same_round_upgrade = certificate
+                    .round()
+                    .view()
+                    .checked_add(1)
+                    .is_some_and(|next_view| next_view == self.current_view)
+                    && self
+                        .last_timeout
+                        .as_ref()
+                        .is_some_and(|installed| installed.round() == certificate.round())
+                    && selected.as_ref().is_some_and(|candidate| {
+                        self.highest_prepare
+                            .as_ref()
+                            .is_none_or(|highest| candidate.round().view() > highest.round().view())
+                            && self.locked.as_ref().is_none_or(|locked| {
+                                candidate.round().view() > locked.round().view()
+                            })
+                    });
+                if certificate.round().view() < self.current_view && !strict_same_round_upgrade {
                     return Err(ReplayError::ViewRegression);
                 }
-                let selected = certificate.highest_prepare().cloned();
                 if let Some(highest) = &selected {
                     match &self.highest_prepare {
                         None => self.highest_prepare = Some(highest.clone()),
@@ -1204,17 +1223,28 @@ impl DurableState {
                 // subject is safe only when the TC carries a strictly higher
                 // PrepareQC; timeout votes transport that full certificate so
                 // an omitted local lock becomes known to the next TC quorum.
-                self.current_view = certificate
-                    .round()
-                    .view()
-                    .checked_add(1)
-                    .ok_or(ReplayError::ViewOverflow)?;
+                if !strict_same_round_upgrade {
+                    self.current_view = certificate
+                        .round()
+                        .view()
+                        .checked_add(1)
+                        .ok_or(ReplayError::ViewOverflow)?;
+                }
                 self.last_timeout = Some(certificate.clone());
             }
             WalRecord::Decision(certificate) => {
                 validate_qc(context, certificate, Phase::Commit)?;
+                if self.locked.as_ref().is_some_and(|locked| {
+                    locked.proposal_round() != certificate.proposal_round()
+                        || locked.subject() != certificate.subject()
+                }) {
+                    return Err(ReplayError::InvalidCertificate);
+                }
                 if let Some(existing) = &self.decision {
-                    if existing.reference() != certificate.reference() {
+                    if !existing
+                        .reference()
+                        .same_commit_decision(certificate.reference())
+                    {
                         return Err(ReplayError::ConflictingDecision);
                     }
                 } else {
@@ -1234,6 +1264,9 @@ impl DurableState {
     ) -> Result<(), ReplayError> {
         if vote.context_id() != context.id()
             || vote.round().height() != context.height()
+            || vote.proposal_round().height() != context.height()
+            || vote.proposal_round().view() > vote.round().view()
+            || (phase == Phase::Prepare && vote.proposal_round() != vote.round())
             || vote.phase() != phase
             || Some(vote.signer()) != local_validator
             || context.validator(&vote.signer()).is_none()
@@ -1326,42 +1359,45 @@ impl DurableState {
         self.prepare_intents.values().copied()
     }
 
-    /// Return whether this validator already durably prepared a conflicting
-    /// subject in a later view.
+    /// Return whether this validator already durably prepared a later proposal
+    /// origin at this height.
     ///
     /// A TC-promoted historical Commit may cross the timeout fence only when
-    /// it does not invert the validator's durable local-vote order. A later
-    /// Prepare for the same subject is harmless and remains compatible with
-    /// locked-body reproposal.
-    pub(crate) fn has_higher_conflicting_prepare_intent(
-        &self,
-        round: Round,
-        subject: Subject,
-    ) -> bool {
+    /// it does not invert the validator's durable local-vote order. Proposal
+    /// origin is part of decision identity, so equal subject bytes do not make
+    /// a later Prepare compatible with an older-origin Commit.
+    pub(crate) fn has_higher_prepare_intent(&self, round: Round) -> bool {
         self.prepare_intents.values().any(|vote| {
-            vote.round().height() == round.height()
-                && vote.round().view() > round.view()
-                && vote.subject() != subject
+            vote.round().height() == round.height() && vote.round().view() > round.view()
         })
     }
 
-    /// Return whether durable local state already ranks a conflicting Prepare
+    /// Return whether durable local state already ranks a later Prepare origin
     /// above the candidate historical Commit.
-    pub(crate) fn has_higher_conflicting_prepare_evidence(
-        &self,
-        round: Round,
-        subject: Subject,
-    ) -> bool {
-        self.has_higher_conflicting_prepare_intent(round, subject)
+    pub(crate) fn has_higher_prepare_evidence(&self, round: Round) -> bool {
+        self.has_higher_prepare_intent(round)
             || self.highest_prepare.as_ref().is_some_and(|highest| {
-                highest.round().height() == round.height()
-                    && highest.round().view() > round.view()
-                    && highest.subject() != subject
+                highest.round().height() == round.height() && highest.round().view() > round.view()
             })
     }
 
     pub(crate) fn commit_intents(&self) -> impl Iterator<Item = Vote> + '_ {
         self.commit_intents.values().copied()
+    }
+
+    /// Returns the newest local Commit intent retaining one proposal origin.
+    pub(crate) fn latest_commit_intent_for_proposal(
+        &self,
+        proposal_round: Round,
+        subject: Subject,
+    ) -> Option<Vote> {
+        self.commit_intents()
+            .filter(|vote| {
+                vote.phase() == Phase::Commit
+                    && vote.proposal_round() == proposal_round
+                    && vote.subject() == subject
+            })
+            .max_by_key(|vote| vote.round())
     }
 
     /// Returns the local timeout intent for a round.
@@ -1513,9 +1549,117 @@ impl Error for ReplayError {}
 
 #[cfg(test)]
 mod byte_lifecycle_tests {
+    use super::super::{
+        ChainId, Digest, OpaqueSignature, SignatureShare, TimeoutSignatureGroup, Validator,
+        VotingMode, VotingPower,
+    };
     use super::*;
 
     const IDENTITY: WalFileIdentity = WalFileIdentity::new(3, [0x11; 32], [0x22; 32]);
+
+    fn replay_context() -> HeightContext {
+        let roster = (1_u8..=4)
+            .map(|byte| Validator::new(ValidatorId::repeat(byte), VotingPower::new(1)))
+            .collect();
+        HeightContext::new(
+            ContextId::repeat(0x50),
+            ChainId::repeat(0x51),
+            2,
+            Some(CertificateRef::new(
+                ContextId::repeat(0x40),
+                Round::new(1, 0),
+                Phase::Commit,
+                Subject::repeat(0x41),
+            )),
+            7,
+            roster,
+            VotingMode::Permissioned,
+            Digest::repeat(0x52),
+            Digest::repeat(0x53),
+            Digest::repeat(0x54),
+        )
+        .expect("valid WAL replay context")
+    }
+
+    fn replay_shares() -> Vec<SignatureShare> {
+        (1_u8..=3)
+            .map(|byte| {
+                SignatureShare::new(
+                    ValidatorId::repeat(byte),
+                    OpaqueSignature::new(vec![byte; 8]),
+                )
+            })
+            .collect()
+    }
+
+    fn replay_prepare(context: &HeightContext, view: u64, subject: u8) -> QuorumCertificate {
+        QuorumCertificate::new(
+            CertificateRef::new(
+                context.id(),
+                Round::new(context.height(), view),
+                Phase::Prepare,
+                Subject::repeat(subject),
+            ),
+            replay_shares(),
+        )
+    }
+
+    fn replay_timeout(
+        context: &HeightContext,
+        view: u64,
+        highest: Option<QuorumCertificate>,
+    ) -> TimeoutCertificate {
+        TimeoutCertificate::new(
+            context.id(),
+            Round::new(context.height(), view),
+            vec![TimeoutSignatureGroup::new(highest, replay_shares())],
+        )
+    }
+
+    #[test]
+    fn same_round_timeout_replay_accepts_only_a_strict_prepare_origin_upgrade() {
+        let context = replay_context();
+        let prepare_zero = replay_prepare(&context, 0, 0x60);
+        let prepare_one = replay_prepare(&context, 1, 0x61);
+        let first = replay_timeout(&context, 0, None);
+        let second = replay_timeout(&context, 1, Some(prepare_zero.clone()));
+        let upgrade = replay_timeout(&context, 1, Some(prepare_one.clone()));
+        let mut durable = DurableState::replay(
+            &context,
+            None,
+            [
+                WalEntry::new(PersistenceId::new(1), WalRecord::InstallTimeout(first)),
+                WalEntry::new(PersistenceId::new(2), WalRecord::InstallTimeout(second)),
+                WalEntry::new(
+                    PersistenceId::new(3),
+                    WalRecord::InstallTimeout(upgrade.clone()),
+                ),
+            ],
+        )
+        .expect("strict same-round Prepare origin upgrade replays");
+
+        assert_eq!(durable.current_view(), 2);
+        assert_eq!(durable.highest_prepare(), Some(&prepare_one));
+        assert_eq!(durable.locked(), Some(&prepare_one));
+        assert_eq!(durable.last_timeout(), Some(&upgrade));
+
+        for rejected in [
+            replay_timeout(&context, 1, None),
+            replay_timeout(&context, 1, Some(prepare_zero)),
+            replay_timeout(&context, 1, Some(prepare_one)),
+        ] {
+            assert_eq!(
+                durable.apply(
+                    &context,
+                    None,
+                    &WalEntry::new(PersistenceId::new(4), WalRecord::InstallTimeout(rejected),),
+                ),
+                Err(ReplayError::ViewRegression)
+            );
+            assert_eq!(durable.current_view(), 2, "rejection must be atomic");
+            assert_eq!(durable.last_timeout(), Some(&upgrade));
+        }
+    }
 
     fn test_hash(bytes: &[u8]) -> [u8; SAFETY_WAL_HASH_LEN] {
         let mut lanes = [

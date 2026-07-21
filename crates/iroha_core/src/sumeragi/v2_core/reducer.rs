@@ -5,9 +5,9 @@ use std::{
 };
 
 use super::{
-    CertificateRef, ConsensusMessageV2, ContextId, DurableState, EventTag, Generation,
-    HeightContext, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest, PersistenceId, Phase,
-    Proposal, ProposalJustification, Quorum, QuorumCertificate, QuorumError, ReplayError, Round,
+    CertificateRef, ConsensusMessageV2, DurableState, EventTag, Generation, HeightContext,
+    MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest, PersistenceId, Phase, Proposal,
+    ProposalJustification, Quorum, QuorumCertificate, QuorumError, ReplayError, Round,
     SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
     TimeoutSignatureGroup, TimeoutVote, ValidatorId, Vote, VotingPower, WalEntry, WalRecord,
     refinement::{
@@ -19,7 +19,8 @@ use super::{
         EFFECT_VALIDATE, EVENT_BODY_AVAILABLE, EVENT_BODY_STORED, EVENT_PERSISTED,
         EVENT_PERSISTENCE_FAILED, EVENT_RESUME_AFTER_REPLAY, EVENT_SIGNED, EffectCapabilityKey,
         EffectTrace, EnterViewProjection, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_SUBJECT,
-        IDENTITY_KIND_CONSENSUS_CONTEXT, IDENTITY_KIND_CONSENSUS_SUBJECT, PendingProjection,
+        IDENTITY_KIND_CONSENSUS_CONTEXT, IDENTITY_KIND_CONSENSUS_SUBJECT,
+        LockedCommitProgressWitnessProjection, PendingProjection,
         ProductionDurableIntentTraceProjection, REPLAY_EFFECT_COMMIT, REPLAY_EFFECT_DECISION,
         REPLAY_EFFECT_NONE, REPLAY_EFFECT_PREPARE, REPLAY_EFFECT_PROPOSAL, REPLAY_EFFECT_TIMEOUT,
         ReplayPlanProjection, SIGNED_MESSAGE_COMMIT, SIGNED_MESSAGE_NONE, SIGNED_MESSAGE_PREPARE,
@@ -28,6 +29,7 @@ use super::{
         VolatileSummary, WAL_RECORD_DECISION, WAL_RECORD_INSTALL_TIMEOUT,
         WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT,
         WAL_RECORD_PROPOSAL_INTENT, WAL_RECORD_TIMEOUT_INTENT,
+        locked_commit_progress_witness_is_valid,
         production_durable_intent_trace_refines_progress_witness_kernel,
     },
 };
@@ -156,7 +158,8 @@ impl EquivocationEvidence {
                     && first.round() == second.round()
                     && first.phase() == second.phase()
                     && first.signer() == second.signer()
-                    && first.subject() != second.subject()
+                    && (first.proposal_round() != second.proposal_round()
+                        || first.subject() != second.subject())
             }
             Self::Timeout { first, second } => {
                 let first = first.vote();
@@ -604,6 +607,8 @@ enum OutboundControlClass {
 pub(crate) struct VotePoolSnapshot {
     /// Voting round.
     pub(crate) round: Round,
+    /// Immutable proposal-body origin authenticated by the pool.
+    pub(crate) proposal_round: Round,
     /// Voting phase.
     pub(crate) phase: Phase,
     /// Exact voted subject.
@@ -639,7 +644,7 @@ pub struct Reducer {
     body_work: BTreeMap<(Round, Subject), BodyWork>,
     pending_prepare: BTreeMap<CertificateRef, QuorumCertificate>,
     known_prepare: BTreeMap<CertificateRef, QuorumCertificate>,
-    votes: BTreeMap<(Round, Phase), BTreeMap<ValidatorId, SignedVote>>,
+    votes: BTreeMap<(Round, Phase, Round), BTreeMap<ValidatorId, SignedVote>>,
     timeout_votes: BTreeMap<Round, BTreeMap<ValidatorId, SignedTimeoutVote>>,
     formed_certificates: BTreeSet<CertificateRef>,
     formed_timeouts: BTreeSet<Round>,
@@ -841,22 +846,23 @@ impl Reducer {
     /// Return exact subject-grouped partial Prepare and Commit pools.
     #[must_use]
     pub(crate) fn vote_pool_snapshots(&self) -> Vec<VotePoolSnapshot> {
-        let mut grouped = BTreeMap::<(Round, Phase, Subject), Vec<ValidatorId>>::new();
-        for ((round, phase), votes) in &self.votes {
+        let mut grouped = BTreeMap::<(Round, Phase, Round, Subject), Vec<ValidatorId>>::new();
+        for ((round, phase, proposal_round), votes) in &self.votes {
             for vote in votes.values() {
                 grouped
-                    .entry((*round, *phase, vote.vote().subject()))
+                    .entry((*round, *phase, *proposal_round, vote.vote().subject()))
                     .or_default()
                     .push(vote.vote().signer());
             }
         }
         grouped
             .into_iter()
-            .map(|((round, phase, subject), signers)| {
+            .map(|((round, phase, proposal_round, subject), signers)| {
                 let quorum = Quorum::calculate(&self.context, &signers)
                     .expect("reducer vote pools contain canonical roster signers");
                 VotePoolSnapshot {
                     round,
+                    proposal_round,
                     phase,
                     subject,
                     signers,
@@ -918,6 +924,11 @@ impl Reducer {
             .map_or(BodyState::Missing, |work| work.state)
     }
 
+    /// Return the immutable proposal-origin round authenticated by a Decision.
+    fn decision_body_round(&self, decision: &QuorumCertificate) -> Round {
+        decision.proposal_round()
+    }
+
     /// Consume a fully applied reducer after Kura durably exposes the matching
     /// block and `CommitQC`. Consuming `self` prevents any further votes at the
     /// closed height.
@@ -977,11 +988,10 @@ impl Reducer {
         {
             self.signature_queue.push_back(SignableMessage::Vote(vote));
         }
-        if let Some(vote) = self
-            .durable
-            .commit_intents()
-            .find(|vote| Self::durable_vote_is_active(&self.durable, *vote))
-        {
+        if let Some(vote) = self.durable.locked().and_then(|locked| {
+            self.durable
+                .latest_commit_intent_for_proposal(locked.round(), locked.subject())
+        }) {
             self.signature_queue.push_back(SignableMessage::Vote(vote));
         }
         StepOutcome::applied(self.drive_signature())
@@ -1060,39 +1070,27 @@ impl Reducer {
             && self.durable.decision().is_none()
             && self.local_validator.is_some()
         {
-            if let Some(intent) = self.durable.commit_intent(locked.round()) {
-                if intent.subject() != locked.subject() {
-                    return Some(ProgressWitnessViolation::LockedCommitOrphaned);
-                }
-                let signature_pending = self.awaiting_signature.as_ref().is_some_and(
-                    |message| matches!(message, SignableMessage::Vote(vote) if *vote == intent),
-                ) || self.signature_queue.iter().any(
-                    |message| matches!(message, SignableMessage::Vote(vote) if *vote == intent),
-                );
-                let pooled = self
-                    .votes
-                    .get(&(intent.round(), Phase::Commit))
-                    .and_then(|pool| pool.get(&intent.signer()))
-                    .is_some_and(|vote| vote.vote() == intent);
-                if self.replay_resumed && !signature_pending && !pooled {
+            let commit_intent = self
+                .durable
+                .latest_commit_intent_for_proposal(locked.round(), locked.subject());
+            let progress_witness = locked_commit_progress_witness_is_valid(
+                self.locked_commit_progress_witness_projection(locked, commit_intent),
+            );
+            if commit_intent.is_some() {
+                if self.replay_resumed && !progress_witness {
                     return Some(ProgressWitnessViolation::LockedCommitOrphaned);
                 }
             } else if self.replay_resumed
                 && self.body_state(locked.round(), locked.subject()) == BodyState::Validated
-                && !self
-                    .durable
-                    .has_higher_conflicting_prepare_evidence(locked.round(), locked.subject())
-                && !self.pending_persistence.as_ref().is_some_and(|pending| {
-                    matches!(
-                        pending.entry.record(),
-                        WalRecord::LockAndCommit { prepare, .. }
-                            if prepare.reference() == locked.reference()
-                    )
-                })
+                && !self.durable.has_higher_prepare_evidence(locked.round())
+                && !progress_witness
             {
                 // Validation of a TC-promoted lock must atomically start the
-                // exact historical Commit append. A settled Validated state
-                // without that append would recreate the production stall.
+                // exact historical Commit append unless this finality view
+                // already has an acknowledged timeout. That durable timeout
+                // is a typed recovery witness: it forbids signing in the
+                // closed view while guaranteeing the exact lock can be
+                // retried after the next certified transition.
                 return Some(ProgressWitnessViolation::LockedCommitOrphaned);
             }
         }
@@ -1101,7 +1099,8 @@ impl Reducer {
             && self.applied_subject != Some(decision.subject())
             && self.replay_resumed
         {
-            let state = self.body_state(decision.round(), decision.subject());
+            let body_round = self.decision_body_round(decision);
+            let state = self.body_state(body_round, decision.subject());
             if state == BodyState::Invalid {
                 return Some(ProgressWitnessViolation::DecidedBodyInvalid);
             }
@@ -1110,12 +1109,81 @@ impl Reducer {
             // stage is itself the reducer-owned reconstruction witness.
             if !self
                 .body_work
-                .contains_key(&(decision.round(), decision.subject()))
+                .contains_key(&(body_round, decision.subject()))
             {
                 return Some(ProgressWitnessViolation::DecisionApplicationOrphaned);
             }
         }
         None
+    }
+
+    fn locked_commit_progress_witness_projection(
+        &self,
+        locked: &QuorumCertificate,
+        commit_intent: Option<Vote>,
+    ) -> LockedCommitProgressWitnessProjection {
+        let current_round = Round::new(self.context.height(), self.durable.current_view());
+        let signature_pending = commit_intent.is_some_and(|intent| {
+            self.awaiting_signature.as_ref().is_some_and(
+                |message| matches!(message, SignableMessage::Vote(vote) if *vote == intent),
+            ) || self
+                .signature_queue
+                .iter()
+                .any(|message| matches!(message, SignableMessage::Vote(vote) if *vote == intent))
+        });
+        let pooled = commit_intent.is_some_and(|intent| {
+            self.votes
+                .get(&(intent.round(), Phase::Commit, intent.proposal_round()))
+                .and_then(|pool| pool.get(&intent.signer()))
+                .is_some_and(|vote| vote.vote() == intent)
+        });
+        let timeout_intent = self.durable.timeout_intent(current_round);
+        LockedCommitProgressWitnessProjection {
+            context_id: Self::context_identity_projection(self.context.id()),
+            current_height: current_round.height(),
+            current_view: current_round.view(),
+            local_validator_present: self.local_validator.is_some(),
+            local_validator: self.local_validator.unwrap_or_default(),
+            locked_context_id: Self::context_identity_projection(locked.reference().context_id()),
+            locked_height: locked.proposal_round().height(),
+            locked_view: locked.proposal_round().view(),
+            locked_subject: Self::subject_identity_projection(locked.subject()),
+            commit_intent_present: commit_intent.is_some(),
+            commit_context_id: commit_intent
+                .map_or_else(CanonicalIdentityProjection::zero, |intent| {
+                    Self::context_identity_projection(intent.context_id())
+                }),
+            commit_height: commit_intent.map_or(0, |intent| intent.round().height()),
+            commit_view: commit_intent.map_or(0, |intent| intent.round().view()),
+            commit_proposal_height: commit_intent
+                .map_or(0, |intent| intent.proposal_round().height()),
+            commit_proposal_view: commit_intent.map_or(0, |intent| intent.proposal_round().view()),
+            commit_phase: commit_intent.map_or(0, |intent| Self::phase_code(intent.phase())),
+            commit_subject: commit_intent
+                .map_or_else(CanonicalIdentityProjection::zero, |intent| {
+                    Self::subject_identity_projection(intent.subject())
+                }),
+            commit_signer: commit_intent.map_or_else(ValidatorId::default, Vote::signer),
+            commit_signature_pending: signature_pending,
+            commit_pooled: pooled,
+            pending: self.pending_projection(),
+            timeout_intent_present: timeout_intent.is_some(),
+            timeout_intent_durable: timeout_intent.is_some(),
+            timeout_context_id: timeout_intent
+                .as_ref()
+                .map_or_else(CanonicalIdentityProjection::zero, |vote| {
+                    Self::context_identity_projection(vote.context_id())
+                }),
+            timeout_height: timeout_intent
+                .as_ref()
+                .map_or(0, |vote| vote.round().height()),
+            timeout_view: timeout_intent
+                .as_ref()
+                .map_or(0, |vote| vote.round().view()),
+            timeout_signer: timeout_intent
+                .as_ref()
+                .map_or_else(ValidatorId::default, |vote| vote.signer()),
+        }
     }
 
     fn step_in_place(&mut self, event: Event) -> Result<StepOutcome, ReducerError> {
@@ -1293,7 +1361,8 @@ impl Reducer {
         let invalid_application = self.applied_subject.is_some_and(|subject| {
             self.durable.decision().is_none_or(|decision| {
                 decision.subject() != subject
-                    || self.body_state(decision.round(), subject) != BodyState::Validated
+                    || self.body_state(self.decision_body_round(decision), subject)
+                        != BodyState::Validated
             })
         });
         SafetyProjection {
@@ -1370,12 +1439,12 @@ impl Reducer {
                     && durable.timeout_intent(vote.round()).is_none()
                     && durable.prepare_intent(vote.round()) == Some(vote)
             }
-            Phase::Commit => {
-                durable.commit_intent(vote.round()) == Some(vote)
-                    && durable.locked().is_some_and(|locked| {
-                        locked.round() == vote.round() && locked.subject() == vote.subject()
-                    })
-            }
+            Phase::Commit => durable.locked().is_some_and(|locked| {
+                locked.round() == vote.proposal_round()
+                    && locked.subject() == vote.subject()
+                    && durable.latest_commit_intent_for_proposal(locked.round(), locked.subject())
+                        == Some(vote)
+            }),
         }
     }
 
@@ -1422,7 +1491,10 @@ impl Reducer {
         let Some(locked) = self.durable.locked() else {
             return;
         };
-        let Some(vote) = self.durable.commit_intent(locked.round()) else {
+        let Some(vote) = self
+            .durable
+            .latest_commit_intent_for_proposal(locked.round(), locked.subject())
+        else {
             return;
         };
         if !Self::durable_vote_is_active(&self.durable, vote) {
@@ -1464,6 +1536,7 @@ impl Reducer {
             .as_ref()
             .map_or_else(PendingProjection::default, |pending| {
                 let (round, subject) = Self::wal_record_round_subject(pending.entry.record());
+                let proposal_round = Self::wal_record_proposal_round(pending.entry.record());
                 PendingProjection {
                     record_kind: Self::wal_record_kind(pending.entry.record()),
                     continuation: Self::continuation_kind(&pending.continuation),
@@ -1473,12 +1546,15 @@ impl Reducer {
                     ),
                     height: round.height(),
                     view: round.view(),
+                    proposal_present: proposal_round.is_some(),
+                    proposal_height: proposal_round.map_or(0, Round::height),
+                    proposal_view: proposal_round.map_or(0, Round::view),
                     subject: Self::subject_identity_projection(subject),
                 }
             })
     }
 
-    fn context_identity_projection(context_id: ContextId) -> CanonicalIdentityProjection {
+    fn context_identity_projection(context_id: super::ContextId) -> CanonicalIdentityProjection {
         CanonicalIdentityProjection::from_bytes(
             IDENTITY_DOMAIN_CONTEXT,
             IDENTITY_KIND_CONSENSUS_CONTEXT,
@@ -1740,7 +1816,7 @@ impl Reducer {
             WalRecord::ObservePrepare(certificate) | WalRecord::Decision(certificate) => {
                 (certificate.round(), certificate.subject())
             }
-            WalRecord::LockAndCommit { prepare, .. } => (prepare.round(), prepare.subject()),
+            WalRecord::LockAndCommit { vote, .. } => (vote.round(), vote.subject()),
             WalRecord::TimeoutIntent(vote) => (vote.round(), Subject::default()),
             WalRecord::InstallTimeout(certificate) => {
                 let subject = certificate
@@ -1748,6 +1824,19 @@ impl Reducer {
                     .map_or_else(Subject::default, QuorumCertificate::subject);
                 (certificate.round(), subject)
             }
+        }
+    }
+
+    fn wal_record_proposal_round(record: &WalRecord) -> Option<Round> {
+        match record {
+            WalRecord::ProposalIntent(proposal) => Some(proposal.round()),
+            WalRecord::PrepareIntent(vote) | WalRecord::LockAndCommit { vote, .. } => {
+                Some(vote.proposal_round())
+            }
+            WalRecord::ObservePrepare(certificate) | WalRecord::Decision(certificate) => {
+                Some(certificate.proposal_round())
+            }
+            WalRecord::TimeoutIntent(_) | WalRecord::InstallTimeout(_) => None,
         }
     }
 
@@ -1760,13 +1849,33 @@ impl Reducer {
         }
     }
 
+    fn wal_record_auxiliary_certificate(record: &WalRecord) -> Option<CertificateRef> {
+        match record {
+            WalRecord::ProposalIntent(proposal) => match proposal.justification() {
+                ProposalJustification::ParentCommit(certificate) => *certificate,
+                ProposalJustification::Timeout(certificate) => certificate
+                    .highest_prepare()
+                    .map(QuorumCertificate::reference),
+            },
+            WalRecord::LockAndCommit { prepare, .. } => Some(prepare.reference()),
+            WalRecord::TimeoutIntent(vote) => vote.highest_prepare_ref(),
+            WalRecord::InstallTimeout(certificate) => certificate
+                .highest_prepare()
+                .map(QuorumCertificate::reference),
+            WalRecord::PrepareIntent(_) | WalRecord::ObservePrepare(_) | WalRecord::Decision(_) => {
+                None
+            }
+        }
+    }
+
     fn boundary_for_pending(
         kind: u8,
         pending: &PendingPersistence,
         tag: EventTag,
     ) -> BoundaryCapabilityKey {
         let (_, subject) = Self::wal_record_round_subject(pending.entry.record());
-        BoundaryCapabilityKey {
+        let proposal_round = Self::wal_record_proposal_round(pending.entry.record());
+        let mut boundary = BoundaryCapabilityKey {
             kind,
             record_kind: Self::wal_record_kind(pending.entry.record()),
             continuation: Self::continuation_kind(&pending.continuation),
@@ -1779,8 +1888,23 @@ impl Reducer {
             tag: Self::tag_projection(tag),
             subject: Self::subject_projection(Some(subject)),
             subject_identity: Self::subject_identity_projection(subject),
+            proposal_present: proposal_round.is_some(),
+            proposal_height: proposal_round.map_or(0, Round::height),
+            proposal_view: proposal_round.map_or(0, Round::view),
             replay_plan: ReplayPlanProjection::empty(),
+            ..BoundaryCapabilityKey::none()
+        };
+        if let Some(reference) = Self::wal_record_auxiliary_certificate(pending.entry.record()) {
+            boundary.auxiliary_present = true;
+            boundary.auxiliary_context_id = reference.context_id();
+            boundary.auxiliary_height = reference.round().height();
+            boundary.auxiliary_view = reference.round().view();
+            boundary.auxiliary_proposal_height = reference.proposal_round().height();
+            boundary.auxiliary_proposal_view = reference.proposal_round().view();
+            boundary.auxiliary_phase = Self::phase_code(reference.phase());
+            boundary.auxiliary_subject = reference.subject();
         }
+        boundary
     }
 
     fn boundary_claim(
@@ -1995,9 +2119,10 @@ impl Reducer {
             (Event::VoteReceived { vote, .. }, WalRecord::ObservePrepare(certificate)) => {
                 vote.vote().phase() == Phase::Prepare
                     && certificate.reference()
-                        == CertificateRef::new(
+                        == CertificateRef::new_with_proposal_round(
                             self.context.id(),
                             vote.vote().round(),
+                            vote.vote().proposal_round(),
                             Phase::Prepare,
                             vote.vote().subject(),
                         )
@@ -2005,9 +2130,10 @@ impl Reducer {
             (Event::VoteReceived { vote, .. }, WalRecord::LockAndCommit { prepare, .. }) => {
                 vote.vote().phase() == Phase::Prepare
                     && prepare.reference()
-                        == CertificateRef::new(
+                        == CertificateRef::new_with_proposal_round(
                             self.context.id(),
                             vote.vote().round(),
+                            vote.vote().proposal_round(),
                             Phase::Prepare,
                             vote.vote().subject(),
                         )
@@ -2015,9 +2141,10 @@ impl Reducer {
             (Event::VoteReceived { vote, .. }, WalRecord::Decision(certificate)) => {
                 vote.vote().phase() == Phase::Commit
                     && certificate.reference()
-                        == CertificateRef::new(
+                        == CertificateRef::new_with_proposal_round(
                             self.context.id(),
                             vote.vote().round(),
+                            vote.vote().proposal_round(),
                             Phase::Commit,
                             vote.vote().subject(),
                         )
@@ -2052,9 +2179,10 @@ impl Reducer {
                         (SignableMessage::Vote(vote), WalRecord::ObservePrepare(certificate)) => {
                             vote.phase() == Phase::Prepare
                                 && certificate.reference()
-                                    == CertificateRef::new(
+                                    == CertificateRef::new_with_proposal_round(
                                         self.context.id(),
                                         vote.round(),
+                                        vote.proposal_round(),
                                         Phase::Prepare,
                                         vote.subject(),
                                     )
@@ -2062,9 +2190,10 @@ impl Reducer {
                         (SignableMessage::Vote(vote), WalRecord::LockAndCommit { prepare, .. }) => {
                             vote.phase() == Phase::Prepare
                                 && prepare.reference()
-                                    == CertificateRef::new(
+                                    == CertificateRef::new_with_proposal_round(
                                         self.context.id(),
                                         vote.round(),
+                                        vote.proposal_round(),
                                         Phase::Prepare,
                                         vote.subject(),
                                     )
@@ -2072,9 +2201,10 @@ impl Reducer {
                         (SignableMessage::Vote(vote), WalRecord::Decision(certificate)) => {
                             vote.phase() == Phase::Commit
                                 && certificate.reference()
-                                    == CertificateRef::new(
+                                    == CertificateRef::new_with_proposal_round(
                                         self.context.id(),
                                         vote.round(),
+                                        vote.proposal_round(),
                                         Phase::Commit,
                                         vote.subject(),
                                     )
@@ -2148,7 +2278,8 @@ impl Reducer {
         }
         after.durable.decision().is_some_and(|decision| {
             decision.subject() == *subject
-                && after.body_state(decision.round(), *subject) == BodyState::Validated
+                && after.body_state(after.decision_body_round(decision), *subject)
+                    == BodyState::Validated
         })
     }
 
@@ -2194,11 +2325,8 @@ impl Reducer {
             messages.push(SignableMessage::Vote(vote));
         }
         if let Some(vote) = self.durable.locked().and_then(|locked| {
-            self.durable.commit_intent(locked.round()).filter(|vote| {
-                vote.phase() == Phase::Commit
-                    && vote.round() == locked.round()
-                    && vote.subject() == locked.subject()
-            })
+            self.durable
+                .latest_commit_intent_for_proposal(locked.round(), locked.subject())
         }) {
             messages.push(SignableMessage::Vote(vote));
         }
@@ -2228,7 +2356,7 @@ impl Reducer {
 
     fn expected_decision_fetch(&self) -> Option<Effect> {
         let certificate = self.durable.decision()?.clone();
-        let round = certificate.round();
+        let round = self.decision_body_round(&certificate);
         let subject = certificate.subject();
         if self.body_state(round, subject) != BodyState::Missing {
             return None;
@@ -2496,14 +2624,19 @@ impl Reducer {
         key.context_id = reference.context_id();
         key.height = reference.round().height();
         key.view = reference.round().view();
+        key.proposal_height = reference.proposal_round().height();
+        key.proposal_view = reference.proposal_round().view();
         key.phase = Self::phase_code(reference.phase());
         key.subject = reference.subject();
     }
 
     fn apply_auxiliary_certificate(key: &mut EffectCapabilityKey, reference: CertificateRef) {
+        key.auxiliary_present = true;
         key.auxiliary_context_id = reference.context_id();
         key.auxiliary_height = reference.round().height();
         key.auxiliary_view = reference.round().view();
+        key.auxiliary_proposal_height = reference.proposal_round().height();
+        key.auxiliary_proposal_view = reference.proposal_round().view();
         key.auxiliary_phase = Self::phase_code(reference.phase());
         key.auxiliary_subject = reference.subject();
     }
@@ -2520,6 +2653,8 @@ impl Reducer {
         key.context_id = proposal.context_id();
         key.height = proposal.round().height();
         key.view = proposal.round().view();
+        key.proposal_height = proposal.round().height();
+        key.proposal_view = proposal.round().view();
         key.actor = proposal.proposer();
         Self::apply_manifest(key, *proposal.manifest());
         let justification = match proposal.justification() {
@@ -2537,6 +2672,8 @@ impl Reducer {
         key.context_id = vote.context_id();
         key.height = vote.round().height();
         key.view = vote.round().view();
+        key.proposal_height = vote.proposal_round().height();
+        key.proposal_view = vote.proposal_round().view();
         key.phase = Self::phase_code(vote.phase());
         key.subject = vote.subject();
         key.actor = vote.signer();
@@ -2579,6 +2716,9 @@ impl Reducer {
             WalRecord::TimeoutIntent(vote) => Self::apply_timeout_vote(key, vote),
             WalRecord::InstallTimeout(certificate) => {
                 Self::apply_timeout_certificate(key, certificate);
+                if let Some(highest_prepare) = certificate.highest_prepare() {
+                    key.subject = highest_prepare.subject();
+                }
             }
         }
     }
@@ -2734,7 +2874,7 @@ impl Reducer {
                     certificate
                         .as_ref()
                         .map_or(certified_sources.is_empty(), |certificate| {
-                            certificate.round() == *round
+                            certificate.proposal_round() == *round
                                 && certificate.subject() == *subject
                                 && certificate.validate(&after.context).is_ok()
                                 && certified_sources
@@ -2777,7 +2917,8 @@ impl Reducer {
                 );
                 let decided_retry = matches!(event, Event::RetransmitElapsed { .. })
                     && after.durable.decision().is_some_and(|decision| {
-                        decision.round() == *round && decision.subject() == *subject
+                        after.decision_body_round(decision) == *round
+                            && decision.subject() == *subject
                     });
                 (after.body_state(*round, *subject) == BodyState::Available
                     && (newly_available || decided_retry))
@@ -2801,7 +2942,8 @@ impl Reducer {
                 );
                 let decided_retry = matches!(event, Event::RetransmitElapsed { .. })
                     && after.durable.decision().is_some_and(|decision| {
-                        decision.round() == *round && decision.subject() == *subject
+                        after.decision_body_round(decision) == *round
+                            && decision.subject() == *subject
                     });
                 (after.body_state(*round, *subject) == BodyState::Durable
                     && (newly_durable || decided_retry))
@@ -2905,14 +3047,15 @@ impl Reducer {
                 certificate: requested,
                 ..
             } => after.durable.decision().and_then(|decision| {
+                let body_round = after.decision_body_round(decision);
                 let exact_local_completion = match event {
                     Event::LocalProposalReady { tag, manifest } => {
                         *tag == after.current_tag()
-                            && decision.round() == Round::new(tag.height(), tag.view())
+                            && body_round == Round::new(tag.height(), tag.view())
                             && decision.subject() == manifest.subject()
                             && after
                                 .body_work
-                                .get(&(decision.round(), *subject))
+                                .get(&(body_round, *subject))
                                 .is_some_and(|work| {
                                     work.state == BodyState::Validated
                                         && work.manifest == Some(*manifest)
@@ -2925,7 +3068,7 @@ impl Reducer {
                     && decision.phase() == Phase::Commit
                     && decision.subject() == *subject
                     && after.applied_subject != Some(*subject)
-                    && after.body_state(decision.round(), *subject) == BodyState::Validated)
+                    && after.body_state(body_round, *subject) == BodyState::Validated)
                     .then(|| {
                         let mut key = EffectCapabilityKey {
                             kind: EFFECT_APPLY,
@@ -3021,7 +3164,13 @@ impl Reducer {
         if proposal.round().view() != self.durable.current_view() {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
-        self.validate_proposal(proposal)?;
+        match self.validate_proposal(proposal) {
+            Ok(()) => {}
+            Err(ReducerError::UnsafeProposal) => {
+                return Ok(StepOutcome::ignored(IgnoreReason::UnsafeProposal));
+            }
+            Err(error) => return Err(error),
+        }
         let round = proposal.round();
         if self.durable.timeout_intent(round).is_some() {
             return Ok(StepOutcome::ignored(IgnoreReason::ViewClosed));
@@ -3083,11 +3232,12 @@ impl Reducer {
     ) -> Result<StepOutcome, ReducerError> {
         let round = Round::new(self.context.height(), self.durable.current_view());
         if let Some(decision) = self.durable.decision().cloned() {
-            let exact_decided_body = decision.round() == round
+            let body_round = self.decision_body_round(&decision);
+            let exact_decided_body = body_round == round
                 && decision.subject() == manifest.subject()
                 && self
                     .body_work
-                    .get(&(round, manifest.subject()))
+                    .get(&(body_round, manifest.subject()))
                     .is_none_or(|work| work.manifest.is_none_or(|known| known == manifest));
             if !exact_decided_body {
                 // A local proposal completion for any other round, subject, or
@@ -3119,7 +3269,7 @@ impl Reducer {
             // and recreate the sole Apply owner atomically; proposal-only work
             // is no longer relevant at this height.
             self.body_work.insert(
-                (round, manifest.subject()),
+                (body_round, manifest.subject()),
                 BodyWork {
                     manifest: Some(manifest),
                     state: BodyState::Validated,
@@ -3154,7 +3304,13 @@ impl Reducer {
             ProposalJustification::Timeout(certificate)
         };
         let proposal = Proposal::new(self.context.id(), round, proposer, manifest, justification);
-        self.validate_proposal(&proposal)?;
+        match self.validate_proposal(&proposal) {
+            Ok(()) => {}
+            Err(ReducerError::UnsafeProposal) => {
+                return Ok(StepOutcome::ignored(IgnoreReason::UnsafeProposal));
+            }
+            Err(error) => return Err(error),
+        }
         if let Some(existing) = self.durable.proposal_intent(round) {
             if existing != &proposal {
                 return Err(ReducerError::ConflictingLocalProposal);
@@ -3223,7 +3379,7 @@ impl Reducer {
         {
             return Err(ReducerError::InvalidProposal);
         }
-        let high = match proposal.justification() {
+        match proposal.justification() {
             ProposalJustification::ParentCommit(parent) => {
                 // The same parent subject may acquire valid CommitQCs in more
                 // than one view. The successor context deliberately ignores
@@ -3238,7 +3394,6 @@ impl Reducer {
                 if proposal.round().view() != 0 || !same_finalized_parent {
                     return Err(ReducerError::InvalidProposalJustification);
                 }
-                None
             }
             ProposalJustification::Timeout(certificate) => {
                 certificate.validate(&self.context)?;
@@ -3247,33 +3402,34 @@ impl Reducer {
                 {
                     return Err(ReducerError::InvalidProposalJustification);
                 }
-                let high = certificate.highest_prepare();
-                if high.is_some_and(|certificate| {
-                    certificate.subject() != proposal.manifest().subject()
-                }) {
+                // A TC's high PrepareQC is control evidence, not proposal
+                // authorization. It must first cross the standalone durable
+                // InstallTimeout path so every validator installs and recovers
+                // the exact certified proposal origin. Accepting it only as a
+                // carried justification could mint a fresh current-view
+                // origin for equal block bytes on nodes that missed the QC.
+                if certificate.highest_prepare().is_some() {
                     return Err(ReducerError::UnsafeProposal);
                 }
-                high
             }
-        };
-        if !self.safe_to_prepare(proposal.manifest().subject(), high) {
+        }
+        if !self.safe_to_prepare(proposal.round(), proposal.manifest().subject()) {
             return Err(ReducerError::UnsafeProposal);
         }
         Ok(())
     }
 
-    fn safe_to_prepare(&self, subject: Subject, proposal_high: Option<&QuorumCertificate>) -> bool {
+    fn safe_to_prepare(&self, proposal_round: Round, subject: Subject) -> bool {
         let Some(locked) = self.durable.locked() else {
             return true;
         };
-        if locked.subject() == subject {
-            return true;
-        }
-        proposal_high.is_some_and(|high| {
-            high.phase() == Phase::Prepare
-                && high.subject() == subject
-                && high.round().view() > locked.round().view()
-        })
+        // A lock authenticates the exact proposal origin, not only the block
+        // subject. Re-proposing equal bytes in a later view creates a distinct
+        // Prepare origin and can collide with the later-finality Commit vote
+        // that the lock authorizes in that same view. Once locked, finish that
+        // exact origin directly; a TC carrying a higher PrepareQC installs that
+        // certificate as the new lock and it is committed by the same path.
+        locked.proposal_round() == proposal_round && locked.subject() == subject
     }
 
     fn on_body_available(&mut self, round: Round, subject: Subject) -> StepOutcome {
@@ -3336,17 +3492,14 @@ impl Reducer {
                 });
             return Ok(StepOutcome::applied(effects));
         }
-        if let Some(decision) = self.durable.decision().cloned()
-            && decision.round() == round
-            && decision.subject() == subject
-        {
-            return Ok(StepOutcome::applied(vec![Effect::Apply {
-                tag: self.current_tag(),
-                subject,
-                certificate: decision,
-            }]));
-        }
-        if self.durable.decision().is_some() {
+        if let Some(decision) = self.durable.decision().cloned() {
+            if self.decision_body_round(&decision) == round && decision.subject() == subject {
+                return Ok(StepOutcome::applied(vec![Effect::Apply {
+                    tag: self.current_tag(),
+                    subject,
+                    certificate: decision,
+                }]));
+            }
             return Ok(StepOutcome::ignored(IgnoreReason::AlreadyDecided));
         }
         // A TC can promote a PrepareQC only after its original round has
@@ -3410,28 +3563,28 @@ impl Reducer {
         &mut self,
         prepare: QuorumCertificate,
     ) -> Result<StepOutcome, ReducerError> {
-        let round = prepare.round();
-        let current_round = round.view() == self.durable.current_view();
-        let historical_locked_round = round.view() < self.durable.current_view()
+        let proposal_round = prepare.proposal_round();
+        let round = Round::new(self.context.height(), self.durable.current_view());
+        let current_round = proposal_round == round;
+        let historical_locked_round = proposal_round.view() < self.durable.current_view()
             && self
                 .durable
                 .locked()
                 .is_some_and(|locked| locked.reference() == prepare.reference())
-            && !self
-                .durable
-                .has_higher_conflicting_prepare_evidence(round, prepare.subject());
+            && !self.durable.has_higher_prepare_evidence(proposal_round);
         if !current_round && !historical_locked_round {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
-        if !historical_locked_round && self.durable.timeout_intent(round).is_some() {
+        if self.durable.timeout_intent(round).is_some() {
             return Ok(StepOutcome::ignored(IgnoreReason::ViewClosed));
         }
         let signer = self
             .local_validator
             .ok_or(ReducerError::ObserverCannotVote)?;
-        let vote = Vote::new(
+        let vote = Vote::new_with_proposal_round(
             self.context.id(),
             round,
+            proposal_round,
             Phase::Commit,
             prepare.subject(),
             signer,
@@ -3467,15 +3620,42 @@ impl Reducer {
         let admissible = match vote.phase() {
             Phase::Prepare => vote.round().view() == current_view,
             Phase::Commit => self.durable.locked().is_some_and(|locked| {
-                locked.round() == vote.round() && locked.subject() == vote.subject()
+                if locked.round() != vote.proposal_round() || locked.subject() != vote.subject() {
+                    return false;
+                }
+                let current_round = Round::new(self.context.height(), current_view);
+                self.durable
+                    .latest_commit_intent_for_proposal(locked.round(), locked.subject())
+                    .map_or(vote.round() == current_round, |intent| {
+                        vote.round() == intent.round()
+                    })
             }),
         };
         if !admissible {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
-        let pool = self.votes.entry((vote.round(), vote.phase())).or_default();
+        let existing_for_signer = self
+            .votes
+            .iter()
+            .filter(|((round, phase, _), _)| *round == vote.round() && *phase == vote.phase())
+            .find_map(|(_, pool)| pool.get(&vote.signer()));
+        if let Some(existing) = existing_for_signer {
+            if existing.vote() == vote {
+                return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
+            }
+            return Ok(StepOutcome::applied(vec![Effect::ReportEquivocation {
+                evidence: EquivocationEvidence::Vote {
+                    first: existing.clone(),
+                    second: signed,
+                },
+            }]));
+        }
+        let pool = self
+            .votes
+            .entry((vote.round(), vote.phase(), vote.proposal_round()))
+            .or_default();
         if let Some(existing) = pool.get(&vote.signer()) {
-            if existing.vote().subject() == vote.subject() {
+            if existing.vote() == vote {
                 return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
             }
             return Ok(StepOutcome::applied(vec![Effect::ReportEquivocation {
@@ -3486,8 +3666,12 @@ impl Reducer {
             }]));
         }
         pool.insert(vote.signer(), signed);
-        let Some(certificate) =
-            self.try_form_certificate(vote.round(), vote.phase(), vote.subject())?
+        let Some(certificate) = self.try_form_certificate(
+            vote.round(),
+            vote.proposal_round(),
+            vote.phase(),
+            vote.subject(),
+        )?
         else {
             return Ok(StepOutcome::applied(Vec::new()));
         };
@@ -3497,6 +3681,9 @@ impl Reducer {
     fn validate_vote(&self, vote: Vote) -> Result<(), ReducerError> {
         if vote.context_id() != self.context.id()
             || vote.round().height() != self.context.height()
+            || vote.proposal_round().height() != self.context.height()
+            || vote.proposal_round().view() > vote.round().view()
+            || (vote.phase() == Phase::Prepare && vote.proposal_round() != vote.round())
             || self.context.validator(&vote.signer()).is_none()
         {
             return Err(ReducerError::InvalidVote);
@@ -3507,14 +3694,21 @@ impl Reducer {
     fn try_form_certificate(
         &mut self,
         round: Round,
+        proposal_round: Round,
         phase: Phase,
         subject: Subject,
     ) -> Result<Option<QuorumCertificate>, ReducerError> {
-        let reference = CertificateRef::new(self.context.id(), round, phase, subject);
+        let reference = CertificateRef::new_with_proposal_round(
+            self.context.id(),
+            round,
+            proposal_round,
+            phase,
+            subject,
+        );
         if self.formed_certificates.contains(&reference) {
             return Ok(None);
         }
-        let Some(pool) = self.votes.get(&(round, phase)) else {
+        let Some(pool) = self.votes.get(&(round, phase, proposal_round)) else {
             return Ok(None);
         };
         let matching: Vec<_> = pool
@@ -3617,7 +3811,14 @@ impl Reducer {
     }
 
     fn ensure_body_fetch(&mut self, certificate: &QuorumCertificate) -> Effect {
-        let round = certificate.round();
+        let round = self
+            .durable
+            .decision()
+            .filter(|decision| *decision == certificate)
+            .map_or_else(
+                || certificate.round(),
+                |decision| self.decision_body_round(decision),
+            );
         let subject = certificate.subject();
         self.body_work.entry((round, subject)).or_insert(BodyWork {
             manifest: None,
@@ -3646,10 +3847,18 @@ impl Reducer {
         formed_locally: bool,
     ) -> Result<StepOutcome, ReducerError> {
         if let Some(existing) = self.durable.decision() {
-            if existing.subject() != certificate.subject() {
+            if existing.subject() != certificate.subject()
+                || existing.proposal_round() != certificate.proposal_round()
+            {
                 return Err(ReducerError::ConflictingDecision);
             }
             return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
+        }
+        if self.durable.locked().is_some_and(|locked| {
+            locked.proposal_round() != certificate.proposal_round()
+                || locked.subject() != certificate.subject()
+        }) {
+            return Err(ReducerError::Quorum(QuorumError::InvalidProposalRound));
         }
         let effect = self.start_persistence(
             WalRecord::Decision(certificate.clone()),
@@ -3669,16 +3878,17 @@ impl Reducer {
             .map(Effect::Broadcast)
             .collect();
         if let Some(decision) = self.durable.decision().cloned() {
-            match self.body_state(decision.round(), decision.subject()) {
+            let body_round = self.decision_body_round(&decision);
+            match self.body_state(body_round, decision.subject()) {
                 BodyState::Missing => effects.push(self.ensure_body_fetch(&decision)),
                 BodyState::Available => effects.push(Effect::StoreBody {
                     tag: self.current_tag(),
-                    round: decision.round(),
+                    round: body_round,
                     subject: decision.subject(),
                 }),
                 BodyState::Durable => effects.push(Effect::ValidateBody {
                     tag: self.current_tag(),
-                    round: decision.round(),
+                    round: body_round,
                     subject: decision.subject(),
                 }),
                 BodyState::Validated if self.applied_subject != Some(decision.subject()) => {
@@ -3765,7 +3975,14 @@ impl Reducer {
                     unreachable!("transport messages are never retained as control traffic")
                 }
             };
-            round.view() > existing_round.view() || &message == existing
+            round.view() > existing_round.view()
+                || &message == existing
+                || (round == existing_round
+                    && matches!(
+                        &message,
+                        ConsensusMessageV2::TimeoutCertificate(incoming)
+                            if self.durable.last_timeout() == Some(incoming)
+                    ))
         });
         if replace {
             self.outbound_control.insert(class, message);
@@ -3891,7 +4108,9 @@ impl Reducer {
             return Ok(StepOutcome::ignored(IgnoreReason::AlreadyDecided));
         }
         certificate.validate(&self.context)?;
-        if certificate.round().view() < self.durable.current_view() {
+        if certificate.round().view() < self.durable.current_view()
+            && !self.is_strict_same_round_timeout_upgrade(&certificate)
+        {
             return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
         }
         let effect = self.start_persistence(
@@ -3902,6 +4121,27 @@ impl Reducer {
             },
         )?;
         Ok(StepOutcome::applied(vec![effect]))
+    }
+
+    fn is_strict_same_round_timeout_upgrade(&self, certificate: &TimeoutCertificate) -> bool {
+        certificate
+            .round()
+            .view()
+            .checked_add(1)
+            .is_some_and(|next_view| next_view == self.durable.current_view())
+            && self
+                .durable
+                .last_timeout()
+                .is_some_and(|installed| installed.round() == certificate.round())
+            && certificate.highest_prepare().is_some_and(|candidate| {
+                self.durable
+                    .highest_prepare()
+                    .is_none_or(|highest| candidate.round().view() > highest.round().view())
+                    && self
+                        .durable
+                        .locked()
+                        .is_none_or(|locked| candidate.round().view() > locked.round().view())
+            })
     }
 
     fn start_persistence(
@@ -3942,16 +4182,15 @@ impl Reducer {
 
         if matches!(pending.entry.record(), WalRecord::LockAndCommit { .. }) {
             let current_round = Round::new(self.context.height(), self.durable.current_view());
-            let locked_round = self.durable.locked().map(QuorumCertificate::round);
-            // Keep the exact historical locked Commit pool while it remains
-            // the durable reconstruction target. Once a newer LockAndCommit
-            // frame is acknowledged, the preceding pool is no longer
-            // admissible and must be retired before the new Commit signature
-            // can create its current-round pool. Pruning before this WAL
-            // boundary would orphan the old lock if the append failed.
-            self.votes.retain(|(round, phase), _| {
-                *round == current_round || (*phase == Phase::Commit && Some(*round) == locked_round)
-            });
+            // Once a later LockAndCommit frame is durable, its finality round
+            // supersedes every older Commit pool, including pools for the same
+            // immutable proposal origin. Keeping those same-origin pools would
+            // allow an old Commit pool, the new Commit pool, and the current
+            // Prepare pool to coexist and violate the verified two-pool bound.
+            // Pruning before this WAL boundary would orphan the old lock if the
+            // append failed, so retire it only after acknowledgement.
+            self.votes
+                .retain(|(round, _, _), _| *round == current_round);
         }
 
         let mut effects = match pending.continuation {
@@ -4123,8 +4362,9 @@ impl Reducer {
             .durable
             .decision()
             .ok_or(ReducerError::InvalidApplicationCompletion)?;
+        let body_round = self.decision_body_round(decision);
         if decision.subject() != subject
-            || self.body_state(decision.round(), subject) != BodyState::Validated
+            || self.body_state(body_round, subject) != BodyState::Validated
         {
             return Err(ReducerError::InvalidApplicationCompletion);
         }
@@ -4140,7 +4380,7 @@ impl Reducer {
     }
 
     fn decision_effects(&mut self, certificate: QuorumCertificate) -> Vec<Effect> {
-        let round = certificate.round();
+        let round = self.decision_body_round(&certificate);
         let subject = certificate.subject();
         match self.body_state(round, subject) {
             BodyState::Missing => vec![self.ensure_body_fetch(&certificate)],
@@ -4452,12 +4692,10 @@ mod source_link_tests {
     fn composite_replay_reducer() -> Reducer {
         let fixture = reducer();
         let context = fixture.context.clone();
-        let local = context.leader(1);
+        let local = context.leader(0);
         let subject = Subject::repeat(0xc1);
-        let locked_round = Round::new(context.height(), 0);
-        let current_round = Round::new(context.height(), 1);
-        let locked_prepare = certificate(&context, 0, Phase::Prepare, subject, 0xc2);
-        let timeout = timeout_certificate(&context, 0, Some(locked_prepare.clone()));
+        let current_round = Round::new(context.height(), 0);
+        let prepare = certificate(&context, 0, Phase::Prepare, subject, 0xc2);
         let manifest =
             PayloadManifest::new(subject, Digest::repeat(0xc3), Digest::repeat(0xc4), 512, 4);
         let proposal = Proposal::new(
@@ -4465,30 +4703,12 @@ mod source_link_tests {
             current_round,
             local,
             manifest,
-            ProposalJustification::Timeout(timeout.clone()),
+            ProposalJustification::ParentCommit(context.parent_commit()),
         );
         let entries = [
-            WalEntry::new(
-                PersistenceId::new(1),
-                WalRecord::PrepareIntent(Vote::new(
-                    context.id(),
-                    locked_round,
-                    Phase::Prepare,
-                    subject,
-                    local,
-                )),
-            ),
+            WalEntry::new(PersistenceId::new(1), WalRecord::ProposalIntent(proposal)),
             WalEntry::new(
                 PersistenceId::new(2),
-                WalRecord::LockAndCommit {
-                    prepare: locked_prepare,
-                    vote: Vote::new(context.id(), locked_round, Phase::Commit, subject, local),
-                },
-            ),
-            WalEntry::new(PersistenceId::new(3), WalRecord::InstallTimeout(timeout)),
-            WalEntry::new(PersistenceId::new(4), WalRecord::ProposalIntent(proposal)),
-            WalEntry::new(
-                PersistenceId::new(5),
                 WalRecord::PrepareIntent(Vote::new(
                     context.id(),
                     current_round,
@@ -4497,9 +4717,16 @@ mod source_link_tests {
                     local,
                 )),
             ),
+            WalEntry::new(
+                PersistenceId::new(3),
+                WalRecord::LockAndCommit {
+                    prepare,
+                    vote: Vote::new(context.id(), current_round, Phase::Commit, subject, local),
+                },
+            ),
         ];
         Reducer::recover(context, Some(local), Generation::new(9), entries)
-            .expect("recover proposal, Prepare, and exact historical Commit")
+            .expect("recover proposal, Prepare, and Commit for one exact origin")
     }
 
     #[test]
@@ -4947,6 +5174,144 @@ mod source_link_tests {
                 "a retransmit tick cannot invent {effect:?} without the exact Decision"
             );
         }
+    }
+
+    #[test]
+    fn certified_fetch_capability_requires_the_exact_proposal_origin() {
+        let fresh = reducer();
+        let context = fresh.context.clone();
+        let subject = Subject::repeat(0xb1);
+        let proposal_round = Round::new(context.height(), 0);
+        let finality_round = Round::new(context.height(), 2);
+        let wrong_round = Round::new(context.height(), 1);
+        let decision = QuorumCertificate::new(
+            CertificateRef::new_with_proposal_round(
+                context.id(),
+                finality_round,
+                proposal_round,
+                Phase::Commit,
+                subject,
+            ),
+            (1_u8..=3)
+                .map(|signer| {
+                    SignatureShare::new(
+                        ValidatorId::repeat(signer),
+                        OpaqueSignature::new(vec![signer; 8]),
+                    )
+                })
+                .collect(),
+        );
+        let before = Reducer::recover(
+            context,
+            Some(ValidatorId::repeat(1)),
+            Generation::new(10),
+            [WalEntry::new(
+                PersistenceId::new(1),
+                WalRecord::Decision(decision.clone()),
+            )],
+        )
+        .expect("recover later-view Decision");
+        let event = Event::RetransmitElapsed {
+            tag: before.current_tag(),
+        };
+        let certified_sources = decision
+            .signatures()
+            .iter()
+            .map(SignatureShare::signer)
+            .collect::<Vec<_>>();
+
+        let mut wrong_after = before.clone();
+        wrong_after.body_work.insert(
+            (wrong_round, subject),
+            BodyWork {
+                manifest: None,
+                state: BodyState::Missing,
+            },
+        );
+        let wrong_fetch = Effect::FetchBody {
+            tag: wrong_after.current_tag(),
+            round: wrong_round,
+            subject,
+            manifest: None,
+            certified_sources: certified_sources.clone(),
+            certificate: Some(decision.clone()),
+        };
+        assert_eq!(
+            before
+                .granted_effect_capability(&event, &wrong_after, &wrong_fetch)
+                .kind,
+            refinement::EFFECT_NONE
+        );
+
+        let mut exact_after = before.clone();
+        exact_after.body_work.insert(
+            (proposal_round, subject),
+            BodyWork {
+                manifest: None,
+                state: BodyState::Missing,
+            },
+        );
+        let exact_fetch = Effect::FetchBody {
+            tag: exact_after.current_tag(),
+            round: proposal_round,
+            subject,
+            manifest: None,
+            certified_sources,
+            certificate: Some(decision),
+        };
+        assert_eq!(
+            before
+                .granted_effect_capability(&event, &exact_after, &exact_fetch)
+                .kind,
+            EFFECT_FETCH
+        );
+    }
+
+    #[test]
+    fn historical_commit_cannot_cross_the_current_finality_timeout_fence() {
+        let fixture = reducer();
+        let context = fixture.context.clone();
+        let local = ValidatorId::repeat(1);
+        let subject = Subject::repeat(0xb2);
+        let proposal_round = Round::new(context.height(), 0);
+        let finality_round = Round::new(context.height(), 1);
+        let prepare = certificate(&context, 0, Phase::Prepare, subject, 0xb3);
+        let timeout = timeout_certificate(&context, 0, Some(prepare.clone()));
+        let timeout_vote =
+            TimeoutVote::new(context.id(), finality_round, local, Some(prepare.clone()));
+        let entries = [
+            WalEntry::new(
+                PersistenceId::new(1),
+                WalRecord::LockAndCommit {
+                    prepare: prepare.clone(),
+                    vote: Vote::new_with_proposal_round(
+                        context.id(),
+                        proposal_round,
+                        proposal_round,
+                        Phase::Commit,
+                        subject,
+                        local,
+                    ),
+                },
+            ),
+            WalEntry::new(PersistenceId::new(2), WalRecord::InstallTimeout(timeout)),
+            WalEntry::new(
+                PersistenceId::new(3),
+                WalRecord::TimeoutIntent(timeout_vote),
+            ),
+        ];
+        let mut recovered = Reducer::recover(context, Some(local), Generation::new(11), entries)
+            .expect("recover current-view timeout above retained proposal origin");
+
+        let outcome = recovered
+            .persist_commit_intent(prepare)
+            .expect("the timeout fence is a non-fatal liveness outcome");
+        assert_eq!(
+            outcome.disposition(),
+            StepDisposition::Ignored(IgnoreReason::ViewClosed)
+        );
+        assert!(outcome.effects().is_empty());
+        assert!(recovered.pending_persistence.is_none());
     }
 
     #[test]

@@ -322,15 +322,16 @@ PROOF
       BY <1>1, ValidInstallSelectedRankDoesNotExceedTcView
     <2>2. /\ request.node \in ValidatorIds
            /\ request.tc.view \in Views
-           /\ request.tc.view >= nodeView[request.node]
+           /\ request.tc.view + 1 >= nodeView[request.node]
            /\ highestRank \in [ValidatorIds -> Ranks]
            /\ nodeView \in [ValidatorIds -> Views]
       BY <1>1
          DEF StrongInductiveInvariant, Safety, TypeInvariant,
              PersistInstallTC, InstallTcWalSet, TcRecordSet
     <2>3. /\ nodeView' =
-                  [nodeView EXCEPT
-                     ![request.node] = request.tc.view + 1]
+                  [nodeView EXCEPT ![request.node] =
+                     IF StrictSameRoundTcUpgrade(request.node, request.tc)
+                     THEN @ ELSE request.tc.view + 1]
            /\ highestRank' =
                   [highestRank EXCEPT
                      ![request.node] =
@@ -368,13 +369,27 @@ PROOF
                        (IF TcHighRank(request.tc) > highestRank[node]
                         THEN TcHighRank(request.tc)
                         ELSE highestRank[node])
-                 /\ nodeView'[node] = request.tc.view + 1
+                 /\ nodeView'[node] =
+                      (IF StrictSameRoundTcUpgrade(
+                            request.node, request.tc)
+                       THEN nodeView[node] ELSE request.tc.view + 1)
             BY <2>3, <2>5, <4>4, Isa
-          <5>2. CASE TcHighRank(request.tc) > highestRank[node]
+          <5>2. CASE StrictSameRoundTcUpgrade(request.node, request.tc)
             BY <2>1, <4>3, <4>4, <5>1, <5>2, SMT
-          <5>3. CASE ~(TcHighRank(request.tc) > highestRank[node])
-            BY <2>2, <4>1, <4>3, <4>4, <5>1, <5>3, SMT
-          <5> QED BY <5>2, <5>3
+               DEF StrictSameRoundTcUpgrade
+          <5>3. CASE /\ ~StrictSameRoundTcUpgrade(
+                           request.node, request.tc)
+                     /\ TcHighRank(request.tc) > highestRank[node]
+            <6>1. request.tc.view >= nodeView[request.node]
+              BY <1>1, <5>3 DEF PersistInstallTC
+            <6> QED BY <2>1, <4>3, <4>4, <5>1, <5>3, <6>1, SMT
+          <5>4. CASE /\ ~StrictSameRoundTcUpgrade(
+                           request.node, request.tc)
+                     /\ ~(TcHighRank(request.tc) > highestRank[node])
+            <6>1. request.tc.view >= nodeView[request.node]
+              BY <1>1, <5>4 DEF PersistInstallTC
+            <6> QED BY <4>1, <4>3, <4>4, <5>1, <5>4, <6>1, SMT
+          <5> QED BY <5>2, <5>3, <5>4
         <4>5. CASE node # request.node
           <5>1. /\ highestRank'[node] = highestRank[node]
                  /\ nodeView'[node] = nodeView[node]
@@ -404,13 +419,21 @@ PROOF
                /\ request.tc.view \in Nat
           BY <2>4, <4>3, SMT DEF ModelConfiguration, Views
         <4>5. CASE pending.node = request.node
-          <5>1. nodeView'[pending.node] = request.tc.view + 1
-            BY <2>3, <2>5, <4>3, <4>5, Isa
-          <5>2. pending.qc.view <= request.tc.view
-            BY <2>2, <4>1, <4>4, <4>5, SMT
-          <5>3. request.tc.view < request.tc.view + 1
-            BY <4>4, SMT
-          <5> QED BY <4>4, <5>1, <5>2, <5>3, SMT
+          <5>1. CASE StrictSameRoundTcUpgrade(
+                        request.node, request.tc)
+            <6>1. nodeView'[pending.node] = nodeView[pending.node]
+              BY <2>3, <2>5, <4>3, <4>5, <5>1, Isa
+            <6> QED BY <4>1, <6>1
+          <5>2. CASE ~StrictSameRoundTcUpgrade(
+                        request.node, request.tc)
+            <6>1. /\ request.tc.view >= nodeView[request.node]
+                   /\ nodeView'[pending.node] = request.tc.view + 1
+              BY <1>1, <2>3, <2>5, <4>3, <4>5, <5>2, Isa
+                 DEF PersistInstallTC
+            <6>2. pending.qc.view <= request.tc.view
+              BY <4>1, <4>4, <4>5, <6>1, SMT
+            <6> QED BY <4>4, <6>1, <6>2, SMT
+          <5> QED BY <5>1, <5>2
         <4>6. CASE pending.node # request.node
           <5>1. nodeView'[pending.node] = nodeView[pending.node]
             BY <2>3, <2>5, <4>3, <4>6, Isa

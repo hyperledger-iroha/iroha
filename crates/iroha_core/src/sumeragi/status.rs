@@ -34,7 +34,7 @@ use iroha_data_model::{
             SumeragiLanePayloadOwnership,
         },
         consensus_v2::{
-            BlockSubject, ConsensusRound, HeightContextId, SumeragiV2BodyState,
+            BlockSubject, ConsensusRound, GlobalPhase, HeightContextId, SumeragiV2BodyState,
             SumeragiV2LivenessBlocker, SumeragiV2LocalWorkStage, SumeragiV2OutboundIntentKind,
             SumeragiV2OutboundIntentStage, SumeragiV2ProgressTransition,
             SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
@@ -1504,6 +1504,41 @@ fn has_current_view_outbound_intent(
         .any(|intent| intent.kind == kind && intent.round.view == status.view)
 }
 
+fn has_exact_locked_commit_progress(status: &SumeragiV2Status) -> bool {
+    let Some(locked) = status.locked_prepare_qc.as_ref() else {
+        return false;
+    };
+    let exact_quorum = status.liveness.commit_quorums.iter().any(|quorum| {
+        quorum.round.height == locked.proposal_round.height
+            && quorum.round.view >= locked.proposal_round.view
+            && quorum.proposal_round == locked.proposal_round
+            && quorum.subject == locked.subject
+            && quorum.execution_commitment == locked.execution_commitment
+            && quorum.signer_count > 0
+            && quorum.signed_power > 0
+    });
+    let exact_outbound = status.liveness.outbound_intents.iter().any(|intent| {
+        matches!(
+            intent.kind,
+            SumeragiV2OutboundIntentKind::CommitVote | SumeragiV2OutboundIntentKind::CommitQc
+        ) && intent.round.height == locked.proposal_round.height
+            && intent.round.view >= locked.proposal_round.view
+            && intent.proposal_round == Some(locked.proposal_round)
+            && intent.subject == Some(locked.subject)
+            && intent.execution_commitment == Some(locked.execution_commitment)
+    });
+    let exact_decision = status.last_committed_height == locked.proposal_round.height
+        && status.last_commit_qc.as_ref().is_some_and(|certificate| {
+            certificate.certificate.phase == GlobalPhase::Commit
+                && certificate.certificate.round.height == locked.proposal_round.height
+                && certificate.certificate.round.view >= locked.proposal_round.view
+                && certificate.certificate.proposal_round == locked.proposal_round
+                && certificate.certificate.subject == locked.subject
+                && certificate.certificate.execution_commitment == locked.execution_commitment
+        });
+    exact_quorum || exact_outbound || exact_decision
+}
+
 /// Classify one post-threshold snapshot with a stable most-specific precedence.
 fn classify_v2_liveness_blocker(
     status: &SumeragiV2Status,
@@ -1581,7 +1616,7 @@ fn classify_v2_liveness_blocker(
                 status,
                 SumeragiV2OutboundIntentKind::TimeoutCertificate,
             );
-    if local_timeout_started && status.phase != SumeragiV2StatusPhase::Commit {
+    if local_timeout_started && !has_exact_locked_commit_progress(status) {
         let formed = status
             .liveness
             .timeout_quorums
@@ -2296,13 +2331,15 @@ mod v2_liveness_watchdog_tests {
                 .public_key()
                 .clone(),
         );
+        let round = ConsensusRound {
+            context_id,
+            height,
+            view: 0,
+        };
         let message = BlockMessage::V2(ConsensusMessageV2::new(ConsensusMessageV2Payload::Vote(
             Vote {
-                round: ConsensusRound {
-                    context_id,
-                    height,
-                    view: 0,
-                },
+                round,
+                proposal_round: round,
                 phase: GlobalPhase::Prepare,
                 subject: BlockSubject {
                     parent_block_hash: None,
@@ -2384,8 +2421,10 @@ mod v2_liveness_watchdog_tests {
     }
 
     fn prepare_qc(status: &SumeragiV2Status, view: u64, seed: u8) -> QuorumCertificateRef {
+        let round = round(status, view);
         QuorumCertificateRef {
-            round: round(status, view),
+            round,
+            proposal_round: round,
             phase: GlobalPhase::Prepare,
             subject: subject(seed),
             execution_commitment: execution_commitment(seed),
@@ -2397,8 +2436,10 @@ mod v2_liveness_watchdog_tests {
         view: u64,
         signer_count: u32,
     ) -> SumeragiV2VoteQuorumStatus {
+        let round = round(status, view);
         SumeragiV2VoteQuorumStatus {
-            round: round(status, view),
+            round,
+            proposal_round: round,
             subject: subject(0xA1),
             execution_commitment: execution_commitment(0xA1),
             signer_count,
@@ -2575,6 +2616,7 @@ mod v2_liveness_watchdog_tests {
             .push(SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::TimeoutCertificate,
                 round: prior_view,
+                proposal_round: None,
                 subject: None,
                 execution_commitment: None,
                 stage: SumeragiV2OutboundIntentStage::Sent,
@@ -2625,6 +2667,7 @@ mod v2_liveness_watchdog_tests {
             .push(SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::CommitVote,
                 round: round(&locked, 0),
+                proposal_round: Some(round(&locked, 0)),
                 subject: Some(subject(0xA1)),
                 execution_commitment: Some(execution_commitment(0xA1)),
                 stage: SumeragiV2OutboundIntentStage::Sent,
@@ -2759,6 +2802,7 @@ mod v2_liveness_watchdog_tests {
             .push(SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::TimeoutVote,
                 round: timeout_round,
+                proposal_round: None,
                 subject: None,
                 execution_commitment: None,
                 stage: SumeragiV2OutboundIntentStage::Sent,
@@ -2789,6 +2833,7 @@ mod v2_liveness_watchdog_tests {
             .push(SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::TimeoutVote,
                 round: queued_round,
+                proposal_round: None,
                 subject: None,
                 execution_commitment: None,
                 stage: SumeragiV2OutboundIntentStage::Queued,
@@ -2815,6 +2860,7 @@ mod v2_liveness_watchdog_tests {
             .push(SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::TimeoutVote,
                 round: stale_round,
+                proposal_round: None,
                 subject: None,
                 execution_commitment: None,
                 stage: SumeragiV2OutboundIntentStage::PendingPersistence,
@@ -2834,6 +2880,7 @@ mod v2_liveness_watchdog_tests {
             .push(SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::TimeoutVote,
                 round: stale_round,
+                proposal_round: None,
                 subject: None,
                 execution_commitment: None,
                 stage: SumeragiV2OutboundIntentStage::PendingSignature,
@@ -2854,7 +2901,7 @@ mod v2_liveness_watchdog_tests {
     }
 
     #[test]
-    fn current_view_timeout_path_supersedes_prepare_but_not_any_locked_commit() {
+    fn current_view_timeout_path_yields_only_to_an_exact_locked_commit_owner() {
         let mut prepare = status();
         prepare.phase = SumeragiV2StatusPhase::Prepare;
         prepare.body_state = SumeragiV2BodyState::Validated;
@@ -2885,6 +2932,7 @@ mod v2_liveness_watchdog_tests {
             .push(SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::TimeoutVote,
                 round: current_round,
+                proposal_round: None,
                 subject: None,
                 execution_commitment: None,
                 stage: SumeragiV2OutboundIntentStage::Sent,
@@ -2908,8 +2956,25 @@ mod v2_liveness_watchdog_tests {
             .expect("same-view locked Commit fixture is structurally valid");
         assert_eq!(
             classify_v2_liveness_blocker(&current_commit, false),
+            SumeragiV2LivenessBlocker::TimeoutCertificateMissing,
+            "a lock without Commit ownership follows its durable timeout recovery path"
+        );
+
+        current_commit
+            .liveness
+            .outbound_intents
+            .push(SumeragiV2OutboundIntentStatus {
+                kind: SumeragiV2OutboundIntentKind::CommitVote,
+                round: current_round,
+                proposal_round: Some(current_lock.proposal_round),
+                subject: Some(current_lock.subject),
+                execution_commitment: Some(current_lock.execution_commitment),
+                stage: SumeragiV2OutboundIntentStage::Sent,
+            });
+        assert_eq!(
+            classify_v2_liveness_blocker(&current_commit, false),
             SumeragiV2LivenessBlocker::CommitQuorumMissing,
-            "a same-view timeout must not hide the still-active locked Commit path"
+            "an exact durable Commit remains active across its same-view timeout"
         );
 
         let mut historical_commit = current_commit;
@@ -2919,6 +2984,12 @@ mod v2_liveness_watchdog_tests {
         historical_commit.highest_prepare_qc = Some(historical_lock);
         let later_timeout_round = round(&historical_commit, 1);
         historical_commit.liveness.outbound_intents[0].round = later_timeout_round;
+        historical_commit.liveness.outbound_intents[1].round = later_timeout_round;
+        historical_commit.liveness.outbound_intents[1].proposal_round =
+            Some(historical_lock.proposal_round);
+        historical_commit.liveness.outbound_intents[1].subject = Some(historical_lock.subject);
+        historical_commit.liveness.outbound_intents[1].execution_commitment =
+            Some(historical_lock.execution_commitment);
         historical_commit.liveness.timeout_quorums[0].round = later_timeout_round;
         historical_commit
             .validate()

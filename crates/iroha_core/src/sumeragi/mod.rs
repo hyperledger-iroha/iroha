@@ -1127,6 +1127,40 @@ pub(crate) struct FairV2IngressOwnershipEvidence {
     attempts_hash: CryptoHash,
 }
 
+fn fair_v2_ingress_append_peer_identity(projection: &mut Vec<u8>, peer: &PeerId) {
+    let encoded = peer.encode();
+    projection.extend_from_slice(
+        &u64::try_from(encoded.len())
+            .expect("canonical peer identity length fits u64")
+            .to_le_bytes(),
+    );
+    projection.extend_from_slice(&encoded);
+}
+
+fn fair_v2_ingress_append_optional_peer_identity(projection: &mut Vec<u8>, peer: Option<&PeerId>) {
+    match peer {
+        None => projection.push(0),
+        Some(peer) => {
+            projection.push(1);
+            fair_v2_ingress_append_peer_identity(projection, peer);
+        }
+    }
+}
+
+fn fair_v2_ingress_append_source_identity(projection: &mut Vec<u8>, source: &FairV2IngressSource) {
+    match source {
+        FairV2IngressSource::Anonymous => projection.push(0),
+        FairV2IngressSource::Validator(peer) => {
+            projection.push(1);
+            fair_v2_ingress_append_peer_identity(projection, peer);
+        }
+        FairV2IngressSource::Authenticated(peer) => {
+            projection.push(2);
+            fair_v2_ingress_append_peer_identity(projection, peer);
+        }
+    }
+}
+
 impl FairV2IngressOwnershipEvidence {
     fn new(occurrence: FairV2IngressOwnershipOccurrence) -> Self {
         let mut action_counts = [0; FairV2IngressOwnershipAction::COUNT];
@@ -1168,6 +1202,9 @@ impl FairV2IngressOwnershipEvidence {
     /// route set, while per-source cursors advance to the greatest progress
     /// already observed by either exact carrier.
     pub(crate) fn merge_downstream(&mut self, candidate: Self) -> bool {
+        if !self.same_semantic_request(&candidate) {
+            return false;
+        }
         match (&self.current_routes, &candidate.current_routes) {
             (Some(retained), Some(observed)) => {
                 let mut reconciled = retained.clone();
@@ -1228,12 +1265,7 @@ impl FairV2IngressOwnershipEvidence {
     }
 
     fn can_merge_downstream_exact(&self, candidate: &Self) -> bool {
-        self.validate_exact()
-            && candidate.validate_exact()
-            && self.first.wire_key == candidate.first.wire_key
-            && self.first.message_kind == candidate.first.message_kind
-            && self.first.class == candidate.first.class
-            && self.first.encoded_bytes.as_ref() == candidate.first.encoded_bytes.as_ref()
+        self.same_semantic_request(candidate)
     }
 
     fn merge_downstream_with_exact_routes(
@@ -1342,46 +1374,27 @@ impl FairV2IngressOwnershipEvidence {
     /// consensus, and two independent network actors must not alias merely
     /// because their wire bytes and counters match.
     pub(crate) fn process_local_projection_hash(&self) -> CryptoHash {
-        fn append_peer(projection: &mut Vec<u8>, peer: Option<&PeerId>) {
-            match peer {
-                None => projection.push(0),
-                Some(peer) => {
-                    projection.push(1);
-                    let encoded = peer.encode();
-                    projection.extend_from_slice(
-                        &u64::try_from(encoded.len())
-                            .expect("peer identity length fits u64")
-                            .to_le_bytes(),
-                    );
-                    projection.extend_from_slice(&encoded);
-                }
-            }
-        }
-
-        fn append_source(projection: &mut Vec<u8>, source: &FairV2IngressSource) {
-            match source {
-                FairV2IngressSource::Anonymous => projection.push(0),
-                FairV2IngressSource::Validator(peer) => {
-                    projection.push(1);
-                    append_peer(projection, Some(peer));
-                }
-                FairV2IngressSource::Authenticated(peer) => {
-                    projection.push(2);
-                    append_peer(projection, Some(peer));
-                }
-            }
-        }
-
         let mut projection = Vec::new();
-        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v2");
-        append_peer(&mut projection, self.first.semantic_origin.as_ref());
-        append_peer(&mut projection, self.first.authenticated_via.as_ref());
-        append_source(&mut projection, &self.first.authenticated_source);
-        append_source(&mut projection, &self.first.semantic_owner_source);
-        append_peer(&mut projection, self.latest.semantic_origin.as_ref());
-        append_peer(&mut projection, self.latest.authenticated_via.as_ref());
-        append_source(&mut projection, &self.latest.authenticated_source);
-        append_source(&mut projection, &self.latest.semantic_owner_source);
+        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v3");
+        for occurrence in [&self.first, &self.latest] {
+            fair_v2_ingress_append_optional_peer_identity(
+                &mut projection,
+                occurrence.semantic_origin.as_ref(),
+            );
+            fair_v2_ingress_append_optional_peer_identity(
+                &mut projection,
+                occurrence.authenticated_via.as_ref(),
+            );
+            projection.push(u8::from(occurrence.authenticated_via_is_validator));
+            fair_v2_ingress_append_source_identity(
+                &mut projection,
+                &occurrence.authenticated_source,
+            );
+            fair_v2_ingress_append_source_identity(
+                &mut projection,
+                &occurrence.semantic_owner_source,
+            );
+        }
         projection.extend_from_slice(&self.admission_count.to_le_bytes());
         projection.extend_from_slice(&self.occurrence_count.to_le_bytes());
         for count in self.action_counts {
@@ -2268,6 +2281,7 @@ fn fair_v2_ingress_required_quorum_certificate_bytes(roster_len: usize) -> Optio
     let signer_vector_bytes = roster_len.checked_mul(5)?.checked_add(8)?;
     let signature_vector_bytes = signature_bytes.checked_add(8)?;
     53_usize
+        .checked_add(53)?
         .checked_add(5)?
         .checked_add(102)?
         .checked_add(fair_v2_ingress_framed_bytes(172)?)?
@@ -2290,8 +2304,8 @@ fn fair_v2_ingress_required_proposal_bytes(
         let signature_bytes = iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES;
         let manifest_bytes = fair_v2_ingress_required_manifest_bytes(layout)?;
 
-        // QuorumCertificate = Round + phase + Subject + ExecutionCommitment
-        // + Vec<ValidatorIndex> + aggregate signature.
+        // QuorumCertificate = certified Round + proposal-origin Round + phase
+        // + Subject + ExecutionCommitment + Vec<ValidatorIndex> + aggregate signature.
         let signature_vector_bytes = signature_bytes.checked_add(8)?;
         let quorum_certificate_bytes =
             fair_v2_ingress_required_quorum_certificate_bytes(roster_len)?;
@@ -4623,6 +4637,7 @@ mod authoritative_runtime_gate_tests {
         };
         let certificate = wire::QuorumCertificate {
             round: vote.round,
+            proposal_round: vote.proposal_round,
             phase: wire::GlobalPhase::Prepare,
             subject: vote.subject,
             execution_commitment: vote.execution_commitment,
@@ -4778,6 +4793,7 @@ mod authoritative_runtime_gate_tests {
                     )),
                     certificate: wire::QuorumCertificate {
                         round: vote.round,
+                        proposal_round: vote.proposal_round,
                         phase: wire::GlobalPhase::Commit,
                         subject: vote.subject,
                         execution_commitment: vote.execution_commitment,
@@ -4792,15 +4808,17 @@ mod authoritative_runtime_gate_tests {
     }
 
     fn v2_vote(phase: wire::GlobalPhase) -> BlockMessage {
+        let round = wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"fair-v2-ingress-vote-context",
+            ))),
+            height: 1,
+            view: 0,
+        };
         BlockMessage::V2(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::Vote(wire::Vote {
-                round: wire::ConsensusRound {
-                    context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                        b"fair-v2-ingress-vote-context",
-                    ))),
-                    height: 1,
-                    view: 0,
-                },
+                round,
+                proposal_round: round,
                 phase,
                 subject: wire::BlockSubject {
                     parent_block_hash: None,
@@ -4829,6 +4847,7 @@ mod authoritative_runtime_gate_tests {
             unreachable!("v2 vote fixture always carries a vote");
         };
         vote.round.height = index.saturating_add(1);
+        vote.proposal_round.height = vote.round.height;
         vote.signature = vec![u8::try_from(index).unwrap_or(u8::MAX)];
         BlockMessage::V2(message)
     }
@@ -4877,6 +4896,7 @@ mod authoritative_runtime_gate_tests {
         );
         let highest_prepare_qc = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: wire::ExecutionCommitment::new(
@@ -4941,17 +4961,21 @@ mod authoritative_runtime_gate_tests {
         let signers = (0..roster_len)
             .map(|index| u32::try_from(index).expect("validator bound fits u32"))
             .collect::<Vec<_>>();
-        let prepare_qc = |view| wire::QuorumCertificate {
-            round: wire::ConsensusRound {
+        let prepare_qc = |view| {
+            let round = wire::ConsensusRound {
                 context_id,
                 height: u64::MAX,
                 view,
-            },
-            phase: wire::GlobalPhase::Prepare,
-            subject,
-            execution_commitment,
-            signers: signers.clone(),
-            aggregate_signature: vec![0xA5; wire::MAX_CONSENSUS_SIGNATURE_BYTES],
+            };
+            wire::QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment,
+                signers: signers.clone(),
+                aggregate_signature: vec![0xA5; wire::MAX_CONSENSUS_SIGNATURE_BYTES],
+            }
         };
         let groups = (0..roster_len)
             .map(|index| wire::TimeoutVoteGroup {
@@ -6356,6 +6380,99 @@ mod authoritative_runtime_gate_tests {
     }
 
     #[test]
+    fn fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
+        let source = validator_peers(1).pop().expect("validator fixture");
+        let semantic_origin = PeerId::from(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(source.clone());
+        let initial_route = routes.mint_via(semantic_origin.clone(), source.clone());
+        let request = v2_auxiliary_prepare(0);
+        ingress.close();
+        ingress
+            .configure_roster([source.clone()])
+            .expect("validator and anonymous lanes fit");
+        ingress.open().expect("open configured roster");
+
+        let inbound = |route: NetworkReplyRoute| {
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                request.clone(),
+                semantic_origin.clone(),
+                source.clone(),
+                route,
+            )
+            .expect("test route binds the semantic request and authenticated source")
+        };
+        assert!(matches!(
+            ingress.try_push(inbound(initial_route.clone())),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+
+        let admitted = {
+            let state = ingress.state.lock();
+            state
+                .lanes
+                .get(&super::FairV2IngressSource::Validator(source.clone()))
+                .and_then(|lane| lane.entries.front())
+                .and_then(|entry| entry.inbound.ingress_ownership.as_ref())
+                .expect("fair admission attached ownership evidence")
+                .clone()
+        };
+        assert!(admitted.validate_exact());
+        let admitted_projection = admitted.process_local_projection_hash();
+
+        assert!(routes.retire(&initial_route));
+        assert!(!initial_route.is_active());
+        assert!(admitted.validate_exact());
+        assert_eq!(
+            admitted.process_local_projection_hash(),
+            admitted_projection,
+            "transport cancellation cannot mutate immutable admission identity"
+        );
+
+        let mut projected_routes = admitted
+            .current_reply_routes()
+            .expect("admitted request retains its reply route")
+            .clone();
+        let mut maintained = admitted.clone();
+        let (retained, prune_receipt) = projected_routes.retain_active_with_receipt();
+        assert_eq!(retained, 0);
+        projected_routes = maintained
+            .project_retained_reply_routes(prune_receipt)
+            .expect("authoritative pruning receipt updates the ownership carrier");
+        assert!(projected_routes.is_empty());
+        assert!(maintained.validate_exact());
+        assert_ne!(
+            maintained.process_local_projection_hash(),
+            admitted_projection,
+            "explicit route pruning must remain visible in the ownership projection"
+        );
+
+        let reconnect = routes.mint_via(semantic_origin.clone(), source.clone());
+        assert!(matches!(
+            ingress.try_push(inbound(reconnect.clone())),
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
+        ));
+        let delivered = ingress
+            .try_recv()
+            .expect("reconnected request retains the queued semantic owner");
+        let reconnected = delivered
+            .ingress_ownership()
+            .expect("reconnected owner retains exact evidence");
+        assert!(reconnected.validate_exact());
+        assert_eq!(
+            reconnected.latest_action(),
+            super::FairV2IngressOwnershipAction::Reconnect
+        );
+        assert!(
+            reconnected
+                .current_reply_routes()
+                .is_some_and(|retained| retained
+                    .iter()
+                    .any(|route| route.same_delivery(&reconnect)))
+        );
+    }
+
+    #[test]
     fn fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins() {
         let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
         let authenticated_via = validator_peers(1).pop().expect("validator fixture");
@@ -6394,6 +6511,34 @@ mod authoritative_runtime_gate_tests {
             first.process_local_projection_hash(),
             second.process_local_projection_hash(),
             "process-local scheduler projections must bind semantic origin"
+        );
+    }
+
+    #[test]
+    fn fair_v2_ingress_wire_index_keeps_non_validator_relay_origins_distinct() {
+        let (_handle, ingress, _relay_receiver) =
+            test_sumeragi_handle_with_source_geometry(3, Some(1));
+        let authenticated_via = validator_peers(1)
+            .pop()
+            .expect("authenticated relay fixture");
+        let origin_a = PeerId::from(KeyPair::random().public_key().clone());
+        let origin_b = PeerId::from(KeyPair::random().public_key().clone());
+        let message = v2_message();
+
+        for origin in [origin_a, origin_b] {
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::from_transport(
+                    message.clone(),
+                    origin,
+                    authenticated_via.clone(),
+                )),
+                Ok(super::FairV2IngressPushDisposition::Enqueued)
+            ));
+        }
+        assert_eq!(
+            ingress.len(),
+            2,
+            "one authenticated relay lane preserves distinct semantic request origins"
         );
     }
 
@@ -6738,7 +6883,7 @@ mod authoritative_runtime_gate_tests {
         let required_proposal =
             super::fair_v2_ingress_required_proposal_bytes(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
         assert_eq!(
-            required_proposal, 232_541,
+            required_proposal, 239_378,
             "maximal proposal wire geometry is a regression boundary"
         );
         let proposal = v2_maximum_structural_proposal_wire(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
@@ -6807,7 +6952,7 @@ mod authoritative_runtime_gate_tests {
         };
         let minimal_proposal_bytes =
             super::fair_v2_ingress_required_proposal_bytes(minimal_layout, 1);
-        assert_eq!(minimal_proposal_bytes, 2_302);
+        assert_eq!(minimal_proposal_bytes, 2_408);
         assert_eq!(
             encoded_v2_len(&v2_maximum_structural_proposal_wire(minimal_layout, 1)),
             minimal_proposal_bytes,

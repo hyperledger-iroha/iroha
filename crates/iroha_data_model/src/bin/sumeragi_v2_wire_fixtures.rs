@@ -173,6 +173,7 @@ fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertifica
     let seed = u8::try_from(view + 1).expect("fixture views fit in u8");
     QuorumCertificate {
         round: round(context, view),
+        proposal_round: round(context, view),
         phase,
         subject: subject(seed),
         execution_commitment: execution_commitment(seed),
@@ -236,9 +237,15 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
     commit_request
         .validate(&context)
         .map_err(|error| format!("fixture commit request is invalid: {error}"))?;
+    let mut delayed_commit = prepare.clone();
+    delayed_commit.round = round(&context, 9);
+    delayed_commit.phase = GlobalPhase::Commit;
+    delayed_commit
+        .validate(&context)
+        .map_err(|error| format!("fixture delayed CommitQC is invalid: {error}"))?;
     let commit_response = CommitCertificateResponse {
         request_hash: HashOf::new(&commit_request),
-        certificate: qc(&context, 9, GlobalPhase::Commit),
+        certificate: delayed_commit.clone(),
         responder: peer(100),
         signature: vec![0x82; 48],
     };
@@ -255,6 +262,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             name: "vote",
             message: ConsensusMessageV2::new(ConsensusMessageV2Payload::Vote(Vote {
                 round: manifest.round,
+                proposal_round: manifest.round,
                 phase: GlobalPhase::Prepare,
                 subject: manifest.subject,
                 execution_commitment: prepare.execution_commitment,
@@ -266,6 +274,24 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             name: "quorum_certificate",
             message: ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
                 prepare.clone(),
+            )),
+        },
+        NamedMessage {
+            name: "commit_vote_later_view",
+            message: ConsensusMessageV2::new(ConsensusMessageV2Payload::Vote(Vote {
+                round: delayed_commit.round,
+                proposal_round: delayed_commit.proposal_round,
+                phase: GlobalPhase::Commit,
+                subject: delayed_commit.subject,
+                execution_commitment: delayed_commit.execution_commitment,
+                signer: 0,
+                signature: vec![0x7A],
+            })),
+        },
+        NamedMessage {
+            name: "commit_quorum_certificate_later_view",
+            message: ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
+                delayed_commit,
             )),
         },
         NamedMessage {
@@ -363,6 +389,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             generation: 3,
             prepare_quorums: vec![SumeragiV2VoteQuorumStatus {
                 round: prepare.round,
+                proposal_round: prepare.proposal_round,
                 subject: prepare.subject,
                 execution_commitment: prepare.execution_commitment,
                 signer_count: 2,
@@ -371,7 +398,8 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
                 total_power: context.quorum.total_power,
             }],
             commit_quorums: vec![SumeragiV2VoteQuorumStatus {
-                round: prepare.round,
+                round: round(&context, 3),
+                proposal_round: prepare.proposal_round,
                 subject: prepare.subject,
                 execution_commitment: prepare.execution_commitment,
                 signer_count: 1,
@@ -389,7 +417,8 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             }],
             outbound_intents: vec![SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::CommitVote,
-                round: prepare.round,
+                round: round(&context, 3),
+                proposal_round: Some(prepare.proposal_round),
                 subject: Some(prepare.subject),
                 execution_commitment: Some(prepare.execution_commitment),
                 stage: SumeragiV2OutboundIntentStage::Sent,
@@ -634,11 +663,14 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
     wrong_request_hash.request_hash =
         HashOf::from_untyped_unchecked(Hash::new(b"wrong commit request"));
     let mut wrong_context = values.commit_response.clone();
-    wrong_context.certificate.round.context_id = HeightContextId(HashOf::from_untyped_unchecked(
-        Hash::new(b"wrong height context"),
-    ));
+    let wrong_context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+        b"wrong height context",
+    )));
+    wrong_context.certificate.round.context_id = wrong_context_id;
+    wrong_context.certificate.proposal_round.context_id = wrong_context_id;
     let mut wrong_height = values.commit_response.clone();
     wrong_height.certificate.round.height += 1;
+    wrong_height.certificate.proposal_round.height += 1;
     rows.extend([
         FixtureRow::rejected(
             "negative_binding",

@@ -1169,7 +1169,10 @@ pub(crate) fn validate_v2_equivocation(
             if first.signer != second.signer {
                 return Err(EvidenceValidationError::V2SignerMismatch);
             }
-            if first.subject == second.subject {
+            if first.proposal_round == second.proposal_round
+                && first.subject == second.subject
+                && first.execution_commitment == second.execution_commitment
+            {
                 return Err(EvidenceValidationError::V2ArtifactsDoNotConflict);
             }
             verify_v2_individual_signature(
@@ -1698,6 +1701,7 @@ mod tests {
         ) -> wire_v2::Vote {
             let mut vote = wire_v2::Vote {
                 round: self.round(0),
+                proposal_round: self.round(0),
                 phase,
                 subject,
                 execution_commitment: self.execution_commitment(),
@@ -1712,6 +1716,7 @@ mod tests {
             let signers = vec![0, 1, 2];
             let unsigned = wire_v2::Vote {
                 round: self.round(0),
+                proposal_round: self.round(0),
                 phase: wire_v2::GlobalPhase::Prepare,
                 subject,
                 execution_commitment: self.execution_commitment(),
@@ -1725,6 +1730,7 @@ mod tests {
             let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
             wire_v2::QuorumCertificate {
                 round: unsigned.round,
+                proposal_round: unsigned.proposal_round,
                 phase: unsigned.phase,
                 subject,
                 execution_commitment: unsigned.execution_commitment,
@@ -1916,6 +1922,40 @@ mod tests {
             second: fixture.timeout_vote(2, Some(fixture.prepare_qc(subject_a))),
         });
         validate_v2_equivocation(&timeout).expect("valid double timeout vote");
+    }
+
+    #[test]
+    fn sumeragi_v2_equivocation_authenticates_vote_origin_and_execution() {
+        let fixture = V2EvidenceFixture::new();
+        let subject = fixture.subject(0x6a);
+        let signer = 1;
+
+        let mut first = fixture.vote(signer, wire_v2::GlobalPhase::Commit, subject);
+        first.round = fixture.round(2);
+        first.proposal_round = fixture.round(0);
+        first.signature = fixture.sign(signer, &first.signature_preimage());
+
+        let mut different_origin = first.clone();
+        different_origin.proposal_round = fixture.round(1);
+        different_origin.signature = fixture.sign(signer, &different_origin.signature_preimage());
+        let origin_conflict = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
+            first: first.clone(),
+            second: different_origin,
+        });
+        validate_v2_equivocation(&origin_conflict)
+            .expect("different authenticated proposal origins conflict");
+
+        let mut different_execution = first.clone();
+        different_execution.execution_commitment.post_state_root =
+            Hash::new(b"different v2 evidence post state");
+        different_execution.signature =
+            fixture.sign(signer, &different_execution.signature_preimage());
+        let execution_conflict = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
+            first,
+            second: different_execution,
+        });
+        validate_v2_equivocation(&execution_conflict)
+            .expect("different authenticated execution commitments conflict");
     }
 
     #[test]

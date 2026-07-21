@@ -397,6 +397,7 @@ impl StrictReplayFixture {
             .expect("derive exact execution commitment");
         let mut certificate = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -557,6 +558,7 @@ impl StrictReplayFixture {
             .expect("derive height-two execution commitment");
         let mut certificate = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -663,6 +665,7 @@ impl StrictReplayFixture {
             .map(|index| {
                 let preimage = wire::Vote {
                     round: certificate.round,
+                    proposal_round: certificate.proposal_round,
                     phase: certificate.phase,
                     subject: certificate.subject,
                     execution_commitment: certificate.execution_commitment,

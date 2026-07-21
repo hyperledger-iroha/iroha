@@ -202,7 +202,7 @@ impl LocalProposalDirective {
         self.leader
     }
 
-    /// Subject which must be re-proposed while the local lock remains active.
+    /// Subject whose exact proposal origin must be recovered while locked.
     pub(crate) const fn locked_subject(self) -> Option<wire::BlockSubject> {
         self.locked_subject
     }
@@ -408,14 +408,14 @@ impl SignRequest {
         }
     }
 
-    /// Return the exact round owned by proposal or phase-vote work.
+    /// Return the exact proposal/body origin owned by proposal or phase-vote work.
     ///
     /// As with [`Self::subject`], a timeout vote is view-progress work rather
     /// than ownership of the body named by its optional high QC.
     pub(crate) const fn body_round(&self) -> Option<wire::ConsensusRound> {
         match self {
             Self::Proposal(proposal) => Some(proposal.round),
-            Self::Vote(vote) => Some(vote.round),
+            Self::Vote(vote) => Some(vote.proposal_round),
             Self::TimeoutVote(_) => None,
         }
     }
@@ -423,25 +423,15 @@ impl SignRequest {
 
 /// Return whether a proposal still satisfies the safe-value rule for one lock.
 ///
-/// A different subject is admissible only when the proposal carries a
-/// strictly higher PrepareQC for that same subject.
+/// The locked subject is admissible only at its exact authenticated proposal
+/// origin. A timeout certificate carrying a PrepareQC installs and commits that
+/// certificate's origin directly; it never authorizes a competing proposal.
 pub(crate) fn proposal_is_safe_for_lock(
     proposal: &wire::Proposal,
     locked_round: wire::ConsensusRound,
     locked_subject: wire::BlockSubject,
 ) -> bool {
-    if proposal.subject == locked_subject {
-        return true;
-    }
-    matches!(
-        &proposal.justification,
-        wire::ProposalJustification::Timeout(justification)
-            if justification.highest_prepare_qc.as_ref().is_some_and(|highest| {
-                highest.phase == wire::GlobalPhase::Prepare
-                    && highest.subject == proposal.subject
-                    && highest.round.view > locked_round.view
-            })
-    )
+    proposal.round == locked_round && proposal.subject == locked_subject
 }
 
 /// Effects delivered by the production adapter to asynchronous services.
@@ -499,7 +489,8 @@ pub(crate) enum AdapterEffect {
         /// Canonical CommitQC authorizing application.
         certificate: wire::QuorumCertificate,
     },
-    /// Reset the round timer after a persisted timeout certificate advances view.
+    /// Reset lifecycle ownership after a persisted timeout certificate advances
+    /// the view or supersedes the current view with a higher-generation lock.
     EnterView {
         /// New reducer incarnation tag.
         tag: reducer::EventTag,
@@ -659,25 +650,26 @@ pub(crate) enum DecisionLocalProposalDisposition {
 
 /// Classify one queued local-proposal completion against a durable Decision.
 ///
-/// `None` means the completion belongs to another round or subject. An exact
-/// Decision owner is retainable only when both non-forgeable receipts bind the
-/// full manifest and Decision execution commitment, and its tag is the current
-/// reducer tag for the Decision round.
+/// `None` means the completion does not belong to the selected durable body
+/// origin. An exact Decision owner is retainable only when both non-forgeable
+/// receipts bind the full manifest and Decision execution commitment, and its
+/// tag is the current reducer tag for that proposal-origin round. The selected
+/// body origin may precede the CommitQC round that installed finality.
 pub(crate) fn classify_decided_local_proposal(
     tag: reducer::EventTag,
     manifest: &wire::PayloadManifest,
     durable_receipt: &DurableBodyReceipt,
     validated_receipt: &ValidatedBodyReceipt,
     decision_tag: reducer::EventTag,
-    decision_round: wire::ConsensusRound,
+    decision_body_round: wire::ConsensusRound,
     decision_subject: wire::BlockSubject,
     decision_commitment: wire::ExecutionCommitment,
 ) -> Option<DecisionLocalProposalDisposition> {
-    if manifest.round != decision_round || manifest.subject != decision_subject {
+    if manifest.round != decision_body_round || manifest.subject != decision_subject {
         return None;
     }
-    if durable_receipt.context_id() != decision_round.context_id
-        || durable_receipt.round() != decision_round
+    if durable_receipt.context_id() != decision_body_round.context_id
+        || durable_receipt.round() != manifest.round
         || durable_receipt.subject() != decision_subject
         || durable_receipt.manifest_hash() != HashOf::new(manifest)
         || validated_receipt.durable() != durable_receipt
@@ -687,8 +679,8 @@ pub(crate) fn classify_decided_local_proposal(
     }
     Some(
         if tag == decision_tag
-            && tag.height() == decision_round.height
-            && tag.view() == decision_round.view
+            && tag.height() == decision_body_round.height
+            && tag.view() == manifest.round.view
         {
             DecisionLocalProposalDisposition::Retain
         } else {
@@ -1373,6 +1365,7 @@ fn append_deferred_projection_certificate(
     let reference = certificate.reference();
     append_deferred_projection_field(projection, reference.context_id().as_bytes());
     append_deferred_projection_round(projection, reference.round());
+    append_deferred_projection_round(projection, reference.proposal_round());
     append_deferred_projection_phase(projection, reference.phase());
     append_deferred_projection_field(projection, reference.subject().as_bytes());
     append_deferred_projection_u64(
@@ -1453,6 +1446,10 @@ fn append_deferred_projection_event(projection: &mut Vec<u8>, event: &reducer::E
                                 reference.context_id().as_bytes(),
                             );
                             append_deferred_projection_round(projection, reference.round());
+                            append_deferred_projection_round(
+                                projection,
+                                reference.proposal_round(),
+                            );
                             append_deferred_projection_phase(projection, reference.phase());
                             append_deferred_projection_field(
                                 projection,
@@ -1473,6 +1470,7 @@ fn append_deferred_projection_event(projection: &mut Vec<u8>, event: &reducer::E
             let body = vote.vote();
             append_deferred_projection_field(projection, body.context_id().as_bytes());
             append_deferred_projection_round(projection, body.round());
+            append_deferred_projection_round(projection, body.proposal_round());
             append_deferred_projection_phase(projection, body.phase());
             append_deferred_projection_field(projection, body.subject().as_bytes());
             append_deferred_projection_field(projection, body.signer().as_bytes());
@@ -1624,8 +1622,9 @@ fn append_deferred_projection_admission(
             projection.push(1);
             append_deferred_projection_field(projection, hash.as_ref());
         }
-        IngressFingerprint::Vote(subject, commitment) => {
+        IngressFingerprint::Vote(proposal_round, subject, commitment) => {
             projection.push(2);
+            append_deferred_projection_field(projection, &proposal_round.encode());
             append_deferred_projection_field(projection, &subject.encode());
             append_deferred_projection_field(projection, &commitment.encode());
         }
@@ -1930,7 +1929,11 @@ impl IngressSemanticKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IngressFingerprint {
     Proposal(Hash),
-    Vote(wire::BlockSubject, wire::ExecutionCommitment),
+    Vote(
+        wire::ConsensusRound,
+        wire::BlockSubject,
+        wire::ExecutionCommitment,
+    ),
     TimeoutVote(Option<wire::QuorumCertificateRef>),
 }
 
@@ -2377,12 +2380,13 @@ impl SumeragiV2Adapter {
         // Recovery must expose the body/application pipeline in its very first
         // status snapshot. A durable decision owns the pipeline in preference
         // to the (possibly still retained) Prepare lock; otherwise the lock is
-        // the active body which must remain recoverable across view changes.
+        // the active body which must remain recoverable while lifecycle views
+        // advance without changing its exact proposal origin.
         let active_subject = reducer
             .durable_state()
             .decision()
             .or_else(|| reducer.durable_state().locked())
-            .map(|certificate| (certificate.round(), certificate.subject()));
+            .map(|certificate| (certificate.proposal_round(), certificate.subject()));
         let mut adapter = Self {
             wire_context,
             proofs_of_possession,
@@ -2469,6 +2473,7 @@ impl SumeragiV2Adapter {
     ) -> Result<
         Option<(
             wire::ConsensusRound,
+            wire::ConsensusRound,
             wire::BlockSubject,
             wire::ExecutionCommitment,
         )>,
@@ -2480,9 +2485,12 @@ impl SumeragiV2Adapter {
             .map(|certificate| {
                 Ok((
                     self.registry.round_to_wire(certificate.round()),
+                    self.registry.round_to_wire(certificate.proposal_round()),
                     self.registry.subject(certificate.subject())?,
-                    self.registry
-                        .execution_commitment(certificate.round(), certificate.subject())?,
+                    self.registry.execution_commitment(
+                        certificate.proposal_round(),
+                        certificate.subject(),
+                    )?,
                 ))
             })
             .transpose()
@@ -2535,6 +2543,39 @@ impl SumeragiV2Adapter {
         message: &AuthenticatedConsensusMessage,
     ) -> bool {
         self.wire_ingress_may_use_progress(message.payload())
+    }
+
+    /// Test whether an exact Commit/Prepare QC already has a Busy-deferred
+    /// authenticated-envelope owner and return its tag.
+    ///
+    /// This comparison is intentionally exact, including canonical signer
+    /// order and aggregate signature. Production uses the generic exact-byte
+    /// lookup directly; this wrapper keeps QC-specific regression assertions
+    /// readable.
+    #[cfg(test)]
+    pub(crate) fn deferred_quorum_certificate_owner_tag(
+        &self,
+        candidate: &wire::QuorumCertificate,
+    ) -> Option<reducer::EventTag> {
+        self.deferred_quorum_certificate_owner(candidate)
+            .map(|(tag, _)| tag)
+    }
+
+    /// Test whether an exact Commit/Prepare QC already has a Busy-deferred
+    /// authenticated-envelope owner and return its tag and admission ordinal.
+    ///
+    /// The ordinal is an opaque process-local association key. It lets the
+    /// serialized runtime merge later authenticated-source routes into the
+    /// exact deferred occurrence without exposing or reconstructing the
+    /// adapter's reducer event.
+    #[cfg(test)]
+    pub(crate) fn deferred_quorum_certificate_owner(
+        &self,
+        candidate: &wire::QuorumCertificate,
+    ) -> Option<(reducer::EventTag, u128)> {
+        self.deferred_authenticated_message_owner(&wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(candidate.clone()),
+        ))
     }
 
     /// Return the tag and actor-global admission ordinal of an exact canonical
@@ -2632,7 +2673,7 @@ impl SumeragiV2Adapter {
             },
             wire::ConsensusMessageV2Payload::Vote(vote) => {
                 self.ensure_vote_execution_commitment_bound(
-                    vote.round,
+                    vote.proposal_round,
                     vote.subject,
                     vote.execution_commitment,
                 )?;
@@ -2723,7 +2764,7 @@ impl SumeragiV2Adapter {
         )>,
     ) -> Result<(), AdapterError> {
         self.ensure_execution_commitment_compatible(
-            certificate.round,
+            certificate.proposal_round,
             certificate.subject,
             certificate.execution_commitment,
             observed,
@@ -2786,8 +2827,10 @@ impl SumeragiV2Adapter {
         let Some(locked) = durable.locked() else {
             return false;
         };
-        vote.round.height == locked.round().height()
-            && vote.round.view == locked.round().view()
+        vote.proposal_round.height == locked.round().height()
+            && vote.proposal_round.view == locked.round().view()
+            && vote.round.height == locked.round().height()
+            && vote.round.view >= vote.proposal_round.view
             && self
                 .registry
                 .subject(locked.subject())
@@ -2883,7 +2926,11 @@ impl SumeragiV2Adapter {
                         phase: vote.phase,
                         signer: vote.signer,
                     },
-                    IngressFingerprint::Vote(vote.subject, vote.execution_commitment),
+                    IngressFingerprint::Vote(
+                        vote.proposal_round,
+                        vote.subject,
+                        vote.execution_commitment,
+                    ),
                     vote.round,
                     vote.signer,
                     reducer::EquivocationKind::Vote,
@@ -3044,9 +3091,14 @@ impl SumeragiV2Adapter {
                         phase: wire::GlobalPhase::Commit,
                         ..
                     },
-                    IngressFingerprint::Vote(subject, execution_commitment),
+                    IngressFingerprint::Vote(
+                        proposal_round,
+                        subject,
+                        execution_commitment,
+                    ),
                     Some((locked_round, locked_subject, locked_execution_commitment))
-                ) if round == locked_round
+                ) if proposal_round == locked_round
+                    && round.height == locked_round.height
                     && subject == locked_subject
                     && execution_commitment == locked_execution_commitment
             )
@@ -3147,7 +3199,7 @@ impl SumeragiV2Adapter {
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
                 let certificate = registry.qc_to_core(&certificate, &self.wire_context)?;
-                let active_subject = Some((certificate.round(), certificate.subject()));
+                let active_subject = Some((certificate.proposal_round(), certificate.subject()));
                 return self.dispatch_staged_authenticated_ingress(
                     registry,
                     reducer::Event::QuorumCertificateReceived { tag, certificate },
@@ -3310,9 +3362,9 @@ impl SumeragiV2Adapter {
     ///
     /// Proposal intent persistence deliberately precedes signing. On restart,
     /// the safety WAL reconstructs that intent while the exact execution
-    /// commitment remains in the independently fsynced body store. Rebinding
-    /// the two durable records before dispatching startup effects ensures the
-    /// replayed proposal can continue directly into its Prepare vote.
+    /// commitment remains in the independently fsynced body store. Reassociating
+    /// those same-round durable records before dispatching startup effects lets
+    /// the replayed proposal continue directly into its Prepare vote.
     pub(crate) fn recover_validated_body(
         &mut self,
         manifest: &wire::PayloadManifest,
@@ -3374,7 +3426,10 @@ impl SumeragiV2Adapter {
         )
     }
 
-    /// Rebind one Busy-deferred body completion to the reducer incarnation installed by a TC.
+    /// Retag one Busy-deferred body completion for the reducer incarnation installed by a TC.
+    ///
+    /// Only lifecycle ownership changes; the manifest proposal round and
+    /// subject remain exact.
     pub(crate) fn rebind_deferred_body_available(
         &mut self,
         previous: reducer::EventTag,
@@ -3686,8 +3741,9 @@ impl SumeragiV2Adapter {
 
     /// Retire deferred proposals made unsafe by an installed durable lock.
     ///
-    /// A different-subject proposal with a strictly higher PrepareQC remains
-    /// queued because it is still a valid safe-value unlock proposal.
+    /// Only an exact locked-origin proposal remains queued. Prepared value
+    /// authority is installed and committed directly rather than converted into
+    /// another proposal origin.
     pub(crate) fn retire_deferred_unsafe_proposals_for_lock(
         &mut self,
         locked_round: wire::ConsensusRound,
@@ -3703,19 +3759,10 @@ impl SumeragiV2Adapter {
             let proposal = proposal.proposal();
             if proposal.context_id() != self.reducer.context().id()
                 || proposal.round().height() != locked_round.height()
-                || proposal.manifest().subject() == locked_subject
             {
                 return true;
             }
-            matches!(
-                proposal.justification(),
-                reducer::ProposalJustification::Timeout(certificate)
-                    if certificate.highest_prepare().is_some_and(|highest| {
-                        highest.phase() == reducer::Phase::Prepare
-                            && highest.subject() == proposal.manifest().subject()
-                            && highest.round().view() > locked_round.view()
-                    })
-            )
+            proposal.round() == locked_round && proposal.manifest().subject() == locked_subject
         });
         let retired = before.saturating_sub(self.deferred_inputs.len());
         self.active_subject = Some((locked_round, locked_subject));
@@ -4355,10 +4402,11 @@ impl SumeragiV2Adapter {
         for snapshot in self.reducer.vote_pool_snapshots() {
             let quorum = wire::SumeragiV2VoteQuorumStatus {
                 round: self.registry.round_to_wire(snapshot.round),
+                proposal_round: self.registry.round_to_wire(snapshot.proposal_round),
                 subject: self.registry.subject(snapshot.subject)?,
                 execution_commitment: self
                     .registry
-                    .execution_commitment(snapshot.round, snapshot.subject)?,
+                    .execution_commitment(snapshot.proposal_round, snapshot.subject)?,
                 signer_count: u32::try_from(snapshot.signers.len())
                     .map_err(|_| wire::ValidationError::TooManySigners)?,
                 signed_power: snapshot.signed_power.get(),
@@ -4555,6 +4603,7 @@ impl SumeragiV2Adapter {
         Ok(wire::SumeragiV2OutboundIntentStatus {
             kind: wire::SumeragiV2OutboundIntentKind::Proposal,
             round: self.registry.round_to_wire(proposal.round()),
+            proposal_round: Some(self.registry.round_to_wire(proposal.round())),
             subject: Some(self.registry.subject(proposal.manifest().subject())?),
             execution_commitment: None,
             stage,
@@ -4572,10 +4621,11 @@ impl SumeragiV2Adapter {
                 reducer::Phase::Commit => wire::SumeragiV2OutboundIntentKind::CommitVote,
             },
             round: self.registry.round_to_wire(vote.round()),
+            proposal_round: Some(self.registry.round_to_wire(vote.proposal_round())),
             subject: Some(self.registry.subject(vote.subject())?),
             execution_commitment: Some(
                 self.registry
-                    .execution_commitment(vote.round(), vote.subject())?,
+                    .execution_commitment(vote.proposal_round(), vote.subject())?,
             ),
             stage,
         })
@@ -4592,10 +4642,11 @@ impl SumeragiV2Adapter {
                 reducer::Phase::Commit => wire::SumeragiV2OutboundIntentKind::CommitQc,
             },
             round: self.registry.round_to_wire(certificate.round()),
+            proposal_round: Some(self.registry.round_to_wire(certificate.proposal_round())),
             subject: Some(self.registry.subject(certificate.subject())?),
             execution_commitment: Some(
                 self.registry
-                    .execution_commitment(certificate.round(), certificate.subject())?,
+                    .execution_commitment(certificate.proposal_round(), certificate.subject())?,
             ),
             stage,
         })
@@ -4609,6 +4660,7 @@ impl SumeragiV2Adapter {
         wire::SumeragiV2OutboundIntentStatus {
             kind: wire::SumeragiV2OutboundIntentKind::TimeoutVote,
             round: self.registry.round_to_wire(vote.round()),
+            proposal_round: None,
             subject: None,
             execution_commitment: None,
             stage,
@@ -4623,6 +4675,7 @@ impl SumeragiV2Adapter {
         wire::SumeragiV2OutboundIntentStatus {
             kind: wire::SumeragiV2OutboundIntentKind::TimeoutCertificate,
             round: self.registry.round_to_wire(certificate.round()),
+            proposal_round: None,
             subject: None,
             execution_commitment: None,
             stage,
@@ -6080,13 +6133,15 @@ impl WireRegistry {
         context: &wire::HeightContext,
     ) -> Result<reducer::SignedVote, AdapterError> {
         let round = self.round_to_core(vote.round, context)?;
+        let proposal_round = self.round_to_core(vote.proposal_round, context)?;
         let subject = self.register_subject(vote.subject)?;
-        self.register_execution_commitment(round, subject, vote.execution_commitment)?;
+        self.register_execution_commitment(proposal_round, subject, vote.execution_commitment)?;
         let signer = self.validator_id(vote.signer)?;
         Ok(reducer::SignedVote::new(
-            reducer::Vote::new(
+            reducer::Vote::new_with_proposal_round(
                 context_id(vote.round.context_id),
                 round,
+                proposal_round,
                 Self::phase_to_core(vote.phase),
                 subject,
                 signer,
@@ -6098,9 +6153,11 @@ impl WireRegistry {
     fn unsigned_vote_to_wire(&self, vote: reducer::Vote) -> Result<wire::Vote, AdapterError> {
         Ok(wire::Vote {
             round: self.round_to_wire(vote.round()),
+            proposal_round: self.round_to_wire(vote.proposal_round()),
             phase: Self::phase_to_wire(vote.phase()),
             subject: self.subject(vote.subject())?,
-            execution_commitment: self.execution_commitment(vote.round(), vote.subject())?,
+            execution_commitment: self
+                .execution_commitment(vote.proposal_round(), vote.subject())?,
             signer: self.validator_index(vote.signer())?,
             signature: Vec::new(),
         })
@@ -6116,12 +6173,34 @@ impl WireRegistry {
         &mut self,
         reference: &wire::QuorumCertificateRef,
     ) -> Result<reducer::CertificateRef, AdapterError> {
+        let Some(wire_context_id) = self.context_id else {
+            return Err(AdapterError::WireValidation(
+                wire::ValidationError::WrongHeightContext,
+            ));
+        };
+        if reference.round.context_id != wire_context_id
+            || reference.proposal_round.context_id != wire_context_id
+            || reference.proposal_round.height != reference.round.height
+        {
+            return Err(AdapterError::WireValidation(
+                wire::ValidationError::WrongHeightContext,
+            ));
+        }
         let round = reducer::Round::new(reference.round.height, reference.round.view);
+        let proposal_round = reducer::Round::new(
+            reference.proposal_round.height,
+            reference.proposal_round.view,
+        );
         let subject = self.register_subject(reference.subject)?;
-        self.register_execution_commitment(round, subject, reference.execution_commitment)?;
-        Ok(reducer::CertificateRef::new(
+        self.register_execution_commitment(
+            proposal_round,
+            subject,
+            reference.execution_commitment,
+        )?;
+        Ok(reducer::CertificateRef::new_with_proposal_round(
             context_id(reference.round.context_id),
             round,
+            proposal_round,
             Self::phase_to_core(reference.phase),
             subject,
         ))
@@ -6172,10 +6251,11 @@ impl WireRegistry {
         let aggregate_signature = aggregate_core_shares(certificate.signatures(), aggregator)?;
         let wire = wire::QuorumCertificate {
             round: self.round_to_wire(certificate.round()),
+            proposal_round: self.round_to_wire(certificate.proposal_round()),
             phase: Self::phase_to_wire(certificate.phase()),
             subject: self.subject(certificate.subject())?,
             execution_commitment: self
-                .execution_commitment(certificate.round(), certificate.subject())?,
+                .execution_commitment(certificate.proposal_round(), certificate.subject())?,
             signers,
             aggregate_signature,
         };
@@ -6409,11 +6489,9 @@ impl WireRegistry {
                         .highest_prepare_qc
                         .as_ref()
                         .map(wire::QuorumCertificate::as_ref)
+                    || selected.is_some()
                 {
                     return Err(AdapterError::InvalidProposalJustification);
-                }
-                if let Some(highest) = &timeout.highest_prepare_qc {
-                    self.qc_to_core(highest, context)?;
                 }
                 Ok(reducer::ProposalJustification::Timeout(certificate))
             }
@@ -6646,11 +6724,17 @@ impl WireRegistry {
             WalRecordV2::PrepareIntent(vote) => {
                 vote.execution_commitment.validate()?;
                 let core_round = round(vote.round)?;
+                let proposal_round = round(vote.proposal_round)?;
                 let subject = self.register_subject(vote.subject)?;
-                self.register_execution_commitment(core_round, subject, vote.execution_commitment)?;
-                reducer::WalRecord::PrepareIntent(reducer::Vote::new(
+                self.register_execution_commitment(
+                    proposal_round,
+                    subject,
+                    vote.execution_commitment,
+                )?;
+                reducer::WalRecord::PrepareIntent(reducer::Vote::new_with_proposal_round(
                     context_id(wire_context_id),
                     core_round,
+                    proposal_round,
                     Self::phase_to_core(vote.phase),
                     subject,
                     self.validator_id(vote.signer)?,
@@ -6662,13 +6746,19 @@ impl WireRegistry {
             WalRecordV2::LockAndCommit { prepare, vote } => {
                 vote.execution_commitment.validate()?;
                 let core_round = round(vote.round)?;
+                let proposal_round = round(vote.proposal_round)?;
                 let subject = self.register_subject(vote.subject)?;
-                self.register_execution_commitment(core_round, subject, vote.execution_commitment)?;
+                self.register_execution_commitment(
+                    proposal_round,
+                    subject,
+                    vote.execution_commitment,
+                )?;
                 reducer::WalRecord::LockAndCommit {
                     prepare: self.qc_to_core_unchecked(&prepare)?,
-                    vote: reducer::Vote::new(
+                    vote: reducer::Vote::new_with_proposal_round(
                         context_id(wire_context_id),
                         core_round,
+                        proposal_round,
                         Self::phase_to_core(vote.phase),
                         subject,
                         self.validator_id(vote.signer)?,
@@ -7353,6 +7443,7 @@ mod tests {
             .expect("fixture certificate has signers");
         let preimage = wire::Vote {
             round: certificate.round,
+            proposal_round: certificate.proposal_round,
             phase: certificate.phase,
             subject: certificate.subject,
             execution_commitment: certificate.execution_commitment,
@@ -7468,6 +7559,7 @@ mod tests {
         };
         let preimage = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x21),
@@ -7486,6 +7578,7 @@ mod tests {
         let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let parent_qc = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x21),
@@ -7551,6 +7644,7 @@ mod tests {
         };
         let alternate_preimage = wire::Vote {
             round: alternate_round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x21),
@@ -7572,6 +7666,7 @@ mod tests {
             .collect::<Vec<_>>();
         let alternate_parent_qc = wire::QuorumCertificate {
             round: alternate_round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x21),
@@ -7739,6 +7834,11 @@ mod tests {
                 height: context.height,
                 view: 2,
             },
+            proposal_round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 2,
+            },
             phase: wire::GlobalPhase::Commit,
             subject: subject(0x31),
             execution_commitment: execution_commitment(0x31),
@@ -7754,6 +7854,141 @@ mod tests {
         assert_eq!(summary.min_signers, 3);
         assert_eq!(summary.signed_power, 8);
         assert_eq!(summary.total_power, 10);
+    }
+
+    #[test]
+    fn vote_body_ownership_uses_the_authenticated_proposal_origin() {
+        let context = context();
+        let proposal_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 1,
+        };
+        let finality_round = wire::ConsensusRound {
+            view: 3,
+            ..proposal_round
+        };
+        let request = SignRequest::Vote(wire::Vote {
+            round: finality_round,
+            proposal_round,
+            phase: wire::GlobalPhase::Commit,
+            subject: subject(0x30),
+            execution_commitment: execution_commitment(0x30),
+            signer: 0,
+            signature: Vec::new(),
+        });
+
+        assert_eq!(request.body_round(), Some(proposal_round));
+    }
+
+    #[test]
+    fn locked_subject_is_safe_only_at_its_exact_proposal_origin() {
+        let context = context();
+        let locked_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 1,
+        };
+        let locked_subject = subject(0x32);
+        let exact_manifest = wire::PayloadManifest::derive(
+            &context,
+            locked_round,
+            locked_subject,
+            5,
+            &[b"chunk".to_vec()],
+        )
+        .expect("exact locked manifest");
+        let exact = wire::Proposal {
+            round: locked_round,
+            proposer: context.leader(locked_round.view),
+            subject: locked_subject,
+            manifest: exact_manifest,
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: Vec::new(),
+        };
+        assert!(proposal_is_safe_for_lock(
+            &exact,
+            locked_round,
+            locked_subject
+        ));
+
+        let later_round = wire::ConsensusRound {
+            view: locked_round.view + 1,
+            ..locked_round
+        };
+        let later = wire::Proposal {
+            round: later_round,
+            proposer: context.leader(later_round.view),
+            manifest: wire::PayloadManifest::derive(
+                &context,
+                later_round,
+                locked_subject,
+                5,
+                &[b"chunk".to_vec()],
+            )
+            .expect("later same-subject manifest"),
+            ..exact
+        };
+        assert!(!proposal_is_safe_for_lock(
+            &later,
+            locked_round,
+            locked_subject
+        ));
+
+        let prepared_subject = subject(0x33);
+        let prepared_round = wire::ConsensusRound {
+            view: locked_round.view + 1,
+            ..locked_round
+        };
+        let proposal_round = wire::ConsensusRound {
+            view: prepared_round.view + 1,
+            ..prepared_round
+        };
+        let highest_prepare = wire::QuorumCertificate {
+            round: prepared_round,
+            proposal_round: prepared_round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: prepared_subject,
+            execution_commitment: execution_commitment(0x33),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x33; 48],
+        };
+        let prepared_proposal = wire::Proposal {
+            round: proposal_round,
+            proposer: context.leader(proposal_round.view),
+            subject: prepared_subject,
+            manifest: wire::PayloadManifest::derive(
+                &context,
+                proposal_round,
+                prepared_subject,
+                5,
+                &[b"chunk".to_vec()],
+            )
+            .expect("prepared-subject manifest"),
+            justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
+                timeout_certificate: wire::TimeoutCertificate {
+                    round: prepared_round,
+                    groups: vec![wire::TimeoutVoteGroup {
+                        highest_prepare_qc: Some(highest_prepare.clone()),
+                        signers: vec![0, 1, 2],
+                        aggregate_signature: vec![0x34; 48],
+                    }],
+                },
+                highest_prepare_qc: Some(highest_prepare),
+            }),
+            signature: vec![0x35; 48],
+        };
+        assert!(
+            !proposal_is_safe_for_lock(&prepared_proposal, locked_round, locked_subject),
+            "a higher PrepareQC is installed directly and cannot unlock a new proposal origin"
+        );
+        let mut registry = WireRegistry::new(&context).expect("wire registry");
+        assert!(matches!(
+            registry.justification_to_core(&prepared_proposal.justification, &context),
+            Err(AdapterError::InvalidProposalJustification)
+        ));
     }
 
     fn proposal(
@@ -8039,6 +8274,7 @@ mod tests {
         let protected_subject = subject(0x6d);
         let prepare = wire::QuorumCertificate {
             round: wire_round,
+            proposal_round: wire_round,
             phase: wire::GlobalPhase::Prepare,
             subject: protected_subject,
             execution_commitment: execution_commitment(0x6d),
@@ -8199,6 +8435,7 @@ mod tests {
         let (_, keys, _) = authenticated_context();
         let mut wire_prepare = wire::QuorumCertificate {
             round: wire_round,
+            proposal_round: wire_round,
             phase: wire::GlobalPhase::Prepare,
             subject: locked_subject,
             execution_commitment: execution_commitment(0xCE),
@@ -8342,6 +8579,7 @@ mod tests {
         let execution_commitment = validated.execution_commitment();
         let prepare = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment,
@@ -8445,6 +8683,15 @@ mod tests {
             .validation_succeeded(fetch_tag, round, subject, &validated)
             .expect("validated TC lock crosses the historical Commit WAL boundary")
             .into_effects();
+        let commit_round = wire::ConsensusRound {
+            view: fetch_tag.view(),
+            ..round
+        };
+        assert_eq!(
+            commit_round.view,
+            round.view + 1,
+            "the TC installs the successor finality view"
+        );
         let commit_vote = match sign.as_slice() {
             [
                 AdapterEffect::Sign {
@@ -8452,7 +8699,8 @@ mod tests {
                     request: SignRequest::Vote(vote),
                 },
             ] if *tag == fetch_tag
-                && vote.round == round
+                && vote.round == commit_round
+                && vote.proposal_round == round
                 && vote.phase == wire::GlobalPhase::Commit
                 && vote.subject == subject
                 && vote.execution_commitment == execution_commitment
@@ -8469,7 +8717,7 @@ mod tests {
             "LockAndCommit must be fsynced before the adapter returns Sign"
         );
         assert_eq!(adapter.reducer.durable_state().last_id().get(), 3);
-        let core_round = reducer::Round::new(round.height, round.view);
+        let core_round = reducer::Round::new(commit_round.height, commit_round.view);
         let core_commit_vote = adapter
             .registry
             .vote_to_core(commit_vote, &adapter.wire_context)
@@ -8482,7 +8730,8 @@ mod tests {
         let status = adapter.status().expect("historical Commit status");
         assert!(status.liveness.outbound_intents.iter().any(|intent| {
             intent.kind == wire::SumeragiV2OutboundIntentKind::CommitVote
-                && intent.round == round
+                && intent.round == commit_round
+                && intent.proposal_round == Some(round)
                 && intent.subject == Some(subject)
                 && intent.execution_commitment == Some(execution_commitment)
                 && intent.stage == wire::SumeragiV2OutboundIntentStage::PendingSignature
@@ -8704,6 +8953,7 @@ mod tests {
 
         let retained_qc = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: execution_commitment(0x3F),
@@ -8896,6 +9146,7 @@ mod tests {
             validated_receipts_for_manifest(&adapter.wire_context, &manifest);
         let decision = wire::QuorumCertificate {
             round: manifest.round,
+            proposal_round: manifest.round,
             phase: wire::GlobalPhase::Commit,
             subject: decided_subject,
             execution_commitment: validated.execution_commitment(),
@@ -8951,6 +9202,7 @@ mod tests {
             validated_receipts_for_manifest(&adapter.wire_context, &manifest);
         let decision = wire::QuorumCertificate {
             round: manifest.round,
+            proposal_round: manifest.round,
             phase: wire::GlobalPhase::Commit,
             subject: decided_subject,
             execution_commitment: validated.execution_commitment(),
@@ -9032,6 +9284,7 @@ mod tests {
             validated_receipts_for_manifest(&adapter.wire_context, &manifest);
         let decision = wire::QuorumCertificate {
             round: manifest.round,
+            proposal_round: manifest.round,
             phase: wire::GlobalPhase::Commit,
             subject: decided_subject,
             execution_commitment: validated.execution_commitment(),
@@ -9065,6 +9318,7 @@ mod tests {
         );
         let terminal_vote = wire::Vote {
             round: manifest.round,
+            proposal_round: manifest.round,
             phase: wire::GlobalPhase::Prepare,
             subject: decided_subject,
             execution_commitment: validated.execution_commitment(),
@@ -9159,6 +9413,7 @@ mod tests {
 
         let deferred_vote = wire::Vote {
             round: manifest.round,
+            proposal_round: manifest.round,
             phase: wire::GlobalPhase::Prepare,
             subject: subject(0x82),
             execution_commitment: execution_commitment(0x82),
@@ -9479,6 +9734,7 @@ mod tests {
             let commitment = execution_commitment(0xD4);
             let mut decision = wire::QuorumCertificate {
                 round,
+                proposal_round: round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
                 execution_commitment: commitment,
@@ -9494,6 +9750,7 @@ mod tests {
             keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let preimage = wire::Vote {
                 round,
+                proposal_round: round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
                 execution_commitment: commitment,
@@ -9523,7 +9780,7 @@ mod tests {
                 .wal
                 .append(&record)
                 .expect("append acknowledged Decision record");
-            expected = (round, subject, commitment);
+            expected = (round, round, subject, commitment);
         }
         OpenOptions::new()
             .append(true)
@@ -9549,13 +9806,13 @@ mod tests {
         let (active_round, active_subject) = adapter
             .active_subject
             .expect("durable Decision owns the recovery body pipeline");
-        assert_eq!(adapter.registry.round_to_wire(active_round), expected.0);
+        assert_eq!(adapter.registry.round_to_wire(active_round), expected.1);
         assert_eq!(
             adapter
                 .registry
                 .subject(active_subject)
                 .expect("map active decision subject"),
-            expected.1
+            expected.2
         );
         let status = adapter.status().expect("first decision recovery snapshot");
         assert_eq!(
@@ -9611,6 +9868,7 @@ mod tests {
             };
             let decision = wire::QuorumCertificate {
                 round,
+                proposal_round: round,
                 phase: wire::GlobalPhase::Commit,
                 subject: subject(0xD5),
                 execution_commitment: execution_commitment(0xD5),
@@ -9650,6 +9908,7 @@ mod tests {
         let commitment = execution_commitment(0xDB);
         let forged_prepare = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: locked_subject,
             execution_commitment: commitment,
@@ -9658,6 +9917,7 @@ mod tests {
         };
         let commit_intent = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: locked_subject,
             execution_commitment: commitment,
@@ -9724,6 +9984,7 @@ mod tests {
         let commitment = execution_commitment(0xD7);
         let prepare = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: certified_subject,
             execution_commitment: commitment,
@@ -9765,6 +10026,7 @@ mod tests {
         };
         let vote = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: certified_subject,
             execution_commitment: commitment,
@@ -9809,6 +10071,7 @@ mod tests {
 
         let forged_parent = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: certified_subject,
             execution_commitment: commitment,
@@ -9875,6 +10138,7 @@ mod tests {
         proposal.signature = vec![0xDA];
         let vote = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: subject(0xDA),
             execution_commitment: execution_commitment(0xDA),
@@ -9883,6 +10147,7 @@ mod tests {
         };
         let prepare = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: vote.subject,
             execution_commitment: vote.execution_commitment,
@@ -9930,6 +10195,7 @@ mod tests {
         let commitment = execution_commitment(0xD6);
         let forged = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: decision_subject,
             execution_commitment: commitment,
@@ -9938,6 +10204,7 @@ mod tests {
         };
         let preimage = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: decision_subject,
             execution_commitment: commitment,
@@ -10025,6 +10292,11 @@ mod tests {
                 height: context.height,
                 view: 2,
             },
+            proposal_round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 2,
+            },
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: execution_commitment(3),
@@ -10051,6 +10323,7 @@ mod tests {
         };
         let first = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: subject(0x31),
             execution_commitment: execution_commitment(0x31),
@@ -10120,6 +10393,7 @@ mod tests {
         };
         let mut vote = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: execution_commitment(0xEC),
@@ -10138,6 +10412,7 @@ mod tests {
 
         let certificate = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: execution_commitment(0xED),
@@ -10157,6 +10432,11 @@ mod tests {
         let subject = subject(5);
         let prepare = wire::QuorumCertificate {
             round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 2,
+            },
+            proposal_round: wire::ConsensusRound {
                 context_id: context.id(),
                 height: context.height,
                 view: 2,
@@ -10296,6 +10576,7 @@ mod tests {
 
         let first_vote = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: flood_subject(0),
             execution_commitment: execution_commitment(0x41),
@@ -10318,6 +10599,7 @@ mod tests {
         for counter in 1..=flood_size {
             let vote = wire::Vote {
                 round,
+                proposal_round: round,
                 phase: wire::GlobalPhase::Prepare,
                 subject: flood_subject(counter),
                 execution_commitment: execution_commitment(0x42),
@@ -10345,6 +10627,7 @@ mod tests {
         // higher-priority deferred slot even while the signer is outstanding.
         let commit_qc = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: decided_subject,
             execution_commitment: decided_execution_commitment,
@@ -10649,6 +10932,7 @@ mod tests {
         };
         let locked_commit = wire::ConsensusMessageV2Payload::Vote(wire::Vote {
             round: wire_round,
+            proposal_round: wire_round,
             phase: wire::GlobalPhase::Commit,
             subject: locked_subject,
             execution_commitment: execution_commitment(0xD4),
@@ -10711,6 +10995,7 @@ mod tests {
         for rejected in [
             wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase: wire::GlobalPhase::Prepare,
                 subject: locked_subject,
                 execution_commitment: execution_commitment(0xD4),
@@ -10719,6 +11004,7 @@ mod tests {
             }),
             wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase: wire::GlobalPhase::Commit,
                 subject: subject(0xD5),
                 execution_commitment: execution_commitment(0xD5),
@@ -10756,6 +11042,7 @@ mod tests {
             };
             let wire_prepare = wire::QuorumCertificate {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase: wire::GlobalPhase::Prepare,
                 subject: locked_subject,
                 execution_commitment: locked_execution_commitment,
@@ -10800,6 +11087,7 @@ mod tests {
                     let signer = u32::try_from(signer).expect("fixture signer index fits u32");
                     let payload = wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                         round: wire_round,
+                        proposal_round: wire_round,
                         phase: wire::GlobalPhase::Commit,
                         subject: locked_subject,
                         execution_commitment: locked_execution_commitment,
@@ -10963,6 +11251,7 @@ mod tests {
         };
         let carried_wire = wire::QuorumCertificate {
             round: wire_round,
+            proposal_round: wire_round,
             phase: wire::GlobalPhase::Prepare,
             subject: subject(0xE1),
             execution_commitment: execution_commitment(0xE1),
@@ -10971,6 +11260,7 @@ mod tests {
         };
         let durable_wire = wire::QuorumCertificate {
             round: wire_round,
+            proposal_round: wire_round,
             phase: wire::GlobalPhase::Prepare,
             subject: subject(0xE2),
             execution_commitment: execution_commitment(0xE2),
@@ -11166,6 +11456,7 @@ mod tests {
         };
         let wire_prepare = wire::QuorumCertificate {
             round: wire_round,
+            proposal_round: wire_round,
             phase: wire::GlobalPhase::Prepare,
             subject: locked_subject,
             execution_commitment: locked_execution_commitment,
@@ -11248,6 +11539,7 @@ mod tests {
         let locked_vote =
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase: wire::GlobalPhase::Commit,
                 subject: locked_subject,
                 execution_commitment: locked_execution_commitment,
@@ -11383,6 +11675,7 @@ mod tests {
         let remote_commit =
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase: wire::GlobalPhase::Commit,
                 subject: locked_subject,
                 execution_commitment: locked_execution_commitment,
@@ -11423,6 +11716,7 @@ mod tests {
 
         let prepare = wire::QuorumCertificate {
             round: wire_round,
+            proposal_round: wire_round,
             phase: wire::GlobalPhase::Prepare,
             subject: locked_subject,
             execution_commitment: locked_execution_commitment,
@@ -11576,6 +11870,7 @@ mod tests {
         };
         let wire_prepare = wire::QuorumCertificate {
             round: wire_round,
+            proposal_round: wire_round,
             phase: wire::GlobalPhase::Prepare,
             subject: locked_subject,
             execution_commitment: locked_execution_commitment,
@@ -11643,6 +11938,7 @@ mod tests {
         let locked_vote = |signer, marker| {
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase: wire::GlobalPhase::Commit,
                 subject: locked_subject,
                 execution_commitment: locked_execution_commitment,
@@ -11776,6 +12072,7 @@ mod tests {
         let conflict =
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase: wire::GlobalPhase::Commit,
                 subject: subject(0xD7),
                 execution_commitment: execution_commitment(0xD7),
@@ -11911,6 +12208,7 @@ mod tests {
         };
         let vote = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: subject(0xBD),
             execution_commitment: execution_commitment(0xBD),
@@ -11985,6 +12283,107 @@ mod tests {
         assert!(first.service_handoff_is_complete());
         assert!(second.claim_adapter_service_for_test());
         assert!(second.claim_runtime_handoff_once());
+    }
+
+    #[test]
+    fn deferred_projection_distinguishes_authenticated_proposal_origins() {
+        let context_id = reducer::ContextId::repeat(0xA1);
+        let finality_round = reducer::Round::new(7, 4);
+        let origin_a = reducer::Round::new(7, 1);
+        let origin_b = reducer::Round::new(7, 2);
+        let subject = reducer::Subject::repeat(0xA2);
+        let signer = reducer::ValidatorId::repeat(0xA3);
+        let tag = reducer::EventTag::new(7, 4, reducer::Generation::new(1));
+        let signature = reducer::OpaqueSignature::new(vec![0xA4]);
+        let project = |event: reducer::Event| {
+            let mut projection = Vec::new();
+            append_deferred_projection_event(&mut projection, &event);
+            projection
+        };
+
+        let signed_vote = |proposal_round| {
+            reducer::SignedVote::new(
+                reducer::Vote::new_with_proposal_round(
+                    context_id,
+                    finality_round,
+                    proposal_round,
+                    reducer::Phase::Commit,
+                    subject,
+                    signer,
+                ),
+                signature.clone(),
+            )
+        };
+        assert_ne!(
+            project(reducer::Event::VoteReceived {
+                tag,
+                vote: signed_vote(origin_a),
+            }),
+            project(reducer::Event::VoteReceived {
+                tag,
+                vote: signed_vote(origin_b),
+            })
+        );
+
+        let certificate = |proposal_round| {
+            reducer::QuorumCertificate::new(
+                reducer::CertificateRef::new_with_proposal_round(
+                    context_id,
+                    finality_round,
+                    proposal_round,
+                    reducer::Phase::Commit,
+                    subject,
+                ),
+                vec![reducer::SignatureShare::new(signer, signature.clone())],
+            )
+        };
+        assert_ne!(
+            project(reducer::Event::QuorumCertificateReceived {
+                tag,
+                certificate: certificate(origin_a),
+            }),
+            project(reducer::Event::QuorumCertificateReceived {
+                tag,
+                certificate: certificate(origin_b),
+            })
+        );
+
+        let proposal = |proposal_round| {
+            reducer::SignedProposal::new(
+                reducer::Proposal::new(
+                    context_id,
+                    reducer::Round::new(7, 0),
+                    signer,
+                    reducer::PayloadManifest::new(
+                        subject,
+                        reducer::Digest::repeat(0xA5),
+                        reducer::Digest::repeat(0xA6),
+                        1,
+                        1,
+                    ),
+                    reducer::ProposalJustification::ParentCommit(Some(
+                        reducer::CertificateRef::new_with_proposal_round(
+                            context_id,
+                            finality_round,
+                            proposal_round,
+                            reducer::Phase::Commit,
+                            subject,
+                        ),
+                    )),
+                ),
+                signature.clone(),
+            )
+        };
+        assert_ne!(
+            project(reducer::Event::ProposalReceived {
+                tag,
+                proposal: proposal(origin_a),
+            }),
+            project(reducer::Event::ProposalReceived {
+                tag,
+                proposal: proposal(origin_b),
+            })
+        );
     }
 
     #[test]
@@ -12653,6 +13052,7 @@ mod tests {
         };
         let qc = |phase, marker| wire::QuorumCertificate {
             round: wire_round,
+            proposal_round: wire_round,
             phase,
             subject: subject(marker),
             execution_commitment: execution_commitment(marker),
@@ -12782,6 +13182,7 @@ mod tests {
         };
         let wire_prepare = wire::QuorumCertificate {
             round: wire_round,
+            proposal_round: wire_round,
             phase: wire::GlobalPhase::Prepare,
             subject: locked_subject,
             execution_commitment: locked_execution_commitment,
@@ -12849,6 +13250,7 @@ mod tests {
             let signer = u32::try_from(signer).expect("fixture signer fits u32");
             let wire_filler_vote = wire::Vote {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase: wire::GlobalPhase::Commit,
                 subject: locked_subject,
                 execution_commitment: locked_execution_commitment,
@@ -12892,6 +13294,7 @@ mod tests {
         let locked_vote =
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase: wire::GlobalPhase::Commit,
                 subject: locked_subject,
                 execution_commitment: locked_execution_commitment,
@@ -12985,6 +13388,7 @@ mod tests {
             let locked_commitment = execution_commitment(marker);
             let wire_vote = wire::Vote {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase: wire::GlobalPhase::Commit,
                 subject: locked_subject,
                 execution_commitment: locked_commitment,
@@ -13004,7 +13408,11 @@ mod tests {
                     phase: wire::GlobalPhase::Commit,
                     signer,
                 },
-                fingerprint: IngressFingerprint::Vote(locked_subject, locked_commitment),
+                fingerprint: IngressFingerprint::Vote(
+                    wire_round,
+                    locked_subject,
+                    locked_commitment,
+                ),
                 generation: tag.generation(),
                 inserted_equivocation: false,
                 locked_commit_progress: true,
@@ -13124,6 +13532,7 @@ mod tests {
         ] {
             let certificate = wire::QuorumCertificate {
                 round: wire_round,
+                proposal_round: wire_round,
                 phase,
                 subject: subject(marker),
                 execution_commitment: execution_commitment(marker),
@@ -13337,6 +13746,7 @@ mod tests {
         let locked_execution_commitment = execution_commitment(0xDA);
         let wire_vote = wire::Vote {
             round: wire_round,
+            proposal_round: wire_round,
             phase: wire::GlobalPhase::Commit,
             subject: locked_subject,
             execution_commitment: locked_execution_commitment,
@@ -13355,7 +13765,11 @@ mod tests {
                 phase: wire::GlobalPhase::Commit,
                 signer: 1,
             },
-            fingerprint: IngressFingerprint::Vote(locked_subject, locked_execution_commitment),
+            fingerprint: IngressFingerprint::Vote(
+                wire_round,
+                locked_subject,
+                locked_execution_commitment,
+            ),
             generation: tag.generation(),
             inserted_equivocation: false,
             locked_commit_progress: true,
@@ -13674,6 +14088,7 @@ mod tests {
 
         let normal_vote = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: subject(0xD3),
             execution_commitment: execution_commitment(0xD3),
@@ -13928,6 +14343,7 @@ mod tests {
         let signed_vote = |execution_commitment| {
             let mut vote = wire::Vote {
                 round,
+                proposal_round: round,
                 phase: wire::GlobalPhase::Prepare,
                 subject: locally_validated_subject,
                 execution_commitment,
@@ -14009,6 +14425,7 @@ mod tests {
 
         let mut conflicting_vote = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: bound_subject,
             execution_commitment: conflicting_commitment,
@@ -14030,6 +14447,7 @@ mod tests {
 
         let mut conflicting_qc = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: bound_subject,
             execution_commitment: conflicting_commitment,
@@ -14136,6 +14554,7 @@ mod tests {
         let unbound_subject = subject(0x85);
         let mut unbound_qc_a = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: unbound_subject,
             execution_commitment: execution_commitment(0x85),
@@ -14264,6 +14683,7 @@ mod tests {
 
         let mut canonical_vote = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: bound_subject,
             execution_commitment: canonical_commitment,
@@ -14296,6 +14716,7 @@ mod tests {
         let subject = subject(12);
         let mut vote = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: execution_commitment(12),
@@ -14315,6 +14736,7 @@ mod tests {
 
         let preimage = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: execution_commitment(12),
@@ -14333,6 +14755,7 @@ mod tests {
         let refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let certificate = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: execution_commitment(12),
@@ -14379,6 +14802,7 @@ mod tests {
         let subject = subject(13);
         let prepare_preimage = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: execution_commitment(13),
@@ -14397,6 +14821,7 @@ mod tests {
         let prepare_refs = prepare_shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let prepare = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment: execution_commitment(13),

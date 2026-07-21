@@ -338,8 +338,17 @@ async fn zk_roots_endpoint_returns_all_roots_when_request_exceeds_history() {
         Some(hex::encode(roots_all.last().copied().unwrap()).as_str())
     );
     assert_eq!(
-        payload.get("height").and_then(norito::json::Value::as_u64),
-        Some(roots_all.len() as u64)
+        payload
+            .get("evaluated_block_height")
+            .and_then(norito::json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        payload
+            .get("evaluated_block_hash")
+            .and_then(norito::json::Value::as_str)
+            .map(str::len),
+        Some(64)
     );
 }
 
@@ -419,8 +428,17 @@ async fn zk_roots_endpoint_returns_empty_window_when_cap_is_zero() {
         Some(hex::encode(roots_all.last().copied().unwrap()).as_str())
     );
     assert_eq!(
-        payload.get("height").and_then(norito::json::Value::as_u64),
-        Some(roots_all.len() as u64)
+        payload
+            .get("evaluated_block_height")
+            .and_then(norito::json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        payload
+            .get("evaluated_block_hash")
+            .and_then(norito::json::Value::as_str)
+            .map(str::len),
+        Some(64)
     );
 }
 

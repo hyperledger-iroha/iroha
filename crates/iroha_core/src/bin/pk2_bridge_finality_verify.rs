@@ -28,8 +28,8 @@ use iroha_data_model::{
     block::{
         BlockHeader,
         consensus_v2::{
-            BlockSubject, ConsensusMode, ExecutionCommitment, GlobalPhase, HeightContextId,
-            PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2Status,
+            BlockSubject, ConsensusMode, ConsensusRound, ExecutionCommitment, GlobalPhase,
+            HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2Status,
         },
         decode_framed_signed_block,
     },
@@ -43,7 +43,7 @@ const LEGACY_EXPECTATIONS_SCHEMA_VERSION: u8 = 2;
 const LEGACY_RECEIPT_SCHEMA_VERSION: u8 = 3;
 const ATTESTED_EXPECTATIONS_SCHEMA_VERSION: u8 = 3;
 const ATTESTED_RECEIPT_SCHEMA_VERSION: u8 = 4;
-const COMMIT_DECISION_ID_VERSION: u8 = 1;
+const COMMIT_DECISION_ID_VERSION: u8 = 2;
 const PK2_CHAIN_ID: &str = "cbdc16";
 const MAX_STATUS_BYTES: u64 = 1024 * 1024;
 const MAX_PROOF_BYTES: u64 = 16 * 1024 * 1024;
@@ -98,7 +98,9 @@ On attested success, receipt schema 4 binds the reporting-node signature and
 caller challenge, exact sealed signed-genesis SHA-256 and typed block hash,
 height-one genesis CommitQC decision, and durable-tip CommitQC decision. Each
 decision ID binds context, height, Commit phase, full block subject, and full
-execution commitment, but excludes view, signers, and aggregate representation.
+execution commitment. It also binds the immutable proposal-origin round, while
+excluding only the later certification-round view, signers, and aggregate
+representation.
 ";
 
 #[derive(Debug)]
@@ -158,13 +160,15 @@ struct AttestedExpectedRosterDocument {
 /// Stable projection of the fields which define one semantic CommitQC decision.
 ///
 /// This deliberately mirrors `QuorumCertificateRef::same_commit_decision`: the
-/// round view, signer subset, and aggregate signature are absent, while the
-/// complete subject and deterministic execution commitment remain bound.
+/// certification-round view, signer subset, and aggregate signature are
+/// absent, while the immutable proposal origin, complete subject, and
+/// deterministic execution commitment remain bound.
 #[derive(norito::Encode)]
 struct SemanticCommitDecisionIdentity {
     identity_version: u8,
     context_id: HeightContextId,
     height: u64,
+    proposal_round: ConsensusRound,
     phase: GlobalPhase,
     subject: BlockSubject,
     execution_commitment: ExecutionCommitment,
@@ -1245,6 +1249,7 @@ fn semantic_commit_decision_id(certificate: QuorumCertificateRef) -> Result<Stri
         identity_version: COMMIT_DECISION_ID_VERSION,
         context_id: certificate.round.context_id,
         height: certificate.round.height,
+        proposal_round: certificate.proposal_round,
         phase: certificate.phase,
         subject: certificate.subject,
         execution_commitment: certificate.execution_commitment,
@@ -1381,12 +1386,14 @@ mod tests {
             Hash::new(b"ordinary writes"),
             genesis_executed_wire_hash,
         );
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: 1,
+            view: 0,
+        };
         let mut commit_qc = QuorumCertificate {
-            round: ConsensusRound {
-                context_id: context.id(),
-                height: 1,
-                view: 0,
-            },
+            round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -1987,6 +1994,17 @@ mod tests {
         assert_ne!(
             semantic_commit_decision_id(baseline).expect("baseline decision id"),
             semantic_commit_decision_id(different_subject).expect("different subject decision id"),
+        );
+
+        let mut different_origin = baseline;
+        different_origin.round.view = different_origin.round.view.saturating_add(1);
+        different_origin.proposal_round.view =
+            different_origin.proposal_round.view.saturating_add(1);
+        assert!(!baseline.same_commit_decision(different_origin));
+        assert_ne!(
+            semantic_commit_decision_id(baseline).expect("baseline decision id"),
+            semantic_commit_decision_id(different_origin)
+                .expect("different proposal-origin decision id"),
         );
 
         let mut prepare = baseline;

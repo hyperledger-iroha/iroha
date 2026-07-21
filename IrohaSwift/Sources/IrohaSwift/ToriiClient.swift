@@ -21769,12 +21769,14 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
 /// A stable reference to a Sumeragi v2 quorum certificate.
 public struct ToriiSumeragiV2QuorumCertificateRef: Decodable, Sendable, Equatable {
     public let round: ToriiSumeragiV2ConsensusRound
+    public let proposalRound: ToriiSumeragiV2ConsensusRound
     public let phase: ToriiSumeragiV2GlobalPhase
     public let subject: ToriiSumeragiV2BlockSubject
     public let executionCommitment: ToriiSumeragiV2ExecutionCommitment
 
     private enum CodingKeys: String, CodingKey {
         case round
+        case proposalRound = "proposal_round"
         case phase
         case subject
         case executionCommitment = "execution_commitment"
@@ -21783,11 +21785,15 @@ public struct ToriiSumeragiV2QuorumCertificateRef: Decodable, Sendable, Equatabl
     public init(from decoder: Decoder) throws {
         try rejectUnknownNativeAmxFields(
             from: decoder,
-            allowed: ["round", "phase", "subject", "execution_commitment"],
+            allowed: ["round", "proposal_round", "phase", "subject", "execution_commitment"],
             context: "Sumeragi v2 quorum-certificate reference"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         round = try container.decode(ToriiSumeragiV2ConsensusRound.self, forKey: .round)
+        proposalRound = try container.decode(
+            ToriiSumeragiV2ConsensusRound.self,
+            forKey: .proposalRound
+        )
         phase = try container.decode(ToriiSumeragiV2GlobalPhase.self, forKey: .phase)
         subject = try container.decode(ToriiSumeragiV2BlockSubject.self, forKey: .subject)
         executionCommitment = try container.decode(
@@ -22113,6 +22119,13 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
                     forKey: .highestPrepareQC,
                     in: container,
                     debugDescription: "Sumeragi status QC reference must be a PrepareQC"
+                )
+            }
+            guard certificate.proposalRound == certificate.round else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .highestPrepareQC,
+                    in: container,
+                    debugDescription: "Sumeragi status PrepareQC proposal round must match its voting round"
                 )
             }
             guard certificate.round.view <= self.view else {
@@ -23453,6 +23466,22 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     ) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getKagemushaReadiness(assetDefinitionId: assetDefinitionId)
+        }
+    }
+
+    @discardableResult
+    public func getKagemushaRecipientRegistrationLineage(
+        request: KagemushaRecipientPaymentRequest,
+        readiness: ToriiKagemushaReadiness,
+        verifiedAtMilliseconds: UInt64,
+        completion: @escaping (Result<KagemushaRecipientRegistrationLineage, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getKagemushaRecipientRegistrationLineage(
+                request: request,
+                readiness: readiness,
+                verifiedAtMilliseconds: verifiedAtMilliseconds
+            )
         }
     }
 
@@ -25906,6 +25935,38 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try response.validatedPaths(expectedCommitments: commitments)
     }
 
+    public func getZkAssetRoots(
+        asset: String,
+        max: UInt32 = 0
+    ) async throws -> ToriiZkRootsResponse {
+        let requestBody = try ToriiZkRootsRequest(assetId: asset, max: max)
+        let request = try makeRequest(
+            path: "/v1/zk/roots",
+            method: .post,
+            queryItems: nil,
+            body: try JSONEncoder().encode(requestBody),
+            headers: ["Content-Type": "application/json"]
+        )
+        let data = try await data(for: request)
+        do {
+            return try ToriiZkRootsResponse.decodeStrict(data)
+        } catch {
+            throw ToriiClientError.decoding(error)
+        }
+    }
+
+    public func getZkAssetRoots(
+        asset: String,
+        max: UInt32 = 0,
+        matching readiness: ToriiKagemushaReadiness
+    ) async throws -> ToriiZkRootsResponse {
+        let roots = try await getZkAssetRoots(asset: asset, max: max)
+        return try roots.requireEvaluatedSnapshot(
+            height: readiness.evaluatedBlockHeight,
+            blockHash: readiness.evaluatedBlockHashBytes
+        )
+    }
+
     /// Fetch the complete authoritative path snapshot, including Torii's
     /// padded next-zero path. Kagemusha uses this form so a one-input proof can
     /// be built from two bounded paths without downloading the whole tree.
@@ -25927,6 +25988,21 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             _ = try response.validatedNextZeroPath()
         }
         return response
+    }
+
+    public func getZkAssetMerklePathSnapshot(
+        asset: String,
+        commitments: [Data],
+        matching readiness: ToriiKagemushaReadiness
+    ) async throws -> ToriiZkMerklePathResponse {
+        let response = try await getZkAssetMerklePathSnapshot(
+            asset: asset,
+            commitments: commitments
+        )
+        return try response.requireEvaluatedSnapshot(
+            height: readiness.evaluatedBlockHeight,
+            blockHash: readiness.evaluatedBlockHashBytes
+        )
     }
 
     private func fetchZkAssetMerklePathResponse(
@@ -26861,6 +26937,58 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         return readiness
+    }
+
+    public func getKagemushaRecipientRegistrationLineage(
+        request requestBody: KagemushaRecipientPaymentRequest,
+        readiness: ToriiKagemushaReadiness,
+        verifiedAtMilliseconds: UInt64
+    ) async throws -> KagemushaRecipientRegistrationLineage {
+        guard verifiedAtMilliseconds > 0 else {
+            throw ToriiClientError.invalidPayload(
+                "Kagemusha receiver lineage verification time must be positive"
+            )
+        }
+        guard requestBody.payload.assetDefinitionID == readiness.assetDefinitionId else {
+            throw ToriiClientError.invalidPayload(
+                "Kagemusha readiness asset does not match the recipient request"
+            )
+        }
+        let request = try makeRequest(
+            path: KagemushaToriiAPI.Endpoint.receiverLineage.path,
+            method: .post,
+            body: requestBody.archive,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            ]
+        )
+        let (responseData, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "Kagemusha receiver registration lineage",
+            maximumBytes: KagemushaRecipientRegistrationLineage.maximumArchiveBytes
+        )
+        try ensureStatus(response, equals: 200, responseBody: responseData)
+        try ensureResponseMediaType(response, equals: "application/x-norito")
+        guard !responseData.isEmpty else {
+            throw ToriiClientError.emptyBody
+        }
+        guard let verified = try NoritoNativeBridge.shared
+            .kagemushaRecipientRegistrationLineageVerifyV1(
+                requestArchive: requestBody.archive,
+                lineageArchive: responseData,
+                verifiedAtMilliseconds: verifiedAtMilliseconds,
+                expectedEvaluatedBlockHeight: readiness.evaluatedBlockHeight,
+                expectedEvaluatedBlockHash: readiness.evaluatedBlockHashBytes
+            ) else {
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        guard verified == responseData else {
+            throw ToriiClientError.invalidPayload(
+                "Native receiver lineage verification did not preserve canonical bytes"
+            )
+        }
+        return try KagemushaRecipientRegistrationLineage(verifiedArchive: verified)
     }
 
     public func submitKagemushaTopUp(

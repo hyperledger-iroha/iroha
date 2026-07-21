@@ -7607,10 +7607,14 @@ mod tests {
                 PROTOCOL_VERSION.saturating_add(1);
             attack.finality_artifact.commit_qc.round.context_id =
                 attack.finality_artifact.height_context.id();
+            attack.finality_artifact.commit_qc.proposal_round.context_id =
+                attack.finality_artifact.height_context.id();
         });
         assert_finality_structure_rejected(&proof, |attack| {
             attack.finality_artifact.height_context.chain_id = "attacker-chain".into();
             attack.finality_artifact.commit_qc.round.context_id =
+                attack.finality_artifact.height_context.id();
+            attack.finality_artifact.commit_qc.proposal_round.context_id =
                 attack.finality_artifact.height_context.id();
         });
         assert_finality_structure_rejected(&proof, |attack| {
@@ -7655,6 +7659,8 @@ mod tests {
             .saturating_sub(1);
         attack.finality_artifact.commit_qc.round.context_id =
             attack.finality_artifact.height_context.id();
+        attack.finality_artifact.commit_qc.proposal_round.context_id =
+            attack.finality_artifact.height_context.id();
         assert!(
             !verify_taira_bridge_finality_proof_structure(&attack),
             "a proof-controlled count threshold must not replace the canonical roster quorum"
@@ -7668,6 +7674,8 @@ mod tests {
             .total_power
             .saturating_add(1);
         attack.finality_artifact.commit_qc.round.context_id =
+            attack.finality_artifact.height_context.id();
+        attack.finality_artifact.commit_qc.proposal_round.context_id =
             attack.finality_artifact.height_context.id();
         assert!(
             !verify_taira_bridge_finality_proof_structure(&attack),

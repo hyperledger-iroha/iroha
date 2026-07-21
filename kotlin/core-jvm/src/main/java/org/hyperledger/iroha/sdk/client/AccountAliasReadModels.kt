@@ -224,7 +224,7 @@ internal fun aliasU64(value: Any?, path: String): BigInteger {
 internal fun aliasOptionalU64(value: Any?, path: String): BigInteger? =
     if (value == null) null else aliasU64(value, path)
 
-private fun requireExactText(value: String, field: String) {
+internal fun requireExactText(value: String, field: String) {
     require(value.isNotBlank() && value == value.trim() && value.none { it.isISOControl() }) {
         "$field must be non-blank without surrounding whitespace or controls"
     }

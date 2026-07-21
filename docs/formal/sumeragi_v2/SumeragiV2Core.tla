@@ -494,6 +494,21 @@ TCValid(tc) ==
 TcHighRank(tc) == HighestTimeoutVote(tc.votes).highRank
 TcHighSubject(tc) == HighestTimeoutVote(tc.votes).highSubject
 
+(***************************************************************************
+A second valid certificate for the timeout round which installed the current
+view may expose a PrepareQC omitted by the first timeout quorum.  Production
+admits that stale-by-one certificate only when its selected Prepare rank is
+strictly above both durable Prepare frontiers.  The install rebinds the lock
+and advances the asynchronous generation, but does not advance nodeView a
+second time.
+***************************************************************************)
+StrictSameRoundTcUpgrade(node, tc) ==
+  /\ tc.view + 1 = nodeView[node]
+  /\ NodeInstalledTC(node, tc.view)
+  /\ TcHighRank(tc) > highestRank[node]
+  /\ TcHighRank(tc) > lockRank[node]
+  /\ generation[node] < MaxGeneration
+
 InstalledTcAuthorizesCommitVote(commitVote) ==
   \E installed \in installedTCs:
     /\ installed.node = commitVote.signer
@@ -507,8 +522,8 @@ An honest timeout ordinarily fences later Commit creation in that view.  The
 one production exception is a Commit for the exact PrepareQC selected by a
 durably installed TC: installation first promotes that QC to the node's lock,
 and local body validation may then persist the matching historical intent only
-when no higher conflicting-subject local Prepare intent or known PrepareQC
-exists.  Higher same-subject reproposals are non-conflicting.
+when no higher local Prepare origin or known PrepareQC exists.  Subject
+equality cannot make a later proposal origin equivalent to the locked origin.
 The installed-TC record is retained as durable provenance after the lock later
 advances, so old timeout/Commit compatibility remains state-checkable.
 ***************************************************************************)
@@ -553,15 +568,13 @@ CurrentOpenPrepareForCommit(node, qc) ==
   /\ qc.view = nodeView[node]
   /\ ~NodeTimedOut(node, qc.view)
 
-NoHigherConflictingPrepareKnown(node, qc) ==
+NoHigherPrepareOriginKnown(node, qc) ==
   /\ ~\E vote \in prepareIntents:
        /\ vote.signer = node
        /\ vote.context = qc.context
        /\ vote.phase = "Prepare"
        /\ vote.view > qc.view
-       /\ vote.subject # qc.subject
-  /\ ~(highestRank[node] > qc.view
-        /\ highestSubject[node] # qc.subject)
+  /\ ~(highestRank[node] > qc.view)
 
 HistoricalLockedPrepareRecoveryProvenance(node, qc) ==
   \/ InstalledTcSelectsPrepareFor(node, qc)
@@ -580,7 +593,7 @@ HistoricalLockedPrepareSource(node, qc) ==
 HistoricalLockedPrepareForCommit(node, qc) ==
   /\ HistoricalLockedPrepareSource(node, qc)
   /\ ExactLockedCommitIntents(node, qc.view, qc.subject) = {}
-  /\ NoHigherConflictingPrepareKnown(node, qc)
+  /\ NoHigherPrepareOriginKnown(node, qc)
 
 \* Compatibility aliases for proof modules whose theorem names predate the
 \* ordinary LockAndCommit -> no-high-TC recovery source.  New statements use
@@ -599,9 +612,9 @@ already recorded its exact local Commit intent before a later no-high TC
 carried the lock forward.  Both origins authorize Fetch/Validate/retransmit;
 only the installed-TC origin with no existing intent can authorize a fresh
 historical BeginLockCommit.  Recovery intentionally excludes the
-higher-conflict signing fence: Rust still fetches and validates that locked
-body, then returns IrrelevantView instead of creating a late Commit when
-conflicting higher Prepare evidence exists.
+higher-origin signing fence: Rust still fetches and validates that locked
+body, then returns IrrelevantView instead of creating a late Commit when any
+higher Prepare origin exists.
 
 The current TC abstraction carries only the authenticated high rank/subject,
 not the full selected QC bytes.  Exact signer-set identity therefore remains
@@ -641,17 +654,15 @@ ProposalJustified(node, proposal) ==
           /\ installed.node = node
           /\ installed.tc.context = context
           /\ installed.tc.view + 1 = proposal.view
-          /\ proposal.justifyRank = TcHighRank(installed.tc)
-          /\ proposal.justifySubject = TcHighSubject(installed.tc)
-          /\ AuthenticatedHighRef(proposal.justifyRank,
-                                  proposal.justifySubject)
-          /\ proposal.justifyRank < proposal.view
+          /\ TcHighRank(installed.tc) = NoRank
+          /\ TcHighSubject(installed.tc) = NoSubject
+          /\ proposal.justifyRank = NoRank
+          /\ proposal.justifySubject = NoSubject
 
 SafeToPrepare(node, proposal) ==
   \/ lockRank[node] = NoRank
-  \/ lockSubject[node] = proposal.subject
-  \/ /\ proposal.justifyRank > lockRank[node]
-     /\ proposal.justifySubject = proposal.subject
+  \/ /\ proposal.view = lockRank[node]
+     /\ proposal.subject = lockSubject[node]
 
 \* Wire/local-state checks do not decide external validity from a subject hash.
 ProposalWireValidFor(node, proposal) ==
@@ -1234,7 +1245,7 @@ TC-installed locked-body recovery has certificate authority but need not have
 a leader Proposal receipt.  Validation therefore mirrors Decision recovery:
 it records only the exact current-generation validation marker.  The ordinary
 ValidateBody causal successor subsequently attempts BeginLockCommit, whose
-HistoricalLockedPrepareForCommit guard applies the higher-conflict fence.
+HistoricalLockedPrepareForCommit guard applies the higher-origin fence.
 ***************************************************************************)
 
 ValidateLockedBody(node, qc) ==
@@ -1778,8 +1789,9 @@ FormTC(node, roundView) ==
      /\ NodeIdle(node)
      /\ NoDecisionForNode(node)
      /\ roundView + 1 \in Views
-     /\ roundView >= nodeView[node]
      /\ TCValid(tc)
+     /\ \/ roundView >= nodeView[node]
+        \/ StrictSameRoundTcUpgrade(node, tc)
      /\ formedTCs' = formedTCs \cup {tc}
      /\ pendingInstallTC' = pendingInstallTC \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
@@ -1820,7 +1832,8 @@ BeginInstallTC(node, tc) ==
   LET request == InstallTcWal(node, tc, FALSE)
   IN /\ TcAt(node, tc) \in receivedTCs
      /\ tc.view + 1 \in Views
-     /\ tc.view >= nodeView[node]
+     /\ \/ tc.view >= nodeView[node]
+        \/ StrictSameRoundTcUpgrade(node, tc)
      /\ NodeIdle(node)
      /\ NoDecisionForNode(node)
      /\ pendingInstallTC' = pendingInstallTC \cup {request}
@@ -1844,9 +1857,13 @@ PersistInstallTC(request) ==
       installed == [node |-> node, tc |-> tc]
       advancesHigh == selectedRank > highestRank[node]
       advancesLock == selectedRank > lockRank[node]
+      sameRoundUpgrade == StrictSameRoundTcUpgrade(node, tc)
   IN /\ request \in pendingInstallTC
-     /\ tc.view >= nodeView[node]
-     /\ nodeView' = [nodeView EXCEPT ![node] = tc.view + 1]
+     /\ \/ tc.view >= nodeView[node]
+        \/ sameRoundUpgrade
+     /\ nodeView' =
+          [nodeView EXCEPT ![node] =
+             IF sameRoundUpgrade THEN @ ELSE tc.view + 1]
      /\ generation' =
           [generation EXCEPT ![node] = IF @ < MaxGeneration THEN @ + 1 ELSE @]
      /\ highestRank' =

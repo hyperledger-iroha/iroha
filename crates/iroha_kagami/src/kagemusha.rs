@@ -1,4 +1,4 @@
-//! Authenticated Kagemusha ABI-20/V4 release verification and activation preparation.
+//! Authenticated Kagemusha ABI-21/V4 release verification and activation preparation.
 
 use std::{
     collections::BTreeSet,
@@ -62,10 +62,10 @@ pub(super) struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Verify one complete authenticated ABI-20/V4 release directory.
+    /// Verify one complete authenticated ABI-21/V4 release directory.
     #[command(name = "verify-release-v4")]
     VerifyReleaseV4(VerifyReleaseV4Args),
-    /// Verify an ABI-20/V4 release and atomically write its typed promotion record.
+    /// Verify an ABI-21/V4 release and atomically write its typed promotion record.
     #[command(name = "promote-release-v4")]
     PromoteReleaseV4(PromoteReleaseV4Args),
     /// Build one release-bound activation instruction from an authenticated V4 catalog.
@@ -75,7 +75,7 @@ enum Command {
 
 #[derive(Debug, ClapArgs)]
 struct VerifyReleaseV4Args {
-    /// Immutable directory containing the exact ABI-20/V4 release inventory.
+    /// Immutable directory containing the exact ABI-21/V4 release inventory.
     #[arg(long)]
     bundle_dir: PathBuf,
     /// Canonical release policy provisioned alongside the candidate release.
@@ -91,7 +91,7 @@ struct VerifyReleaseV4Args {
 
 #[derive(Debug, ClapArgs)]
 struct PromoteReleaseV4Args {
-    /// Immutable directory containing the exact ABI-20/V4 release inventory.
+    /// Immutable directory containing the exact ABI-21/V4 release inventory.
     #[arg(long)]
     bundle_dir: PathBuf,
     /// Canonical release policy provisioned alongside the candidate release.
