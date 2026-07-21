@@ -61,6 +61,107 @@ IndexedHistoricalRecoveryTemporalPrerequisites ==
   /\ IndexedHistoricalRecoveryAsyncTemporalPrerequisites
 
 (***************************************************************************
+Exact indexed height boundary.
+
+`IndexedExactHeightEntrySource` distinguishes the genesis seed from every
+later context.  Height zero is entered only through `GenesisContext`; a
+non-genesis context is entered only from the pending activation owned by its
+canonical height-minus-one predecessor.  The target is the actual membership
+set of the canonical successor context, not the weaker observation that a
+numeric node height became larger.
+
+The finite terminal horizon remains an exact application boundary because no
+successor context exists there.  These operators are stronger than the older
+`IndexedContextCompleted` projection used by the reusable parent induction.
+The lemmas below lift that projection back to exact successor membership before
+the release wrapper consumes it.
+***************************************************************************)
+
+IndexedExactHeightEntrySource(initialContext, node) ==
+  IF initialContext.height = 0
+  THEN initialContext = GenesisContext
+  ELSE /\ initialContext =
+             CanonicalIndexedContext(initialContext.height)
+       /\ IndexedSuccessorActivationPending(
+            CanonicalIndexedContext(initialContext.height - 1), node)
+
+IndexedExactHeightEntryProgress ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    IndexedExactHeightEntrySource(initialContext, node)
+      ~> node \in joinedByContext[initialContext]
+
+IndexedExactContextCompleted(initialContext) ==
+  IF initialContext.height = MaxHeight
+  THEN IndexedAllResponsiveExactApplicationsAt(initialContext)
+  ELSE LET nextContext ==
+             CanonicalIndexedContext(initialContext.height + 1)
+       IN \A node \in Responsive:
+            node \in joinedByContext[nextContext]
+
+IndexedExactHeightLivenessProperty ==
+  (/\ VerificationContext \in AdmissibleContextRecords
+   /\ VerificationContext \in JoinedContexts
+   /\ IndexedCore(VerificationContext, 7))
+    ~> IndexedExactContextCompleted(VerificationContext)
+
+IndexedHistoricalRecoveryClosureGap ==
+  IndexedChainSpec => IndexedHistoricalRecoveryTemporalPrerequisites
+
+THEOREM IndexedChainSpecAlwaysSeedsExactGenesisJoin ==
+  IndexedChainSpec
+    => []\A node \in Responsive:
+          node \in joinedByContext[GenesisContext]
+PROOF
+  <1>1. IndexedChainInit
+           => \A node \in Responsive:
+                node \in joinedByContext[GenesisContext]
+    BY Isa
+       DEF IndexedChainInit, GenesisContext, AdmissibleContextRecords,
+           FrozenContextAdmissible, ContextRecords, LineagesAt, Heights,
+           ModelConfiguration, ValidatorIds
+  <1>2. \A node \in Responsive:
+           node \in joinedByContext[GenesisContext]
+             /\ [IndexedChainNext]_IndexedChainVars
+             => node \in joinedByContext[GenesisContext]'
+    BY IndexedNodeJoinIsStable, Isa
+       DEF AdmissibleContextRecords, FrozenContextAdmissible,
+           ContextRecords, LineagesAt, Heights, GenesisContext,
+           ModelConfiguration, ValidatorIds
+  <1> QED BY <1>1, <1>2, PTL DEF IndexedChainSpec
+
+THEOREM IndexedExactHeightEntrySourceEventuallyJoins ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => IndexedExactHeightEntryProgress
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              NEW initialContext \in AdmissibleContextRecords,
+              NEW node \in Responsive
+         PROVE IndexedExactHeightEntrySource(initialContext, node)
+                 ~> node \in joinedByContext[initialContext]
+    <2>1. CASE initialContext.height = 0
+      <3>1. []\A currentNode \in Responsive:
+               currentNode \in joinedByContext[GenesisContext]
+        BY <1>1, IndexedChainSpecAlwaysSeedsExactGenesisJoin
+      <3> QED BY <2>1, <3>1, PTL
+           DEF IndexedExactHeightEntrySource
+    <2>2. CASE initialContext.height # 0
+      <3>1. IndexedExactHeightEntrySource(initialContext, node)
+               => IndexedActivationPendingIntoContext(
+                    initialContext, node)
+        BY <2>2 DEF IndexedExactHeightEntrySource,
+                       IndexedActivationPendingIntoContext
+      <3>2. IndexedActivationPendingIntoContext(initialContext, node)
+               ~> node \in joinedByContext[initialContext]
+        BY <1>1,
+           IndexedActivationPendingIntoContextEventuallyJoins
+      <3> QED BY <3>1, <3>2, PTL
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1 DEF IndexedExactHeightEntryProgress
+
+(***************************************************************************
 An authenticated exact source is durable, joined membership is monotone, and
 responsive nodes cannot crash after GST.  Consequently the exact open guard
 persists until either the target is opened or a later recovery phase has
@@ -293,19 +394,366 @@ PROOF
     BY SuccessorActivationStarvationMatchesChainProgress
   <1> QED BY <1>1, <1>2
 
+(***************************************************************************
+Lift numeric completion back to the exact indexed successor.
+
+`IndexedJoinedThroughLocalHeight` says that a node numerically beyond a
+nonterminal context either already belongs to the canonical next instance or
+is at that exact height with a pending activation.  The latter pending owner
+is necessarily rooted at the canonical height-minus-one context.  Successor
+starvation freedom therefore joins that exact next instance.  A finite prefix
+induction performs the pointwise-to-all-Responsive temporal lift.
+***************************************************************************)
+
+THEOREM IndexedCompletedNonterminalClassifiesExactSuccessorEntry ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    /\ IndexedCompositionInvariant
+    /\ IndexedJoinedThroughLocalHeight
+    /\ IndexedTargetJoined(initialContext)
+    /\ initialContext.height < MaxHeight
+    /\ IndexedContextCompleted(initialContext)
+    => /\ CanonicalIndexedContext(initialContext.height + 1)
+              \in AdmissibleContextRecords
+       /\ \/ node \in joinedByContext[
+                      CanonicalIndexedContext(initialContext.height + 1)]
+          \/ IndexedExactHeightEntrySource(
+               CanonicalIndexedContext(initialContext.height + 1), node)
+BY Isa
+   DEF IndexedCompositionInvariant, JoinedContextCertificationInvariant,
+       IndexedJoinedThroughLocalHeight, IndexedTargetJoined, JoinedContexts,
+       IndexedContextCompleted, IndexedExactHeightEntrySource,
+       IndexedSuccessorActivationPending,
+       SuccessorPublicationOrSuperseded, SuccessorHeightActivated,
+       CanonicalIndexedContext, AdmissibleContextRecords,
+       FrozenContextAdmissible, ContextRecords, LineagesAt, Heights,
+       ModelConfiguration, ValidatorIds
+
+THEOREM IndexedCompletedNonterminalEventuallyJoinsExactSuccessorNode ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A initialContext \in AdmissibleContextRecords,
+       node \in Responsive:
+       (/\ IndexedTargetJoined(initialContext)
+        /\ initialContext.height < MaxHeight
+        /\ IndexedContextCompleted(initialContext))
+         ~> node \in joinedByContext[
+              CanonicalIndexedContext(initialContext.height + 1)]
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              NEW initialContext \in AdmissibleContextRecords,
+              NEW node \in Responsive
+         PROVE (/\ IndexedTargetJoined(initialContext)
+                /\ initialContext.height < MaxHeight
+                /\ IndexedContextCompleted(initialContext))
+                 ~> node \in joinedByContext[
+                      CanonicalIndexedContext(initialContext.height + 1)]
+    <2>1. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>2. []IndexedJoinedThroughLocalHeight
+      BY <1>1, IndexedChainSpecJoinsEveryNodeThroughLocalHeight, PTL
+    <2>3. IndexedExactHeightEntryProgress
+      BY <1>1, IndexedExactHeightEntrySourceEventuallyJoins
+    <2>4. (/\ IndexedCompositionInvariant
+            /\ IndexedJoinedThroughLocalHeight
+            /\ IndexedTargetJoined(initialContext)
+            /\ initialContext.height < MaxHeight
+            /\ IndexedContextCompleted(initialContext))
+             => /\ CanonicalIndexedContext(initialContext.height + 1)
+                       \in AdmissibleContextRecords
+                /\ \/ node \in joinedByContext[
+                               CanonicalIndexedContext(
+                                 initialContext.height + 1)]
+                   \/ IndexedExactHeightEntrySource(
+                        CanonicalIndexedContext(
+                          initialContext.height + 1), node)
+      BY <1>1, IndexedCompletedNonterminalClassifiesExactSuccessorEntry
+    <2>5. (/\ IndexedCompositionInvariant
+            /\ IndexedJoinedThroughLocalHeight
+            /\ IndexedTargetJoined(initialContext)
+            /\ initialContext.height < MaxHeight
+            /\ IndexedContextCompleted(initialContext)
+            /\ CanonicalIndexedContext(initialContext.height + 1)
+                 \in AdmissibleContextRecords
+            /\ IndexedExactHeightEntrySource(
+                 CanonicalIndexedContext(
+                   initialContext.height + 1), node))
+             ~> node \in joinedByContext[
+                  CanonicalIndexedContext(initialContext.height + 1)]
+      BY <1>1, <2>3, <2>4, PTL
+         DEF IndexedExactHeightEntryProgress
+    <2>6. /\ IndexedCompositionInvariant
+           /\ IndexedJoinedThroughLocalHeight
+           /\ IndexedTargetJoined(initialContext)
+           /\ initialContext.height < MaxHeight
+           /\ IndexedContextCompleted(initialContext)
+           /\ CanonicalIndexedContext(initialContext.height + 1)
+                \in AdmissibleContextRecords
+           /\ node \in joinedByContext[
+                CanonicalIndexedContext(initialContext.height + 1)]
+           /\ [IndexedChainNext]_IndexedChainVars
+             => node \in joinedByContext[
+                  CanonicalIndexedContext(initialContext.height + 1)]'
+      BY <1>1, <2>4, IndexedNodeJoinIsStable, Isa
+         DEF IndexedCompositionInvariant,
+             Chain!ChainEpochInvariant,
+             Chain!ChainEpochTypeInvariant,
+             Chain!ContextsMatchLocalHistories,
+             IndexedJoinedThroughLocalHeight,
+             IndexedTargetJoined, JoinedContexts,
+             IndexedContextCompleted, CanonicalIndexedContext,
+             AdmissibleContextRecords, FrozenContextAdmissible,
+             ContextRecords, LineagesAt, Heights,
+             ModelConfiguration, ValidatorIds
+    <2> QED BY <2>1, <2>2, <2>4, <2>5, <2>6, PTL
+  <1> QED BY <1>1
+
+IndexedExactSuccessorJoinPrefixAt(initialContext, limit) ==
+  \A node \in Responsive \cap (0..limit):
+    node \in joinedByContext[
+      CanonicalIndexedContext(initialContext.height + 1)]
+
+THEOREM IndexedExactSuccessorJoinPrefixIsStable ==
+  \A initialContext \in AdmissibleContextRecords,
+     limit \in Nat:
+    /\ initialContext.height < MaxHeight
+    /\ IndexedExactSuccessorJoinPrefixAt(initialContext, limit)
+    /\ [IndexedChainNext]_IndexedChainVars
+    => IndexedExactSuccessorJoinPrefixAt(initialContext, limit)'
+BY Isa, IndexedNodeJoinIsStable
+   DEF IndexedExactSuccessorJoinPrefixAt,
+       CanonicalIndexedContext, AdmissibleContextRecords,
+       FrozenContextAdmissible, ContextRecords, LineagesAt, Heights,
+       ModelConfiguration, ValidatorIds
+
+THEOREM IndexedCompletedNonterminalEventuallyJoinsExactSuccessorPrefix ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A initialContext \in AdmissibleContextRecords:
+       \A limit \in Nat:
+         (/\ IndexedTargetJoined(initialContext)
+          /\ initialContext.height < MaxHeight
+          /\ IndexedContextCompleted(initialContext))
+           ~> IndexedExactSuccessorJoinPrefixAt(initialContext, limit)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              NEW initialContext \in AdmissibleContextRecords
+         PROVE \A limit \in Nat:
+                 (/\ IndexedTargetJoined(initialContext)
+                  /\ initialContext.height < MaxHeight
+                  /\ IndexedContextCompleted(initialContext))
+                   ~> IndexedExactSuccessorJoinPrefixAt(
+                        initialContext, limit)
+    <2> DEFINE Antecedent ==
+           /\ IndexedTargetJoined(initialContext)
+           /\ initialContext.height < MaxHeight
+           /\ IndexedContextCompleted(initialContext)
+    <2> DEFINE P(limit) ==
+           Antecedent
+             ~> IndexedExactSuccessorJoinPrefixAt(initialContext, limit)
+    <2>1. P(0)
+      <3>1. CASE 0 \in Responsive
+        BY <1>1, <3>1,
+           IndexedCompletedNonterminalEventuallyJoinsExactSuccessorNode,
+           PTL DEF P, Antecedent,
+                   IndexedExactSuccessorJoinPrefixAt
+      <3>2. CASE 0 \notin Responsive
+        BY <3>2, PTL DEF P, Antecedent,
+                       IndexedExactSuccessorJoinPrefixAt
+      <3> QED BY <3>1, <3>2
+    <2>2. ASSUME NEW limit \in Nat, P(limit)
+           PROVE P(limit + 1)
+      <3>1. CASE limit + 1 \in Responsive
+        <4>1. Antecedent
+                 ~> limit + 1 \in joinedByContext[
+                      CanonicalIndexedContext(initialContext.height + 1)]
+          BY <1>1, <3>1,
+             IndexedCompletedNonterminalEventuallyJoinsExactSuccessorNode
+             DEF Antecedent
+        <4>2. /\ initialContext.height < MaxHeight
+               /\ IndexedExactSuccessorJoinPrefixAt(
+                    initialContext, limit)
+               /\ [IndexedChainNext]_IndexedChainVars
+              => IndexedExactSuccessorJoinPrefixAt(
+                   initialContext, limit)'
+          BY <1>1, <2>2, IndexedExactSuccessorJoinPrefixIsStable
+        <4>3. limit + 1 \in joinedByContext[
+                 CanonicalIndexedContext(initialContext.height + 1)]
+                 /\ [IndexedChainNext]_IndexedChainVars
+                 => limit + 1 \in joinedByContext[
+                      CanonicalIndexedContext(initialContext.height + 1)]'
+          BY <1>1, IndexedNodeJoinIsStable, Isa
+             DEF AdmissibleContextRecords, FrozenContextAdmissible,
+                 ContextRecords, LineagesAt, Heights,
+                 ModelConfiguration, ValidatorIds
+        <4>4. IndexedExactSuccessorJoinPrefixAt(
+                 initialContext, limit + 1)
+                 <=> /\ IndexedExactSuccessorJoinPrefixAt(
+                           initialContext, limit)
+                     /\ limit + 1 \in joinedByContext[
+                           CanonicalIndexedContext(
+                             initialContext.height + 1)]
+          BY <2>2, <3>1, Isa
+             DEF IndexedExactSuccessorJoinPrefixAt
+        <4> QED BY <2>2, <4>1, <4>2, <4>3, <4>4, PTL
+             DEF P, Antecedent
+      <3>2. CASE limit + 1 \notin Responsive
+        <4>1. IndexedExactSuccessorJoinPrefixAt(
+                 initialContext, limit)
+                 => IndexedExactSuccessorJoinPrefixAt(
+                      initialContext, limit + 1)
+          BY <2>2, <3>2, Isa
+             DEF IndexedExactSuccessorJoinPrefixAt
+        <4> QED BY <2>2, <4>1, PTL DEF P
+      <3> QED BY <3>1, <3>2
+    <2>3. \A limit \in Nat: P(limit)
+      BY <2>1, <2>2, NatInduction
+    <2> QED BY <2>3 DEF P
+  <1> QED BY <1>1
+
+THEOREM IndexedCompletedNonterminalEventuallyJoinsExactSuccessor ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A initialContext \in AdmissibleContextRecords:
+       (/\ IndexedTargetJoined(initialContext)
+        /\ initialContext.height < MaxHeight
+        /\ IndexedContextCompleted(initialContext))
+         ~> \A node \in Responsive:
+              node \in joinedByContext[
+                CanonicalIndexedContext(initialContext.height + 1)]
+BY IndexedCompletedNonterminalEventuallyJoinsExactSuccessorPrefix, SMT
+   DEF IndexedExactSuccessorJoinPrefixAt,
+       ModelConfiguration, ValidatorIds
+
+THEOREM IndexedProjectedCompletionReachesExactCompletion ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A initialContext \in AdmissibleContextRecords:
+       (IndexedTargetJoined(initialContext)
+         /\ IndexedContextCompleted(initialContext))
+         ~> IndexedExactContextCompleted(initialContext)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              NEW initialContext \in AdmissibleContextRecords
+         PROVE (IndexedTargetJoined(initialContext)
+                  /\ IndexedContextCompleted(initialContext))
+                 ~> IndexedExactContextCompleted(initialContext)
+    <2>1. CASE initialContext.height = MaxHeight
+      BY <2>1, PTL
+         DEF IndexedContextCompleted, IndexedExactContextCompleted
+    <2>2. CASE initialContext.height # MaxHeight
+      <3>1. initialContext.height < MaxHeight
+        BY <1>1, <2>2, Isa
+           DEF AdmissibleContextRecords, FrozenContextAdmissible,
+               ContextRecords, Heights
+      <3>2. (/\ IndexedTargetJoined(initialContext)
+              /\ initialContext.height < MaxHeight
+              /\ IndexedContextCompleted(initialContext))
+               ~> \A node \in Responsive:
+                    node \in joinedByContext[
+                      CanonicalIndexedContext(initialContext.height + 1)]
+        BY <1>1,
+           IndexedCompletedNonterminalEventuallyJoinsExactSuccessor
+      <3> QED BY <2>2, <3>1, <3>2, PTL
+           DEF IndexedExactContextCompleted
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM IndexedExactContextCompletionImpliesProjectedCompletion ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedCompositionInvariant
+      /\ IndexedExactContextCompleted(initialContext)
+      => IndexedContextCompleted(initialContext)
+BY Isa
+   DEF IndexedCompositionInvariant, JoinedRoutingInvariant,
+       IndexedExactContextCompleted, IndexedContextCompleted,
+       IndexedAllResponsiveExactApplicationsAt,
+       IndexedNodeCurrentAt, CanonicalIndexedContext,
+       Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
+       Chain!ContextsMatchLocalHistories,
+       AdmissibleContextRecords, FrozenContextAdmissible,
+       ContextRecords, Heights, ModelConfiguration, ValidatorIds
+
+THEOREM IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress ==
+  /\ IndexedChainSpec
+  /\ IndexedExactHistoricalRecoveryProgress
+  /\ IndexedSuccessorActivationProgress
+  /\ VerificationOneHeightCompletion
+  => IndexedExactHeightLivenessProperty
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
+              VerificationOneHeightCompletion
+         PROVE IndexedExactHeightLivenessProperty
+    <2>1. IndexedHeightLivenessProperty
+      BY <1>1, HeightLivenessFromOneHeightAndExactRecoveryProgress
+    <2>2. CASE VerificationContext \in AdmissibleContextRecords
+      <3>1. (IndexedTargetJoined(VerificationContext)
+               /\ IndexedContextCompleted(VerificationContext))
+               ~> IndexedExactContextCompleted(VerificationContext)
+        BY <1>1, <2>2, IndexedProjectedCompletionReachesExactCompletion
+      <3>2. IndexedTargetJoined(VerificationContext)
+               /\ [IndexedChainNext]_IndexedChainVars
+               => IndexedTargetJoined(VerificationContext)'
+        BY <2>2, IndexedTargetJoinedIsStable
+      <3> QED BY <1>1, <2>1, <2>2, <3>1, <3>2, PTL
+           DEF IndexedHeightLivenessProperty,
+               IndexedExactHeightLivenessProperty,
+               IndexedTargetJoined
+    <2>3. CASE VerificationContext \notin AdmissibleContextRecords
+      BY <2>3 DEF IndexedExactHeightLivenessProperty
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM IndexedExactHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs ==
+  /\ IndexedChainSpec
+  /\ IndexedHistoricalRecoveryTemporalPrerequisites
+  => IndexedExactHeightLivenessProperty
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedHistoricalRecoveryTemporalPrerequisites
+         PROVE IndexedExactHeightLivenessProperty
+    <2>1. IndexedExactHistoricalRecoveryProgress
+      BY <1>1, IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites
+    <2>2. IndexedSuccessorActivationProgress
+      BY <1>1, IndexedSuccessorActivationProgressFromStarvationProof
+    <2>3. VerificationOneHeightCompletion
+      BY VerificationOneHeightCompletionObligation
+    <2> QED BY <1>1, <2>1, <2>2, <2>3,
+         IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress
+  <1> QED BY <1>1
+
 THEOREM IndexedHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalRecoveryTemporalPrerequisites
   => IndexedHeightLivenessProperty
 PROOF
-  <1>1. IndexedExactHistoricalRecoveryProgress
-    BY IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites
-  <1>2. IndexedSuccessorActivationProgress
-    BY IndexedSuccessorActivationProgressFromStarvationProof
-  <1>3. VerificationOneHeightCompletion
-    BY VerificationOneHeightCompletionObligation
-  <1> QED BY <1>1, <1>2, <1>3,
-       HeightLivenessFromOneHeightAndExactRecoveryProgress
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedHistoricalRecoveryTemporalPrerequisites
+         PROVE IndexedHeightLivenessProperty
+    <2>1. IndexedExactHistoricalRecoveryProgress
+      BY <1>1, IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites
+    <2>2. IndexedSuccessorActivationProgress
+      BY <1>1, IndexedSuccessorActivationProgressFromStarvationProof
+    <2>3. VerificationOneHeightCompletion
+      BY VerificationOneHeightCompletionObligation
+    <2>4. IndexedExactHeightLivenessProperty
+      BY <1>1, <2>1, <2>2, <2>3,
+         IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress
+    <2>5. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant
+    <2>6. VerificationContext \in AdmissibleContextRecords
+             => (IndexedExactContextCompleted(VerificationContext)
+                  => IndexedContextCompleted(VerificationContext))
+      BY <2>5, IndexedExactContextCompletionImpliesProjectedCompletion, PTL
+    <2> QED BY <1>1, <2>4, <2>6, PTL
+         DEF IndexedExactHeightLivenessProperty,
+             IndexedHeightLivenessProperty
+  <1> QED BY <1>1
 
 (***************************************************************************
 Release-facing declaration.

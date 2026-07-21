@@ -191,9 +191,12 @@ max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
-# The checked-in baseline covers four validators plus the shared untrusted-source lane.
-# The validator-bundle renderer scales body_bytes to at least (N + 1) * body_source_bytes.
-body_bytes = 173015040
+# The checked-in baseline covers four validators, two authenticated
+# non-validator source lanes, and anonymous delivery.
+# The validator-bundle renderer scales body_bytes to at least
+# (N + authenticated_non_validator_sources + 1) * body_source_bytes.
+authenticated_non_validator_sources = 2
+body_bytes = 242221056
 body_source_bytes = 34603008
 
 [confidential]

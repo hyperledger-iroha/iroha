@@ -2352,6 +2352,27 @@ fn dispatch_lane_work_effects(
 /// lane adapter. A malformed effect which never carried its required route is
 /// left intact so normal strict validation rejects it.
 fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
+    retain_active_owned_reply_routes_with_snapshot_hook(effect, || {})
+}
+
+#[cfg(test)]
+fn retain_active_owned_reply_routes_after_snapshot<AfterSnapshot>(
+    effect: &mut V2LaneWorkEffect,
+    after_snapshot: AfterSnapshot,
+) -> bool
+where
+    AfterSnapshot: FnOnce(),
+{
+    retain_active_owned_reply_routes_with_snapshot_hook(effect, after_snapshot)
+}
+
+fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(
+    effect: &mut V2LaneWorkEffect,
+    after_snapshot: AfterSnapshot,
+) -> bool
+where
+    AfterSnapshot: FnOnce(),
+{
     if let V2LaneWorkEffect::PostDurableLaneCertificate {
         reply_routes,
         ingress_ownership,
@@ -2359,17 +2380,24 @@ fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
     } = effect
     {
         let Some(routes) = reply_routes.as_mut() else {
-            return false;
+            return true;
         };
         let Some(ownership) = ingress_ownership.as_mut() else {
-            return false;
+            return true;
         };
-        let retained_routes = routes.retain_active();
-        let retained_ownership = ownership.retain_active_reply_routes();
-        return retained_routes != 0
-            && retained_routes == retained_ownership
-            && ownership.validate_exact()
-            && ownership.matches_reply_routes(Some(routes));
+        if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {
+            return true;
+        }
+        let (retained_routes, receipt) = routes.retain_active_with_receipt();
+        after_snapshot();
+        let Some(projected_routes) = ownership.project_retained_reply_routes(receipt) else {
+            // Preserve malformed pre-existing ownership for strict dispatch;
+            // ordinary retirement cannot reach this branch because the exact
+            // route snapshot is projected without another liveness read.
+            return true;
+        };
+        *routes = projected_routes;
+        return retained_routes != 0;
     }
     let reply_routes = match effect {
         V2LaneWorkEffect::PostNativeAmx {
@@ -2388,9 +2416,19 @@ fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
         | V2LaneWorkEffect::BroadcastMerge(_)
         | V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => return true,
     };
-    reply_routes
-        .as_mut()
-        .is_none_or(|routes| routes.retain_active() != 0)
+    let Some(routes) = reply_routes.as_mut() else {
+        return true;
+    };
+    let before = routes.clone();
+    let (retained, receipt) = routes.retain_active_with_receipt();
+    let Some(projected) = receipt.into_output(&before) else {
+        // Preserve the operation's mutated value for normal strict dispatch;
+        // this branch is unreachable for a module-minted receipt and exists
+        // only to fail closed if its exact-history contract is broken.
+        return true;
+    };
+    *routes = projected;
+    retained != 0
 }
 
 #[derive(Debug)]
@@ -3077,45 +3115,108 @@ mod tests {
             history.context,
             &history.validators,
         );
-        services.set_exact_output_admission_hook(|post, ticket| {
+        let dispatch_attempts = Arc::new(AtomicUsize::new(0));
+        let dispatch_attempts_for_hook = Arc::clone(&dispatch_attempts);
+        services.set_exact_output_admission_hook(move |post, ticket| {
+            dispatch_attempts_for_hook.fetch_add(1, Ordering::Relaxed);
             Err(NetworkActorAdmissionError::Backpressured {
                 message: post,
                 ticket,
                 rank: 1,
             })
         });
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(hub.clone());
-        let route = route_fixture.mint(requester.clone());
-        let reply_routes =
-            NetworkReplyRoutes::try_from_route(route.clone()).expect("live reply route set");
-        let mut admitted = super::super::fair_v2_ingress_admit_for_test(
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut route_fixture =
+            NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = route_fixture.mint_via(requester.clone(), hub_a.clone());
+        let route_b = route_fixture.mint_via(requester.clone(), hub_b.clone());
+        assert!(route_a.source_key() != route_b.source_key());
+
+        let mut reply_routes = NetworkReplyRoutes::try_from_route(route_a.clone())
+            .expect("first authenticated durable-response source");
+        reply_routes
+            .merge(
+                &NetworkReplyRoutes::try_from_route(route_b.clone())
+                    .expect("second authenticated durable-response source"),
+            )
+            .expect("attach the independent durable-response source");
+
+        let mut admitted_a = super::super::fair_v2_ingress_admit_for_test(
             InboundBlockMessage::try_from_transport_with_reply_route(
                 BlockMessage::LaneBlockProposal(history.certificate.proposal.clone()),
                 requester.clone(),
-                hub,
-                route.clone(),
+                hub_a,
+                route_a.clone(),
             )
-            .expect("durable request route binds its fair-ingress occurrence"),
+            .expect("first durable request route binds its fair-ingress occurrence"),
         );
-        let ingress_ownership = admitted
+        let mut ingress_ownership = admitted_a
             .take_ingress_ownership()
-            .expect("fair ingress supplies exact durable-request ownership");
+            .expect("fair ingress supplies first exact durable-request ownership");
+        let mut admitted_b = super::super::fair_v2_ingress_admit_for_test(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                BlockMessage::LaneBlockProposal(history.certificate.proposal.clone()),
+                requester.clone(),
+                hub_b,
+                route_b.clone(),
+            )
+            .expect("second durable request route binds its fair-ingress occurrence"),
+        );
+        assert!(
+            ingress_ownership.merge_downstream(
+                admitted_b
+                    .take_ingress_ownership()
+                    .expect("fair ingress supplies second exact durable-request ownership")
+            ),
+            "independent authenticated sources merge under one semantic request identity"
+        );
+        assert!(ingress_ownership.validate_exact());
+        assert!(ingress_ownership.matches_reply_routes(Some(&reply_routes)));
 
-        dispatch_lane_work_effect(
-            &services,
+        let mut effect = V2LaneWorkEffect::PostDurableLaneCertificate {
+            peer: requester,
+            reply_routes: Some(reply_routes),
+            ingress_ownership: Some(ingress_ownership),
+            certificate: history.certificate,
+        };
+        assert!(retain_active_owned_reply_routes_after_snapshot(
+            &mut effect,
+            || assert!(route_fixture.retire(&route_a))
+        ));
+        assert!(!route_a.is_active());
+        assert!(route_b.is_active());
+        match &effect {
             V2LaneWorkEffect::PostDurableLaneCertificate {
-                peer: requester,
-                reply_routes: Some(reply_routes),
-                ingress_ownership: Some(ingress_ownership),
-                certificate: history.certificate,
-            },
-        )
-        .expect("runner hands the Kura-backed certificate to exact output");
+                reply_routes: Some(routes),
+                ingress_ownership: Some(ownership),
+                ..
+            } => {
+                assert_eq!(routes.len(), 2);
+                assert!(routes.iter().any(|route| route.same_delivery(&route_a)));
+                assert!(routes.iter().any(|route| route.same_delivery(&route_b)));
+                assert!(ownership.validate_exact());
+                assert!(ownership.matches_reply_routes(Some(routes)));
+            }
+            other => panic!("durable response lost exact route ownership: {other:?}"),
+        }
+
+        dispatch_lane_work_effect(&services, effect)
+            .expect("runner hands the Kura-backed certificate to exact output");
+        assert!(
+            !services
+                .retains_reply_route_for_test(&route_a)
+                .expect("inspect retired durable certificate route")
+        );
         assert!(
             services
-                .retains_reply_route_for_test(&route)
-                .expect("inspect retained durable certificate route")
+                .retains_reply_route_for_test(&route_b)
+                .expect("inspect retained sibling durable certificate route")
+        );
+        assert_eq!(
+            dispatch_attempts.load(Ordering::Relaxed),
+            1,
+            "only the responsive authenticated source may reach exact-output dispatch"
         );
     }
 
@@ -3830,16 +3931,18 @@ mod tests {
             history.context,
             &history.validators,
         );
-        let error = dispatch_lane_work_effect(
-            &services,
-            V2LaneWorkEffect::PostDurableLaneCertificate {
-                peer: requester,
-                reply_routes: None,
-                ingress_ownership: None,
-                certificate: history.certificate,
-            },
-        )
-        .expect_err("runner must reject a durable response without local reply authority");
+        let mut effect = V2LaneWorkEffect::PostDurableLaneCertificate {
+            peer: requester,
+            reply_routes: None,
+            ingress_ownership: None,
+            certificate: history.certificate,
+        };
+        assert!(
+            retain_active_owned_reply_routes(&mut effect),
+            "the scheduler prefilter must leave malformed ownership for strict dispatch"
+        );
+        let error = dispatch_lane_work_effect(&services, effect)
+            .expect_err("runner must reject a durable response without local reply authority");
         assert!(
             error
                 .to_string()
@@ -3935,6 +4038,7 @@ mod tests {
                 runtime_progress_reserve: 2,
                 runtime_completion_reserve: 2,
                 body_queue_capacity: 16,
+                authenticated_non_validator_source_capacity: 2,
                 body_bytes: 160 * 1024 * 1024,
                 body_source_bytes: 32 * 1024 * 1024,
                 chunk_queue_capacity: 64,

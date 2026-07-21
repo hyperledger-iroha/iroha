@@ -5481,30 +5481,52 @@ fn lane_work_effect_reply_routes_are_valid(effect: &V2LaneWorkEffect) -> bool {
     }
 }
 
+fn optional_reply_routes_retain_candidate(
+    merged: &Option<NetworkReplyRoutes>,
+    candidate: &Option<NetworkReplyRoutes>,
+) -> bool {
+    match (merged, candidate) {
+        (Some(merged), Some(candidate)) => candidate.iter().any(|candidate_route| {
+            merged
+                .iter()
+                .any(|route| route.same_delivery(candidate_route))
+        }),
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+    }
+}
+
 fn merge_optional_reply_routes(
     queued: &mut Option<NetworkReplyRoutes>,
     candidate: &Option<NetworkReplyRoutes>,
 ) -> bool {
-    match (queued, candidate) {
-        (Some(queued), Some(candidate)) => {
-            // Reconcile the complete observed history on a shadow set. A
-            // successful maintenance-only merge still commits retirement and
-            // tombstone history even when no candidate delivery remains live.
-            let mut merged = queued.clone();
-            if merged.merge_observed(candidate).is_err() {
+    match (queued.as_ref(), candidate.as_ref()) {
+        (Some(retained), Some(candidate)) => {
+            // Both reconciliation and its final liveness snapshot return
+            // operation-owned histories. No caller-supplied projection can
+            // erase another authenticated source at this coalescing seam.
+            let mut merged = retained.clone();
+            let Ok(merge_receipt) = merged.merge_observed_with_receipt(candidate) else {
                 return false;
-            }
-            let retained_active_candidate = candidate.iter().any(|candidate_route| {
-                candidate_route.is_active()
-                    && merged
-                        .iter()
-                        .any(|route| route.same_delivery(candidate_route))
+            };
+            let Some(mut merged) = merge_receipt.into_output(retained, candidate) else {
+                return false;
+            };
+            let before_prune = merged.clone();
+            let (_, prune_receipt) = merged.retain_active_with_receipt();
+            let Some(merged) = prune_receipt.into_output(&before_prune) else {
+                return false;
+            };
+            let retains_candidate = candidate.iter().any(|candidate_route| {
+                merged
+                    .iter()
+                    .any(|route| route.same_delivery(candidate_route))
             });
-            *queued = merged;
-            retained_active_candidate
+            *queued = Some(merged);
+            retains_candidate
         }
         (None, None) => true,
-        (None, Some(_)) | (Some(_), None) => false,
+        (Some(_), None) | (None, Some(_)) => false,
     }
 }
 
@@ -5512,6 +5534,17 @@ fn merge_lane_work_effect_reply_routes(
     queued: &mut V2LaneWorkEffect,
     candidate: &V2LaneWorkEffect,
 ) -> bool {
+    merge_lane_work_effect_reply_routes_after_route_merge(queued, candidate, || {})
+}
+
+fn merge_lane_work_effect_reply_routes_after_route_merge<AfterRouteMerge>(
+    queued: &mut V2LaneWorkEffect,
+    candidate: &V2LaneWorkEffect,
+    after_route_merge: AfterRouteMerge,
+) -> bool
+where
+    AfterRouteMerge: FnOnce(),
+{
     // A queued source may have disconnected since reservation. The
     // per-source merge prunes such retained attempts while allowing other live
     // members of the same occurrence to attach.
@@ -5531,25 +5564,43 @@ fn merge_lane_work_effect_reply_routes(
                 ..
             },
         ) => {
-            let mut merged_routes = queued_routes.clone();
-            let retained_candidate_route =
-                merge_optional_reply_routes(&mut merged_routes, candidate_routes);
+            let (mut merged_routes, merge_receipt) =
+                match (queued_routes.as_ref(), candidate_routes.as_ref()) {
+                    (Some(queued), Some(candidate)) => {
+                        let mut merged = queued.clone();
+                        let Ok(receipt) = merged.merge_observed_with_receipt(candidate) else {
+                            return false;
+                        };
+                        (Some(merged), Some(receipt))
+                    }
+                    (None, None) if cfg!(test) => (None, None),
+                    (Some(_), None) | (None, Some(_)) | (None, None) => return false,
+                };
+            after_route_merge();
             let mut merged_ownership = queued_ownership.clone();
             match (&mut merged_ownership, candidate_ownership) {
                 (Some(retained), Some(candidate)) => {
-                    if !retained.merge_downstream(candidate.clone()) {
+                    let Some(receipt) = merge_receipt else {
                         return false;
-                    }
+                    };
+                    let Some(receipt_routes) =
+                        retained.merge_downstream_with_observed_receipt(candidate.clone(), receipt)
+                    else {
+                        return false;
+                    };
+                    merged_routes = Some(receipt_routes);
                 }
                 (None, None) if cfg!(test) => {}
                 (Some(_), None) | (None, Some(_)) | (None, None) => return false,
             }
             if merged_ownership.as_ref().is_some_and(|ownership| {
-                !ownership.matches_reply_routes(merged_routes.as_ref())
-                    || !ownership.validate_exact()
+                !ownership.validate_exact()
+                    || !ownership.matches_reply_routes(merged_routes.as_ref())
             }) {
                 return false;
             }
+            let retained_candidate_route =
+                optional_reply_routes_retain_candidate(&merged_routes, candidate_routes);
             *queued_routes = merged_routes;
             *queued_ownership = merged_ownership;
             retained_candidate_route
@@ -10379,9 +10430,9 @@ pub(super) mod tests {
         assert_eq!(
             certificate,
             LaneBlockCertificateV1 {
-                proposal: session.proposal,
-                prepare_qc: session.prepare_qc,
-                commit_qc: session.commit_qc,
+                proposal: session.proposal.clone(),
+                prepare_qc: session.prepare_qc.clone(),
+                commit_qc: session.commit_qc.clone(),
             }
         );
         assert_eq!(reply_routes.len(), 2);
@@ -10398,6 +10449,73 @@ pub(super) mod tests {
         assert!(ownership.validate_exact());
         assert_eq!(ownership.admission_count, 2);
         assert!(ownership.matches_reply_routes(Some(&reply_routes)));
+
+        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_d = PeerId::new(KeyPair::random().public_key().clone());
+        let route_c = route_fixture.mint_via(requester.clone(), hub_c.clone());
+        let route_d = route_fixture.mint_via(requester.clone(), hub_d.clone());
+        let race_effect = |via: PeerId, route: NetworkReplyRoute| {
+            let mut inbound = admitted(via, route);
+            let ingress_ownership = inbound
+                .take_ingress_ownership()
+                .expect("fair admission attaches exact ownership");
+            let (_, peer, reply_routes) = inbound.into_message_sender_and_reply_routes();
+            V2LaneWorkEffect::PostDurableLaneCertificate {
+                peer: peer.expect("transport request retains its semantic origin"),
+                reply_routes,
+                ingress_ownership: Some(ingress_ownership),
+                certificate: certificate.clone(),
+            }
+        };
+        let mut queued = race_effect(hub_c, route_c.clone());
+        let candidate = race_effect(hub_d, route_d.clone());
+        assert!(merge_lane_work_effect_reply_routes_after_route_merge(
+            &mut queued,
+            &candidate,
+            || assert!(route_fixture.retire(&route_c))
+        ));
+        let V2LaneWorkEffect::PostDurableLaneCertificate {
+            reply_routes: Some(mut race_routes),
+            ingress_ownership: Some(mut race_ownership),
+            ..
+        } = queued
+        else {
+            panic!("coalesced race result retains route and ownership carriers")
+        };
+        assert_eq!(
+            race_routes.len(),
+            2,
+            "source C retired after the authoritative merge snapshot"
+        );
+        assert!(
+            race_routes
+                .iter()
+                .any(|route| route.same_delivery(&route_c))
+        );
+        assert!(
+            race_routes
+                .iter()
+                .any(|route| route.same_delivery(&route_d)),
+            "source C retirement cannot consume independent source D"
+        );
+        assert!(race_ownership.validate_exact());
+        assert!(race_ownership.matches_reply_routes(Some(&race_routes)));
+        let (retained, prune_receipt) = race_routes.retain_active_with_receipt();
+        assert_eq!(
+            retained, 1,
+            "the next bounded snapshot observes only source C's retirement"
+        );
+        race_routes = race_ownership
+            .project_retained_reply_routes(prune_receipt)
+            .expect("the prune receipt owns the exact source-D output");
+        assert!(race_ownership.validate_exact());
+        assert!(race_ownership.matches_reply_routes(Some(&race_routes)));
+        assert!(
+            race_ownership
+                .current_reply_routes()
+                .is_some_and(|routes| routes.len() == 1
+                    && routes.iter().any(|route| route.same_delivery(&route_d)))
+        );
     }
 
     #[test]

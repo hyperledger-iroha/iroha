@@ -314,6 +314,7 @@ def test_repository_verus_evidence_binds_the_sidecar_admission_corridor() -> Non
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
         "crates/iroha_p2p/src/network.rs",
         "crates/iroha_p2p/src/peer.rs",
+        "crates/irohad/src/main.rs",
     } <= set(module.REQUIRED_SOURCE_PATHS)
 
 

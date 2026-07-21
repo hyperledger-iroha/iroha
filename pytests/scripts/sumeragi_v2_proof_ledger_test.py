@@ -48,6 +48,7 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_kagami/src/localnet.rs"),
         Path("crates/iroha_config/src/parameters/actual.rs"),
         Path("crates/iroha_config/src/parameters/defaults.rs"),
         Path("crates/iroha_config/src/parameters/user.rs"),
@@ -62,7 +63,11 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
         Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("scripts/render_taira_validator_bundle.py"),
         Path("scripts/verify_sumeragi_v2.sh"),
+        Path("defaults/kagami/iroha3-taira/config.toml"),
+        Path("configs/soranexus/taira/config.toml"),
+        Path("configs/soranexus/taira/README.md"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -197,6 +202,28 @@ def mutate_rust_item_source_in_context(
     mutated_item = item.source.replace(old, new, 1)
     assert source.count(item.source) == 1, item_name
     path.write_text(source.replace(item.source, mutated_item, 1), encoding="utf-8")
+
+
+def freeze_cross_tool_claim_call_sites(module, claim, root: Path = ROOT_DIR):
+    """Seal a claim's current authoritative call items for mutation fixtures."""
+
+    call_sites = []
+    for call_site in claim.production_call_sites:
+        source = (root / call_site.source).read_text(encoding="utf-8")
+        items = [
+            item
+            for item in module.rust_items(source, call_site.item)
+            if item.brace_context == call_site.brace_context
+        ]
+        assert len(items) == 1, (call_site.source, call_site.item)
+        call_sites.append(
+            replace(
+                call_site,
+                item_token_sha256=module._rust_sealed_item_token_sha256(items[0]),
+                unfrozen_reason=None,
+            )
+        )
+    return replace(claim, production_call_sites=tuple(call_sites))
 
 
 def test_tla_comment_stripping_reuses_bounded_content_cache() -> None:
@@ -873,6 +900,19 @@ def build_cross_tool_fixture(module, tmp_path: Path):
             ).hexdigest()
             call_source = claim.production_sources[0]
             call_item = f"enforce_{claim.verus_theorem}"
+            call_expression = f"assert!({kernel}(projection));"
+            synthetic_call_source = (
+                f"fn {call_item}(projection: u64) {{\n"
+                f"    {call_expression}\n"
+                "}\n"
+            )
+            extracted_call_items = module.rust_items(
+                synthetic_call_source, call_item
+            )
+            assert len(extracted_call_items) == 1
+            call_item_sha256 = module._rust_sealed_item_token_sha256(
+                extracted_call_items[0]
+            )
             claims.append(
                 module.CrossToolClaimContract(
                     constant=claim.constant,
@@ -903,7 +943,8 @@ def build_cross_tool_fixture(module, tmp_path: Path):
                             source=call_source,
                             item=call_item,
                             projection="projection",
-                            required_expression=f"assert!({kernel}(projection));",
+                            required_expression=call_expression,
+                            item_token_sha256=call_item_sha256,
                         ),
                     ),
                 )
@@ -1247,11 +1288,24 @@ def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
         for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
     ] == [4, 7, 6]
     assert module._cross_tool_contract_errors() == []
-    assert (
-        module._cross_tool_promotion_contract_errors(
-            module.CROSS_TOOL_REFINEMENT_CONTRACTS
-        )
-        == []
+    production_call_sites = [
+        call_site
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        for call_site in claim.production_call_sites
+    ]
+    assert len(production_call_sites) == 22
+    sealed_call_sites = sum(
+        call_site.item_token_sha256 is not None
+        for call_site in production_call_sites
+    )
+    assert sealed_call_sites == 15
+    promotion_errors = module._cross_tool_promotion_contract_errors(
+        module.CROSS_TOOL_REFINEMENT_CONTRACTS
+    )
+    assert len(promotion_errors) == 7
+    assert all(
+        "remains intentionally unfrozen" in error for error in promotion_errors
     )
     canonical_contracts = module.CROSS_TOOL_REFINEMENT_CONTRACTS
     first = canonical_contracts[0]
@@ -1364,6 +1418,56 @@ def test_cross_tool_promotion_rejects_vacuity_kernel_only_and_missing_call_sites
 
     errors = errors_for(replace(claim, production_call_sites=()))
     assert any("no authoritative production kernel call sites" in error for error in errors)
+
+    call_site = claim.production_call_sites[0]
+    errors = errors_for(
+        replace(
+            claim,
+            production_call_sites=(
+                replace(
+                    call_site,
+                    item_token_sha256=None,
+                    unfrozen_reason=None,
+                ),
+            ),
+        )
+    )
+    assert any("lacks an exact item token seal" in error for error in errors)
+
+    errors = errors_for(
+        replace(
+            claim,
+            production_call_sites=(
+                replace(call_site, item_token_sha256="0" * 63),
+            ),
+        )
+    )
+    assert any("invalid exact item token seal" in error for error in errors)
+
+
+def test_cross_tool_contract_rejects_call_source_missing_from_verus_inventory() -> None:
+    """Every authoritative production call item is part of Verus evidence."""
+
+    module = load_checker()
+    verus_contract = module._verus_evidence_contract_module()
+    canonical_sources = verus_contract.REQUIRED_SOURCE_PATHS
+    assert "crates/irohad/src/main.rs" in canonical_sources
+    try:
+        verus_contract.REQUIRED_SOURCE_PATHS = tuple(
+            source
+            for source in canonical_sources
+            if source != "crates/irohad/src/main.rs"
+        )
+        errors = module._cross_tool_contract_errors()
+    finally:
+        verus_contract.REQUIRED_SOURCE_PATHS = canonical_sources
+
+    assert any(
+        "authoritative production call sources outside the Verus evidence inventory"
+        in error
+        and "crates/irohad/src/main.rs" in error
+        for error in errors
+    )
 
 
 def test_cross_tool_obligation_query_is_dormant_canonical_and_fail_closed(
@@ -1916,6 +2020,7 @@ def test_progress_witness_shared_kernel_rejects_owner_record_round_mutations(
     (
         ("negated_production_call", "exact kernel enforcement and projection"),
         ("constant_production_field", "exact kernel enforcement and projection"),
+        ("disconnected_verus_proof", "must invoke its verified kernel"),
         ("altered_verus_projection", "projection builder"),
         ("constant_verus_mirror", "Verus mirror kernel"),
         ("altered_shared_step", "shared macro"),
@@ -1961,6 +2066,7 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
     if mutation in {"negated_production_call", "constant_production_field"}:
         relative = claim.production_call_sites[0].source
     elif mutation in {
+        "disconnected_verus_proof",
         "altered_verus_projection",
         "constant_verus_mirror",
         "altered_identity_postcondition",
@@ -1992,6 +2098,13 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
             "owner_after: ownership_after,",
             "owner_after: 0,",
         ),
+        "disconnected_verus_proof": (
+            "assert(production_enter_view_uses_post_install_effective_lock_kernel(\n"
+            "        production_enter_view_effective_lock_trace(projection),\n"
+            "        projection.enter_view,\n"
+            "    ));",
+            "assert(production_kernel_relation(projection));",
+        ),
         "altered_verus_projection": (
             "protected_before: protected_after,",
             "protected_before: 0u64,",
@@ -2014,8 +2127,10 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
             "&& true",
         ),
         "omitted_signer_count": (
-            "&& $left.signer_count == $right.signer_count",
-            "&& true",
+            "&& $left.signer_bitmap_count == $right.signer_bitmap_count\n"
+            "                    && $left.signer_count == $right.signer_count",
+            "&& $left.signer_bitmap_count == $right.signer_bitmap_count\n"
+            "                    && true",
         ),
         "omitted_voting_power": (
             "&& $left.voting_power == $right.voting_power",
@@ -2099,8 +2214,8 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
             "        );",
         ),
         "altered_identity_postcondition": (
-            "production_enter_view_preserves_locked_prepare_qc_identity("
-            "projection.enter_view),",
+            "projection.enter_view.effect_protected_lock.present\n"
+            "            == projection.enter_view.durable_lock_after.present,",
             "true,",
         ),
     }
@@ -2151,6 +2266,7 @@ def test_body_service_cross_tool_claim_requires_live_production_dequeue(
         for claim in contract.claims
         if claim.constant == "ProductionBodyServiceRefinesAsyncFairness"
     )
+    claim = freeze_cross_tool_claim_call_sites(module, claim)
     assert claim.verified_kernel_source is not None
     paths = {
         *claim.production_sources,
@@ -2221,7 +2337,7 @@ def test_body_service_cross_tool_claim_requires_live_production_dequeue(
             "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
             "$projection.expected_height == $projection.frozen_height",
             "$projection.expected_height == $projection.expected_height",
-            "source seal",
+            "shared macro|source seal",
         ),
         (
             "ProductionDecisionTraceRefinesRecoveryWitness",
@@ -2306,7 +2422,7 @@ def test_body_service_cross_tool_claim_requires_live_production_dequeue(
             "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
             "$projection.chunk_cursor_before == $projection.chunk_index",
             "$projection.chunk_cursor_before == $projection.chunk_cursor_before",
-            "source seal",
+            "shared macro|source seal",
         ),
         (
             "ProductionReliableFlushTraceRefinesOutboundOwnership",
@@ -2334,7 +2450,7 @@ def test_body_service_cross_tool_claim_requires_live_production_dequeue(
             "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
             "$projection.context_height == $projection.commit_qc.decision.height",
             "$projection.context_height == $projection.context_height",
-            "source seal",
+            "shared macro|source seal",
         ),
         (
             "ProductionApplicationTraceRefinesDecisionCompletion",
@@ -2369,6 +2485,7 @@ def test_exact_identity_cross_tool_claims_reject_real_source_mutations(
         for claim in contract.claims
         if claim.constant == claim_constant
     )
+    claim = freeze_cross_tool_claim_call_sites(module, claim)
     assert claim.verified_kernel_source is not None
     paths = {
         *claim.production_sources,
@@ -2416,6 +2533,7 @@ def test_terminal_application_without_successor_activation_claim_rejects_runner_
         if claim.constant
         == "ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal"
     )
+    claim = freeze_cross_tool_claim_call_sites(module, claim)
     assert claim.verified_kernel_source is not None
     paths = {
         *claim.production_sources,
@@ -2443,6 +2561,20 @@ def test_terminal_application_without_successor_activation_claim_rejects_runner_
             "if production_terminal_application_without_successor_activation_kernel(\n"
             "            terminal_application,\n"
             "        ) {",
+        ),
+        (
+            "if !production_terminal_application_without_successor_activation_kernel(\n"
+            "            terminal_application,\n"
+            "        ) {\n"
+            "            return Err(V2RunnerError::SuccessorRefinementRejected);\n"
+            "        }\n"
+            "        let activation = PendingSuccessorConstruction::begin(predecessor)?;",
+            "let activation = PendingSuccessorConstruction::begin(predecessor)?;\n"
+            "        if !production_terminal_application_without_successor_activation_kernel(\n"
+            "            terminal_application,\n"
+            "        ) {\n"
+            "            return Err(V2RunnerError::SuccessorRefinementRejected);\n"
+            "        }",
         ),
     )
 
@@ -2555,7 +2687,10 @@ def test_two_stage_relay_retry_claim_rejects_source_fairness_mutations(
         }
         with pytest.raises(
             ValueError,
-            match="source seal|exact kernel enforcement and projection",
+            match=(
+                "source seal|exact kernel enforcement and projection|"
+                "exact reviewed item token seal"
+            ),
         ):
             module._cross_tool_claim_payload(
                 claim,
@@ -2564,45 +2699,126 @@ def test_two_stage_relay_retry_claim_rejects_source_fairness_mutations(
             )
 
 
-@pytest.mark.parametrize("replacement", ("let _ = projection;", None))
+@pytest.mark.parametrize("mutation", ("missing", "altered"))
 def test_cross_tool_evidence_rejects_missing_or_altered_production_projection(
-    tmp_path: Path, replacement: str | None
+    tmp_path: Path, mutation: str
 ) -> None:
     module = load_checker()
-    (
-        ledger,
-        formal_dir,
-        tlaps_evidence,
-        verus_evidence,
-        cross_tool_evidence,
-        workspace_manifest,
-    ) = build_cross_tool_fixture(module, tmp_path)
     claim = module.CROSS_TOOL_REFINEMENT_CONTRACTS[0].claims[0]
     call_site = claim.production_call_sites[0]
+    paths = {
+        *claim.production_sources,
+        claim.verus_source,
+        claim.verified_kernel_source,
+        *(site.source for site in claim.production_call_sites),
+    }
+    for relative in paths:
+        source_path = ROOT_DIR / relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, destination)
+
     path = tmp_path / call_site.source
     source = path.read_text(encoding="utf-8")
-    exact = call_site.required_expression
-    assert source.count(exact) == 1
-    if replacement is None:
-        replacement = exact.replace("(projection)", "(projection + 1)", 1)
-    path.write_text(source.replace(exact, replacement, 1), encoding="utf-8")
-    for entry in verus_evidence["sources"]:
-        if entry["path"] == call_site.source:
-            entry["sha256"] = module._sha256_file(path)
-            break
+    if mutation == "missing":
+        exact = (
+            "if !production_enter_view_uses_post_install_effective_lock_kernel("
+            "trace, enter_view) {\n"
+            "            return false;\n"
+            "        }"
+        )
+        replacement = "return false;"
     else:
-        raise AssertionError(call_site.source)
+        exact = "owner_after: ownership_after,"
+        replacement = "owner_after: 0,"
+    assert source.count(exact) == 1
+    path.write_text(source.replace(exact, replacement, 1), encoding="utf-8")
+    evidence_paths = {
+        claim.verus_source,
+        claim.verified_kernel_source,
+        *(site.source for site in claim.production_call_sites),
+    }
+    verus_evidence = {
+        "sources": [
+            {
+                "path": relative,
+                "sha256": module._sha256_file(tmp_path / relative),
+            }
+            for relative in sorted(evidence_paths)
+        ]
+    }
+    with pytest.raises(
+        ValueError,
+        match="exact kernel enforcement and projection",
+    ):
+        module._cross_tool_claim_payload(
+            claim,
+            verus_evidence=verus_evidence,
+            root_dir=tmp_path,
+        )
 
-    errors = module._cross_tool_evidence_errors(
-        ledger,
-        cross_tool_evidence,
-        tlaps_evidence=tlaps_evidence,
-        verus_evidence=verus_evidence,
-        formal_dir=formal_dir,
-        root_dir=tmp_path,
-        expected_verus_source_manifest_sha256=workspace_manifest,
+
+def test_cross_tool_evidence_rejects_production_bypass_outside_required_expression(
+    tmp_path: Path,
+) -> None:
+    """A retained kernel snippet cannot hide a new bypass elsewhere in its item."""
+
+    module = load_checker()
+    claim = module.CROSS_TOOL_REFINEMENT_CONTRACTS[0].claims[0]
+    call_site = claim.production_call_sites[0]
+    paths = {
+        *claim.production_sources,
+        claim.verus_source,
+        claim.verified_kernel_source,
+        *(site.source for site in claim.production_call_sites),
+    }
+    for relative in paths:
+        source = ROOT_DIR / relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+
+    path = tmp_path / call_site.source
+    source = path.read_text(encoding="utf-8")
+    items = [
+        item
+        for item in module.rust_items(source, call_site.item)
+        if item.brace_context == call_site.brace_context
+    ]
+    assert len(items) == 1
+    item = items[0]
+    body_start = item.source.find("{")
+    assert body_start >= 0
+    mutated_item = (
+        item.source[: body_start + 1]
+        + "\n        if projection.enter_view.active { return true; }"
+        + item.source[body_start + 1 :]
     )
-    assert any("exact kernel enforcement and projection" in error for error in errors)
+    assert source.count(item.source) == 1
+    path.write_text(
+        source.replace(item.source, mutated_item, 1),
+        encoding="utf-8",
+    )
+    evidence_paths = {
+        claim.verus_source,
+        claim.verified_kernel_source,
+        *(site.source for site in claim.production_call_sites),
+    }
+    verus_evidence = {
+        "sources": [
+            {
+                "path": relative,
+                "sha256": module._sha256_file(tmp_path / relative),
+            }
+            for relative in sorted(evidence_paths)
+        ]
+    }
+    with pytest.raises(ValueError, match="exact reviewed item token seal"):
+        module._cross_tool_claim_payload(
+            claim,
+            verus_evidence=verus_evidence,
+            root_dir=tmp_path,
+        )
 
 
 def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) -> None:
@@ -10157,8 +10373,8 @@ def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
     )
 
     for refinement_constant in (
-        "ProductionTwoStageRelayRetryTraceRefinesSourceFairness",
         "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+        "ProductionTwoStageRelayRetryTraceRefinesSourceFairness",
         "ProductionReliableFlushTraceRefinesOutboundOwnership",
     ):
         path.write_text(
@@ -16244,7 +16460,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 465 tests",
+            "must contain exactly 477 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -16252,9 +16468,9 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=465",
+            "readonly expected_production_liveness_test_count=477",
             "readonly expected_production_liveness_test_count=462",
-            "production liveness source count must be sealed as 465",
+            "production liveness source count must be sealed as 477",
         ),
         (
             'production_p2p_unit_list="$(cargo test --locked -p iroha_p2p --lib -- --list)"',
@@ -16314,13 +16530,15 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
     (
         (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
-            "yielding the current 465-test, 30-module, 53-leg geometry",
-            "yielding the current 465-test, 30-module, 52-leg geometry",
+            "yielding the 465-test, 30-module, 53-leg checkpoint",
+            "yielding the 465-test, 30-module, 52-leg checkpoint",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "current 465-test inventory across 30 modules and 53\npre-network legs",
-            "current 465-test inventory across 30 modules and 52\npre-network legs",
+            "receipt binds the 53 pre-network corridor legs and\n"
+            "their exact 477-test inventory",
+            "receipt binds the 52 pre-network corridor legs and\n"
+            "their exact 477-test inventory",
         ),
     ),
 )
@@ -16331,16 +16549,16 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     new: str,
 ) -> None:
     module = load_checker()
-    for relative in (
+    for fixture_relative in (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
     ):
-        destination = tmp_path / relative
+        destination = tmp_path / fixture_relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT_DIR / relative, destination)
+        shutil.copyfile(ROOT_DIR / fixture_relative, destination)
 
     document_path = tmp_path / relative
     source = document_path.read_text(encoding="utf-8")
@@ -16363,9 +16581,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 465",
+            "_PRODUCTION_TEST_COUNT = 477",
             "_PRODUCTION_TEST_COUNT = 462",
-            "production test count must equal the exact shell inventory count 465",
+            "production test count must equal the exact shell inventory count 477",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -16478,6 +16696,15 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         / "v2_core"
         / "tests.rs"
     ).read_text(encoding="utf-8")
+    refinement_source = (
+        ROOT_DIR
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_core"
+        / "refinement.rs"
+    ).read_text(encoding="utf-8")
     effects_source = (
         ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_effects.rs"
     ).read_text(encoding="utf-8")
@@ -16489,6 +16716,9 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     ).read_text(encoding="utf-8")
     p2p_network_source = (
         ROOT_DIR / "crates" / "iroha_p2p" / "src" / "network.rs"
+    ).read_text(encoding="utf-8")
+    p2p_peer_source = (
+        ROOT_DIR / "crates" / "iroha_p2p" / "src" / "peer.rs"
     ).read_text(encoding="utf-8")
     config_actual_source = (
         ROOT_DIR / "crates" / "iroha_config" / "src" / "parameters" / "actual.rs"
@@ -17335,6 +17565,69 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         )
     )
     assert len(route_lifecycle_inventory_additions) == 3
+    latest_h_geometry_and_daemon_inventory_additions = (
+        (
+            "sumeragi::authoritative_runtime_gate_tests::",
+            "authenticated_non_validator_source_cap_retries_third_source_until_one_lane_drains",
+            sumeragi_source,
+        ),
+        (
+            "sumeragi::authoritative_runtime_gate_tests::",
+            "alternate_reply_route_attaches_before_authenticated_source_lane_cap",
+            sumeragi_source,
+        ),
+        (
+            "consensus_message_control::tests::",
+            "stale_duplicate_reordered_and_unknown_releases_are_atomic",
+            irohad_control_source,
+        ),
+        (
+            "consensus_message_control::tests::",
+            "hold_capacity_is_bounded_by_count_bytes_and_checked_arithmetic",
+            irohad_control_source,
+        ),
+        (
+            "consensus_message_control::tests::",
+            "drain_fence_holds_racing_chunks_fifo_until_atomic_cutover",
+            irohad_control_source,
+        ),
+        (
+            "tests::relay_fairness::",
+            "hold_release_preserves_exact_layered_ownership_until_recorded_terminal",
+            irohad_main_source,
+        ),
+        (
+            "parameters::user::duration_clamp_tests::",
+            "sumeragi_authenticated_non_validator_sources_must_fit_network_geometry",
+            config_user_source,
+        ),
+        (
+            "parameters::user::duration_clamp_tests::",
+            "sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry",
+            config_user_source,
+        ),
+        (
+            "parameters::actual::tests::",
+            "sumeragi_v2_config_format_changes_the_handshake_fingerprint",
+            config_actual_source,
+        ),
+        (
+            "sumeragi::v2_core::refinement::tests::",
+            "historical_body_pipeline_kernel_rejects_request_subject_and_owner_substitution",
+            refinement_source,
+        ),
+        (
+            "sumeragi::v2_core::refinement::tests::",
+            "historical_certificate_kernel_rejects_foreign_admission_and_unretired_request",
+            refinement_source,
+        ),
+        (
+            "peer::run::tests::",
+            "consensus_lane_and_v2_topics_share_authenticated_high_source_credit",
+            p2p_peer_source,
+        ),
+    )
+    assert len(latest_h_geometry_and_daemon_inventory_additions) == 12
     production_inventory_additions = (
         new_production_inventory_additions
         + macro_step_production_inventory_additions
@@ -17342,6 +17635,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         + route_completion_inventory_additions
         + source_geometry_inventory_additions
         + route_lifecycle_inventory_additions
+        + latest_h_geometry_and_daemon_inventory_additions
     )
     for _, test_name, source in production_inventory_additions:
         assert source.count(f"fn {test_name}(") == 1
@@ -17466,10 +17760,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 465
-    assert len(set(production_inventory)) == 465
-    assert "readonly expected_production_liveness_test_count=465" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 465" in receipt_source
+    assert len(production_inventory) == 477
+    assert len(set(production_inventory)) == 477
+    assert "readonly expected_production_liveness_test_count=477" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 477" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -17479,7 +17773,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 465
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 477
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -17726,10 +18020,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         '"preflight-release-receipt",\n                "pytest",\n                189,'
         in receipt_source
     )
-    assert "did not run exactly 1044 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 1044" in release_source
+    assert "did not run exactly 1045 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 1045" in release_source
     assert (
-        "^1044 passed in [0-9]+([.][0-9]+)?s( "
+        "^1045 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -17748,7 +18042,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         assert contract_file in release_source
         assert contract_file in receipt_source
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                1044,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                1045,'
         in receipt_source
     )
     assert "did not run exactly 16 passing tests" in release_source
@@ -19233,10 +19527,10 @@ def test_transport_geometry_source_fidelity_rejects_runtime_frame_mutants(
             "already-accounted source leases coalesce without release and reacquisition",
         ),
         (
-            "source_credits",
-            "if by_peer.len() >= self.max_peer_reserves {",
-            "if false && by_peer.len() >= self.max_peer_reserves {",
-            "bounded weak source-credit registry preserves identity and capacity",
+            "credit_owner",
+            "if required.len() > self.max_sources {",
+            "if false && required.len() > self.max_sources {",
+            "shared authenticated-source registry preserves identity, protected sources, and capacity",
         ),
     ),
 )
@@ -20250,6 +20544,173 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         for error in errors
     ), errors
 
+    # Exercise every H/R split seam in one additional copied workspace so the
+    # fixed proof-fidelity test count does not grow with the mutation matrix.
+    geometry_formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path / "h_geometry", module, "SumeragiV2AsyncNetwork.tla"
+    )
+    geometry_root = geometry_formal_dir.parents[2]
+    core_path = geometry_root / "crates/iroha_core/src/sumeragi/mod.rs"
+    core_source = core_path.read_text(encoding="utf-8")
+    core_source = core_source.replace(
+        "    Authenticated(PeerId),\n    Anonymous,",
+        "    Authenticated,\n    Anonymous,",
+        1,
+    )
+    core_path.write_text(core_source, encoding="utf-8")
+    mutate_rust_item_source(
+        module,
+        core_path,
+        "fair_v2_ingress_required_capacity",
+        "authenticated_non_validator_source_capacity\n"
+        "                .checked_mul(2)",
+        "authenticated_non_validator_source_capacity\n"
+        "                .checked_mul(1)",
+    )
+    mutate_rust_item_source(
+        module,
+        core_path,
+        "fair_v2_ingress_required_byte_capacity",
+        ".checked_add(authenticated_non_validator_source_capacity.unwrap_or(0))",
+        ".checked_add(0)",
+    )
+    mutate_rust_item_source(
+        module,
+        core_path,
+        "try_push_at",
+        "let source_lane_is_new = !state.lanes.contains_key(&source);",
+        "let source_lane_is_new = false;",
+    )
+    mutate_rust_item_source(
+        module,
+        core_path,
+        "try_push_at",
+        "let retained_authenticated_non_validator_sources = state\n"
+        "                .lanes\n"
+        "                .keys()\n"
+        "                .filter(|source| matches!(source, FairV2IngressSource::Authenticated(_)))\n"
+        "                .count();",
+        "let retained_authenticated_non_validator_sources = state\n"
+        "                .lanes\n"
+        "                .keys()\n"
+        "                .count();",
+    )
+    mutate_rust_item_source(
+        module,
+        core_path,
+        "try_recv_if_at",
+        "} else if matches!(&source, FairV2IngressSource::Authenticated(_)) {",
+        "} else if false && matches!(&source, FairV2IngressSource::Authenticated(_)) {",
+    )
+    mutate_rust_item_source(
+        module,
+        core_path,
+        "start",
+        "let authenticated_non_validator_source_capacity =\n"
+        "            config.queues.authenticated_non_validator_sources.get();",
+        "let authenticated_non_validator_source_capacity =\n"
+        "            network.reply_route_source_capacity();",
+    )
+
+    defaults_path = geometry_root / "crates/iroha_config/src/parameters/defaults.rs"
+    defaults_source = defaults_path.read_text(encoding="utf-8")
+    defaults_source = defaults_source.replace(
+        "+ 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()",
+        "+ QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()",
+        1,
+    )
+    defaults_path.write_text(defaults_source, encoding="utf-8")
+
+    actual_path = geometry_root / "crates/iroha_config/src/parameters/actual.rs"
+    actual_source = actual_path.read_text(encoding="utf-8")
+    actual_source = actual_source.replace(
+        "body_queue_capacity,\n                "
+        "authenticated_non_validator_source_capacity,\n                body_bytes,",
+        "body_queue_capacity,\n                "
+        "authenticated_non_validator_source_capacity: 0,\n                body_bytes,",
+        1,
+    )
+    actual_path.write_text(actual_source, encoding="utf-8")
+
+    user_path = geometry_root / "crates/iroha_config/src/parameters/user.rs"
+    user_source = user_path.read_text(encoding="utf-8")
+    user_source = user_source.replace(
+        "sumeragi.queues.authenticated_non_validator_sources.get() "
+        "> reply_source_capacity",
+        "sumeragi.queues.authenticated_non_validator_sources.get() "
+        ">= reply_source_capacity",
+        1,
+    )
+    user_source = user_source.replace(
+        ".or(lane_profile.derived_limits().max_total_connections)",
+        ".or(None)",
+        1,
+    )
+    user_path.write_text(user_source, encoding="utf-8")
+
+    kagami_path = geometry_root / "crates/iroha_kagami/src/localnet.rs"
+    mutate_rust_item_source(
+        module,
+        kagami_path,
+        "localnet_sumeragi_body_bytes",
+        ".checked_add(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)",
+        ".checked_add(0)",
+    )
+
+    renderer_path = geometry_root / "scripts/render_taira_validator_bundle.py"
+    renderer_source = renderer_path.read_text(encoding="utf-8")
+    renderer_source = renderer_source.replace(
+        "validator_count + authenticated_non_validator_sources + 1",
+        "validator_count + 1",
+        1,
+    )
+    renderer_path.write_text(renderer_source, encoding="utf-8")
+
+    for relative in (
+        Path("defaults/kagami/iroha3-taira/config.toml"),
+        Path("configs/soranexus/taira/config.toml"),
+    ):
+        path = geometry_root / relative
+        source = path.read_text(encoding="utf-8")
+        path.write_text(
+            source.replace("authenticated_non_validator_sources = 2", "", 1),
+            encoding="utf-8",
+        )
+    readme_path = geometry_root / "configs/soranexus/taira/README.md"
+    readme_source = readme_path.read_text(encoding="utf-8")
+    readme_path.write_text(
+        readme_source.replace(
+            "validator_count + authenticated_non_validator_sources + 1",
+            "validator_count + 1",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    geometry_errors = module._transport_geometry_production_source_fidelity_errors(
+        geometry_root
+    )
+    for expected_error in (
+        "three-way fair-ingress source ownership inventory",
+        "semantic duplicate route attachment precedes authenticated non-validator lane-cap admission",
+        "authenticated non-validator lane cap excludes validator and anonymous lanes",
+        "empty authenticated non-validator lanes release their bounded churn slot",
+        "exact default 4N+2H+2 outer-ingress message geometry",
+        "production H comes from Sumeragi ingress configuration rather than reply-route R",
+        "root configuration derives R from the effective explicit or lane-profile network geometry",
+        "root configuration rejects H greater than exact-output reply-source R",
+        "shared Sumeragi fingerprint projection carries H beside ingress capacities",
+        "localnet aggregate bytes scale by N+H+1",
+        "Taira renderer scales aggregate bytes by N+H+1",
+        "default Taira profile pins H=2 and seven source partitions",
+        "production Taira profile pins H=2 and seven source partitions",
+        "Taira operator documentation states N+H+1 byte scaling",
+    ):
+        assert any(expected_error in error for error in geometry_errors), (
+            expected_error,
+            geometry_errors,
+        )
+
 
 def test_transport_geometry_source_fidelity_rejects_sm_distid_bit_length_mutant(
     tmp_path: Path,
@@ -20491,7 +20952,7 @@ def test_transport_geometry_source_fidelity_requires_configure_and_open_rechecks
             "block_sync_frame_byte_capacity,\n"
             "            outbound_frame_queue_max_high_bytes,",
             "block_sync_frame_byte_capacity,\n            usize::MAX,",
-            "production fair-ingress construction with every progress cap",
+            "production fair-ingress construction with configured H and every progress cap",
         ),
         (
             Path("crates/irohad/src/main.rs"),
@@ -20580,9 +21041,17 @@ def test_transport_geometry_source_fidelity_rejects_startup_cap_bypass(
             "payload-completion frame ceiling",
         ),
         (
-            "nonzero!(4 * MAX_VALIDATORS_PER_HEIGHT + 2)",
-            "nonzero!(3 * MAX_VALIDATORS_PER_HEIGHT + 2)",
-            "exact default 4N+2 outer-ingress message geometry",
+            "nonzero!(\n"
+            "        4 * MAX_VALIDATORS_PER_HEIGHT\n"
+            "            + 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
+            "            + 2\n"
+            "    )",
+            "nonzero!(\n"
+            "        3 * MAX_VALIDATORS_PER_HEIGHT\n"
+            "            + 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
+            "            + 2\n"
+            "    )",
+            "exact default 4N+2H+2 outer-ingress message geometry",
         ),
     ),
 )

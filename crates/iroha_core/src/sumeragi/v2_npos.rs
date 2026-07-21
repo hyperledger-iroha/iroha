@@ -103,19 +103,6 @@ pub(crate) enum V2VrfRejection {
     Capacity,
 }
 
-/// Reconciliation result after the finalized block has been applied to WSV.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum V2VrfReconcileOutcome {
-    /// There was no locally pending record.
-    NoPending,
-    /// The finalized world-state record covers every locally pending observation.
-    Committed,
-    /// The winning block did not include all compatible local observations.
-    Deferred,
-    /// The winning block contains a conflicting signed observation; local state was discarded.
-    ConflictDiscarded,
-}
-
 /// Fatal construction or local-emission failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2NposError {
@@ -379,32 +366,6 @@ impl V2NposVrfLifecycle {
             .and_then(ActiveVrfLifecycle::pending_record)
             .into_iter()
             .collect()
-    }
-
-    /// Reconcile the winning block's committed effects after application.
-    pub(crate) fn reconcile_committed(&mut self, state: &State) -> V2VrfReconcileOutcome {
-        let Some(active) = self.active.as_mut() else {
-            return V2VrfReconcileOutcome::NoPending;
-        };
-        let Some(pending) = active.pending_record() else {
-            return V2VrfReconcileOutcome::NoPending;
-        };
-        let committed = {
-            let world = state.world_view();
-            world.vrf_epochs().get(&pending.epoch).cloned()
-        };
-        let Some(committed) = committed else {
-            return V2VrfReconcileOutcome::Deferred;
-        };
-        if record_extends(&pending, &committed) {
-            active.committed_record = Some(committed);
-            return V2VrfReconcileOutcome::Committed;
-        }
-        if record_extends(&committed, &pending) {
-            return V2VrfReconcileOutcome::Deferred;
-        }
-        active.committed_record = Some(committed);
-        V2VrfReconcileOutcome::ConflictDiscarded
     }
 }
 

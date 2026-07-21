@@ -207,7 +207,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 465
+_PRODUCTION_TEST_COUNT = 477
 _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
@@ -227,11 +227,11 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        26,
+        28,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 30),
     ("production-v2-core", "sumeragi::v2_core::tests", 15),
-    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 8),
+    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 10),
     (
         "production-v2-core-source-link",
         "sumeragi::v2_core::reducer::source_link_tests",
@@ -259,7 +259,7 @@ _PRODUCTION_MODULES = (
     (
         "production-p2p-peer-reliable-flush",
         "peer::run::tests",
-        7,
+        8,
     ),
     (
         "production-p2p-shared-source-byte-geometry",
@@ -284,7 +284,7 @@ _PRODUCTION_MODULES = (
     (
         "production-irohad-consensus-message-control",
         "consensus_message_control::tests",
-        4,
+        7,
     ),
     (
         "production-irohad-network-relay",
@@ -294,7 +294,7 @@ _PRODUCTION_MODULES = (
     (
         "production-irohad-authenticated-via",
         "tests::relay_fairness",
-        5,
+        6,
     ),
     (
         "production-irohad-genesis-reply-geometry",
@@ -304,12 +304,12 @@ _PRODUCTION_MODULES = (
     (
         "production-config-v2-exact-output-geometry",
         "parameters::actual::tests",
-        1,
+        2,
     ),
     (
         "production-config-v2-exact-output-root-parse",
         "parameters::user::duration_clamp_tests",
-        3,
+        5,
     ),
 )
 _PRODUCTION_INTEGRATION_MODULE = "sumeragi_v2_runner::prepare_qc_split_tests"
@@ -590,7 +590,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                1044,
+                1045,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "

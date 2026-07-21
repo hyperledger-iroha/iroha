@@ -835,7 +835,7 @@ work before handoff. Manual or otherwise untyped `Exact` output remains owned
 and fails closed. These source contracts do not promote the application,
 reconstruction-refinement, or starvation obligations.
 
-The current pre-network release inventory names 465 tests across thirty Rust
+The current pre-network release inventory names 477 tests across thirty Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -859,7 +859,16 @@ the historical 443-test, 29-module, 52-leg checkpoint. The subsequent
 source-authority, immutable-sidecar, runner-race, daemon-corridor,
 shared-byte-budget, cached-Arc-admission, and executable-refinement closure adds
 22 exact regressions and moves two peer tests to their actual owning module,
-yielding the current 465-test, 30-module, 53-leg geometry.
+yielding the 465-test, 30-module, 53-leg checkpoint. The authenticated
+non-validator source-cap regression and the alternate-route-before-lane-cap
+regression add two exact names, yielding the 467-test checkpoint without
+adding a module or corridor leg. Three daemon Hold/Release controller
+regressions, one layered daemon ownership regression, and two root
+configuration geometry regressions add six exact names, yielding the current
+473-test checkpoint without adding a module or corridor leg. One configuration
+fingerprint, two historical-recovery kernel, and one shared authenticated
+source-credit regression add four exact names, yielding the current 477-test
+geometry without adding a module or corridor leg.
 They bind each delivery capability to its
 original minting tenure across bounded retired-source tombstone churn, reject
 a second rehydrated capability instead of overwriting the first, and prove actor
@@ -880,9 +889,11 @@ atomic-lane, semantic-origin, P2P source-fairness, daemon-relay, and active-
 watchdog regressions. The 232-name baseline already included two exact locked-Commit
 progress-witness regressions
 and six outer TransportCompletion-corridor regressions. The current
-geometry inventories four owners per validator plus two aggregate-untrusted
-owners (`4N+2` total), including a roster-origin completion relayed through an
-untrusted authenticated hop, and retains the capacity-negative boundary. It
+geometry inventories four owners per validator, two owners for every one of
+the `H` simultaneously materialized authenticated non-validator lanes, and two
+anonymous owners (`4N+2H+2` total), including a roster-origin completion relayed
+through an authenticated non-validator hop, and retains the capacity-negative
+boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
 now has 53 legs, including separate exact data-model status and atomic
@@ -895,7 +906,7 @@ claimed by the thirty-module, fifty-three-leg corridor. It includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
-`4N+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
+`4N+2H+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
 authenticated exact historical recovery, retained effect-capacity ownership,
 post-decision timeout/TC quiescence, and watchdog classification. It also pins
 the adapter's maximum flattened persistence macro-step at five effects within

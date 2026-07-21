@@ -1047,10 +1047,20 @@ impl Root {
 
         let sumeragi = self.sumeragi.parse(&mut emitter);
         if let Some(sumeragi) = sumeragi.as_ref() {
+            let lane_profile = network.lane_profile;
             let reply_source_capacity = network
                 .max_total_connections
+                .or(lane_profile.derived_limits().max_total_connections)
                 .map(NonZeroUsize::get)
-                .unwrap_or(defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS);
+                .unwrap_or(lane_profile.defaults().max_total_connections);
+            if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "sumeragi.queues.authenticated_non_validator_sources ({}) exceeds configured network authenticated-source capacity {reply_source_capacity}",
+                        sumeragi.queues.authenticated_non_validator_sources,
+                    )),
+                );
+            }
             let effect_work_capacity = (sumeragi.queues.commands.get()
                 / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
                 .max(1);
@@ -5741,16 +5751,20 @@ pub struct SumeragiQueues {
     /// Serialized reducer command FIFO capacity.
     #[config(default = "defaults::sumeragi::QUEUE_COMMAND_CAPACITY")]
     pub commands: NonZeroUsize,
+    /// Maximum simultaneously materialized authenticated non-validator fair-ingress lanes.
+    #[config(default = "defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY")]
+    pub authenticated_non_validator_sources: NonZeroUsize,
     /// Certified-body and block-sync ingress capacity.
     #[config(default = "defaults::sumeragi::QUEUE_BODY_CAPACITY")]
     pub bodies: NonZeroUsize,
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
     #[config(default = "defaults::sumeragi::QUEUE_BODY_BYTES")]
     pub body_bytes: NonZeroUsize,
-    /// Per-authenticated-source canonical outer-ingress wire bytes, partitioned
-    /// between ordinary traffic, payload completions, and timeout votes. This
-    /// also reserves the fixed atomic lane-certificate and executable-source
-    /// minima when the configured global body limit is smaller.
+    /// Per-ingress-source canonical outer-ingress wire-byte partition.
+    /// Validator partitions isolate ordinary traffic, payload completions, and
+    /// timeout votes; authenticated non-validator and anonymous partitions do
+    /// not spend the timeout reserve. This also reserves the fixed atomic
+    /// lane-certificate and executable-source minima.
     #[config(default = "defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES")]
     pub body_source_bytes: NonZeroUsize,
     /// Payload-chunk ingress and orphan-buffer capacity.
@@ -5970,11 +5984,41 @@ impl Sumeragi {
             }
         }
 
-        match queues.body_source_bytes.get().checked_mul(2) {
+        let minimum_body_sources = queues
+            .authenticated_non_validator_sources
+            .get()
+            .checked_add(2);
+        let minimum_body_messages = queues
+            .authenticated_non_validator_sources
+            .get()
+            .checked_mul(2)
+            .and_then(|hubs| hubs.checked_add(6));
+        match minimum_body_messages {
+            Some(minimum) if queues.bodies.get() < minimum => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "sumeragi.queues.bodies must reserve four positions for at least one validator, two per authenticated non-validator source, and two anonymous positions (minimum {minimum}, configured {})",
+                        queues.bodies,
+                    )),
+                );
+                valid = false;
+            }
+            Some(_) => {}
+            None => {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "Sumeragi authenticated non-validator ingress message geometry exceeds the platform size representation",
+                ));
+                valid = false;
+            }
+        }
+
+        match minimum_body_sources
+            .and_then(|sources| queues.body_source_bytes.get().checked_mul(sources))
+        {
             Some(minimum) if queues.body_bytes.get() < minimum => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.body_bytes must be at least 2 * sumeragi.queues.body_source_bytes (minimum {minimum}, configured {})",
+                        "sumeragi.queues.body_bytes must reserve one validator, every configured authenticated non-validator source, and the anonymous source partition (minimum {minimum}, configured {})",
                         queues.body_bytes,
                     )),
                 );
@@ -5984,7 +6028,7 @@ impl Sumeragi {
             None => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(
-                        "2 * sumeragi.queues.body_source_bytes exceeds the platform size representation",
+                        "Sumeragi authenticated-source ingress byte geometry exceeds the platform size representation",
                     ),
                 );
                 valid = false;
@@ -6036,6 +6080,7 @@ impl Sumeragi {
             },
             queues: actual::SumeragiQueues {
                 commands: queues.commands,
+                authenticated_non_validator_sources: queues.authenticated_non_validator_sources,
                 bodies: queues.bodies,
                 body_bytes: queues.body_bytes,
                 body_source_bytes: queues.body_source_bytes,
@@ -21853,6 +21898,64 @@ initial_delay_seconds = 17
         assert!(
             report.contains(
                 "Sumeragi v2 outbound shared ownership capacity 394 is below one maximum fanout 396; configured network reply-source capacity is 132"
+            ),
+            "{report}",
+        );
+    }
+
+    #[test]
+    fn sumeragi_authenticated_non_validator_sources_must_fit_network_geometry() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert("max_total_connections".into(), Value::Integer(1));
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("two independent authenticated sources cannot fit one connection");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "sumeragi.queues.authenticated_non_validator_sources (2) exceeds configured network authenticated-source capacity 1"
+            ),
+            "{report}",
+        );
+    }
+
+    #[test]
+    fn sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert("lane_profile".into(), Value::String("home".into()));
+        network.remove("max_total_connections");
+
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let queues = sumeragi
+            .entry("queues")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi queues table");
+        queues.insert(
+            "authenticated_non_validator_sources".into(),
+            Value::Integer(33),
+        );
+        queues.insert("bodies".into(), Value::Integer(72));
+        queues.insert("body_bytes".into(), Value::Integer(35 * 33 * 1024 * 1024));
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("home profile admits at most 32 independent authenticated sources");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "sumeragi.queues.authenticated_non_validator_sources (33) exceeds configured network authenticated-source capacity 32"
             ),
             "{report}",
         );

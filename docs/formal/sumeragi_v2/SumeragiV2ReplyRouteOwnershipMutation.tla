@@ -11,7 +11,7 @@ fixed path retires source 0, reconnects the first request at its retained
 cursor, and then rebinds the second request to the source-scoped new tenure at
 its own retained cursor.  The mutations reset a reconnect cursor, replace
 independent attempts, retain a sibling semantic ticket across a source-wide
-tenure change, accept the authenticated hub as a substituted semantic target,
+tenure change, accept the authenticated source as a substituted semantic target,
 or reuse a consumed ticket for the next cursor payload.  These cases pin the
 production distinctions among semantic origin, authenticated source,
 connection tenure, and one-item admission authority.

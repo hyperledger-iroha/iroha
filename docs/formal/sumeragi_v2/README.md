@@ -88,12 +88,15 @@ ledger.
   `2 * |ValidatorIds| + 3` owners. Exact duplicates coalesce, while a distinct
   same-owner item retries without displacing another protected slot. Immutable
   authenticated history remains separate from this consumer state. Fair
-  transport ingress requires at least `4 * |ValidatorIds| + 1` entries. The
-  potential separately reserves an empty or non-timeout-progress-deficient
-  validator source, every validator's missing TimeoutVote, every validator's
-  missing shared TransportCompletion owner, and the continuation required when
-  servicing a lane would recreate any reservation; anonymous and non-roster
-  senders share the final untrusted slot. The
+  transport ingress for a non-empty roster has the exact minimum
+  `4 * |ValidatorIds| + 2 * H + 2` entries, where `H` is the configured maximum
+  number of simultaneously materialized authenticated non-validator source
+  lanes. The potential separately reserves four owners per validator, two
+  owners per materialized authenticated non-validator lane, and two anonymous
+  owners. With no roster the diagnostic minimum is `2 * H + 1`, because no
+  roster-origin TransportCompletion can be valid on the anonymous lane. A
+  semantic duplicate carrying a newly authenticated reply route is merged into
+  its existing request before the new-lane `H` gate is evaluated. The
   inductive invariant also records that every individual source lane is at
   most the aggregate ingress capacity, matching the runtime admission gate;
   this makes one-item removal decrease the counted depth by exactly one even
@@ -190,10 +193,12 @@ ledger.
   Configure and open both reject overflow or an undersized ingress, topic,
   global-frame, or high-queue owner. The default instantiation uses
   17 MiB global/consensus/block-sync settings, 2 MiB control, a 128 MiB
-  high-priority byte queue, and `4 * 128 + 2 = 514` outer-ingress entries.
+  high-priority byte queue, `H = 2`, and
+  `4 * 128 + 2 * 2 + 2 = 518` outer-ingress entries.
   Kagami and the Taira renderer reject rosters above 128 and preserve one
-  aggregate source partition for every validator plus the shared untrusted
-  lane by scaling body bytes to at least `(N + 1) * body_source_bytes`.
+  source partition for every validator, every simultaneously materialized
+  authenticated non-validator lane, and the anonymous lane by scaling body
+  bytes to at least `(N + H + 1) * body_source_bytes`.
   The production reducer's shared Rust/Verus refinement gate checks the local
   EnterView selection boundary: the persisted TC, pre-install lock,
   post-install durable lock, effect-carried lock, and immediately following
@@ -704,7 +709,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 465 named tests
+Before network startup, the executable wrapper inventories 477 named tests
 across 30 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -730,7 +735,16 @@ cardinality. The in-flight sidecar refresh regression raised the inventory to
 historical 443-test checkpoint. The source-authority, immutable-sidecar,
 runner-race, daemon-corridor, shared-byte-budget, cached-Arc-admission, and
 executable-refinement closure adds 22 exact regressions, moves two peer tests to their actual owning
-module, and yields the current 465-test, 30-module, 53-leg geometry.
+module, and yields the 465-test, 30-module, 53-leg checkpoint. The authenticated
+non-validator source-cap regression and the alternate-route-before-lane-cap
+regression add two more exact names, yielding the 467-test checkpoint
+without adding a module or corridor leg. Three daemon Hold/Release controller
+regressions, one layered daemon ownership regression, and two root
+configuration geometry regressions add six exact names, yielding the current
+473-test checkpoint without adding a module or corridor leg. One configuration
+fingerprint, two historical-recovery kernel, and one shared authenticated
+source-credit regression add four more exact names, yielding the current
+477-test geometry without adding a module or corridor leg.
 They bind each delivery capability to its original minting tenure even after
 bounded retired-source tombstone churn, reject a second route at rehydration
 instead of silently overwriting the first capability, and prove actor
@@ -753,9 +767,11 @@ daemon relay quotas, and the active watchdog. The 232-name baseline already
 included two exact locked-Commit
 progress-witness regressions and six outer TransportCompletion-corridor
 regressions. The current
-geometry pins four owners per validator plus two aggregate-untrusted owners
-(`4N+2` total), including a roster-origin completion relayed through an
-untrusted authenticated hop, and retains the capacity-negative boundary. It
+geometry pins four owners per validator, two owners for each of the `H`
+simultaneously materialized authenticated non-validator lanes, and two
+anonymous owners (`4N+2H+2` total), including a roster-origin completion relayed
+through an authenticated non-validator hop, and retains the capacity-negative
+boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
 the complete pre-network corridor now spans 53 legs, including separate exact
@@ -768,7 +784,7 @@ thirty modules or fifty-three legs. The inventory includes five native-AMX lane-
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
 recovery, post-decision timeout/TC quiescence, and the exact
-`4N+2`/`2N+3` admission boundaries in addition to exact-lock,
+`4N+2H+2`/`2N+3` admission boundaries in addition to exact-lock,
 completion-ownership, future-acquisition rejection, rebound durable retry, and
 executor-batch boundaries. Those adapter boundaries pin a maximum flattened
 persistence macro-step of five effects within the reducer's eight-effect bound,
@@ -840,7 +856,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 53 pre-network legs and the exact
-465-test inventory, the pinned harness lock and resolved toolchain, the formal
+477-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

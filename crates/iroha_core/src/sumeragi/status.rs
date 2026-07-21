@@ -6207,26 +6207,6 @@ pub fn set_pipeline_execution_snapshot(snapshot: PipelineExecutionSnapshot) {
     *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") = snapshot;
 }
 
-/// Test-only wrapper that reads only the pipeline adapter diagnostic without
-/// cloning the rest of the public non-consensus status snapshot.
-#[cfg(test)]
-pub(crate) struct PipelineExecutionTestSnapshot {
-    /// Aggregate adapter counters asserted by block-pipeline tests.
-    pub(crate) pipeline_execution: PipelineExecutionSnapshot,
-}
-
-/// Read the aggregate pipeline-execution diagnostic in isolated unit tests.
-#[cfg(test)]
-pub(crate) fn pipeline_execution_snapshot_for_tests() -> PipelineExecutionTestSnapshot {
-    PipelineExecutionTestSnapshot {
-        pipeline_execution: lock_operator_status_slot(
-            pipeline_execution_slot(),
-            "pipeline execution snapshot",
-        )
-        .clone(),
-    }
-}
-
 /// Replace the access-set source adapter diagnostic.
 pub fn set_access_set_source_summary(summary: AccessSetSourceSummary) {
     *lock_operator_status_slot(access_set_source_slot(), "access-set source snapshot") = summary;
@@ -7028,14 +7008,16 @@ fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Option<TestLoc
 pub(crate) struct NexusFeeTestLock;
 
 #[cfg(test)]
-pub(crate) struct NexusFeeTestGuard(TestLockGuard);
+pub(crate) struct NexusFeeTestGuard {
+    _guard: TestLockGuard,
+}
 
 #[cfg(test)]
 impl NexusFeeTestLock {
     pub(crate) fn lock(&'static self) -> Result<NexusFeeTestGuard, std::convert::Infallible> {
-        Ok(NexusFeeTestGuard(reentrant_test_guard(
-            &RBC_STATUS_TEST_LOCK,
-        )))
+        Ok(NexusFeeTestGuard {
+            _guard: reentrant_test_guard(&RBC_STATUS_TEST_LOCK),
+        })
     }
 }
 

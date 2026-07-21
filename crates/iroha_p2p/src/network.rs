@@ -2942,6 +2942,37 @@ impl NetworkReplyRoute {
     pub fn is_active(&self) -> bool {
         self.validate_delivery_binding().is_ok() && self.tenure.is_active()
     }
+
+    /// Immutable process-local identity of this exact authenticated delivery.
+    ///
+    /// The digest deliberately includes opaque actor and tenure identities as
+    /// well as both actor-global ordinals, the authenticated source, and the
+    /// semantic target. It never includes connection liveness and has no wire
+    /// representation; callers use it only to protect in-process ownership
+    /// projections from substitution.
+    #[must_use]
+    pub fn process_local_identity_hash(&self) -> Hash {
+        const DOMAIN: &[u8] = b"iroha:p2p:reply-route-process-local-identity:v1\n";
+        let actor = (Arc::as_ptr(&self.tenure.owner) as usize as u128).to_le_bytes();
+        let tenure = (Arc::as_ptr(&self.tenure) as usize as u128).to_le_bytes();
+        let connection_ordinal = self.tenure.connection_ordinal.to_le_bytes();
+        let delivery_ordinal = self.delivery_ordinal.to_le_bytes();
+        let source_capacity = u64::try_from(self.tenure.source_capacity)
+            .expect("bounded reply-source capacity fits u64")
+            .to_le_bytes();
+        let authenticated_source = self.tenure.delivery_peer.encode();
+        let semantic_target = self.semantic_target.encode();
+        Hash::new_from_chunks(&[
+            DOMAIN,
+            &actor,
+            &tenure,
+            &connection_ordinal,
+            &delivery_ordinal,
+            &source_capacity,
+            &authenticated_source,
+            &semantic_target,
+        ])
+    }
 }
 
 /// Valid update of one authenticated reply-source attempt.
@@ -3000,6 +3031,125 @@ pub struct NetworkReplyRoutes {
     /// pruning, while lower ordinals from another authenticated source remain
     /// valid independent attempts.
     retired_attempts: BTreeMap<NetworkReplySourceKey, NetworkReplyRoute>,
+}
+
+/// Opaque proof that one route set was pruned by one exact liveness snapshot.
+///
+/// The receipt is process-local, cannot be constructed outside this module,
+/// and has no wire codec. Downstream ownership carriers consume it to bind
+/// their cursor projection to the route operation which actually occurred.
+pub struct NetworkReplyRoutesPruneReceipt {
+    before: NetworkReplyRoutes,
+    after: NetworkReplyRoutes,
+}
+
+impl core::fmt::Debug for NetworkReplyRoutesPruneReceipt {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NetworkReplyRoutesPruneReceipt")
+            .field("before_attempts", &self.before.attempts.len())
+            .field("after_attempts", &self.after.attempts.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl NetworkReplyRoutesPruneReceipt {
+    /// Consume this receipt for its exact input and return the bound output.
+    ///
+    /// A caller cannot supply or substitute an output route set. Failure means
+    /// the supplied input was not the exact history pruned by this operation.
+    #[must_use]
+    pub fn into_output(self, before: &NetworkReplyRoutes) -> Option<NetworkReplyRoutes> {
+        (self.before.same_exact_history(before)
+            && self.before.has_valid_container_shape()
+            && self.after.has_valid_container_shape())
+        .then_some(self.after)
+    }
+}
+
+#[derive(Debug)]
+struct NetworkReplyRoutesMergeTransition {
+    left: NetworkReplyRoutes,
+    right: NetworkReplyRoutes,
+    merged: NetworkReplyRoutes,
+}
+
+impl NetworkReplyRoutesMergeTransition {
+    fn into_output(
+        self,
+        left: &NetworkReplyRoutes,
+        right: &NetworkReplyRoutes,
+    ) -> Option<NetworkReplyRoutes> {
+        (self.left.same_exact_history(left)
+            && self.right.same_exact_history(right)
+            && self.left.has_valid_container_shape()
+            && self.right.has_valid_container_shape()
+            && self.merged.has_valid_container_shape())
+        .then_some(self.merged)
+    }
+}
+
+/// Opaque proof that a strict route merge produced one exact output history.
+///
+/// The receipt is process-local, non-cloneable, and non-serializable. Consuming
+/// it returns the operation-owned output rather than accepting a caller's
+/// independently mutable route set.
+pub struct NetworkReplyRoutesStrictMergeReceipt {
+    transition: NetworkReplyRoutesMergeTransition,
+}
+
+impl core::fmt::Debug for NetworkReplyRoutesStrictMergeReceipt {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NetworkReplyRoutesStrictMergeReceipt")
+            .field("left_attempts", &self.transition.left.attempts.len())
+            .field("right_attempts", &self.transition.right.attempts.len())
+            .field("merged_attempts", &self.transition.merged.attempts.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl NetworkReplyRoutesStrictMergeReceipt {
+    /// Consume this strict-merge receipt and return its bound output history.
+    #[must_use]
+    pub fn into_output(
+        self,
+        left: &NetworkReplyRoutes,
+        right: &NetworkReplyRoutes,
+    ) -> Option<NetworkReplyRoutes> {
+        self.transition.into_output(left, right)
+    }
+}
+
+/// Opaque proof that observed-history reconciliation produced one exact output.
+///
+/// This receipt is deliberately distinct from a strict-merge receipt so a
+/// tolerant stale observation cannot be reused at a strict admission seam.
+pub struct NetworkReplyRoutesObservedMergeReceipt {
+    transition: NetworkReplyRoutesMergeTransition,
+}
+
+impl core::fmt::Debug for NetworkReplyRoutesObservedMergeReceipt {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NetworkReplyRoutesObservedMergeReceipt")
+            .field("left_attempts", &self.transition.left.attempts.len())
+            .field("right_attempts", &self.transition.right.attempts.len())
+            .field("merged_attempts", &self.transition.merged.attempts.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl NetworkReplyRoutesObservedMergeReceipt {
+    /// Consume this observed-merge receipt and return its bound output history.
+    #[must_use]
+    pub fn into_output(
+        self,
+        left: &NetworkReplyRoutes,
+        right: &NetworkReplyRoutes,
+    ) -> Option<NetworkReplyRoutes> {
+        self.transition.into_output(left, right)
+    }
 }
 
 impl core::fmt::Debug for NetworkReplyRoutes {
@@ -3072,29 +3222,127 @@ impl NetworkReplyRoutes {
         self.attempts.values()
     }
 
+    /// Whether two carriers contain the same exact active and retired history.
+    ///
+    /// This comparison is process-local and liveness-independent. It includes
+    /// opaque actor ownership, container geometry, map/source bindings, active
+    /// delivery placement, and bounded tombstones.
+    #[must_use]
+    pub fn has_same_exact_history(&self, other: &Self) -> bool {
+        self.has_valid_container_shape()
+            && other.has_valid_container_shape()
+            && self.same_exact_history(other)
+    }
+
+    /// Immutable process-local digest of the complete route history.
+    ///
+    /// Both active attempts and retired tombstones are included. The digest
+    /// deliberately excludes current connection liveness and has no wire
+    /// representation.
+    #[must_use]
+    pub fn process_local_exact_history_hash(&self) -> Hash {
+        const DOMAIN: &[u8] = b"iroha:p2p:reply-route-history-process-local:v1\n";
+        let actor = (Arc::as_ptr(&self.owner) as usize as u128).to_le_bytes();
+        let source_capacity = u64::try_from(self.source_capacity)
+            .expect("bounded reply-source capacity fits u64")
+            .to_le_bytes();
+        let semantic_target = self.semantic_target.encode();
+        let mut projection = Vec::new();
+        projection.extend_from_slice(DOMAIN);
+        projection.extend_from_slice(&actor);
+        projection.extend_from_slice(&source_capacity);
+        projection.extend_from_slice(&semantic_target);
+        projection.extend_from_slice(
+            &u64::try_from(self.attempts.len())
+                .expect("bounded active route count fits u64")
+                .to_le_bytes(),
+        );
+        for route in self.attempts.values() {
+            projection.push(0);
+            projection.extend_from_slice(route.process_local_identity_hash().as_ref());
+        }
+        projection.extend_from_slice(
+            &u64::try_from(self.retired_attempts.len())
+                .expect("bounded retired route count fits u64")
+                .to_le_bytes(),
+        );
+        for route in self.retired_attempts.values() {
+            projection.push(1);
+            projection.extend_from_slice(route.process_local_identity_hash().as_ref());
+        }
+        Hash::new(projection)
+    }
+
     /// Consume the set into independent source attempts in stable local order.
     pub fn into_routes(self) -> impl Iterator<Item = NetworkReplyRoute> {
         self.attempts.into_values()
     }
 
-    /// Drop retired connection tenures from an already-owned route set.
+    /// Drop connection tenures which are retired in one bounded snapshot.
     ///
     /// This is local ownership maintenance, not candidate admission: callers
     /// should validate every newly observed route before invoking it. The
-    /// returned count is the number of live authenticated-source attempts
-    /// which remain available for dispatch.
+    /// snapshot is authoritative for this pass: a route which retires after
+    /// its liveness was sampled remains retained until the next pass, so no
+    /// route can be removed without recording its exact retired delivery. The
+    /// returned count is the number of authenticated-source attempts retained
+    /// for dispatch after this pass; a concurrently retired attempt can remain
+    /// in that count until the next bounded snapshot.
     pub fn retain_active(&mut self) -> usize {
-        let retired = self
+        self.retain_active_with_receipt().0
+    }
+
+    /// Prune one bounded inactive-route snapshot and return its opaque receipt.
+    ///
+    /// Unlike a post-hoc predicate, the receipt binds the exact before/after
+    /// histories captured by the operation itself and therefore cannot accept
+    /// a caller-invented omission after liveness changes again.
+    pub fn retain_active_with_receipt(&mut self) -> (usize, NetworkReplyRoutesPruneReceipt) {
+        self.retain_active_with_receipt_after_snapshot(|| {})
+    }
+
+    /// Apply one exact inactive-route snapshot after exposing its linearization
+    /// boundary to a caller-supplied hook.
+    ///
+    /// Production pruning supplies a no-op hook. Keeping the boundary explicit
+    /// lets the race regression retire a tenure immediately after sampling and
+    /// prove that a later liveness transition is deferred to the next pass.
+    fn retain_active_with_receipt_after_snapshot<F>(
+        &mut self,
+        after_snapshot: F,
+    ) -> (usize, NetworkReplyRoutesPruneReceipt)
+    where
+        F: FnOnce(),
+    {
+        let before = self.clone();
+        let retired_snapshot = self
             .attempts
-            .values()
-            .filter(|route| !route.is_active())
-            .cloned()
+            .iter()
+            .filter(|(_, route)| !route.is_active())
+            .map(|(source, route)| (source.clone(), route.clone()))
             .collect::<Vec<_>>();
-        for retired in retired {
-            self.record_retired_delivery(retired);
+        after_snapshot();
+        for (source, snapshot_route) in retired_snapshot {
+            if self
+                .attempts
+                .get(&source)
+                .is_some_and(|current| current.same_delivery(&snapshot_route))
+            {
+                let retired = self
+                    .attempts
+                    .remove(&source)
+                    .expect("exact snapshotted reply route must remain present");
+                self.record_retired_delivery(retired);
+            }
         }
-        self.attempts.retain(|_, route| route.is_active());
-        self.attempts.len()
+        let retained = self.attempts.len();
+        let receipt = NetworkReplyRoutesPruneReceipt {
+            before,
+            after: self.clone(),
+        };
+        debug_assert!(receipt.before.has_valid_container_shape());
+        debug_assert!(receipt.after.has_valid_container_shape());
+        (retained, receipt)
     }
 
     /// Remove one source attempt after its semantic output cursor completes.
@@ -3117,7 +3365,21 @@ impl NetworkReplyRoutes {
     ///
     /// Returns a capability or capacity error without changing `self`.
     pub fn merge(&mut self, candidate: &Self) -> Result<(), NetworkReplyRouteError> {
+        self.merge_with_receipt(candidate).map(drop)
+    }
+
+    /// Strictly merge a candidate and return the exact operation receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capability or capacity error without changing `self`.
+    pub fn merge_with_receipt(
+        &mut self,
+        candidate: &Self,
+    ) -> Result<NetworkReplyRoutesStrictMergeReceipt, NetworkReplyRouteError> {
         self.preflight_merge(candidate)?;
+        let left = self.clone();
+        let right = candidate.clone();
         let mut merged = self.clone();
         merged.retain_active();
         for retired in candidate.retired_attempts.values().cloned() {
@@ -3126,8 +3388,18 @@ impl NetworkReplyRoutes {
         for route in candidate.iter().cloned() {
             merged.attach(route)?;
         }
+        let receipt = NetworkReplyRoutesStrictMergeReceipt {
+            transition: NetworkReplyRoutesMergeTransition {
+                left,
+                right,
+                merged: merged.clone(),
+            },
+        };
+        debug_assert!(receipt.transition.left.has_valid_container_shape());
+        debug_assert!(receipt.transition.right.has_valid_container_shape());
+        debug_assert!(receipt.transition.merged.has_valid_container_shape());
         *self = merged;
-        Ok(())
+        Ok(receipt)
     }
 
     /// Reconcile an independently observed route history atomically.
@@ -3144,8 +3416,23 @@ impl NetworkReplyRoutes {
     /// Returns a non-stale capability or capacity error without changing
     /// `self`.
     pub fn merge_observed(&mut self, candidate: &Self) -> Result<(), NetworkReplyRouteError> {
+        self.merge_observed_with_receipt(candidate).map(drop)
+    }
+
+    /// Reconcile observed history and return the exact operation receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a non-stale capability or capacity error without changing
+    /// `self`.
+    pub fn merge_observed_with_receipt(
+        &mut self,
+        candidate: &Self,
+    ) -> Result<NetworkReplyRoutesObservedMergeReceipt, NetworkReplyRouteError> {
         self.preflight_merge(candidate)?;
 
+        let left = self.clone();
+        let right = candidate.clone();
         let mut merged = self.clone();
         merged.retain_active();
         let observed_routes = candidate
@@ -3177,8 +3464,87 @@ impl NetworkReplyRoutes {
             }
         }
         merged.retain_active();
+        let receipt = NetworkReplyRoutesObservedMergeReceipt {
+            transition: NetworkReplyRoutesMergeTransition {
+                left,
+                right,
+                merged: merged.clone(),
+            },
+        };
+        debug_assert!(receipt.transition.left.has_valid_container_shape());
+        debug_assert!(receipt.transition.right.has_valid_container_shape());
+        debug_assert!(receipt.transition.merged.has_valid_container_shape());
         *self = merged;
-        Ok(())
+        Ok(receipt)
+    }
+
+    fn same_exact_history(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.owner, &other.owner)
+            && self.semantic_target == other.semantic_target
+            && self.source_capacity == other.source_capacity
+            && self.attempts.len() == other.attempts.len()
+            && self.retired_attempts.len() == other.retired_attempts.len()
+            && self.attempts.iter().all(|(source, route)| {
+                other
+                    .attempts
+                    .get(source)
+                    .is_some_and(|other| route.same_delivery(other))
+            })
+            && self.retired_attempts.iter().all(|(source, route)| {
+                other
+                    .retired_attempts
+                    .get(source)
+                    .is_some_and(|other| route.same_delivery(other))
+            })
+    }
+
+    fn has_valid_container_shape(&self) -> bool {
+        let member_is_exact = |source: &NetworkReplySourceKey, route: &NetworkReplyRoute| {
+            source == &route.source_key()
+                && Arc::ptr_eq(&self.owner, &route.tenure.owner)
+                && self.semantic_target == route.semantic_target
+                && self.source_capacity == route.tenure.source_capacity
+                && route.validate_delivery_binding().is_ok()
+        };
+        if self.source_capacity == 0
+            || self.attempts.len() > self.source_capacity
+            || self.retired_attempts.len() > self.source_capacity
+            || self
+                .attempts
+                .iter()
+                .chain(&self.retired_attempts)
+                .any(|(source, route)| !member_is_exact(source, route))
+        {
+            return false;
+        }
+        let attempts_are_distinct = self.attempts.iter().all(|(source, route)| {
+            self.attempts.iter().all(|(other_source, other)| {
+                source == other_source
+                    || (!route.same_delivery(other) && !route.equal_ordinal_different_tenure(other))
+            })
+        });
+        let retired_are_distinct = self.retired_attempts.iter().all(|(source, route)| {
+            self.retired_attempts.iter().all(|(other_source, other)| {
+                source == other_source
+                    || (!route.same_delivery(other) && !route.equal_ordinal_different_tenure(other))
+            })
+        });
+        let histories_are_ordered = self.attempts.iter().all(|(source, route)| {
+            self.retired_attempts.get(source).is_none_or(|retired| {
+                route.delivery_ordinal > retired.delivery_ordinal
+                    && !route.same_delivery(retired)
+                    && !route.equal_ordinal_different_tenure(retired)
+            })
+        });
+        let histories_do_not_collide = self.attempts.values().all(|route| {
+            self.retired_attempts.values().all(|retired| {
+                !route.same_delivery(retired) && !route.equal_ordinal_different_tenure(retired)
+            })
+        });
+        attempts_are_distinct
+            && retired_are_distinct
+            && histories_are_ordered
+            && histories_do_not_collide
     }
 
     fn preflight_merge(&self, candidate: &Self) -> Result<(), NetworkReplyRouteError> {
@@ -3751,6 +4117,12 @@ pub enum NetworkReplyFlushAckStatus {
 pub struct NetworkReplyFlushIdentity {
     route: NetworkReplyRoute,
     ticket: NetworkActorAdmittedTicketIdentity,
+    /// Linear claim shared by every clone of this exact actor completion.
+    ///
+    /// A consumer may therefore retain immutable identity projections without
+    /// allowing an already-applied writer receipt to advance a later,
+    /// byte-identical rematerialization of the same semantic request.
+    completion_claimed: Arc<AtomicBool>,
 }
 
 impl core::fmt::Debug for NetworkReplyFlushIdentity {
@@ -3789,7 +4161,11 @@ impl NetworkReplyFlushIdentity {
             Some(&route.tenure.delivery_peer)
         );
         debug_assert!(!ticket.shape.broadcast);
-        Some(Self { route, ticket })
+        Some(Self {
+            route,
+            ticket,
+            completion_claimed: Arc::new(AtomicBool::new(false)),
+        })
     }
 
     /// Semantic peer to which the admitted reply is addressed.
@@ -3859,6 +4235,19 @@ impl NetworkReplyFlushIdentity {
     #[must_use]
     pub fn canonical_request_digest(&self) -> Hash {
         self.ticket.shape.request_digest
+    }
+
+    /// Consume this exact actor-minted writer completion at most once.
+    ///
+    /// Cloned identities share the same process-local claim. This operation
+    /// does not attest that the writer flushed; callers must first obtain the
+    /// terminal [`NetworkReplyFlushAckStatus::Flushed`] result from the
+    /// matching [`NetworkReplyFlushAck`].
+    #[must_use]
+    pub fn claim_writer_flush_once(&self) -> bool {
+        self.completion_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     /// Whether `route` is the exact authenticated tenure and semantic target.
@@ -19364,10 +19753,30 @@ mod tests {
         let other_target = PeerId::from(KeyPair::random().public_key().clone());
         let mut fixture = NetworkReplyRouteTestFixture::new(delivery_peer);
         let prior = fixture.mint(semantic_target.clone());
+        let exact_clone = prior.clone();
+        let later = fixture
+            .redeliver(&prior)
+            .expect("mint a later delivery on the same tenure");
         let reconnected = fixture.mint(semantic_target);
         let retargeted = fixture.mint(other_target);
 
         assert!(prior.is_active());
+        assert_eq!(
+            prior.process_local_identity_hash(),
+            exact_clone.process_local_identity_hash(),
+            "an exact clone retains the immutable delivery identity"
+        );
+        assert_ne!(
+            prior.process_local_identity_hash(),
+            later.process_local_identity_hash(),
+            "a same-tenure redelivery receives another actor-global ordinal"
+        );
+        assert_ne!(
+            later.process_local_identity_hash(),
+            reconnected.process_local_identity_hash(),
+            "a reconnect receives another immutable delivery identity"
+        );
+        let prior_identity = prior.process_local_identity_hash();
         assert_eq!(
             reconnected.source_update_from(&prior),
             Ok(NetworkReplyRouteSourceUpdate::Reconnected)
@@ -19379,6 +19788,11 @@ mod tests {
         );
         assert!(fixture.retire(&prior));
         assert!(!prior.is_active());
+        assert_eq!(
+            prior.process_local_identity_hash(),
+            prior_identity,
+            "retirement cannot rewrite immutable delivery identity"
+        );
 
         let foreign_delivery = PeerId::from(KeyPair::random().public_key().clone());
         let mut foreign_fixture = NetworkReplyRouteTestFixture::new(foreign_delivery);
@@ -19441,9 +19855,54 @@ mod tests {
         let retired = fixture.mint_via(target.clone(), hub.clone());
         let mut routes =
             NetworkReplyRoutes::try_from_route(retired.clone()).expect("initial live route");
+        let before_pruning = routes.clone();
+        let mut forged_live_omission = before_pruning.clone();
+        assert!(forged_live_omission.remove_completed_source(&retired.source_key()));
+        let mut no_op_snapshot = before_pruning.clone();
+        let (retained_count, no_op_receipt) = no_op_snapshot.retain_active_with_receipt();
+        assert_eq!(retained_count, 1);
+        assert!(
+            no_op_receipt.into_output(&forged_live_omission).is_none(),
+            "a receipt cannot be consumed against a caller-invented input omission"
+        );
+        let mut no_op_snapshot = before_pruning.clone();
+        let (_, no_op_receipt) = no_op_snapshot.retain_active_with_receipt();
+        let exact_no_op = no_op_receipt
+            .into_output(&before_pruning)
+            .expect("the receipt returns its operation-owned no-op output");
+        assert!(
+            exact_no_op.has_same_exact_history(&before_pruning),
+            "the no-op snapshot retains every exact live delivery"
+        );
 
-        assert!(fixture.retire(&retired));
-        assert_eq!(routes.retain_active(), 0);
+        let (retained_count, prune_receipt) =
+            routes.retain_active_with_receipt_after_snapshot(|| assert!(fixture.retire(&retired)));
+        assert_eq!(
+            retained_count, 1,
+            "a route retiring after the snapshot must remain for the next bounded pass"
+        );
+        routes = prune_receipt
+            .into_output(&before_pruning)
+            .expect("consume the exact first-snapshot receipt");
+        assert!(!retired.is_active());
+        assert!(routes.iter().any(|route| route.same_delivery(&retired)));
+        assert!(
+            routes.retired_attempts.is_empty(),
+            "the first pass must neither remove nor tombstone an unsnapshotted retirement"
+        );
+        let before_second_pruning = routes.clone();
+        let (retained_count, prune_receipt) = routes.retain_active_with_receipt();
+        assert_eq!(retained_count, 0);
+        routes = prune_receipt
+            .into_output(&before_second_pruning)
+            .expect("consume the exact second-snapshot receipt");
+        assert!(
+            routes
+                .retired_attempts
+                .get(&retired.source_key())
+                .is_some_and(|route| route.same_delivery(&retired)),
+            "the next pass must remove and tombstone the exact retired delivery"
+        );
         let collision = fixture
             .forge_equal_ordinal_different_tenure(&retired, target.clone(), hub.clone())
             .expect("forge an active capability with the retired delivery ordinal");
@@ -20091,6 +20550,13 @@ mod tests {
         assert!(!first_identity.same_ticket_identity(foreign.identity()));
         assert!(!first_identity.same_delivery_occurrence(foreign.identity()));
         assert_ne!(first_identity.source_key(), foreign.identity().source_key());
+
+        let cloned_first_identity = first_identity.clone();
+        assert!(first_identity.claim_writer_flush_once());
+        assert!(
+            !cloned_first_identity.claim_writer_flush_once(),
+            "a cloned exact completion cannot mint a second writer-flush claim"
+        );
     }
 
     #[test]

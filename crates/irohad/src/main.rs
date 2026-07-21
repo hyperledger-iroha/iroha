@@ -1445,19 +1445,6 @@ impl SumeragiRelayWorkItem {
         }
     }
 
-    #[cfg(test)]
-    fn tracked(work: RelayWorkItem) -> (Self, oneshot::Receiver<SumeragiRelayTerminalOutcome>) {
-        let (completion, outcome) = oneshot::channel();
-        (
-            Self {
-                work,
-                skip_test_control: false,
-                completion: Some(completion),
-            },
-            outcome,
-        )
-    }
-
     #[cfg(feature = "test-network-message-control")]
     fn released(
         work: RelayWorkItem,
@@ -1805,6 +1792,7 @@ impl SumeragiRelayIngress {
     }
 }
 
+#[cfg(any(test, feature = "test-network-message-control"))]
 fn sumeragi_rehydrated_ownership_matches(
     expected_source: &SumeragiRelaySource,
     expected_geometry: SumeragiRelayCapacityGeometry,
@@ -1883,7 +1871,7 @@ impl SumeragiRelaySourceCredits {
             .count()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-network-message-control"))]
     fn available_permits(&self, source: &SumeragiRelaySource) -> usize {
         self.semaphore(source).available_permits()
     }
@@ -1949,6 +1937,7 @@ enum FairRetainedPushError<T> {
     SourceFull(T),
 }
 
+#[cfg(test)]
 impl<T> FairRetainedPushError<T> {
     fn into_item(self) -> T {
         match self {
@@ -1998,10 +1987,12 @@ impl<K: Clone + Ord, T> FairRetainedQueue<K, T> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn pop(&mut self) -> Option<T> {
         self.pop_if(|_| true)
     }
 
+    #[cfg(test)]
     fn pop_if(&mut self, mut eligible: impl FnMut(&T) -> bool) -> Option<T> {
         self.pop_if_with_trace(&mut eligible)
             .map(|selection| selection.item)
@@ -2063,9 +2054,11 @@ impl<K: Clone + Ord, T> FairRetainedQueue<K, T> {
 enum PrepareSumeragiRelayResult {
     Prepared(PreparedSumeragiRelayWork),
     /// Test control atomically owns the occurrence until an explicit release.
+    #[cfg(feature = "test-network-message-control")]
     Held,
     /// Test control either owns the exact token or has already released it at
     /// a terminal drop/rejection boundary.
+    #[cfg(feature = "test-network-message-control")]
     Controlled {
         outcome: SumeragiRelayTerminalOutcome,
         completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
@@ -3175,11 +3168,11 @@ impl NetworkRelayShared {
             }
         };
 
+        let source = retention_guard.source.clone();
+        debug_assert_eq!(source.class, class);
+        debug_assert_eq!(source.via, authenticated_via);
         PrepareSumeragiRelayResult::Prepared(PreparedSumeragiRelayWork {
-            source: SumeragiRelaySource {
-                class,
-                via: authenticated_via,
-            },
+            source,
             item,
             reply_route: original_reply_route,
             retention_guard,
@@ -3691,7 +3684,9 @@ fn spawn_sumeragi_relay_dispatcher(
                             );
                         }
                     }
+                    #[cfg(feature = "test-network-message-control")]
                     PrepareSumeragiRelayResult::Held => {}
+                    #[cfg(feature = "test-network-message-control")]
                     PrepareSumeragiRelayResult::Controlled {
                         outcome,
                         completion,
@@ -5088,7 +5083,7 @@ mod network_relay_tests {
     #[allow(clippy::too_many_lines)]
     fn test_control_hold_release_preserves_live_route_and_retires_canceled_reentry() {
         use super::{
-            HeldSumeragiReentry, SumeragiRelayPreparationBoundary,
+            HeldSumeragiReentry, HeldSumeragiReentryFailure, SumeragiRelayPreparationBoundary,
             SumeragiRelayPreparationBoundaryError, SumeragiRelayPreparationParts,
             SumeragiRelayTerminalOutcome, prepare_sumeragi_relay_work_boundary,
             rehydrate_held_sumeragi_relay_work, sumeragi_reply_route_terminal_if_inactive,
@@ -5280,6 +5275,238 @@ mod network_relay_tests {
             controller
                 .next_release()
                 .expect("inspect post-retirement queue")
+                .is_none()
+        );
+
+        let protected_peer = sample_peer();
+        let rejected_via = sample_peer().id().clone();
+        let independent_peer = sample_peer();
+        let independent_via = sample_peer().id().clone();
+        assert_ne!(protected_peer.id(), &rejected_via);
+        assert_ne!(independent_peer.id(), &independent_via);
+        assert_ne!(rejected_via, independent_via);
+
+        controller.drain_subsequent_messages_for_tests();
+        let protected_route =
+            TestReplyRoute::new(protected_peer.id().clone(), rejected_via.clone());
+        let expected_protected_route = protected_route.clone();
+        assert!(matches!(
+            prepare_sumeragi_relay_work_boundary(
+                Some(&controller),
+                false,
+                SumeragiRelayPreparationParts {
+                    peer: protected_peer.clone(),
+                    authenticated_via: rejected_via.clone(),
+                    message: v2_vote_msg(),
+                    size_bytes: 201,
+                    reply_route: Some(protected_route),
+                    ownership: (),
+                },
+            ),
+            SumeragiRelayPreparationBoundary::Held
+        ));
+        let independent_route =
+            TestReplyRoute::new(independent_peer.id().clone(), independent_via.clone());
+        let expected_independent_route = independent_route.clone();
+        assert!(matches!(
+            prepare_sumeragi_relay_work_boundary(
+                Some(&controller),
+                false,
+                SumeragiRelayPreparationParts {
+                    peer: independent_peer.clone(),
+                    authenticated_via: independent_via.clone(),
+                    message: v2_vote_msg(),
+                    size_bytes: 202,
+                    reply_route: Some(independent_route),
+                    ownership: (),
+                },
+            ),
+            SumeragiRelayPreparationBoundary::Held
+        ));
+
+        let missing_ownership_route =
+            TestReplyRoute::new(protected_peer.id().clone(), rejected_via.clone());
+        let expected_missing_ownership_route = missing_ownership_route.clone();
+        assert!(matches!(
+            rehydrate_held_sumeragi_relay_work(
+                super::consensus_message_control::HeldMessage {
+                    sequence: 10_001,
+                    peer: protected_peer.clone(),
+                    authenticated_via: rejected_via.clone(),
+                    message: v2_vote_msg(),
+                    size_bytes: 301,
+                    reply_route: Some(missing_ownership_route),
+                    ownership: None::<u64>,
+                },
+                reattach_test_reply_route,
+            ),
+            HeldSumeragiReentry::Reject {
+                sequence: 10_001,
+                reason: HeldSumeragiReentryFailure::MissingOwnership,
+                ownership: None,
+            }
+        ));
+        assert!(super::SumeragiReplyRouteLiveness::is_active(
+            &expected_missing_ownership_route
+        ));
+
+        let unsupported_route =
+            TestReplyRoute::new(protected_peer.id().clone(), rejected_via.clone());
+        let expected_unsupported_route = unsupported_route.clone();
+        assert!(matches!(
+            rehydrate_held_sumeragi_relay_work(
+                super::consensus_message_control::HeldMessage {
+                    sequence: 10_002,
+                    peer: protected_peer.clone(),
+                    authenticated_via: rejected_via.clone(),
+                    message: limited_msg(),
+                    size_bytes: 302,
+                    reply_route: Some(unsupported_route),
+                    ownership: Some(42),
+                },
+                reattach_test_reply_route,
+            ),
+            HeldSumeragiReentry::Reject {
+                sequence: 10_002,
+                reason: HeldSumeragiReentryFailure::UnsupportedMessage,
+                ownership: Some(42),
+            }
+        ));
+        assert!(super::SumeragiReplyRouteLiveness::is_active(
+            &expected_unsupported_route
+        ));
+
+        assert!(matches!(
+            rehydrate_held_sumeragi_relay_work(
+                super::consensus_message_control::HeldMessage::<TestReplyRoute, u64> {
+                    sequence: 10_003,
+                    peer: protected_peer.clone(),
+                    authenticated_via: rejected_via.clone(),
+                    message: v2_vote_msg(),
+                    size_bytes: 303,
+                    reply_route: None,
+                    ownership: Some(43),
+                },
+                reattach_test_reply_route,
+            ),
+            HeldSumeragiReentry::Reject {
+                sequence: 10_003,
+                reason: HeldSumeragiReentryFailure::MissingReplyRoute,
+                ownership: Some(43),
+            }
+        ));
+
+        let wrong_target = sample_peer();
+        assert_ne!(protected_peer.id(), wrong_target.id());
+        let mismatched_route = TestReplyRoute::new(wrong_target.id().clone(), rejected_via.clone());
+        let expected_mismatched_route = mismatched_route.clone();
+        assert!(matches!(
+            rehydrate_held_sumeragi_relay_work(
+                super::consensus_message_control::HeldMessage {
+                    sequence: 10_004,
+                    peer: protected_peer.clone(),
+                    authenticated_via: rejected_via.clone(),
+                    message: v2_vote_msg(),
+                    size_bytes: 304,
+                    reply_route: Some(mismatched_route),
+                    ownership: Some(44),
+                },
+                reattach_test_reply_route,
+            ),
+            HeldSumeragiReentry::Reject {
+                sequence: 10_004,
+                reason: HeldSumeragiReentryFailure::RouteMismatch,
+                ownership: Some(44),
+            }
+        ));
+        assert!(super::SumeragiReplyRouteLiveness::is_active(
+            &expected_mismatched_route
+        ));
+
+        let substituted_via = sample_peer().id().clone();
+        assert_ne!(rejected_via, substituted_via);
+        let substituted_route =
+            TestReplyRoute::new(protected_peer.id().clone(), substituted_via.clone());
+        let expected_substituted_route = substituted_route.clone();
+        assert!(matches!(
+            rehydrate_held_sumeragi_relay_work(
+                super::consensus_message_control::HeldMessage {
+                    sequence: 10_005,
+                    peer: protected_peer.clone(),
+                    authenticated_via: rejected_via.clone(),
+                    message: v2_vote_msg(),
+                    size_bytes: 305,
+                    reply_route: Some(substituted_route),
+                    ownership: Some(45),
+                },
+                reattach_test_reply_route,
+            ),
+            HeldSumeragiReentry::Reject {
+                sequence: 10_005,
+                reason: HeldSumeragiReentryFailure::AuthenticatedViaMismatch,
+                ownership: Some(45),
+            }
+        ));
+        assert!(super::SumeragiReplyRouteLiveness::is_active(
+            &expected_substituted_route
+        ));
+        assert_eq!(
+            expected_substituted_route.authenticated_via,
+            substituted_via
+        );
+
+        for (expected_peer, expected_via, expected_route, expected_size) in [
+            (protected_peer, rejected_via, expected_protected_route, 201),
+            (
+                independent_peer,
+                independent_via,
+                expected_independent_route,
+                202,
+            ),
+        ] {
+            let held = controller
+                .next_release()
+                .expect("release capability after rejected reentry probes")
+                .expect("rejected reentry must not consume a queued capability");
+            assert_eq!(held.peer, expected_peer);
+            assert_eq!(held.authenticated_via, expected_via);
+            assert_eq!(held.size_bytes, expected_size);
+            assert!(
+                held.reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_tenure(&expected_route))
+            );
+            let sequence = match rehydrate_held_sumeragi_relay_work(held, reattach_test_reply_route)
+            {
+                HeldSumeragiReentry::Ready {
+                    sequence,
+                    class: super::SumeragiRelayClass::V2,
+                    work,
+                    ownership: (),
+                } => {
+                    assert_eq!(work.peer, expected_peer);
+                    assert_eq!(work.authenticated_via, expected_via);
+                    assert_eq!(work.size_bytes, expected_size);
+                    assert!(work.reply_route.same_tenure(&expected_route));
+                    sequence
+                }
+                HeldSumeragiReentry::Ready { .. }
+                | HeldSumeragiReentry::RetireStale { .. }
+                | HeldSumeragiReentry::Reject { .. } => {
+                    panic!("queued capability changed during rejected reentry probes")
+                }
+            };
+            controller
+                .complete_release(
+                    sequence,
+                    super::consensus_message_control::ReleaseOutcome::Delivered,
+                )
+                .expect("complete unchanged queued capability");
+        }
+        assert!(
+            controller
+                .next_release()
+                .expect("inspect queue after independent source delivery")
                 .is_none()
         );
 

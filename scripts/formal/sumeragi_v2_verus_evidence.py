@@ -83,6 +83,7 @@ REQUIRED_SOURCE_PATHS = (
     "crates/iroha_core/src/merge_sidecar.rs",
     "crates/iroha_p2p/src/network.rs",
     "crates/iroha_p2p/src/peer.rs",
+    "crates/irohad/src/main.rs",
     "docs/formal/sumeragi_v2/SumeragiV2EffectiveLockAcquisition.tla",
     "docs/formal/sumeragi_v2/SumeragiV2EffectiveLockAcquisitionProofs.tla",
     "docs/formal/sumeragi_v2/proof_coverage.json",

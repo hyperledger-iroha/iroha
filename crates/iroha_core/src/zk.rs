@@ -3200,7 +3200,12 @@ where
     resolve_vk_cached_for_type::<C, F>(backend, params, vk_box, builder)
 }
 
-#[cfg(all(test, feature = "zk-halo2-ipa"))]
+#[cfg(all(
+    test,
+    feature = "halo2-dev-tests",
+    feature = "zk-halo2",
+    feature = "zk-halo2-ipa"
+))]
 /// Resolve a packaged verifier key without falling back to runtime keygen.
 fn resolve_packaged_vk_cached<C>(
     backend: &str,
@@ -10281,101 +10286,14 @@ fn extract_pasta_fp_instances_impl(
 // Tiny pasta circuits used for dispatch verification across transparent IPA paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod pasta_tiny {
-    // Dispatch-verification circuits exercise the non-native Vesta/Fq
-    // foundations used by the in-circuit Halo2 IPA verifier gadget.
     #![cfg_attr(not(test), allow(dead_code))]
 
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
         halo2curves::pasta::Fp as Scalar,
-        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression, Selector},
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
         poly::Rotation,
     };
-
-    /// Number of bits in each non-native verifier limb.
-    pub const NON_NATIVE_U64_LIMB_BITS: usize = 64;
-    /// Number of 64-bit limbs in a Pasta/Vesta base-field element.
-    pub const NON_NATIVE_PASTA_FIELD_LIMBS: usize = 4;
-    /// Number of 64-bit limbs in a Vesta/Fq product before reduction.
-    pub const NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS: usize = 8;
-    /// Number of 64-bit limbs used to range-bound multiplication carries.
-    pub const NON_NATIVE_U128_LIMBS: usize = 2;
-    /// Vesta base-field modulus as little-endian `u64` limbs.
-    pub const VESTA_FQ_MODULUS_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [
-        0x8c46_eb21_0000_0001,
-        0x2246_98fc_0994_a8dd,
-        0x0000_0000_0000_0000,
-        0x4000_0000_0000_0000,
-    ];
-    /// Maximum canonical Vesta base-field value, `q - 1`, as little-endian limbs.
-    pub const VESTA_FQ_MAX_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [
-        0x8c46_eb21_0000_0000,
-        0x2246_98fc_0994_a8dd,
-        0x0000_0000_0000_0000,
-        0x4000_0000_0000_0000,
-    ];
-    /// Native Pasta/Fp scalar modulus as little-endian `u64` limbs.
-    pub const PASTA_FP_MODULUS_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [
-        0x992d_30ed_0000_0001,
-        0x2246_98fc_094c_f91b,
-        0x0000_0000_0000_0000,
-        0x4000_0000_0000_0000,
-    ];
-    /// Maximum canonical native Pasta/Fp scalar, `p - 1`, as little-endian limbs.
-    pub const PASTA_FP_MAX_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [
-        0x992d_30ed_0000_0000,
-        0x2246_98fc_094c_f91b,
-        0x0000_0000_0000_0000,
-        0x4000_0000_0000_0000,
-    ];
-    /// Canonical native Pasta/Fp scalars occupy 255 bits.
-    pub const PASTA_FP_SCALAR_BITS: usize = 255;
-    /// Vesta curve equation constant `b = 5` for `y^2 = x^3 + b`.
-    pub const VESTA_CURVE_B_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [5, 0, 0, 0];
-    /// Vesta base-field one as little-endian limbs.
-    pub const VESTA_FQ_ONE_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [1, 0, 0, 0];
-    const NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE: usize = NON_NATIVE_U64_LIMB_BITS + 1;
-
-    type VestaPointEncoding = (
-        [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
-        [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
-        bool,
-    );
-
-    type VestaPointExpressions = (
-        [Expression<Scalar>; NON_NATIVE_PASTA_FIELD_LIMBS],
-        [Expression<Scalar>; NON_NATIVE_PASTA_FIELD_LIMBS],
-        Expression<Scalar>,
-    );
-
-    fn scalar_two_pow_64() -> Scalar {
-        let mut value = Scalar::from(1);
-        for _ in 0..NON_NATIVE_U64_LIMB_BITS {
-            value += value;
-        }
-        value
-    }
-
-    fn scalar_from_limbs_wrapping(limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS]) -> Scalar {
-        let radix = scalar_two_pow_64();
-        let mut coefficient = Scalar::from(1);
-        let mut value = Scalar::from(0);
-        for limb in limbs {
-            value += Scalar::from(limb) * coefficient;
-            coefficient *= radix;
-        }
-        value
-    }
-
-    fn scalar_limb_bit(limbs: [u64; NON_NATIVE_PASTA_FIELD_LIMBS], bit_index: usize) -> bool {
-        let limb_index = bit_index / NON_NATIVE_U64_LIMB_BITS;
-        let local_bit = bit_index % NON_NATIVE_U64_LIMB_BITS;
-        ((limbs[limb_index] >> local_bit) & 1) == 1
-    }
-
-    fn u64_limb_bits(value: u64) -> [Scalar; NON_NATIVE_U64_LIMB_BITS] {
-        std::array::from_fn(|index| Scalar::from((value >> index) & 1))
-    }
 
     #[derive(Clone, Default)]
     pub struct Add;

@@ -358,6 +358,7 @@ ReplyAttemptServiceKernelValid(oldAttempt, serviced) ==
        oldAttempt.retiredDeliveryOrdinal
   /\ serviced.retiredConnectionTenure =
        oldAttempt.retiredConnectionTenure
+  /\ ReplyAttemptRank(serviced) > ReplyAttemptRank(oldAttempt)
   /\ ReplyAttemptHasNoTicket(serviced)
 
 AdvanceCurrentReplyAttempt(owner, semantic, source) ==
@@ -554,8 +555,10 @@ ReconnectReplySource(owner, semantic, source) ==
      /\ source \in ReplySources
      /\ ReplyAttemptOwned(owner, semantic, source)
      /\ ~rrSourceActive[owner][source]
+     /\ oldAttempt.connectionTenure < connectionTenure
      /\ connectionTenure \in ReplyConnectionTenures
      /\ deliveryOrdinal \in ReplyDeliveryOrdinals
+     /\ deliveryOrdinal > oldAttempt.deliveryOrdinal
      /\ capability.owner = owner
      /\ capability.source = source
      /\ capability.target = ReplySemanticTarget(semantic)
@@ -655,7 +658,10 @@ ReplyRouteTypeInvariant ==
 ReplyRouteOwnershipInvariant ==
   /\ \A owner \in ReplyOwners, semantic \in ReplySemantics,
        source \in ReplySources:
-       Cardinality(ReplyAttemptsForSource(owner, semantic, source)) <= 1
+       /\ IsFiniteSet(
+            ReplyAttemptsForSource(owner, semantic, source))
+       /\ Cardinality(
+            ReplyAttemptsForSource(owner, semantic, source)) <= 1
   /\ \A owner \in ReplyOwners, semantic \in ReplySemantics:
        /\ Cardinality(ReplyAttemptSources(owner, semantic))
             <= ReplySourceCapacity
@@ -684,27 +690,30 @@ ReplySourceTenureInvalidationStep ==
       > rrConnectionTenure[owner][source] =>
         ReplySourceHasNoTickets(owner, source)'
 
+ReplyAttemptReplayValid(oldAttempt, newAttempt) ==
+  /\ newAttempt.owner = oldAttempt.owner
+  /\ newAttempt.semantic = oldAttempt.semantic
+  /\ newAttempt.source = oldAttempt.source
+  /\ IF newAttempt.connectionTenure = oldAttempt.connectionTenure
+     THEN /\ newAttempt.deliveryOrdinal
+                  >= oldAttempt.deliveryOrdinal
+          /\ newAttempt.messageCursor >= oldAttempt.messageCursor
+          /\ newAttempt.chunkCursor >= oldAttempt.chunkCursor
+     ELSE /\ newAttempt.connectionTenure
+                  > oldAttempt.connectionTenure
+          /\ newAttempt.deliveryOrdinal
+                  > oldAttempt.deliveryOrdinal
+          /\ ReplyAttemptHasNoTicket(newAttempt)
+          /\ ReplyAttemptCursor(newAttempt) =
+               ReplyAttemptCursor(oldAttempt)
+
+ReplyAttemptReplayStep ==
+  \A oldAttempt \in rrAttempts:
+    \E newAttempt \in rrAttempts':
+      ReplyAttemptReplayValid(oldAttempt, newAttempt)
+
 ReplyTenureAwareReplayStep ==
-  /\ \A oldAttempt \in rrAttempts:
-       LET afterAttempts ==
-             {newAttempt \in rrAttempts':
-                /\ newAttempt.owner = oldAttempt.owner
-                /\ newAttempt.semantic = oldAttempt.semantic
-                /\ newAttempt.source = oldAttempt.source}
-       IN afterAttempts # {} =>
-            LET newAttempt == CHOOSE attempt \in afterAttempts: TRUE
-            IN IF newAttempt.connectionTenure = oldAttempt.connectionTenure
-               THEN /\ newAttempt.deliveryOrdinal
-                          >= oldAttempt.deliveryOrdinal
-                    /\ newAttempt.messageCursor >= oldAttempt.messageCursor
-                    /\ newAttempt.chunkCursor >= oldAttempt.chunkCursor
-               ELSE /\ newAttempt.connectionTenure
-                          > oldAttempt.connectionTenure
-                    /\ newAttempt.deliveryOrdinal
-                          > oldAttempt.deliveryOrdinal
-                    /\ ReplyAttemptHasNoTicket(newAttempt)
-                    /\ ReplyAttemptCursor(newAttempt) =
-                         ReplyAttemptCursor(oldAttempt)
+  /\ ReplyAttemptReplayStep
   /\ ReplySourceTenureInvalidationStep
 
 ReplyTenureAwareReplay ==
@@ -720,25 +729,33 @@ SameReplyAttemptIdentity(left, right) ==
   /\ left.semantic = right.semantic
   /\ left.source = right.source
 
+ReplyAttemptSurvivalStep ==
+  \A retainedBefore \in rrAttempts:
+    \E retainedAfter \in rrAttempts':
+      SameReplyAttemptIdentity(retainedBefore, retainedAfter)
+
+ReplyOtherCursorIsolationStep ==
+  \A changedBefore \in rrAttempts:
+    \A changedAfter \in rrAttempts':
+      LET sameAttempt ==
+            SameReplyAttemptIdentity(changedBefore, changedAfter)
+          attemptChanged ==
+            ReplyAttemptCursor(changedAfter) #
+              ReplyAttemptCursor(changedBefore)
+      IN (sameAttempt /\ attemptChanged) =>
+           \A otherBefore \in rrAttempts:
+             (otherBefore.owner = changedBefore.owner
+               /\ ~SameReplyAttemptIdentity(
+                    otherBefore, changedBefore))
+             => \E otherAfter \in rrAttempts':
+                  /\ SameReplyAttemptIdentity(
+                       otherBefore, otherAfter)
+                  /\ ReplyAttemptCursor(otherAfter) =
+                       ReplyAttemptCursor(otherBefore)
+
 ReplySourceIsolationStep ==
-  /\ \A retainedBefore \in rrAttempts:
-       \E retainedAfter \in rrAttempts':
-         SameReplyAttemptIdentity(retainedBefore, retainedAfter)
-  /\ \A changedBefore \in rrAttempts:
-       \A changedAfter \in rrAttempts':
-         LET sameAttempt ==
-               SameReplyAttemptIdentity(changedBefore, changedAfter)
-             attemptChanged == changedAfter # changedBefore
-         IN (sameAttempt /\ attemptChanged) =>
-              \A otherBefore \in rrAttempts:
-                (otherBefore.owner = changedBefore.owner
-                  /\ ~SameReplyAttemptIdentity(
-                       otherBefore, changedBefore))
-                => \E otherAfter \in rrAttempts':
-                     /\ SameReplyAttemptIdentity(
-                          otherBefore, otherAfter)
-                     /\ ReplyAttemptCursor(otherAfter) =
-                          ReplyAttemptCursor(otherBefore)
+  /\ ReplyAttemptSurvivalStep
+  /\ ReplyOtherCursorIsolationStep
 
 ReplySourceIsolation ==
   [][ReplySourceIsolationStep]_ReplyRouteVars

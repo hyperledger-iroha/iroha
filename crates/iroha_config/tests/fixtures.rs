@@ -1517,8 +1517,9 @@ fn minimal_config_snapshot() {
                 },
                 queues: SumeragiQueues {
                     commands: 1024,
-                    bodies: 514,
-                    body_bytes: 173015040,
+                    authenticated_non_validator_sources: 2,
+                    bodies: 518,
+                    body_bytes: 242221056,
                     body_source_bytes: 34603008,
                     chunks: 2048,
                     ready_bodies: 128,
@@ -4242,16 +4243,23 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .and_then(TomlValue::as_table)
         .expect("sumeragi.queues should be configured");
     assert_eq!(
+        queues
+            .get("authenticated_non_validator_sources")
+            .and_then(TomlValue::as_integer),
+        Some(2),
+        "Taira should reserve two independent authenticated non-validator ingress lanes"
+    );
+    assert_eq!(
         queues.get("body_bytes").and_then(TomlValue::as_integer),
-        Some(165 * 1024 * 1024),
-        "Taira aggregate canonical wire-byte budget should isolate its five ingress source lanes"
+        Some(231 * 1024 * 1024),
+        "Taira aggregate canonical wire-byte budget should isolate its seven ingress source lanes"
     );
     assert_eq!(
         queues
             .get("body_source_bytes")
             .and_then(TomlValue::as_integer),
         Some(33 * 1024 * 1024),
-        "Taira should retain one canonical outer-ingress wire-byte quota per authenticated source"
+        "Taira should retain one canonical outer-ingress wire-byte quota per source"
     );
 
     let untrusted = doc
@@ -4437,13 +4445,24 @@ fn sumeragi_v2_explicit_schema_parses() {
     let cfg = load_config_from_fixtures("sumeragi_v2.toml")
         .expect("first-release v2 configuration should parse");
 
+    assert_eq!(
+        cfg.network.max_total_connections.map(|limit| limit.get()),
+        Some(32)
+    );
     assert_eq!(cfg.sumeragi.role, NodeRole::Observer);
     assert_eq!(cfg.sumeragi.block.max_transactions.get(), 333);
     assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 8 * 1024 * 1024);
     assert_eq!(cfg.sumeragi.block.proposal_queue_scan_multiplier.get(), 3);
     assert_eq!(cfg.sumeragi.queues.commands.get(), 512);
+    assert_eq!(
+        cfg.sumeragi
+            .queues
+            .authenticated_non_validator_sources
+            .get(),
+        2
+    );
     assert_eq!(cfg.sumeragi.queues.bodies.get(), 96);
-    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 64 * 1024 * 1024);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 68 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),
         17 * 1024 * 1024
@@ -4475,11 +4494,15 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         ),
         (
             "bad.sumeragi_body_source_bytes_too_small.toml",
-            "sumeragi.queues.body_source_bytes must isolate two sumeragi.block.max_payload_bytes envelopes + 65536 bytes of fixed headroom per envelope + 33800 recommended payload-completion manifest wire bytes + 65536 reserved timeout-vote bytes (minimum 33784840, configured 16777216)",
+            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, and 65536 timeout-vote bytes (minimum 33784840, configured 16777216)",
+        ),
+        (
+            "bad.sumeragi_body_queue_too_small.toml",
+            "sumeragi.queues.bodies must reserve four positions for at least one validator, two per authenticated non-validator source, and two anonymous positions (minimum 10, configured 9)",
         ),
         (
             "bad.sumeragi_body_bytes_too_small.toml",
-            "sumeragi.queues.body_bytes must be at least 2 * sumeragi.queues.body_source_bytes (minimum 69206016, configured 69206015)",
+            "sumeragi.queues.body_bytes must reserve one validator, every configured authenticated non-validator source, and the anonymous source partition (minimum 138412032, configured 138412031)",
         ),
         (
             "bad.sumeragi_empty_hsm_provider.toml",
@@ -4678,14 +4701,20 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
         16 * 1024 * 1024,
     );
     assert_eq!(defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get(), 1_024);
-    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 514);
+    assert_eq!(
+        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
+        2
+    );
+    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 518);
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
-        4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT + 2
+        4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            + 2 * defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
+            + 2
     );
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_BYTES.get(),
-        165 * 1024 * 1024
+        231 * 1024 * 1024
     );
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
@@ -4707,8 +4736,15 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     assert_eq!(cfg.sumeragi.block.max_transactions.get(), 512);
     assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 16 * 1024 * 1024);
     assert_eq!(cfg.sumeragi.queues.commands.get(), 1_024);
-    assert_eq!(cfg.sumeragi.queues.bodies.get(), 514);
-    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 165 * 1024 * 1024);
+    assert_eq!(
+        cfg.sumeragi
+            .queues
+            .authenticated_non_validator_sources
+            .get(),
+        2
+    );
+    assert_eq!(cfg.sumeragi.queues.bodies.get(), 518);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 231 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),
         33 * 1024 * 1024

@@ -269,8 +269,26 @@ run_case reply-route-pipeline-fixed \
   SumeragiV2ReplyRoutePipelineMutation.tla \
   reply_route_pipeline_fixed.cfg 0 \
   "Model checking completed. No error has been found." \
-  "20 states generated, 18 distinct states found" \
+  "23 states generated, 18 distinct states found" \
   "depth of the complete state graph search is 18"
+run_case reply-route-pipeline-replay-isolation-fixed \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_replay_isolation_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "23 states generated, 18 distinct states found" \
+  "depth of the complete state graph search is 18"
+run_case reply-route-pipeline-replay-step-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_replay_step_bug.cfg 13 \
+  "Action property MutationPipeline!ReplyTenureAwareReplay is violated." \
+  "15 states generated, 14 distinct states found" \
+  "phase = 34"
+run_case reply-route-pipeline-source-isolation-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_source_isolation_bug.cfg 13 \
+  "Action property MutationPipeline!ReplySourceIsolation is violated." \
+  "14 states generated, 13 distinct states found" \
+  "phase = 35"
 run_case reply-route-pipeline-unfair-attach-bug \
   SumeragiV2ReplyRoutePipelineMutation.tla \
   reply_route_pipeline_unfair_attach_bug.cfg 13 \
@@ -297,6 +315,11 @@ run_case reply-route-pipeline-premature-reconnect-bug \
   reply_route_pipeline_premature_reconnect_bug.cfg 12 \
   "Invariant PipelineMutationSafety is violated." \
   "sourceActive = (0 :> (0 :> FALSE" "phase = 32"
+run_case reply-route-pipeline-reconnect-observation-not-ready-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_reconnect_observation_not_ready_bug.cfg 12 \
+  "Invariant PipelineMutationSafety is violated." \
+  "phase = 36" "kind |-> \"Later\""
 run_case reply-route-pipeline-old-flush-double-apply-bug \
   SumeragiV2ReplyRoutePipelineMutation.tla \
   reply_route_pipeline_old_flush_double_apply_bug.cfg 12 \
@@ -315,4 +338,4 @@ run_case reply-route-pipeline-cross-semantic-close-cycle-bug \
   "14 states generated, 13 distinct states found" \
   "Back to state 7"
 
-echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, ownership, and per-source reply-route/pipeline mutation matrix passed"
+echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, ownership, replay/isolation, and per-source reply-route/pipeline mutation matrix passed"

@@ -4262,20 +4262,6 @@ impl Queue {
         batch
     }
 
-    #[cfg(test)]
-    fn resolve_queue_routing_plan(
-        &self,
-        plan: RoutingPlan,
-    ) -> Result<RoutingPlan, RoutingResolveError> {
-        let lane_catalog = self.lane_catalog.read();
-        let dataspace_catalog = self.dataspace_catalog.read();
-        resolve_routing_plan_against_catalogs(
-            plan,
-            lane_catalog.as_ref(),
-            dataspace_catalog.as_ref(),
-        )
-    }
-
     fn resolve_view_routing_plan(
         plan: RoutingPlan,
         state_view: &StateView<'_>,
@@ -4322,17 +4308,6 @@ impl Queue {
         if !self.nexus_routing_matches(nexus) {
             self.reconfigure_nexus(nexus, state_view, self.lane_compliance_engine());
         }
-    }
-
-    /// Resolve a full routing plan without a [`StateView`] when the active router supports it.
-    #[cfg(test)]
-    pub(crate) fn route_plan_for_gossip_without_state(
-        &self,
-        tx: &AcceptedTransaction<'_>,
-    ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
-        let plan = self.router.read().try_route_plan_without_state(tx)?;
-        plan.map(|plan| self.resolve_queue_routing_plan(plan))
-            .transpose()
     }
 
     /// Resolve a full routing plan for an inbound gossip transaction with the current state.

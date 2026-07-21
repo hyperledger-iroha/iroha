@@ -928,6 +928,57 @@ HistoricalRecoveryAsyncTemporalClosurePremises(specification) ==
   /\ HistoricalDecisionConcreteLeafProperties(specification)
   /\ ResponsiveDecisionServiceOwnershipProperty(specification)
 
+(***************************************************************************
+Exact premise accounting.
+
+The first two closure premises are consequences of the actual Async
+transition system: target creation records a nonempty canonical remote
+CommitQC request outbox, and the discovery guard persists until either the
+request set is published or Decision is installed.  They therefore must not
+remain hidden among the temporal assumptions supplied to the corridor.
+
+The other six predicates are the smallest remaining historical-service
+boundary in this child.  In particular, the clock predicate is not inferred
+from weak fairness of `AsyncTick`: an overdue packet or local-service owner can
+disable that action, so a proof must first discharge the concrete terminating
+work/rank corridor.  Keeping this partition exact prevents a future proof from
+silently replacing one of those dependencies with target-to-Decision itself.
+***************************************************************************)
+
+HistoricalRecoveryAsyncModelDerivedPremises(specification) ==
+  /\ HistoricalCommitCertificateDiscoveryPersistenceProperty(specification)
+  /\ HistoricalRecoveryTargetRemoteServerProperty(specification)
+
+HistoricalRecoveryAsyncRemainingCorridorPremises(specification) ==
+  /\ HistoricalCommitCertificateDiscoveryClockProgressProperty(specification)
+  /\ HistoricalProtectedServiceRankLeafProperties(specification)
+  /\ HistoricalCommitCertificateConcreteLeafProperties(specification)
+  /\ HistoricalDecisionFrontierAvailabilityProperty(specification)
+  /\ HistoricalDecisionConcreteLeafProperties(specification)
+  /\ ResponsiveDecisionServiceOwnershipProperty(specification)
+
+HistoricalRecoveryAsyncRemainingCorridorObligation ==
+  \A initialContext:
+    HistoricalRecoveryAsyncRemainingCorridorPremises(
+      AsyncSpecAt(initialContext))
+
+THEOREM HistoricalRecoveryAsyncModelDerivedPremisesFromAsyncSpec ==
+  \A initialContext:
+    HistoricalRecoveryAsyncModelDerivedPremises(
+      AsyncSpecAt(initialContext))
+BY HistoricalCommitCertificateDiscoveryPersistenceFromAsyncSpec,
+   HistoricalRecoveryTargetRemoteServerFromAsyncSpec
+   DEF HistoricalRecoveryAsyncModelDerivedPremises
+
+THEOREM HistoricalRecoveryAsyncTemporalClosurePremisesPartition ==
+  \A specification:
+    HistoricalRecoveryAsyncTemporalClosurePremises(specification)
+      <=> /\ HistoricalRecoveryAsyncModelDerivedPremises(specification)
+          /\ HistoricalRecoveryAsyncRemainingCorridorPremises(specification)
+BY DEF HistoricalRecoveryAsyncTemporalClosurePremises,
+       HistoricalRecoveryAsyncModelDerivedPremises,
+       HistoricalRecoveryAsyncRemainingCorridorPremises
+
 THEOREM HistoricalActiveCommitCertificateRequestReachesDecision ==
   \A initialContext:
     /\ AsyncSpecAt(initialContext)
@@ -1223,6 +1274,31 @@ THEOREM HistoricalRecoveryAsyncTemporalPrerequisitesFromExactCorridor ==
 BY HistoricalRecoveryTargetDecisionFromExactCorridor,
    ResponsiveDecisionApplicationFromExactCorridor
    DEF HistoricalRecoveryAsyncTemporalPrerequisites
+
+THEOREM HistoricalRecoveryAsyncTemporalPrerequisitesFromRemainingCorridor ==
+  \A initialContext:
+    /\ AsyncSpecAt(initialContext)
+    /\ HistoricalRecoveryAsyncRemainingCorridorPremises(
+         AsyncSpecAt(initialContext))
+    => HistoricalRecoveryAsyncTemporalPrerequisites(
+         AsyncSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext),
+                HistoricalRecoveryAsyncRemainingCorridorPremises(
+                  AsyncSpecAt(initialContext))
+         PROVE HistoricalRecoveryAsyncTemporalPrerequisites(
+                 AsyncSpecAt(initialContext))
+    <2>1. HistoricalRecoveryAsyncModelDerivedPremises(
+             AsyncSpecAt(initialContext))
+      BY HistoricalRecoveryAsyncModelDerivedPremisesFromAsyncSpec
+    <2>2. HistoricalRecoveryAsyncTemporalClosurePremises(
+             AsyncSpecAt(initialContext))
+      BY <1>1, <2>1,
+         HistoricalRecoveryAsyncTemporalClosurePremisesPartition
+    <2> QED BY <1>1, <2>2,
+         HistoricalRecoveryAsyncTemporalPrerequisitesFromExactCorridor
+  <1> QED BY <1>1
 
 (***************************************************************************
 Ordinary historical locked-body recovery cone.

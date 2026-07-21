@@ -647,44 +647,6 @@ pub(super) fn lane_block_slot_leader<'a>(
     validator_set.get(index)
 }
 
-/// Derive content-independent durable queue ownership identities for one lane
-/// producer slot.
-#[allow(clippy::too_many_arguments)]
-#[must_use]
-#[cfg(test)]
-pub(super) fn lane_block_reservation_identities(
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_incarnation: Hash,
-    proposal_height: u64,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    validator_set_hash: HashOf<Vec<PeerId>>,
-    leader: &PeerId,
-) -> (Hash, Hash) {
-    let slot = norito::to_bytes(&(
-        lane_id,
-        dataspace_id,
-        lane_incarnation,
-        proposal_height,
-        lane_block_height,
-        lane_block_view,
-        validator_set_hash,
-    ))
-    .expect("lane reservation slot identity must encode");
-    let owner = Hash::new_from_chunks(&[
-        b"iroha:nexus:lane-reservation-owner:v1\0",
-        &slot,
-        &norito::to_bytes(leader).expect("lane producer identity must encode"),
-    ]);
-    let proposal = Hash::new_from_chunks(&[
-        b"iroha:nexus:lane-reservation-proposal-slot:v1\0",
-        &slot,
-        owner.as_ref(),
-    ]);
-    (owner, proposal)
-}
-
 /// Lane-local vote record over a standalone lane block proposal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LaneBlockVote {

@@ -14,8 +14,9 @@ and becomes serviceable only after its own attempt and queued item are rebound
 to the source's new tenure.
 
 Each mutation removes exactly one production boundary: fair pending attach,
-source/class FIFO admission, cursor non-regression, exact tenure/payload ticket
-binding, reconnect retirement ordering, or one-shot old-flush application.
+source/class FIFO admission, cursor non-regression, cross-attempt cursor
+isolation, exact tenure/payload ticket binding, reconnect retirement ordering,
+or one-shot old-flush application.
 ***************************************************************************)
 
 CONSTANT PipelineMutationMode
@@ -201,6 +202,70 @@ BuggyRegressAppliedCursor ==
                     oldFlushAppliedTwice>>
      /\ phase' = 34
 
+(***************************************************************************
+Advance both semantic attempts in one atomic terminal transition.  Each
+individual cursor is non-regressing, so tenure-aware replay still holds, but
+changing request A no longer leaves request B's independently owned cursor
+unchanged.  This is the source-isolation mutation.
+***************************************************************************)
+BuggyAdvanceTwoAttemptsAtOnce ==
+  LET attemptA == SourceAttempt(RequestA)
+      attemptB == SourceAttempt(RequestB)
+      itemA == SourceItem(RequestA)
+      advancedA == MutationPipeline!ReplyAttemptAfterService(attemptA)
+      advancedB == MutationPipeline!ReplyAttemptAfterService(attemptB)
+  IN /\ phase = 11
+     /\ ~MutationPipeline!ReplyAttemptComplete(attemptA)
+     /\ ~MutationPipeline!ReplyAttemptComplete(attemptB)
+     /\ MutationPipeline!ReplyPipelineItemOwned(
+           0, RequestA, Source)
+     /\ itemA.phase = "Flushed"
+     /\ attempts' =
+          (attempts \ {attemptA, attemptB})
+            \cup {advancedA, advancedB}
+     /\ items' = items \ {itemA}
+     /\ UNCHANGED <<payloads, nextDeliveryOrdinal,
+                    connectionTenure, sourceActive, nextServiceIndex,
+                    pendingAttachments,
+                    nextFifoOrdinal, nextTicketId,
+                    oldFlushAppliedTwice>>
+     /\ phase' = 35
+
+(***************************************************************************
+Bypass reconnect-observation readiness after request A has attached the new
+source tenure but request B still owns its old-tenure queued item and pending
+Later rebind.  A second reconnect observation would discard B's sole rebind;
+the production guard keeps this transition disabled until B attaches.
+***************************************************************************)
+BuggyObserveReconnectWithoutReadiness ==
+  LET attachment ==
+        MutationPipeline!ReplyAttachment(
+          0, RequestA, Source, "Reconnect")
+  IN /\ phase = 14
+     /\ ~MutationPipeline!ReplyPipelineReconnectObservationReady(
+           0, Source)
+     /\ sourceActive[0][Source]
+     /\ ~MutationPipeline!ReplyPendingAttachmentOwned(
+           0, RequestA, Source)
+     /\ MutationPipeline!ReplyAttemptOwned(
+           0, RequestA, Source)
+     /\ connectionTenure[0][Source]
+          < MutationDeliveryOrdinalLimit
+     /\ nextDeliveryOrdinal[0]
+          + MutationPipeline!ReplyOwnerOrdinalReservations(0)
+          <= MutationDeliveryOrdinalLimit
+     /\ pendingAttachments' =
+          MutationPipeline!ReplyPendingAfterReconnectObservation(
+            0, Source, attachment)
+     /\ items' =
+          MutationPipeline!ReplyPipelineItemsAfterReconnectObservation(
+            0, Source)
+     /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
+                    connectionTenure, sourceActive, nextServiceIndex,
+                    nextFifoOrdinal, nextTicketId,
+                    oldFlushAppliedTwice>>
+     /\ phase' = 36
+
 PipelineMutationInit ==
   /\ MutationPipeline!ReplyPipelineInit
   /\ oldFlushAppliedTwice = FALSE
@@ -261,9 +326,12 @@ PipelineMutationNext ==
   \/ /\ PipelineMutationMode = "PrematureRetire"
      /\ BuggyRetireBeforeOldWriterResolution
   \/ /\ phase = 11
+     /\ PipelineMutationMode # "CrossAttemptIsolation"
      /\ AdvancePhase(
           MutationPipeline!ApplyFlushedReplyPipelineItem(
             0, RequestA, Source), 12)
+  \/ /\ PipelineMutationMode = "CrossAttemptIsolation"
+     /\ BuggyAdvanceTwoAttemptsAtOnce
   \/ /\ phase = 12
      /\ PipelineMutationMode \notin
           {"CursorRegression", "OldFlushDoubleApply"}
@@ -279,9 +347,12 @@ PipelineMutationNext ==
           MutationPipeline!AttachPendingReplyDelivery(
             0, RequestA, Source), 14)
   \/ /\ phase = 14
+     /\ PipelineMutationMode # "ReconnectObservationNotReady"
      /\ AdvancePhase(
           MutationPipeline!AttachPendingReplyDelivery(
             0, RequestB, Source), 15)
+  \/ /\ PipelineMutationMode = "ReconnectObservationNotReady"
+     /\ BuggyObserveReconnectWithoutReadiness
   \/ /\ phase = 15
      /\ AdvancePhase(
           MutationPipeline!AcquireReplyPipelineTicket(
@@ -444,5 +515,11 @@ PipelineMutationSafety ==
   /\ RequestACursorNeverRegressesAfterApply
   /\ SiblingLaterRebindBlocksOldTenureTicket
   /\ OldFlushAppliedAtMostOnce
+
+PipelineTenureAwareReplay ==
+  MutationPipeline!ReplyTenureAwareReplay
+
+PipelineSourceIsolation ==
+  MutationPipeline!ReplySourceIsolation
 
 =============================================================================

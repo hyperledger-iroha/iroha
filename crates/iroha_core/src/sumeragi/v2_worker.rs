@@ -2622,6 +2622,9 @@ struct PendingExactFanout {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReplyTargetMerge {
+    Park {
+        prior_index: usize,
+    },
     Update {
         prior_index: usize,
         candidate_index: usize,
@@ -2932,19 +2935,23 @@ impl PendingExactFanout {
         let reply_routes = self.reply_routes.as_mut().ok_or_else(|| {
             "Sumeragi v2 owned reply transfer lost its bounded route history".to_owned()
         })?;
-        reply_routes.retain_active();
-        if let Some(ownership) = self.ingress_ownership.as_mut() {
-            ownership.retain_active_reply_routes();
-            if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(reply_routes)) {
-                return Err(
-                    "Sumeragi v2 owned reply pruning lost fair-ingress ownership".to_owned(),
-                );
-            }
+        let routes_before = reply_routes.clone();
+        let (_, receipt) = reply_routes.retain_active_with_receipt();
+        let projected_routes = if let Some(ownership) = self.ingress_ownership.as_mut() {
+            ownership.project_retained_reply_routes(receipt)
+        } else {
+            receipt.into_output(&routes_before)
         }
+        .ok_or_else(|| "Sumeragi v2 owned reply pruning lost exact history".to_owned())?;
+        *reply_routes = projected_routes;
         let mut retained_targets = Vec::with_capacity(self.targets.len());
         let mut retained_peers = Vec::with_capacity(self.peers.len());
         for (target, peer) in self.targets.drain(..).zip(self.peers.drain(..)) {
-            if matches!(&target.route, ExactTargetRoute::Reply(route) if route.is_active()) {
+            if matches!(&target.route, ExactTargetRoute::Reply(route)
+                if reply_routes
+                    .iter()
+                    .any(|retained| retained.same_delivery(route)))
+            {
                 retained_targets.push(target);
                 retained_peers.push(peer);
             }
@@ -2952,19 +2959,32 @@ impl PendingExactFanout {
         self.targets = retained_targets;
         self.peers = retained_peers;
         self.next_target_index = 0;
-        // Close the monotonic race where a target retired after the first
-        // history prune but before its target entry was inspected. If it
-        // retired later still, strict validation below observes the inactive
-        // target and repeats this bounded pruning pass.
-        reply_routes.retain_active();
-        if let Some(ownership) = self.ingress_ownership.as_mut() {
-            ownership.retain_active_reply_routes();
-            if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(reply_routes)) {
-                return Err(
-                    "Sumeragi v2 owned reply race pruning lost fair-ingress ownership".to_owned(),
-                );
+        // Close the monotonic race after filtering without independently
+        // rereading any target's liveness. The second receipt is the sole
+        // authority for both route history and target membership in this pass.
+        let routes_before = reply_routes.clone();
+        let (_, receipt) = reply_routes.retain_active_with_receipt();
+        let projected_routes = if let Some(ownership) = self.ingress_ownership.as_mut() {
+            ownership.project_retained_reply_routes(receipt)
+        } else {
+            receipt.into_output(&routes_before)
+        }
+        .ok_or_else(|| "Sumeragi v2 owned reply race pruning lost exact history".to_owned())?;
+        *reply_routes = projected_routes;
+        let mut retained_targets = Vec::with_capacity(self.targets.len());
+        let mut retained_peers = Vec::with_capacity(self.peers.len());
+        for (target, peer) in self.targets.drain(..).zip(self.peers.drain(..)) {
+            if matches!(&target.route, ExactTargetRoute::Reply(route)
+                if reply_routes
+                    .iter()
+                    .any(|retained| retained.same_delivery(route)))
+            {
+                retained_targets.push(target);
+                retained_peers.push(peer);
             }
         }
+        self.targets = retained_targets;
+        self.peers = retained_peers;
         self.rebuild_current_source_targets()?;
         Ok(self.targets.len())
     }
@@ -3207,16 +3227,42 @@ impl PendingExactFanout {
     }
 
     fn reply_target_merge_plan(&self, candidate: &Self) -> Result<ReplyTargetMergePlan, String> {
-        self.reply_target_merge_plan_after_candidate_prune(candidate, |_| {})
+        self.reply_target_merge_plan_with_hooks(candidate, |_| {}, || {})
     }
 
+    #[cfg(test)]
     fn reply_target_merge_plan_after_candidate_prune<AfterCandidatePrune>(
         &self,
         candidate: &Self,
-        mut after_candidate_prune: AfterCandidatePrune,
+        after_candidate_prune: AfterCandidatePrune,
     ) -> Result<ReplyTargetMergePlan, String>
     where
         AfterCandidatePrune: FnMut(usize),
+    {
+        self.reply_target_merge_plan_with_hooks(candidate, after_candidate_prune, || {})
+    }
+
+    #[cfg(test)]
+    fn reply_target_merge_plan_after_route_merge<AfterRouteMerge>(
+        &self,
+        candidate: &Self,
+        after_route_merge: AfterRouteMerge,
+    ) -> Result<ReplyTargetMergePlan, String>
+    where
+        AfterRouteMerge: FnOnce(),
+    {
+        self.reply_target_merge_plan_with_hooks(candidate, |_| {}, after_route_merge)
+    }
+
+    fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(
+        &self,
+        candidate: &Self,
+        mut after_candidate_prune: AfterCandidatePrune,
+        after_route_merge: AfterRouteMerge,
+    ) -> Result<ReplyTargetMergePlan, String>
+    where
+        AfterCandidatePrune: FnMut(usize),
+        AfterRouteMerge: FnOnce(),
     {
         if !self.can_coalesce_retry(candidate) {
             return Err("Sumeragi v2 exact-output request changed semantic identity".to_owned());
@@ -3239,23 +3285,38 @@ impl PendingExactFanout {
             .reply_routes
             .clone()
             .ok_or_else(|| "Sumeragi v2 reply retry lost its bounded route history".to_owned())?;
+        let mut candidate_ownership = candidate.ingress_ownership.clone();
         let mut merge_attempt = 0usize;
-        let merged_routes = loop {
-            candidate_routes.retain_active();
+        let merge_receipt = loop {
+            let (_, prune_receipt) = candidate_routes.retain_active_with_receipt();
+            if let Some(ownership) = candidate_ownership.as_mut() {
+                candidate_routes = ownership
+                    .project_retained_reply_routes(prune_receipt)
+                    .ok_or_else(|| {
+                        "Sumeragi v2 candidate pruning lost fair-ingress ownership".to_owned()
+                    })?;
+            }
             let live_before_merge = candidate_routes.len();
             after_candidate_prune(merge_attempt);
 
             let mut merged_routes = retained_routes.clone();
-            merged_routes.retain_active();
-            match merged_routes.merge(&candidate_routes) {
-                Ok(()) => break merged_routes,
+            match merged_routes.merge_with_receipt(&candidate_routes) {
+                Ok(receipt) => break receipt,
                 Err(NetworkReplyRouteError::Inactive) => {
                     // A candidate tenure may retire after the owned-transfer
                     // prune but before strict history merge reaches that member.
                     // Activity is monotonic, so the next prune must remove at
                     // least that raced occurrence; otherwise retrying could hide
                     // an invariant violation behind an unbounded loop.
-                    candidate_routes.retain_active();
+                    let (_, prune_receipt) = candidate_routes.retain_active_with_receipt();
+                    if let Some(ownership) = candidate_ownership.as_mut() {
+                        candidate_routes = ownership
+                            .project_retained_reply_routes(prune_receipt)
+                            .ok_or_else(|| {
+                            "Sumeragi v2 raced candidate pruning lost fair-ingress ownership"
+                                .to_owned()
+                        })?;
+                    }
                     if candidate_routes.len() >= live_before_merge {
                         return Err(
                             "Sumeragi v2 inactive reply-history retry made no progress".to_owned()
@@ -3276,6 +3337,43 @@ impl PendingExactFanout {
             }
         };
 
+        // Route history is the sole authoritative liveness snapshot for the
+        // remainder of this plan. Ownership projects its semantic counts and
+        // cursors onto that already-reconciled snapshot, and target membership
+        // below never rereads liveness. A route retiring after this point is
+        // removed with its target by the next bounded service pass.
+        after_route_merge();
+        let (mut merged_routes, ingress_ownership) =
+            match (&self.ingress_ownership, candidate_ownership) {
+                (Some(retained), Some(candidate)) => {
+                    let mut retained = retained.clone();
+                    let Some(receipt_routes) =
+                        retained.merge_downstream_with_strict_receipt(candidate, merge_receipt)
+                    else {
+                        return Err(
+                            "Sumeragi v2 exact-output coalescing lost fair-ingress ownership"
+                                .to_owned(),
+                        );
+                    };
+                    (receipt_routes, Some(retained))
+                }
+                (None, None) => {
+                    let receipt_routes = merge_receipt
+                        .into_output(&retained_routes, &candidate_routes)
+                        .ok_or_else(|| {
+                            "Sumeragi v2 exact-output route receipt changed its exact histories"
+                                .to_owned()
+                        })?;
+                    (receipt_routes, None)
+                }
+                (Some(_), None) | (None, Some(_)) => {
+                    return Err(
+                        "Sumeragi v2 exact-output retry changed fair-ingress ownership shape"
+                            .to_owned(),
+                    );
+                }
+            };
+
         let mut retained_sources = BTreeSet::new();
         for target in &self.targets {
             let ExactTargetRoute::Reply(route) = &target.route else {
@@ -3289,7 +3387,30 @@ impl PendingExactFanout {
             }
         }
 
-        let mut plan = Vec::with_capacity(candidate.targets.len());
+        let mut plan = Vec::with_capacity(
+            self.targets
+                .len()
+                .checked_add(candidate.targets.len())
+                .ok_or_else(|| "Sumeragi v2 reply merge-plan capacity overflowed".to_owned())?,
+        );
+        for (prior_index, prior_target) in self.targets.iter().enumerate() {
+            let ExactTargetRoute::Reply(prior_route) = &prior_target.route else {
+                unreachable!("retained reply fanout was validated above");
+            };
+            if !prior_target.parked
+                && !self.target_is_complete(prior_index)
+                && !merged_routes
+                    .iter()
+                    .any(|route| route.same_source(prior_route))
+            {
+                // The strict merge's authoritative snapshot removed this
+                // retained source. Preserve its exact cursor, FIFO age, and
+                // reservation while discarding only tenure-bound dispatch
+                // state. A later authenticated reconnect updates this same
+                // target instead of allocating another source owner.
+                plan.push(ReplyTargetMerge::Park { prior_index });
+            }
+        }
         let mut used_prior = BTreeSet::new();
         let mut unmatched = Vec::new();
         let mut candidate_sources = BTreeSet::new();
@@ -3297,10 +3418,12 @@ impl PendingExactFanout {
             let ExactTargetRoute::Reply(candidate_route) = &candidate_target.route else {
                 return Err("Sumeragi v2 reply retry changed route kind".to_owned());
             };
-            if !candidate_route.is_active() {
-                // Strict preflight rejected routes which were inactive when
-                // observed. A later retirement racing owned coalescing drops
-                // only this source occurrence.
+            if !merged_routes
+                .iter()
+                .any(|route| route.same_delivery(candidate_route))
+            {
+                // The authoritative post-merge snapshot omitted this retired
+                // or superseded occurrence. Do not take a second liveness read.
                 continue;
             }
             if !candidate_route.same_request_authority(authority_route) {
@@ -3328,20 +3451,17 @@ impl PendingExactFanout {
                 let ExactTargetRoute::Reply(prior_route) = &self.targets[prior_index].route else {
                     unreachable!("located reply target must retain its route kind");
                 };
-                let update = match candidate_route.source_update_from(prior_route) {
-                    Ok(update) => update,
-                    Err(NetworkReplyRouteError::Inactive) => continue,
-                    Err(NetworkReplyRouteError::Stale) => {
-                        return Err(
-                            "Sumeragi v2 outbound reply fanout contains a stale capability"
-                                .to_owned(),
-                        );
-                    }
-                    Err(error) => {
-                        return Err(format!(
-                            "invalid Sumeragi v2 per-source reply update: {error}"
-                        ));
-                    }
+                // The bounded route merge above already rejected stale,
+                // foreign, retargeted, and equal-ordinal/different-tenure
+                // capabilities. Classify the exact admitted occurrence using
+                // immutable identity only so a post-snapshot disconnect cannot
+                // remove it from this plan.
+                let update = if candidate_route.same_delivery(prior_route) {
+                    NetworkReplyRouteSourceUpdate::Exact
+                } else if candidate_route.same_tenure(prior_route) {
+                    NetworkReplyRouteSourceUpdate::LaterDelivery
+                } else {
+                    NetworkReplyRouteSourceUpdate::Reconnected
                 };
                 if !used_prior.insert(prior_index) {
                     return Err("Sumeragi v2 retry updated one reply attempt twice".to_owned());
@@ -3372,30 +3492,6 @@ impl PendingExactFanout {
             // attempt and can never reuse or erase that parked source's slot.
             plan.push(ReplyTargetMerge::Append { candidate_index });
         }
-        let ingress_ownership = match (&self.ingress_ownership, &candidate.ingress_ownership) {
-            (Some(retained), Some(candidate)) => {
-                let mut retained = retained.clone();
-                let mut candidate = candidate.clone();
-                retained.retain_active_reply_routes();
-                candidate.retain_active_reply_routes();
-                if !retained.merge_downstream(candidate)
-                    || !retained.matches_reply_routes(Some(&merged_routes))
-                {
-                    return Err(
-                        "Sumeragi v2 exact-output coalescing lost fair-ingress ownership"
-                            .to_owned(),
-                    );
-                }
-                Some(retained)
-            }
-            (None, None) => None,
-            (Some(_), None) | (None, Some(_)) => {
-                return Err(
-                    "Sumeragi v2 exact-output retry changed fair-ingress ownership shape"
-                        .to_owned(),
-                );
-            }
-        };
         Ok(ReplyTargetMergePlan {
             targets: plan,
             reply_routes: merged_routes,
@@ -3416,7 +3512,7 @@ impl PendingExactFanout {
         let mut additions = BTreeMap::<ExactTargetReservation, usize>::new();
         for merge in plan {
             let added_mask = match *merge {
-                ReplyTargetMerge::Update { .. } => 0,
+                ReplyTargetMerge::Park { .. } | ReplyTargetMerge::Update { .. } => 0,
                 ReplyTargetMerge::Reactivate {
                     candidate_index, ..
                 }
@@ -3475,6 +3571,17 @@ impl PendingExactFanout {
             .collect::<Vec<_>>();
         for merge in &plan.targets {
             match *merge {
+                ReplyTargetMerge::Park { prior_index } => {
+                    let target = targets.get_mut(prior_index).ok_or_else(|| {
+                        "Sumeragi v2 retired merge target disappeared before commit".to_owned()
+                    })?;
+                    if !matches!(target.0, ExactTargetRoute::Reply(_)) || target.2 {
+                        return Err(
+                            "Sumeragi v2 retired merge target changed before commit".to_owned()
+                        );
+                    }
+                    target.2 = true;
+                }
                 ReplyTargetMerge::Update {
                     prior_index,
                     candidate_index,
@@ -3586,6 +3693,12 @@ impl PendingExactFanout {
     ) {
         for merge in &plan.targets {
             match *merge {
+                ReplyTargetMerge::Park { prior_index } => {
+                    let target = &mut self.targets[prior_index];
+                    target.current = None;
+                    target.ticket = None;
+                    target.parked = true;
+                }
                 ReplyTargetMerge::Update {
                     prior_index,
                     candidate_index,
@@ -4971,22 +5084,19 @@ impl PendingExactOutput {
             .fanouts
             .get_mut(fanout_index)
             .expect("retired exact fanout must remain present");
-        fanout
+        let (_, prune_receipt) = fanout
             .reply_routes
             .as_mut()
             .expect("preflighted reply fanout must retain its route history")
-            .retain_active();
+            .retain_active_with_receipt();
         if let Some(ownership) = fanout.ingress_ownership.as_mut() {
-            ownership.retain_active_reply_routes();
-            let routes = fanout
-                .reply_routes
-                .as_ref()
-                .expect("preflighted reply fanout must retain its route history");
-            if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {
+            let Some(projected_routes) = ownership.project_retained_reply_routes(prune_receipt)
+            else {
                 return Err(
                     "Sumeragi v2 retired reply target lost fair-ingress ownership".to_owned(),
                 );
-            }
+            };
+            fanout.reply_routes = Some(projected_routes);
         }
         let target = fanout
             .targets
@@ -5263,21 +5373,6 @@ impl PendingExactOutput {
         self.drive_with_budget_ack(attempt_budget, |post, ticket, route| {
             attempt(post, ticket, route).map(|()| ExactOutputAttemptOutcome::Admitted)
         })
-    }
-
-    #[cfg(test)]
-    fn drive_bounded_with<Attempt>(
-        &mut self,
-        attempt: Attempt,
-    ) -> Result<ExactOutputDriveOutcome, String>
-    where
-        Attempt: FnMut(
-            Post<NetworkMessage>,
-            Option<NetworkActorAdmissionTicket>,
-            &ExactTargetRoute,
-        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>,
-    {
-        self.drive_with_budget(self.drive_attempt_budget, attempt)
     }
 
     fn drive_bounded_with_ack<Attempt>(
@@ -16861,7 +16956,7 @@ pub(super) mod tests {
         let (routes_a, ownership_a) =
             fair_ingress_route_owner(request.clone(), requester.clone(), hub_a, route_a.clone());
         let (routes_b, ownership_b) =
-            fair_ingress_route_owner(request, requester.clone(), hub_b, route_b.clone());
+            fair_ingress_route_owner(request.clone(), requester.clone(), hub_b, route_b.clone());
         let response = lane_commit_qc_message(service.local_peer.clone());
         let mut retained = PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
             vec![response.clone()],
@@ -16923,6 +17018,306 @@ pub(super) mod tests {
             .expect("source B cursor");
         assert_eq!(source_a_cursor.message_cursor, 1);
         assert_eq!(source_b_cursor.message_cursor, 0);
+
+        {
+            let owned_fanout = |authenticated_via: PeerId, route: NetworkReplyRoute| {
+                let (reply_routes, ownership) = fair_ingress_route_owner(
+                    request.clone(),
+                    requester.clone(),
+                    authenticated_via,
+                    route,
+                );
+                PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
+                    vec![response.clone()],
+                    requester.clone(),
+                    reply_routes,
+                    Some(ownership),
+                    ExactOutputRolloverClaim::Exact,
+                )
+                .expect("race source ownership is exact")
+                .expect("race source response fanout")
+            };
+
+            let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+            let hub_d = PeerId::new(KeyPair::random().public_key().clone());
+            let route_c = route_fixture.mint_via(requester.clone(), hub_c.clone());
+            let route_d = route_fixture.mint_via(requester.clone(), hub_d.clone());
+            let mut retained_race = owned_fanout(hub_c, route_c.clone());
+            let candidate_race = owned_fanout(hub_d, route_d.clone());
+            let plan = retained_race
+                .reply_target_merge_plan_after_route_merge(&candidate_race, || {
+                    assert!(
+                        route_fixture.retire(&route_c),
+                        "retained source retires after the initial route merge"
+                    );
+                })
+                .expect("candidate source survives retained-source retirement");
+
+            assert_eq!(
+                plan.targets,
+                vec![ReplyTargetMerge::Append { candidate_index: 0 }]
+            );
+            assert_eq!(
+                plan.reply_routes.len(),
+                2,
+                "a disconnect after reconciliation is deferred to the next bounded snapshot"
+            );
+            assert!(
+                plan.reply_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_d))
+            );
+            assert!(
+                plan.reply_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_c))
+            );
+            let ownership = plan
+                .ingress_ownership
+                .as_ref()
+                .expect("candidate source retains fair-ingress ownership");
+            assert!(ownership.validate_exact());
+            assert!(ownership.matches_reply_routes(Some(&plan.reply_routes)));
+            assert_eq!(ownership.admission_count, 2);
+            assert_eq!(ownership.attempts.len(), 2);
+            assert!(ownership.attempts.iter().any(|attempt| {
+                attempt.route.same_delivery(&route_d)
+                    && attempt.message_cursor == 0
+                    && attempt.chunk_cursor == 0
+            }));
+            let preview = retained_race
+                .preview_coalesce_plan(&candidate_race, &plan)
+                .expect("snapshot-coherent race plan has valid target geometry");
+            retained_race.commit_coalesce_plan(
+                &candidate_race,
+                &plan,
+                preview.current_source_targets,
+            );
+            assert_eq!(
+                retained_race
+                    .retain_active_unowned_reply_targets()
+                    .expect("the next service snapshot prunes only retired source C"),
+                1
+            );
+            let retained_routes = retained_race
+                .reply_routes
+                .as_ref()
+                .expect("source D retains route history");
+            assert_eq!(retained_routes.len(), 1);
+            assert!(
+                retained_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_d))
+            );
+            assert!(
+                retained_race
+                    .ingress_ownership
+                    .as_ref()
+                    .is_some_and(|ownership| ownership.validate_exact()
+                        && ownership.matches_reply_routes(Some(retained_routes)))
+            );
+
+            let hub_e = PeerId::new(KeyPair::random().public_key().clone());
+            let hub_f = PeerId::new(KeyPair::random().public_key().clone());
+            let route_e = route_fixture.mint_via(requester.clone(), hub_e.clone());
+            let route_f = route_fixture.mint_via(requester.clone(), hub_f.clone());
+            let mut retained_race = owned_fanout(hub_e, route_e.clone());
+            let candidate_race = owned_fanout(hub_f, route_f.clone());
+            let plan = retained_race
+                .reply_target_merge_plan_after_route_merge(&candidate_race, || {
+                    assert!(
+                        route_fixture.retire(&route_f),
+                        "candidate source retires after the initial route merge"
+                    );
+                })
+                .expect("retained source survives candidate-source retirement");
+
+            assert_eq!(
+                plan.targets,
+                vec![ReplyTargetMerge::Append { candidate_index: 0 }]
+            );
+            assert_eq!(plan.reply_routes.len(), 2);
+            assert!(
+                plan.reply_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_e))
+            );
+            assert!(
+                plan.reply_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_f))
+            );
+            let ownership = plan
+                .ingress_ownership
+                .as_ref()
+                .expect("retained source keeps fair-ingress ownership");
+            assert!(ownership.validate_exact());
+            assert!(ownership.matches_reply_routes(Some(&plan.reply_routes)));
+            assert_eq!(ownership.admission_count, 2);
+            assert_eq!(ownership.attempts.len(), 2);
+            let preview = retained_race
+                .preview_coalesce_plan(&candidate_race, &plan)
+                .expect("candidate-retirement plan remains snapshot coherent");
+            retained_race.commit_coalesce_plan(
+                &candidate_race,
+                &plan,
+                preview.current_source_targets,
+            );
+            assert_eq!(
+                retained_race
+                    .retain_active_unowned_reply_targets()
+                    .expect("the next service snapshot prunes only retired source F"),
+                1
+            );
+            let retained_routes = retained_race
+                .reply_routes
+                .as_ref()
+                .expect("source E retains route history");
+            assert_eq!(retained_routes.len(), 1);
+            assert!(
+                retained_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_e))
+            );
+            assert!(
+                retained_race
+                    .ingress_ownership
+                    .as_ref()
+                    .is_some_and(|ownership| ownership.validate_exact()
+                        && ownership.matches_reply_routes(Some(retained_routes)))
+            );
+
+            let hub_g = PeerId::new(KeyPair::random().public_key().clone());
+            let hub_h = PeerId::new(KeyPair::random().public_key().clone());
+            let route_g = route_fixture.mint_via(requester.clone(), hub_g.clone());
+            let route_h = route_fixture.mint_via(requester.clone(), hub_h.clone());
+            let (routes_g, ownership_g) = fair_ingress_route_owner(
+                request.clone(),
+                requester.clone(),
+                hub_g.clone(),
+                route_g.clone(),
+            );
+            let (routes_h, ownership_h) = fair_ingress_route_owner(
+                request.clone(),
+                requester.clone(),
+                hub_h,
+                route_h.clone(),
+            );
+            let repeated_responses = vec![response.clone(), response.clone()];
+            let mut retained_cursor =
+                PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
+                    repeated_responses.clone(),
+                    requester.clone(),
+                    routes_g,
+                    Some(ownership_g),
+                    ExactOutputRolloverClaim::Exact,
+                )
+                .expect("source G cursor ownership is exact")
+                .expect("source G response fanout");
+            retained_cursor
+                .mark_admitted(0)
+                .expect("source G advances to its second immutable response");
+            let candidate_h = PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
+                repeated_responses.clone(),
+                requester.clone(),
+                routes_h,
+                Some(ownership_h),
+                ExactOutputRolloverClaim::Exact,
+            )
+            .expect("source H cursor ownership is exact")
+            .expect("source H response fanout");
+            assert!(
+                route_fixture.retire(&route_g),
+                "source G retires before the authoritative strict-merge snapshot"
+            );
+            let plan = retained_cursor
+                .reply_target_merge_plan(&candidate_h)
+                .expect("source H progresses while retired source G stays owned");
+            assert_eq!(
+                plan.targets,
+                vec![
+                    ReplyTargetMerge::Park { prior_index: 0 },
+                    ReplyTargetMerge::Append { candidate_index: 0 },
+                ]
+            );
+            let preview = retained_cursor
+                .preview_coalesce_plan(&candidate_h, &plan)
+                .expect("parked-source merge preserves bounded geometry");
+            retained_cursor.commit_coalesce_plan(
+                &candidate_h,
+                &plan,
+                preview.current_source_targets,
+            );
+            assert!(retained_cursor.targets[0].parked);
+            assert_eq!(retained_cursor.targets[0].message_index, 1);
+            let parked_cursor = retained_cursor
+                .ingress_ownership
+                .as_ref()
+                .expect("parked source retains fair ownership")
+                .attempts
+                .iter()
+                .find(|attempt| attempt.route.same_source(&route_g))
+                .expect("parked source G retains its cursor");
+            assert_eq!(parked_cursor.message_cursor, 1);
+            assert_eq!(parked_cursor.chunk_cursor, 0);
+            assert!(retained_cursor.targets.iter().any(|target| {
+                matches!(&target.route, ExactTargetRoute::Reply(route)
+                    if route.same_delivery(&route_h) && !target.parked)
+            }));
+
+            let reconnect_g = route_fixture.mint_via(requester.clone(), hub_g.clone());
+            let (reconnect_routes, reconnect_ownership) = fair_ingress_route_owner(
+                request.clone(),
+                requester.clone(),
+                hub_g,
+                reconnect_g.clone(),
+            );
+            let reconnect_candidate =
+                PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
+                    repeated_responses,
+                    requester.clone(),
+                    reconnect_routes,
+                    Some(reconnect_ownership),
+                    ExactOutputRolloverClaim::Exact,
+                )
+                .expect("reconnect ownership is exact")
+                .expect("reconnect response fanout");
+            let reconnect_plan = retained_cursor
+                .reply_target_merge_plan(&reconnect_candidate)
+                .expect("reconnect reuses the parked source owner");
+            assert_eq!(
+                reconnect_plan.targets,
+                vec![ReplyTargetMerge::Update {
+                    prior_index: 0,
+                    candidate_index: 0,
+                    update: NetworkReplyRouteSourceUpdate::Reconnected,
+                }]
+            );
+            let reconnect_preview = retained_cursor
+                .preview_coalesce_plan(&reconnect_candidate, &reconnect_plan)
+                .expect("reconnect preview preserves the current item");
+            retained_cursor.commit_coalesce_plan(
+                &reconnect_candidate,
+                &reconnect_plan,
+                reconnect_preview.current_source_targets,
+            );
+            assert!(!retained_cursor.targets[0].parked);
+            assert_eq!(retained_cursor.targets[0].message_index, 1);
+            assert!(matches!(
+                &retained_cursor.targets[0].route,
+                ExactTargetRoute::Reply(route) if route.same_delivery(&reconnect_g)
+            ));
+            let resumed_cursor = retained_cursor
+                .ingress_ownership
+                .as_ref()
+                .expect("reconnected source retains fair ownership")
+                .attempts
+                .iter()
+                .find(|attempt| attempt.route.same_source(&reconnect_g))
+                .expect("reconnected source G retains its cursor");
+            assert_eq!(resumed_cursor.message_cursor, 1);
+            assert_eq!(resumed_cursor.chunk_cursor, 0);
+        }
 
         let missing = PendingExactFanout::claimed_with_reply_routes(
             vec![response],

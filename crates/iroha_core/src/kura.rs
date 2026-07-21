@@ -1178,12 +1178,6 @@ pub struct Kura {
     /// Test hook for forcing the next Sumeragi v2 finality sidecar write to fail.
     #[cfg(test)]
     fail_next_v2_finality_write: AtomicBool,
-    /// Test hook for forcing the next lane-block application-receipt write to fail.
-    #[cfg(test)]
-    fail_next_lane_block_application_receipt_write: AtomicBool,
-    /// Test hook for forcing the next autonomous lane view-state write to fail.
-    #[cfg(test)]
-    fail_next_autonomous_lane_view_state_write: AtomicBool,
     /// Counts actual v2 finality BLS verification passes for cache tests.
     #[cfg(test)]
     v2_finality_crypto_verifications: AtomicUsize,
@@ -1214,15 +1208,6 @@ pub struct Kura {
     /// Test hook indicating an inline read is paused before its cache publication recheck.
     #[cfg(test)]
     block_read_paused_before_cache_recheck: AtomicBool,
-    /// Test hook that pauses rollback after it owns the canonical block-store write lock.
-    #[cfg(test)]
-    pause_rollback_after_write_lock: AtomicBool,
-    /// Test hook indicating rollback is paused while owning the block-store write lock.
-    #[cfg(test)]
-    rollback_paused_after_write_lock: AtomicBool,
-    /// Test hook indicating a block store call is waiting for the canonical write lock.
-    #[cfg(test)]
-    store_waiting_for_write_lock: AtomicBool,
     /// Test hook forcing `durable_blocks_count` through its in-memory fallback.
     #[cfg(test)]
     force_durable_blocks_count_fallback: AtomicBool,
@@ -3974,10 +3959,6 @@ impl Kura {
             #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
             #[cfg(test)]
-            fail_next_lane_block_application_receipt_write: AtomicBool::new(false),
-            #[cfg(test)]
-            fail_next_autonomous_lane_view_state_write: AtomicBool::new(false),
-            #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
             #[cfg(test)]
             fail_next_roster_sidecar_writes: AtomicUsize::new(0),
@@ -3997,12 +3978,6 @@ impl Kura {
             pause_block_read_before_cache_recheck: AtomicBool::new(false),
             #[cfg(test)]
             block_read_paused_before_cache_recheck: AtomicBool::new(false),
-            #[cfg(test)]
-            pause_rollback_after_write_lock: AtomicBool::new(false),
-            #[cfg(test)]
-            rollback_paused_after_write_lock: AtomicBool::new(false),
-            #[cfg(test)]
-            store_waiting_for_write_lock: AtomicBool::new(false),
             #[cfg(test)]
             force_durable_blocks_count_fallback: AtomicBool::new(false),
             #[cfg(test)]
@@ -4217,10 +4192,6 @@ impl Kura {
             #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
             #[cfg(test)]
-            fail_next_lane_block_application_receipt_write: AtomicBool::new(false),
-            #[cfg(test)]
-            fail_next_autonomous_lane_view_state_write: AtomicBool::new(false),
-            #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
             #[cfg(test)]
             fail_next_roster_sidecar_writes: AtomicUsize::new(0),
@@ -4240,12 +4211,6 @@ impl Kura {
             pause_block_read_before_cache_recheck: AtomicBool::new(false),
             #[cfg(test)]
             block_read_paused_before_cache_recheck: AtomicBool::new(false),
-            #[cfg(test)]
-            pause_rollback_after_write_lock: AtomicBool::new(false),
-            #[cfg(test)]
-            rollback_paused_after_write_lock: AtomicBool::new(false),
-            #[cfg(test)]
-            store_waiting_for_write_lock: AtomicBool::new(false),
             #[cfg(test)]
             force_durable_blocks_count_fallback: AtomicBool::new(false),
             #[cfg(test)]
@@ -4738,23 +4703,6 @@ impl Kura {
                 .store(true, Ordering::Release);
             while self
                 .hash_only_extension_paused_before_store
-                .load(Ordering::Acquire)
-            {
-                std::thread::yield_now();
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn maybe_pause_rollback_after_write_lock_for_tests(&self) {
-        if self
-            .pause_rollback_after_write_lock
-            .swap(false, Ordering::AcqRel)
-        {
-            self.rollback_paused_after_write_lock
-                .store(true, Ordering::Release);
-            while self
-                .rollback_paused_after_write_lock
                 .load(Ordering::Acquire)
             {
                 std::thread::yield_now();
@@ -19226,11 +19174,6 @@ impl Kura {
             .store(true, Ordering::Relaxed);
     }
 
-    pub(crate) fn fail_next_lane_block_application_receipt_write_for_tests(&self) {
-        self.fail_next_lane_block_application_receipt_write
-            .store(true, Ordering::Relaxed);
-    }
-
     #[cfg(test)]
     pub(crate) fn fail_progress_sidecar_ancestor_sync_attempts_for_tests(
         &self,
@@ -19238,11 +19181,6 @@ impl Kura {
         failures: usize,
     ) {
         fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index, failures);
-    }
-
-    pub(crate) fn fail_next_autonomous_lane_view_state_write_for_tests(&self) {
-        self.fail_next_autonomous_lane_view_state_write
-            .store(true, Ordering::Relaxed);
     }
 
     /// Replace manifest bytes without updating the checkpoint digest, for corruption tests.
@@ -23616,16 +23554,6 @@ impl Kura {
             expected_epoch,
         )
         .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
-        #[cfg(test)]
-        if self
-            .fail_next_autonomous_lane_view_state_write
-            .swap(false, Ordering::Relaxed)
-        {
-            return Err(Error::IO(
-                std::io::Error::other("autonomous lane view-state injected failure"),
-                path.to_path_buf(),
-            ));
-        }
         let state = AutonomousLaneBlockViewState::from_artifact(artifact);
         let bytes = norito::to_bytes(&state).map_err(Error::NoritoFrame)?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > STRICT_INIT_MAX_BLOCK_BYTES {
@@ -24370,31 +24298,6 @@ impl Kura {
             expected_epoch,
             true,
         )
-    }
-
-    /// Return whether the supplied proposal is the current certified view of a
-    /// durable lane-owned executable payload.
-    #[cfg(test)]
-    pub(crate) fn autonomous_lane_payload_available(
-        &self,
-        proposal: &LaneBlockProposalV1,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> bool {
-        let Some(artifact) = self.read_autonomous_lane_block_artifact(
-            proposal.descriptor.lane_id,
-            proposal.descriptor.lane_block_height,
-            expected_chain_id_hash,
-            expected_epoch,
-        ) else {
-            return false;
-        };
-        Self::validate_autonomous_lane_block_artifact(
-            &artifact,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .is_ok_and(|current| current.same_consensus_identity(proposal))
     }
 
     /// Return the validated executable payload and current synthetic NewView cursor.
@@ -26478,17 +26381,6 @@ impl Kura {
         };
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
 
-        #[cfg(test)]
-        if self
-            .fail_next_lane_block_application_receipt_write
-            .swap(false, Ordering::Relaxed)
-        {
-            return Err(Error::IO(
-                std::io::Error::other("Kura lane-block application receipt injected failure"),
-                data_path,
-            ));
-        }
-
         let _guard = self.sidecar_lock.lock();
         if !self.recover_bound_progress_sidecar_artifacts(
             &data_path,
@@ -27324,19 +27216,6 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
     ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
         self.recover_lane_block_payload_with_sidecar_repair(proposal, true)
-    }
-
-    /// Revalidate a lane payload while an outer disk-mutation gate is held.
-    ///
-    /// Missing lane-artifact sidecars are reconstructed in memory from the
-    /// canonical block, but are not persisted because persistence acquires
-    /// `prune_lock` and would recursively lock the caller's outer gate.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
-    fn recover_lane_block_payload_without_sidecar_repair(
-        &self,
-        proposal: &LaneBlockProposalV1,
-    ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
-        self.recover_lane_block_payload_with_sidecar_repair(proposal, false)
     }
 
     fn recover_lane_block_payload_with_sidecar_repair(

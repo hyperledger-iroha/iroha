@@ -1074,11 +1074,13 @@ From `../iroha2-block-explorer-web`:
      `max_transactions = 96`, `max_payload_bytes = 16777216`, and
      `proposal_queue_scan_multiplier = 4` bounds, plus the
      `[sumeragi.queues]` canonical outer-ingress wire-byte baseline
-     `body_bytes = 173015040` and `body_source_bytes = 34603008`, before running
-     public write canaries or scenario sweeps. The four-validator baseline
-     covers every authenticated source plus the shared untrusted-source lane;
+     `authenticated_non_validator_sources = 2`, `body_bytes = 242221056`, and
+     `body_source_bytes = 34603008`, before running public write canaries or
+     scenario sweeps. The four-validator baseline isolates every validator,
+     both authenticated non-validator source lanes, and anonymous delivery;
      `render_taira_validator_bundle.py` raises `body_bytes` to at least
-     `(validator_count + 1) * body_source_bytes` for larger legal rosters.
+     `(validator_count + authenticated_non_validator_sources + 1) *
+     body_source_bytes` for larger legal rosters.
      Fast-finality caps are retired in v2.
    - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
      served peer configs; otherwise a handful of failed storage-pin probes can

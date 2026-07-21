@@ -13,7 +13,8 @@ CONSTANTS ProductionAppliedSuccessorTraceRefinesIndexedActivation,
           ProductionRecoveredSuccessorTraceRefinesIndexedActivation,
           ProductionStartupFailureAndRestartRefinesIndexedLifecycle,
           ProductionHistoricalCertificateTraceRefinesIndexedAsync,
-          ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync
+          ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync,
+          ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal
 
 (***************************************************************************
 Selected-height synchronous product.
@@ -5536,12 +5537,12 @@ PROOF
 
 (***************************************************************************
 External production-trace evidence is deliberately represented separately
-from the model-side invariant above. These five booleans are not assigned by
+from the model-side invariant above. These six booleans are not assigned by
 this module: source-order checks, adversarial tests, and source-manifest
 binding can constrain the trace claims, but none of those artifacts alone
 proves them.  The conditional theorem below composes the separately checked
 trace claims with the deductive model invariant; it does not manufacture any
-of the five premises. `MaxHeight` is absent: it is a finite-horizon projection
+of the six premises. `MaxHeight` is absent: it is a finite-horizon projection
 parameter and has no production trace counterpart.
 
 Keeping the source seam in the theorem statement prevents the already-proved
@@ -5553,6 +5554,7 @@ ProductionSuccessorAndExactRecoveryTraceRefinement ==
   /\ ProductionStartupFailureAndRestartRefinesIndexedLifecycle = TRUE
   /\ ProductionHistoricalCertificateTraceRefinesIndexedAsync = TRUE
   /\ ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync = TRUE
+  /\ ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal = TRUE
 
 (***************************************************************************
 This is the deliberately explicit Rust-to-TLA refinement seam. Its discharge

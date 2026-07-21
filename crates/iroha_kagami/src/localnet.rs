@@ -398,12 +398,16 @@ pub(crate) const GENESIS_SEED: &[u8; 7] = b"genesis";
 const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;
 /// Certified-body and block-sync outer-ingress capacity for generated localnets.
 ///
-/// This inherits the production 4N+2 geometry at the protocol's maximum
-/// validator roster: four owners per validator plus distinct generic and
-/// relayed-completion owners for the shared untrusted-via lane.
+/// This inherits the production 4N+2H+2 geometry at the protocol's maximum
+/// validator roster: four owners per validator, two per authenticated
+/// non-validator source, and two for anonymous delivery.
 const LOCALNET_SUMERAGI_QUEUE_BODIES: usize =
     iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
-/// Per-authenticated-source canonical outer-ingress wire bytes for generated localnets.
+/// Authenticated non-validator fair-ingress lanes for generated localnets.
+const LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
+    iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+        .get();
+/// Per-source canonical outer-ingress wire bytes for generated localnets.
 const LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES: usize =
     iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
 /// Payload-chunk ingress and orphan-buffer capacity for generated localnets.
@@ -438,7 +442,8 @@ fn localnet_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
         ));
     }
     let source_count = validator_count
-        .checked_add(1)
+        .checked_add(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
+        .and_then(|count| count.checked_add(1))
         .ok_or_else(|| eyre!("localnet Sumeragi outer-ingress source count overflow"))?;
     let isolated_bytes = source_count
         .checked_mul(LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES)
@@ -2293,6 +2298,13 @@ fn render_peer_config(
         Value::Integer(
             i64::try_from(LOCALNET_SUMERAGI_QUEUE_COMMANDS)
                 .expect("localnet command queue fits i64"),
+        ),
+    );
+    queues.insert(
+        "authenticated_non_validator_sources".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
+                .expect("localnet authenticated non-validator source count fits i64"),
         ),
     );
     queues.insert(
@@ -6743,12 +6755,21 @@ mod tests {
             Some(i64::try_from(LOCALNET_SUMERAGI_QUEUE_COMMANDS).expect("queue fits i64"))
         );
         assert_eq!(
+            queues
+                .get("authenticated_non_validator_sources")
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
+                    .expect("source count fits i64")
+            )
+        );
+        assert_eq!(
             queues.get("bodies").and_then(toml::Value::as_integer),
             Some(i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODIES).expect("queue fits i64"))
         );
         assert_eq!(
             queues.get("body_bytes").and_then(toml::Value::as_integer),
-            Some(165 * 1024 * 1024)
+            Some(231 * 1024 * 1024)
         );
         assert_eq!(
             queues
@@ -7338,8 +7359,8 @@ mod tests {
         );
         assert_eq!(
             queues.get("body_bytes").and_then(toml::Value::as_integer),
-            Some(264 * 1024 * 1024),
-            "seven validators plus the untrusted lane each need one isolated body quota"
+            Some(330 * 1024 * 1024),
+            "seven validators, two authenticated non-validator sources, and anonymous delivery each need one isolated body quota"
         );
 
         let manifest = localnet_genesis_for_opts(&opts);

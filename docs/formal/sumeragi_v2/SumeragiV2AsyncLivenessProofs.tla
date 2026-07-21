@@ -25,8 +25,8 @@ CONSTANTS ProductionEnterViewUsesPostInstallEffectiveLock,
           ProductionDurableIntentTraceRefinesProgressWitness,
           ProductionDecisionTraceRefinesRecoveryWitness,
           ProductionSchedulerTraceRefinesProtectedOwnership,
-          ProductionTwoStageRelayRetryTraceRefinesSourceFairness,
           ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership,
+          ProductionTwoStageRelayRetryTraceRefinesSourceFairness,
           ProductionReliableFlushTraceRefinesOutboundOwnership,
           ProductionApplicationTraceRefinesDecisionCompletion
 
@@ -40,8 +40,8 @@ ProductionProgressWitnessTraceRefinement ==
   /\ ProductionDurableIntentTraceRefinesProgressWitness = TRUE
   /\ ProductionDecisionTraceRefinesRecoveryWitness = TRUE
   /\ ProductionSchedulerTraceRefinesProtectedOwnership = TRUE
-  /\ ProductionTwoStageRelayRetryTraceRefinesSourceFairness = TRUE
   /\ ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership = TRUE
+  /\ ProductionTwoStageRelayRetryTraceRefinesSourceFairness = TRUE
   /\ ProductionReliableFlushTraceRefinesOutboundOwnership = TRUE
   /\ ProductionApplicationTraceRefinesDecisionCompletion = TRUE
 
@@ -48127,7 +48127,7 @@ authenticated resource-owning hop while preserving the modeled admission
 class, and reliable delivery to retain the exact source, target/cursor, bytes,
 and occurrence through actor, encode, frame, batch, write, and flush stages
 until the matching flush acknowledgement.  Source-fidelity and mutation tests
-constrain the seam but cannot prove these six external propositions.
+constrain the seam but cannot prove these seven external propositions.
 ***************************************************************************)
 THEOREM ProgressWitnessObligation ==
   \A initialContext:

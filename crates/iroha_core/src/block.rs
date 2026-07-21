@@ -6508,39 +6508,6 @@ pub(crate) mod valid {
             .unbox_state_block()
         }
 
-        /// Same as [`Self::validate_keep_voting_block`], but records timing breakdowns.
-        #[allow(clippy::too_many_arguments)]
-        #[cfg(test)]
-        pub(crate) fn validate_keep_voting_block_with_timing<'state>(
-            block: SignedBlock,
-            topology: &Topology,
-            expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
-            soft_fork: bool,
-            timings: &mut ValidationTimings,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            Self::validate_keep_voting_block_inner(
-                block,
-                topology,
-                expected_chain_id,
-                genesis_account,
-                time_source,
-                state,
-                voting_block,
-                soft_fork,
-                Some(timings),
-                false,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-                false,
-                None,
-            )
-            .unbox_state_block()
-        }
-
         /// Execute a previously validated commit candidate while preserving current-tip checks.
         ///
         /// Callers must only use this after independently verifying that local validation roots

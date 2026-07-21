@@ -37,7 +37,8 @@ address = "0.0.0.0:1337"
 public_address = "taira-validator-1.sora.org:1337"
 
 [sumeragi.queues]
-body_bytes = 173015040
+authenticated_non_validator_sources = 2
+body_bytes = 242221056
 body_source_bytes = 34603008
 
 [torii]
@@ -349,8 +350,9 @@ def test_render_bundle_scales_body_budget_for_five_validators(tmp_path: Path) ->
         output_dir / "taira-validator-5" / "config.toml"
     )
     queues = rendered["sumeragi"]["queues"]
+    assert queues["authenticated_non_validator_sources"] == 2
     assert queues["body_source_bytes"] == 34_603_008
-    assert queues["body_bytes"] == 6 * queues["body_source_bytes"]
+    assert queues["body_bytes"] == 8 * queues["body_source_bytes"]
 
 
 def test_render_bundle_rejects_non_positive_queue_template_values(
@@ -360,15 +362,21 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
     _write_roster(roster_path)
 
     malformed = {
-        "body_bytes": ["0", "-1", '"173015040"', "true"],
+        "authenticated_non_validator_sources": ["0", "-1", '"2"', "true"],
+        "body_bytes": ["0", "-1", '"242221056"', "true"],
         "body_source_bytes": ["0", "-1", '"34603008"', "true"],
+    }
+    defaults = {
+        "authenticated_non_validator_sources": 2,
+        "body_bytes": 242221056,
+        "body_source_bytes": 34603008,
     }
     for key, values in malformed.items():
         for index, value in enumerate(values):
             base_config_path = tmp_path / f"config-{key}-{index}.toml"
             output_dir = tmp_path / f"out-{key}-{index}"
             template = BASE_CONFIG.replace(
-                f"{key} = {173015040 if key == 'body_bytes' else 34603008}",
+                f"{key} = {defaults[key]}",
                 f"{key} = {value}",
             )
             base_config_path.write_text(template, encoding="utf-8")

@@ -2379,7 +2379,6 @@ pub(crate) trait RuntimeDriver {
     fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
     /// Return whether the unauthenticated wire shape could match a protected
     /// active-lock item after authentication.
-    #[cfg(test)]
     fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool;
 }
 
@@ -2490,7 +2489,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
         }
     }
 
-    #[cfg(test)]
     fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool {
         SumeragiV2Adapter::wire_ingress_may_use_progress(self, payload)
     }
@@ -3986,6 +3984,7 @@ mod tests {
     use crate::sumeragi::v2_core::Generation;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::peer::PeerId;
+    use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteTestFixture};
     use tempfile::TempDir;
 
     use super::*;
@@ -4338,6 +4337,26 @@ mod tests {
         inbound
             .take_ingress_ownership()
             .expect("real fair ingress attaches exact ownership")
+    }
+
+    fn fair_runtime_ownership_with_reply_route(
+        message: &wire::ConsensusMessageV2,
+        semantic_origin: PeerId,
+        authenticated_via: PeerId,
+        reply_route: NetworkReplyRoute,
+    ) -> FairV2IngressOwnershipEvidence {
+        let mut inbound = super::super::fair_v2_ingress_admit_for_test(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                BlockMessage::V2(message.clone()),
+                semantic_origin,
+                authenticated_via,
+                reply_route,
+            )
+            .expect("test transport identities bind the reply capability"),
+        );
+        inbound
+            .take_ingress_ownership()
+            .expect("real fair ingress attaches route ownership")
     }
 
     fn signed_runtime_quorum_certificate(
@@ -5821,8 +5840,21 @@ mod tests {
         let semantic_origin = PeerId::new(keys[0].public_key().clone());
         let source_a = PeerId::new(keys[1].public_key().clone());
         let source_b = PeerId::new(keys[2].public_key().clone());
-        let ownership_a = fair_runtime_ownership(&message, semantic_origin.clone(), source_a);
-        let ownership_b = fair_runtime_ownership(&message, semantic_origin, source_b);
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(source_a.clone(), 2);
+        let route_a = routes.mint_via(semantic_origin.clone(), source_a.clone());
+        let route_b = routes.mint_via(semantic_origin.clone(), source_b.clone());
+        let ownership_a = fair_runtime_ownership_with_reply_route(
+            &message,
+            semantic_origin.clone(),
+            source_a,
+            route_a.clone(),
+        );
+        let ownership_b = fair_runtime_ownership_with_reply_route(
+            &message,
+            semantic_origin,
+            source_b,
+            route_b.clone(),
+        );
 
         let owner_tag = runtime
             .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
@@ -5834,13 +5866,47 @@ mod tests {
             owner_tag
         );
         assert_eq!(runtime.queued_commands(), 1);
+        let ownership = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("coalesced runtime command retains exact source ownership");
+        assert!(ownership.validate_exact());
+        let projection_hash = ownership.projection_hash;
+        let direct = ownership
+            .direct
+            .as_ref()
+            .expect("proposal retains direct fair-ingress ownership");
+        assert_eq!(
+            direct
+                .current_reply_routes()
+                .expect("route-aware fair ownership")
+                .len(),
+            2
+        );
+        assert!(routes.retire(&route_a));
+        let ownership = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("queued ownership survives a normal source disconnect");
+        assert!(ownership.validate_exact());
+        assert_eq!(
+            ownership.projection_hash, projection_hash,
+            "connection liveness is not part of immutable runtime ownership identity"
+        );
         assert!(
-            runtime
-                .ingress
-                .commands
-                .front()
-                .and_then(|queued| queued.ingress_ownership.as_ref())
-                .is_some_and(RuntimeIngressOwnershipEvidence::validate_exact)
+            ownership
+                .direct
+                .as_ref()
+                .and_then(FairV2IngressOwnershipEvidence::current_reply_routes)
+                .is_some_and(|owned| {
+                    owned.iter().any(|route| route.same_delivery(&route_a))
+                        && owned.iter().any(|route| route.same_delivery(&route_b))
+                }),
+            "retirement is applied only by an authoritative prune receipt"
         );
         assert!(!runtime.fail_closed);
     }

@@ -352,6 +352,8 @@ class CrossToolProductionCallContract:
     projection: str
     required_expression: str
     brace_context: tuple[tuple[str, ...], ...] = ()
+    item_token_sha256: str | None = None
+    unfrozen_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -561,9 +563,9 @@ _TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "FairRetainedSelectionTrace", "0f305222909a5fa1fa8f3ae523b84bc3f232bfb57b7b76944887b54922c0f098", "struct"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "send", "897eae8bd11a0e121267b60b141acdc36d9c326c41b4516c0f4ffddba539ce83", brace_context=(("impl", "SumeragiRelayIngress"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "send_rehydrated", "d10242d792a48f0778102fd02d6eb3b1843dfb2c099101cddc181b817eadf668", brace_context=(("impl", "SumeragiRelayIngress"),)),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_rehydrated_ownership_matches", "afde041aeed753bb303ec80c00f88f1a920e7da14e182b788f97f8f7e71beaa1"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_rehydrated_ownership_matches", "e256e3116ecb06539aa891d0057e502b9b6bdf46150211a9891168eeb38a256e"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "rehydrate_held_sumeragi_relay_work", "c70d1d27ef4f639937fdbb8e4c5deb035142532b31c7bcfdb539ab752e36bb16"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "3e2c64c8285e1620c0d5047eff27f4b2472885dbe8352882cef60861d26d8a35", brace_context=(("impl", "NetworkRelayShared"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "74cda23a6a9fb054bc55f6d1588ca70be12291f470ba34aac2db75e49b842234", brace_context=(("impl", "NetworkRelayShared"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "push", "d30cc609e125945f143c35d42f513479d7255ed739859859a6a2149aa74abf82", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "pop_if_with_trace", "4041485881b4ba7d2898082b21a228ff77652d520a91bb20cb9475ece8a48b41", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "finish_sumeragi_block_ingress_attempt", "acfcb75628dc5cc0a843059252287d0caaddae96a7575435ced11cd3b84a86fb"),
@@ -574,7 +576,7 @@ _TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_dispatcher_capacity", "5d5c9a68cde0a263c47641d250717da5f186f7b1c3c9437a7d57d05fc0bb581c"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_class_capacity", "6a0f470f2cc7ba50e6893bb586cbd18e99a6ceffa29029279decaf1e692f7d49"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_retain_retry", "d3ee8f2f1434cb71a1eccfd66360d719ab90934bc3506c287e626b94f6d29b40"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_sumeragi_relay_dispatcher", "9b32ca4aac5e1b3aa3351d73552857ebb8a614e3f6ffd881e482172a53b9034d"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_sumeragi_relay_dispatcher", "028ea5ef68d3851d4ba87f4571693bc4d7607fbcd971b038528bb1aae75cf72c"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_network_relay_worker", "b60f7100692c80656a06f76ff03ac021f37b563555b997b2ed1e3ebd2593d9f7"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "forward_relay_lane", "8aca2344fdba8a6e935e2d852ed79b0c3f4d904560b3a6a52d0428c7990ddceb"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "drive_network_relay_ingress_inner", "fbe68c06eba092f488d4f4f92191b2014fa6923de62d111ffc12319a7cd67bb8"),
@@ -807,6 +809,10 @@ _ENTER_VIEW_IDENTITY_SUBSTITUTION_TEST = (
 _ENTER_VIEW_IDENTITY_SUBSTITUTION_TEST_SHA256 = (
     "c5a2e26e14f83468edbb83187ad6261a8d0ca6ebce9a27ff288fb4b5c0dfe71f"
 )
+_CROSS_TOOL_ROUTE_OWNERSHIP_STABILIZATION_REASON = (
+    "authoritative item is still changing in the reply-route ownership "
+    "completion patch"
+)
 
 # This inventory is deliberately code-owned rather than evidence-owned.  An
 # evidence writer may record these mappings but may not choose or substitute
@@ -895,6 +901,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
                         ),
                         item="accepts",
+                        item_token_sha256=(
+                            "208714b6905a5f92c18f43115d46889b10ea422cd5581dfb0f1923b8d2485bdb"
+                        ),
                         projection="trace, enter_view",
                         required_expression="""
                             if projection.enter_view.active {
@@ -1026,6 +1035,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="plan_body_pipeline_owner_hash",
+                        item_token_sha256=(
+                            "afc4c4fa90ce5d4c30b3d72525a8a909bca734b268ccd166094e9c168ca45fc3"
+                        ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
                             "V2EffectExecutor", "<", "R", ">",
@@ -1178,6 +1190,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="reconcile_protected_lock",
+                        item_token_sha256=(
+                            "b996cc6d47c73e3d22095b9ab534d2b1679c81c847536ef1faeac20c839e116e"
+                        ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
                             "V2EffectExecutor", "<", "R", ">",
@@ -1237,6 +1252,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="plan_certified_view_body_cleanup",
+                        item_token_sha256=(
+                            "b053bbdb7f1f88f72046618e6e3dd9fa02d33ac9910bc14d1d17caad3aad25ca"
+                        ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
                             "V2EffectExecutor", "<", "R", ">",
@@ -1399,6 +1417,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="pop_next_with_ownership",
+                        unfrozen_reason=(
+                            _CROSS_TOOL_ROUTE_OWNERSHIP_STABILIZATION_REASON
+                        ),
                         brace_context=((
                             "impl", "<", "C", ">", "BoundedIngress", "<", "C", ">",
                         ),),
@@ -1564,6 +1585,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             "crates/iroha_core/src/sumeragi/v2_core/reducer.rs"
                         ),
                         item="step",
+                        item_token_sha256=(
+                            "9c05b735ac51637004b6ae3286716360ae2b341f2f2bdd853688f1ca2a4cb9d4"
+                        ),
                         brace_context=(("impl", "Reducer"),),
                         projection="durable_intent_trace,",
                         required_expression="""
@@ -1659,6 +1683,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="verify_pending_kura_apply_parts",
+                        item_token_sha256=(
+                            "3c4a539122a8e2ecab8b283731cf4a0336762efda9f5fd56566dea21b32308fc"
+                        ),
                         projection="recovery_trace",
                         required_expression="""
                             let recovery_trace = evidence
@@ -1762,6 +1789,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             "crates/iroha_core/src/sumeragi/v2_core/scheduler.rs"
                         ),
                         item="select",
+                        item_token_sha256=(
+                            "a685ec19d5dfb98b747dade9860b2bacbec992c4e98ab43a15e4c7605fd100ed"
+                        ),
                         brace_context=(("impl", "ScheduleState"),),
                         projection="scheduler_trace",
                         required_expression="""
@@ -1865,6 +1895,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="enqueue_classified_command",
+                        unfrozen_reason=(
+                            _CROSS_TOOL_ROUTE_OWNERSHIP_STABILIZATION_REASON
+                        ),
                         brace_context=((
                             "impl", "<", "C", ">", "BoundedIngress", "<", "C", ">",
                         ),),
@@ -1915,6 +1948,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="enqueue_completion_batch",
+                        unfrozen_reason=(
+                            _CROSS_TOOL_ROUTE_OWNERSHIP_STABILIZATION_REASON
+                        ),
                         brace_context=((
                             "impl", "<", "C", ">", "BoundedIngress", "<", "C", ">",
                         ),),
@@ -1996,6 +2032,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="commit_canonical_body_available",
+                        unfrozen_reason=(
+                            _CROSS_TOOL_ROUTE_OWNERSHIP_STABILIZATION_REASON
+                        ),
                         brace_context=((
                             "impl", "BoundedIngress", "<", "AdapterCommand", ">",
                         ),),
@@ -2123,6 +2162,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/irohad/src/main.rs",
                         item="sumeragi_relay_retain_retry",
+                        item_token_sha256=(
+                            "d3ee8f2f1434cb71a1eccfd66360d719ab90934bc3506c287e626b94f6d29b40"
+                        ),
                         projection="projection",
                         required_expression="""
                             let projection = ProductionTwoStageRelayRetryTraceProjection {
@@ -2273,6 +2315,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_worker.rs",
                         item="poll_sidecar_flushes",
+                        unfrozen_reason=(
+                            _CROSS_TOOL_ROUTE_OWNERSHIP_STABILIZATION_REASON
+                        ),
                         brace_context=(("impl", "PendingExactOutput"),),
                         projection="flush_trace",
                         required_expression="""
@@ -2364,6 +2409,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_apply.rs",
                         item="finish_durable_apply_completion",
+                        item_token_sha256=(
+                            "c2aeba7048889670718af0ecb8fba4a9c6da634a8a721ed4142ef343f416429a"
+                        ),
                         brace_context=(("impl", "V2ApplyService"),),
                         projection="application_trace",
                         required_expression="""
@@ -2477,6 +2525,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/status.rs",
                         item="activate_v2_successor_height_at",
+                        item_token_sha256=(
+                            "987944ae9b1aa0e75b7647317456b76388830e9f20ab8d6d63e8b76f540be914"
+                        ),
                         projection="trace",
                         required_expression="""
                             if !production_applied_successor_trace_refines_indexed_activation_kernel(
@@ -2557,6 +2608,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/status.rs",
                         item="publish_recovered_v2_successor_height_at",
+                        item_token_sha256=(
+                            "4d4f6ae501991b5bdbc9e131f6f0d6b7db6547fbc2f7f644300658deb2d53650"
+                        ),
                         projection="trace",
                         required_expression="""
                             if !production_recovered_successor_trace_refines_indexed_activation_kernel(
@@ -2643,6 +2697,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/status.rs",
                         item="begin_v2_successor_activation",
+                        item_token_sha256=(
+                            "75a97fea11fa80934f6ac549867de2be2392e5636229a57f342edaa73bf30f62"
+                        ),
                         projection="lifecycle",
                         required_expression="""
                             if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
@@ -2655,6 +2712,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/status.rs",
                         item="mark_v2_restart_required",
+                        item_token_sha256=(
+                            "42ecf2fdaa311da9e1052c8816e0fc234d99539b906d59a462c3b48e13bb54b7"
+                        ),
                         projection="lifecycle",
                         required_expression="""
                             if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
@@ -2670,6 +2730,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_runner.rs",
                         item="recovered",
+                        unfrozen_reason=(
+                            _CROSS_TOOL_ROUTE_OWNERSHIP_STABILIZATION_REASON
+                        ),
                         brace_context=(("impl", "PendingSuccessorActivation"),),
                         projection="lifecycle",
                         required_expression="""
@@ -2747,6 +2810,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_block_sync.rs",
                         item="enqueue_and_complete",
+                        item_token_sha256=(
+                            "af3ec8e7240f6406ed88556fa35eea30250a57aaba10b503bf9ddf87f8a07575"
+                        ),
                         brace_context=(("impl", "V2BlockSyncDiscovery"),),
                         projection="historical_trace",
                         required_expression="""
@@ -2827,6 +2893,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="accept_certified_body_response_inner",
+                        item_token_sha256=(
+                            "bb0c8b87aa2efd09eebf75ed149d55ae44d974cd0aa24a8f8c15ca83b4da44f4"
+                        ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
                             "V2EffectExecutor", "<", "R", ">",
@@ -2918,6 +2987,9 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_runner.rs",
                         item="run_inner",
+                        unfrozen_reason=(
+                            _CROSS_TOOL_ROUTE_OWNERSHIP_STABILIZATION_REASON
+                        ),
                         projection="terminal_application,",
                         required_expression="""
                             let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)?;
@@ -2950,6 +3022,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             ) {
                                 return Err(V2RunnerError::SuccessorRefinementRejected);
                             }
+                            let activation = PendingSuccessorConstruction::begin(predecessor)?;
                         """,
                     ),
                 ),
@@ -4076,7 +4149,7 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 465
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 477
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-kura-progress-durability", "kura::tests", 13),
     ("production-kura-lane-geometry", "kura::lane_geometry::tests", 8),
@@ -4084,11 +4157,11 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        26,
+        28,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 30),
     ("production-v2-core", "sumeragi::v2_core::tests", 15),
-    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 8),
+    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 10),
     (
         "production-v2-core-source-link",
         "sumeragi::v2_core::reducer::source_link_tests",
@@ -4109,7 +4182,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         19,
     ),
     ("production-v2-integration-runner", "sumeragi_v2_runner", 4),
-    ("production-p2p-peer-reliable-flush", "peer::run::tests", 7),
+    ("production-p2p-peer-reliable-flush", "peer::run::tests", 8),
     (
         "production-p2p-shared-source-byte-geometry",
         "peer::shared_byte_budget_tests",
@@ -4129,10 +4202,10 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-irohad-consensus-message-control",
         "consensus_message_control::tests",
-        4,
+        7,
     ),
     ("production-irohad-network-relay", "network_relay_tests", 2),
-    ("production-irohad-authenticated-via", "tests::relay_fairness", 5),
+    ("production-irohad-authenticated-via", "tests::relay_fairness", 6),
     (
         "production-irohad-genesis-reply-geometry",
         "genesis_bootstrap::tests",
@@ -4141,12 +4214,12 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-config-v2-exact-output-geometry",
         "parameters::actual::tests",
-        1,
+        2,
     ),
     (
         "production-config-v2-exact-output-root-parse",
         "parameters::user::duration_clamp_tests",
-        3,
+        5,
     ),
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULES = tuple(
@@ -4162,11 +4235,23 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::authoritative_runtime_gate_tests::atomic_lane_certificate_uses_the_shared_progress_owner",
     "sumeragi::authoritative_runtime_gate_tests::oversized_atomic_lane_certificate_is_returned_exactly",
     "sumeragi::authoritative_runtime_gate_tests::relayed_origin_churn_uses_one_via_lane_and_preserves_protocol_origin",
-    "sumeragi::authoritative_runtime_gate_tests::roster_origin_relay_completion_has_untrusted_count_and_byte_owner",
-    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_wire_index_keeps_untrusted_origins_distinct",
+    "sumeragi::authoritative_runtime_gate_tests::authenticated_non_validator_source_cap_retries_third_source_until_one_lane_drains",
+    "sumeragi::authoritative_runtime_gate_tests::roster_origin_relay_completion_has_authenticated_source_count_and_byte_owner",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_wire_index_keeps_authenticated_origins_distinct",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pressure",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_coalesces_semantic_request_and_attaches_independent_routes",
+    "sumeragi::authoritative_runtime_gate_tests::alternate_reply_route_attaches_before_authenticated_source_lane_cap",
     "sumeragi::authoritative_runtime_gate_tests::transport_reply_route_construction_is_fallible_and_target_bound",
+    "consensus_message_control::tests::stale_duplicate_reordered_and_unknown_releases_are_atomic",
+    "consensus_message_control::tests::hold_capacity_is_bounded_by_count_bytes_and_checked_arithmetic",
+    "consensus_message_control::tests::drain_fence_holds_racing_chunks_fifo_until_atomic_cutover",
+    "tests::relay_fairness::hold_release_preserves_exact_layered_ownership_until_recorded_terminal",
+    "parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry",
+    "parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry",
+    "parameters::actual::tests::sumeragi_v2_config_format_changes_the_handshake_fingerprint",
+    "sumeragi::v2_core::refinement::tests::historical_body_pipeline_kernel_rejects_request_subject_and_owner_substitution",
+    "sumeragi::v2_core::refinement::tests::historical_certificate_kernel_rejects_foreign_admission_and_unretired_request",
+    "peer::run::tests::consensus_lane_and_v2_topics_share_authenticated_high_source_credit",
     "merge_sidecar::tests::exact_active_delivery_retry_preserves_decreasing_chunk_rank",
     "merge_sidecar::tests::alternate_source_progress_and_reconnect_preserve_independent_cursors",
     "merge_sidecar::tests::equal_ordinal_different_tenure_alternate_source_is_rejected_atomically",
@@ -5238,19 +5323,22 @@ _PRODUCTION_SM_DISTID_GEOMETRY_ITEM_SHA256 = {
     ),
 }
 
-# Exact pure geometry and admission items connecting the abstract 4N+2 owner
-# model to the authoritative production queue.  Whole-item token seals are
+# Exact pure geometry and admission items connecting the abstract 4N+2H+2
+# owner model to the authoritative production queue.  Whole-item token seals are
 # intentional here: every numeric term contributes to a progress reservation,
 # and comments or test-only lookalikes cannot satisfy this contract.
 _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
     "fair_v2_ingress_required_capacity": (
-        "5d9e1dc21b96084a00fac1be26bc8206b904edbc804c89d65fe0b819bb58c30b"
+        "57a7b60ca509f5074b58d5f778633a739ba8adc8b71d4a55a6f6824522634cd4"
+    ),
+    "fair_v2_ingress_current_protected_slots": (
+        "277b32d5a3f4564a998edee5a0267204553f659134fce846de04353bd0ba34d4"
     ),
     "fair_v2_ingress_lane_protected_slots": (
-        "72f36295d28e177033820236bfa01f807904999eb481a2f9faa37e26d2ec161c"
+        "da25270d56a0bd3011ad224033c9b4a5c7a42ca4e86e66f1eb6ca1018415b9ea"
     ),
     "fair_v2_ingress_required_byte_capacity": (
-        "7d99e013709df23265aa02f9aee689809187543868637321174f6edc51fadbfe"
+        "f3b4cfc1017778a7d7ba68b1e4c3a24c2f00f5f20252d3375eded1e986bd0799"
     ),
     "fair_v2_ingress_compact_len_prefix_bytes": (
         "50cd13b1d620e26eb0502ae9650b7cb66e489073ab407d95a5217177de517d95"
@@ -5307,23 +5395,23 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
     ),
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
-    "new_with_transport_frame_caps": (
-        "f78747a342bcf0b28765179d651b4dcdd6c08b530d4a3d271106cfec793501d1"
+    "new_with_source_geometry_and_transport_frame_caps": (
+        "524a2ae97a911d147d7bf3e27b07f207fa3fb17cfddfcb1c3408631d73c1a1d0"
     ),
     "configure_roster_for_context": (
         "f8b9331b60f910268d41edcb9570b8019c196a14da5da0d16e2b21d2ec0f9ddc"
     ),
     "configure_roster_with_byte_requirements": (
-        "70b120203e90993a0ea1db92695d21c97add2914bc3f1924649863f4f4966f80"
+        "e5d74945047d4df6ba2c55d96e3109d241fe18eeb6e6171cfd412627864238bd"
     ),
     "open": (
-        "d289203f86e087dc73e66e4d10be2cf44109d93afb213d729ad0391039cc3fcf"
+        "4a438064a15934103937a5cf29a93e0f2bb8bdd07b3838ea01118dcf63859ba1"
     ),
     "try_push_at": (
-        "751a8801bf143df9a8e8e567b0038608dfdd8f5eccb32ba72ef924d09eb7c1ad"
+        "72d70d619c421e62263934cb8df5640116dcb55b2fc1ab46b80e6222ea3cac9f"
     ),
     "try_recv_if_at": (
-        "ccf1326659f76bbcda3c1e4d1d54fca1f36946805b5a6a62d0623cadbe2520cf"
+        "37b785d44e6fecf30b3d63ce5f90dcde39fe6584d91c6678b97401b6fb22a4db"
     ),
 }
 
@@ -6077,6 +6165,16 @@ def _cross_tool_contract_errors() -> list[str]:
     """Check the immutable 4 + 7 + 6 refinement mapping itself."""
 
     errors: list[str] = []
+    try:
+        verus_evidence_sources = frozenset(
+            _verus_evidence_contract_module().REQUIRED_SOURCE_PATHS
+        )
+    except (AttributeError, OSError, RuntimeError, ValueError) as error:
+        errors.append(
+            "cross-tool contract cannot load the Verus source inventory: "
+            f"{error}"
+        )
+        verus_evidence_sources = frozenset()
     expected_ids = (
         "effective-lock-body-acquisition-production-refinement",
         "progress-witness-production-refinement",
@@ -6189,6 +6287,23 @@ def _cross_tool_contract_errors() -> list[str]:
                         f"cross-tool claim {claim.constant} has unsafe source path "
                         f"{relative!r}"
                     )
+            required_evidence_sources = (
+                claim.verus_source,
+                claim.verified_kernel_source,
+                *(call_site.source for call_site in claim.production_call_sites),
+            )
+            missing_evidence_sources = tuple(
+                relative
+                for relative in required_evidence_sources
+                if _nonempty_string(relative)
+                and relative not in verus_evidence_sources
+            )
+            if missing_evidence_sources:
+                errors.append(
+                    f"cross-tool claim {claim.constant} has proof, kernel, or "
+                    "authoritative production call sources outside the Verus "
+                    f"evidence inventory: {missing_evidence_sources!r}"
+                )
     for label, values, expected_count in (
         ("TLA constants", constants, 17),
         ("Verus theorem names", verus_theorems, 17),
@@ -6652,6 +6767,33 @@ def _cross_tool_promotion_contract_errors(
                     errors.append(
                         f"cross-tool claim {claim.constant} has an incomplete or "
                         "invalid authoritative production call-site contract"
+                    )
+                call_item_seal = call_site.item_token_sha256
+                unfrozen_reason = call_site.unfrozen_reason
+                if _nonempty_string(call_item_seal):
+                    if re.fullmatch(r"[0-9a-f]{64}", call_item_seal) is None:
+                        errors.append(
+                            f"cross-tool claim {claim.constant} production call site "
+                            f"{call_site.source}!{call_site.item} has an invalid exact "
+                            "item token seal"
+                        )
+                    if _nonempty_string(unfrozen_reason):
+                        errors.append(
+                            f"cross-tool claim {claim.constant} production call site "
+                            f"{call_site.source}!{call_site.item} cannot be both sealed "
+                            "and intentionally unfrozen"
+                        )
+                elif _nonempty_string(unfrozen_reason):
+                    errors.append(
+                        f"cross-tool claim {claim.constant} production call site "
+                        f"{call_site.source}!{call_site.item} remains intentionally "
+                        f"unfrozen: {unfrozen_reason}"
+                    )
+                else:
+                    errors.append(
+                        f"cross-tool claim {claim.constant} production call site "
+                        f"{call_site.source}!{call_site.item} lacks an exact item "
+                        "token seal"
                     )
                 if any(
                     "test" in header or "bench" in header
@@ -7117,6 +7259,8 @@ def _cross_tool_claim_contract_document(
                 "required_expression": _normalized_rust_contract(
                     call_site.required_expression
                 ),
+                "item_token_sha256": call_site.item_token_sha256,
+                "unfrozen_reason": call_site.unfrozen_reason,
             }
             for call_site in claim.production_call_sites
         ],
@@ -7650,6 +7794,18 @@ def _cross_tool_claim_payload(
 
     call_site_payloads: list[dict[str, Any]] = []
     for call_site in claim.production_call_sites:
+        expected_call_item_sha256 = call_site.item_token_sha256
+        if re.fullmatch(r"[0-9a-f]{64}", expected_call_item_sha256 or "") is None:
+            if _nonempty_string(call_site.unfrozen_reason):
+                raise ValueError(
+                    f"cross-tool production call site {call_site.source}!"
+                    f"{call_site.item} remains intentionally unfrozen: "
+                    f"{call_site.unfrozen_reason}"
+                )
+            raise ValueError(
+                f"cross-tool production call site {call_site.source}!"
+                f"{call_site.item} lacks an exact item token seal"
+            )
         call_source_entry = _verus_source_entry(
             source_entries,
             call_site.source,
@@ -7720,12 +7876,19 @@ def _cross_tool_claim_payload(
                 "must contain its exact kernel enforcement and projection once; "
                 f"found {observed_expression_count}"
             )
+        observed_call_item_sha256 = _rust_sealed_item_token_sha256(call_item)
+        if observed_call_item_sha256 != expected_call_item_sha256:
+            raise ValueError(
+                f"cross-tool production call site {call_site.source}!{call_site.item} "
+                "does not match its exact reviewed item token seal "
+                f"{expected_call_item_sha256}; found {observed_call_item_sha256}"
+            )
         call_site_payloads.append(
             {
                 "source": call_site.source,
                 "source_sha256": call_sha256,
                 "item": call_site.item,
-                "item_token_sha256": _rust_item_token_sha256(call_item),
+                "item_token_sha256": observed_call_item_sha256,
                 "brace_context": [list(header) for header in call_site.brace_context],
                 "projection": _normalized_rust_contract(call_site.projection),
                 "required_expression": _normalized_rust_contract(
@@ -11460,8 +11623,8 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ ProductionDurableIntentTraceRefinesProgressWitness = TRUE "
             "/\\ ProductionDecisionTraceRefinesRecoveryWitness = TRUE "
             "/\\ ProductionSchedulerTraceRefinesProtectedOwnership = TRUE "
-            "/\\ ProductionTwoStageRelayRetryTraceRefinesSourceFairness = TRUE "
             "/\\ ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership = TRUE "
+            "/\\ ProductionTwoStageRelayRetryTraceRefinesSourceFairness = TRUE "
             "/\\ ProductionReliableFlushTraceRefinesOutboundOwnership = TRUE "
             "/\\ ProductionApplicationTraceRefinesDecisionCompletion = TRUE"
         ),
@@ -14911,6 +15074,19 @@ def _transport_geometry_production_source_fidelity_errors(
         "p2p_lib": repo_root / "crates" / "iroha_p2p" / "src" / "lib.rs",
         "p2p_network": repo_root / "crates" / "iroha_p2p" / "src" / "network.rs",
         "p2p_peer": repo_root / "crates" / "iroha_p2p" / "src" / "peer.rs",
+        "kagami_localnet": (
+            repo_root / "crates" / "iroha_kagami" / "src" / "localnet.rs"
+        ),
+        "taira_renderer": repo_root / "scripts" / "render_taira_validator_bundle.py",
+        "taira_default": (
+            repo_root / "defaults" / "kagami" / "iroha3-taira" / "config.toml"
+        ),
+        "taira_config": (
+            repo_root / "configs" / "soranexus" / "taira" / "config.toml"
+        ),
+        "taira_readme": (
+            repo_root / "configs" / "soranexus" / "taira" / "README.md"
+        ),
     }
     sources: dict[str, str] = {}
     for role, path in paths.items():
@@ -15051,6 +15227,49 @@ assert!(matches!(
         core_path,
         core_source,
         """
+enum FairV2IngressSource {
+    Validator(PeerId),
+    Authenticated(PeerId),
+    Anonymous,
+}
+""",
+        "three-way fair-ingress source ownership inventory",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        core_path,
+        core_source,
+        """
+enum FairV2IngressSourceClass {
+    Validator,
+    Authenticated,
+    Anonymous,
+}
+""",
+        "three-way fair-ingress source-class inventory",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        core_path,
+        core_source,
+        """
+impl FairV2IngressSource {
+    const fn class(&self) -> FairV2IngressSourceClass {
+        match self {
+            Self::Validator(_) => FairV2IngressSourceClass::Validator,
+            Self::Authenticated(_) => FairV2IngressSourceClass::Authenticated,
+            Self::Anonymous => FairV2IngressSourceClass::Anonymous,
+        }
+    }
+}
+""",
+        "exact fair-ingress source-class projection",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        core_path,
+        core_source,
+        """
 enum FairV2IngressClass {
     Auxiliary,
     Progress,
@@ -15072,6 +15291,27 @@ timeout_vote_bytes: usize,
 transport_completion_bytes: usize,
 """,
         "shared per-validator progress and transport-completion owners",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        core_path,
+        core_source,
+        """
+pub(crate) struct FairV2Ingress {
+    capacity: usize,
+    byte_capacity: usize,
+    source_byte_capacity: usize,
+    timeout_vote_byte_reserve: usize,
+    transport_completion_byte_reserve: usize,
+    consensus_frame_byte_capacity: usize,
+    control_frame_byte_capacity: usize,
+    block_sync_frame_byte_capacity: usize,
+    outbound_high_frame_byte_capacity: usize,
+    authenticated_non_validator_source_capacity: Option<usize>,
+    state: Mutex<FairV2IngressState>,
+}
+""",
+        "bounded authenticated non-validator fair-ingress lane geometry",
         errors,
     )
 
@@ -15107,16 +15347,15 @@ let wire_key = Some(FairV2IngressWireKey {
         core_path,
         push,
         """
-let source = inbound
-    .via()
-    .filter(|peer| state.roster.contains(*peer))
-    .cloned()
-    .map_or(
-        FairV2IngressSource::Untrusted,
-        FairV2IngressSource::Validator,
-    );
+let source = match inbound.via() {
+    Some(peer) if state.roster.contains(peer) => {
+        FairV2IngressSource::Validator(peer.clone())
+    }
+    Some(peer) => FairV2IngressSource::Authenticated(peer.clone()),
+    None => FairV2IngressSource::Anonymous,
+};
 """,
-        "authenticated-via source ownership separated from semantic origin",
+        "validator, authenticated non-validator, and anonymous source ownership separated from semantic origin",
         errors,
     )
     _require_rust_token_sequence(
@@ -15198,6 +15437,42 @@ return Ok(FairV2IngressPushDisposition::Coalesced);
         core_path,
         push,
         """
+queued.inbound.reply_routes = routes_after;
+queued.inbound.ingress_ownership = Some(evidence);
+return Ok(FairV2IngressPushDisposition::Coalesced);
+}
+let source_lane_is_new = !state.lanes.contains_key(&source);
+if source_lane_is_new {
+    if !matches!(source, FairV2IngressSource::Authenticated(_)) {
+        return Err(FairV2IngressPushError::Rejected(inbound));
+    }
+""",
+        "semantic duplicate route attachment precedes authenticated non-validator lane-cap admission",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+let retained_authenticated_non_validator_sources = state
+    .lanes
+    .keys()
+    .filter(|source| matches!(source, FairV2IngressSource::Authenticated(_)))
+    .count();
+if self
+    .authenticated_non_validator_source_capacity
+    .is_some_and(|capacity| retained_authenticated_non_validator_sources >= capacity)
+{
+    return Err(FairV2IngressPushError::Full(inbound));
+}
+""",
+        "authenticated non-validator lane cap excludes validator and anonymous lanes",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
 if is_transport_completion && lane.transport_completion_len != 0 {
     return Err(FairV2IngressPushError::Full(inbound));
 }
@@ -15214,11 +15489,38 @@ if is_transport_completion && encoded_len > self.transport_completion_byte_reser
         """
 lane.bytes
     .checked_sub(lane.transport_completion_bytes)
-    .expect("untrusted completion bytes are included in the source total"),
+    .expect("non-validator completion bytes are included in the source total"),
 self.source_byte_capacity
     .saturating_sub(self.transport_completion_byte_reserve),
 """,
-        "untrusted ordinary bytes isolated from its relayed-completion reserve",
+        "non-validator ordinary bytes isolated from its relayed-completion reserve",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+let Some(latent_authenticated_slots_after) = self
+    .authenticated_non_validator_source_capacity
+    .map_or(Some(0), |capacity| {
+        capacity
+            .checked_sub(materialized_authenticated_after)
+            .and_then(|latent| latent.checked_mul(2))
+    })
+else {
+    return Err(FairV2IngressPushError::Rejected(inbound));
+};
+""",
+        "unmaterialized authenticated non-validator lanes retain two protected owners each",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+let lane = state.lanes.entry(source.clone()).or_default();
+""",
+        "new authenticated non-validator ownership materializes one exact source lane",
         errors,
     )
     receive = _require_rust_item(core_path, core_source, "try_recv_if_at", errors)
@@ -15253,6 +15555,22 @@ if let Some(key) = &entry.wire_key {
 }
 """,
         "semantic request ownership retires only when its queued occurrence is serviced",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        receive,
+        """
+if remains_ready {
+    state.ready.push_back(source);
+} else if matches!(&source, FairV2IngressSource::Authenticated(_)) {
+    let removed = state.lanes.remove(&source).expect(
+        "an emptied authenticated non-validator lane remains indexed until dequeue",
+    );
+    debug_assert!(removed.entries.is_empty());
+}
+""",
+        "empty authenticated non-validator lanes release their bounded churn slot",
         errors,
     )
 
@@ -15427,7 +15745,17 @@ let block_sync_frame_byte_capacity =
         core_path,
         start,
         """
-FairV2Ingress::new_with_transport_frame_caps(
+let authenticated_non_validator_source_capacity =
+    config.queues.authenticated_non_validator_sources.get();
+""",
+        "production H comes from Sumeragi ingress configuration rather than reply-route R",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        start,
+        """
+FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
     block_channel_cap,
     block_byte_cap,
     block_source_byte_cap,
@@ -15437,9 +15765,10 @@ FairV2Ingress::new_with_transport_frame_caps(
     control_frame_byte_capacity,
     block_sync_frame_byte_capacity,
     outbound_frame_queue_max_high_bytes,
+    Some(authenticated_non_validator_source_capacity),
 )
 """,
-        "production fair-ingress construction with every progress cap",
+        "production fair-ingress construction with configured H and every progress cap",
         errors,
     )
 
@@ -15730,22 +16059,47 @@ other.bytes = 0;
         p2p_peer_path,
         source_ownership_items.get("source_credits"),
         """
-by_peer.retain(|_, owner| owner.strong_count() != 0);
-if let Some(owner) = by_peer.get(peer_id).and_then(Weak::upgrade) {
-    if owner.per_lane_capacity != per_lane_capacity {
-        return None;
-    }
-    owner
-} else {
-    if by_peer.len() >= self.max_peer_reserves {
-        return None;
-    }
-    let owner = Arc::new(AuthenticatedSourceCreditOwner::new(per_lane_capacity));
-    by_peer.insert(peer_id.clone(), Arc::downgrade(&owner));
-    owner
+if per_lane_capacity == 0 {
+    return None;
 }
+let owner = self
+    .source_geometry
+    .credit_owner(peer_id, per_lane_capacity)?;
+Some(message::AuthenticatedSourceCredits::from_owner(owner))
 """,
-        "bounded weak source-credit registry preserves identity and capacity",
+        "inbound authenticated-source credits invoke the shared source-geometry kernel",
+        errors,
+    )
+    credit_owner = _require_rust_item(
+        p2p_peer_path, p2p_peer_source, "credit_owner", errors
+    )
+    _require_rust_item_context(
+        p2p_peer_path,
+        credit_owner,
+        (("impl", "AuthenticatedSourceGeometry"),),
+        "shared authenticated-source credit-owner geometry kernel",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_peer_path,
+        credit_owner,
+        """
+registry.prune();
+if let Some(owner) = registry.credit_owners.get(peer_id).and_then(Weak::upgrade) {
+    return (owner.per_lane_capacity == per_lane_capacity).then_some(owner);
+}
+let mut required = registry.live_and_protected_sources()?;
+required.insert(peer_id.clone());
+if required.len() > self.max_sources {
+    return None;
+}
+let owner = Arc::new(AuthenticatedSourceCreditOwner::new(per_lane_capacity));
+registry
+    .credit_owners
+    .insert(peer_id.clone(), Arc::downgrade(&owner));
+Some(owner)
+""",
+        "shared authenticated-source registry preserves identity, protected sources, and capacity",
         errors,
     )
     _require_rust_token_sequence(
@@ -16304,14 +16658,20 @@ let mut emitter = Emitter::new();
             "reviewed payload-completion frame ceiling",
         ),
         (
+            "pub const QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY: "
+            "NonZeroUsize = nonzero!(2_usize);",
+            "reviewed authenticated non-validator ingress lane count H",
+        ),
+        (
             "pub const QUEUE_BODY_CAPACITY: NonZeroUsize = "
-            "nonzero!(4 * MAX_VALIDATORS_PER_HEIGHT + 2);",
-            "exact default 4N+2 outer-ingress message geometry",
+            "nonzero!(4 * MAX_VALIDATORS_PER_HEIGHT + 2 * "
+            "QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get() + 2);",
+            "exact default 4N+2H+2 outer-ingress message geometry",
         ),
         (
             "pub const QUEUE_BODY_BYTES: NonZeroUsize = "
-            "nonzero!(165_usize * 1024 * 1024);",
-            "reviewed aggregate outer-ingress byte reserve",
+            "nonzero!(231_usize * 1024 * 1024);",
+            "reviewed N+H+1 aggregate outer-ingress byte reserve",
         ),
         (
             "pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = "
@@ -16367,6 +16727,223 @@ let mut emitter = Emitter::new();
         errors,
         count=2,
     )
+    for path, source, expected, description in (
+        (
+            actual_path,
+            actual_source,
+            "pub authenticated_non_validator_sources: NonZeroUsize,",
+            "actual Sumeragi H configuration field",
+        ),
+        (
+            user_path,
+            user_source,
+            "pub authenticated_non_validator_sources: NonZeroUsize,",
+            "user Sumeragi H configuration field",
+        ),
+        (
+            actual_path,
+            actual_source,
+            "pub authenticated_non_validator_source_capacity: u64,",
+            "fingerprinted shared Sumeragi H limit",
+        ),
+        (
+            actual_path,
+            actual_source,
+            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 3;",
+            "source-geometry shared-config format version",
+        ),
+        (
+            user_path,
+            user_source,
+            "authenticated_non_validator_sources: queues.authenticated_non_validator_sources,",
+            "user-to-actual Sumeragi H mapping",
+        ),
+    ):
+        _require_rust_source_token_sequence(
+            path,
+            source,
+            expected,
+            description,
+            errors,
+        )
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        """
+let minimum_body_queue_capacity = authenticated_non_validator_source_capacity
+    .checked_mul(2)
+    .and_then(|hubs| hubs.checked_add(6))
+""",
+        "actual N=1 minimum 2H+6 ingress-message geometry",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        """
+let minimum_body_sources = authenticated_non_validator_source_capacity
+    .checked_add(2)
+""",
+        "actual N=1 minimum H+2 ingress-byte partitions",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        """
+body_queue_capacity,
+authenticated_non_validator_source_capacity,
+body_bytes,
+body_source_bytes,
+""",
+        "shared Sumeragi fingerprint projection carries H beside ingress capacities",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        user_path,
+        user_source,
+        """
+let lane_profile = network.lane_profile;
+let reply_source_capacity = network
+    .max_total_connections
+    .or(lane_profile.derived_limits().max_total_connections)
+    .map(NonZeroUsize::get)
+    .unwrap_or(lane_profile.defaults().max_total_connections);
+""",
+        "root configuration derives R from the effective explicit or lane-profile network geometry",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        user_path,
+        user_source,
+        """
+if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {
+    emitter.emit(
+        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+            "sumeragi.queues.authenticated_non_validator_sources ({}) exceeds configured network authenticated-source capacity {reply_source_capacity}",
+            sumeragi.queues.authenticated_non_validator_sources,
+        )),
+    );
+}
+""",
+        "root configuration rejects H greater than exact-output reply-source R",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        user_path,
+        user_source,
+        """
+let minimum_body_messages = queues
+    .authenticated_non_validator_sources
+    .get()
+    .checked_mul(2)
+    .and_then(|hubs| hubs.checked_add(6));
+""",
+        "user N=1 minimum 2H+6 ingress-message geometry",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        user_path,
+        user_source,
+        """
+let minimum_body_sources = queues
+    .authenticated_non_validator_sources
+    .get()
+    .checked_add(2);
+""",
+        "user N=1 minimum H+2 ingress-byte partitions",
+        errors,
+    )
+
+    kagami_path = paths["kagami_localnet"]
+    kagami_source = sources["kagami_localnet"]
+    _require_rust_source_token_sequence(
+        kagami_path,
+        kagami_source,
+        """
+const LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
+    iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+        .get();
+""",
+        "localnet generator consumes configured default H",
+        errors,
+    )
+    localnet_body_bytes = _require_rust_item(
+        kagami_path,
+        kagami_source,
+        "localnet_sumeragi_body_bytes",
+        errors,
+    )
+    _require_rust_token_sequence(
+        kagami_path,
+        localnet_body_bytes,
+        """
+let source_count = validator_count
+    .checked_add(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
+    .and_then(|count| count.checked_add(1))
+""",
+        "localnet aggregate bytes scale by N+H+1",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        kagami_path,
+        kagami_source,
+        """
+queues.insert(
+    "authenticated_non_validator_sources".into(),
+    Value::Integer(
+        i64::try_from(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
+            .expect("localnet authenticated non-validator source count fits i64"),
+    ),
+);
+""",
+        "localnet renderer emits the public H key",
+        errors,
+    )
+
+    deployment_fragments = (
+        (
+            "taira_renderer",
+            'authenticated_non_validator_sources = _require_positive_integer(\n'
+            '        queues, "authenticated_non_validator_sources", context\n'
+            '    )',
+            "Taira renderer validates the public H key",
+        ),
+        (
+            "taira_renderer",
+            "minimum = (\n"
+            "        validator_count + authenticated_non_validator_sources + 1\n"
+            "    ) * source_bytes",
+            "Taira renderer scales aggregate bytes by N+H+1",
+        ),
+        (
+            "taira_default",
+            "authenticated_non_validator_sources = 2\n"
+            "body_bytes = 242221056\n"
+            "body_source_bytes = 34603008",
+            "default Taira profile pins H=2 and seven source partitions",
+        ),
+        (
+            "taira_config",
+            "authenticated_non_validator_sources = 2\n"
+            "body_bytes = 242221056\n"
+            "body_source_bytes = 34603008",
+            "production Taira profile pins H=2 and seven source partitions",
+        ),
+        (
+            "taira_readme",
+            "(validator_count + authenticated_non_validator_sources + 1) *\n"
+            "     body_source_bytes",
+            "Taira operator documentation states N+H+1 byte scaling",
+        ),
+    )
+    for role, fragment, description in deployment_fragments:
+        observed = sources[role].count(fragment)
+        if observed != 1:
+            errors.append(
+                f"{paths[role]}: {description} must occur exactly once; "
+                f"found {observed}"
+            )
 
     p2p_network_path = paths["p2p_network"]
     p2p_network_source = sources["p2p_network"]
@@ -17810,8 +18387,21 @@ let source_capacity = self
         p2p_network_path,
         network_reliable_items.get("peer_connected"),
         """
+let Some(source_credits) = self
+    .inbound_frame_byte_budgets
+    .source_credits(peer.id(), self.authenticated_source_credit_capacity)
+else {
+""",
+        "accepted reply tenure first acquires the shared authenticated-source count owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("peer_connected"),
+        """
 Arc::new(ReliableReplyRouteTenure {
     owner: Arc::clone(&self.reply_route_owner),
+    _source_credits: route_source_credits,
     delivery_peer: peer.id().clone(),
     connection_id,
     connection_ordinal,
@@ -24163,8 +24753,8 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
         "ProductionDurableIntentTraceRefinesProgressWitness",
         "ProductionDecisionTraceRefinesRecoveryWitness",
         "ProductionSchedulerTraceRefinesProtectedOwnership",
-        "ProductionTwoStageRelayRetryTraceRefinesSourceFairness",
         "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+        "ProductionTwoStageRelayRetryTraceRefinesSourceFairness",
         "ProductionReliableFlushTraceRefinesOutboundOwnership",
         "ProductionApplicationTraceRefinesDecisionCompletion",
     ):
@@ -24469,10 +25059,20 @@ Ok(())
         config_user_path,
         geometry_items["user::Root::parse"][1],
         """
+let lane_profile = network.lane_profile;
 let reply_source_capacity = network
     .max_total_connections
+    .or(lane_profile.derived_limits().max_total_connections)
     .map(NonZeroUsize::get)
-    .unwrap_or(defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS);
+    .unwrap_or(lane_profile.defaults().max_total_connections);
+if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {
+    emitter.emit(
+        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+            "sumeragi.queues.authenticated_non_validator_sources ({}) exceeds configured network authenticated-source capacity {reply_source_capacity}",
+            sumeragi.queues.authenticated_non_validator_sources,
+        )),
+    );
+}
 let effect_work_capacity = (sumeragi.queues.commands.get()
     / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
     .max(1);
@@ -34290,8 +34890,8 @@ def _production_liveness_release_inventory_errors(
             f"{release_path}: production liveness source count must be sealed as "
             f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
         )
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 200:
-        errors.append("internal release-regression seal must contain exactly 200 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 212:
+        errors.append("internal release-regression seal must contain exactly 212 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -34481,17 +35081,17 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "inventories 465 named tests\nacross 30 Rust modules",
-            "all 53 pre-network legs and the exact\n465-test inventory",
+            "inventories 477 named tests\nacross 30 Rust modules",
+            "all 53 pre-network legs and the exact\n477-test inventory",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "yielding the current 465-test, 30-module, 53-leg geometry",
+            "yielding the 465-test, 30-module, 53-leg checkpoint",
             "pre-network corridor\nnow has 53 legs",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
-            "current 465-test inventory across 30 modules and 53\npre-network legs",
+            "current 477-test inventory",
             "receipt binds the 53 pre-network corridor legs and\n"
-            "their exact 465-test inventory",
+            "their exact 477-test inventory",
         ),
     }
     for path, claims in documentation_claims.items():
