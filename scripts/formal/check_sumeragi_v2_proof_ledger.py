@@ -414,31 +414,41 @@ class CrossToolObligationContract:
 _DURABLE_INTENT_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "CanonicalIdentityProjection", "6988ca07a23b2b0b2f6f97862355cd26b65549402367584c30cc32311fa907b0", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "TagProjection", "a2816900778eb7ba8d2f8167528090e5e955b4b3dcaab7f2b44c9a29a5a50b30", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "PendingProjection", "1580fadfad5afa989512cb0de69a7a25ddc803e2d957bb0aab86ef37d856006d", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "PendingProjection", "60161447cde7da8a227555838fb809cdb492d9c1c9e9f44f935f6784f55173ea", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionDurableIntentTraceProjection", "a35e463374616a20e4ec9ae0d03eaa2a54a6f8121cb2cc9d1d305277920e66bb", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "BoundaryCapabilityKey", "ff4694ba16f7a91a52ac6b759e0f93fede9598d1defed5c649b9bdcdca224254", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "EffectCapabilityKey", "736da67f9fe9b674bdb0883c030f7484306a8744b1daa16db9a955787a047db9", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "LockedCommitProgressWitnessProjection", "898c2af32458e8653ba90665b35bb49900ff289311de737e08775025acd07e91", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "locked_commit_progress_witness_body", "3d629086c69398752909fcd6a0a2bc5d91b2f6b1671c4862a42f8083ddd6034e", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "locked_commit_progress_witness_is_valid", "7aeaf9fa283c74eb189e8e4d48de90a9b4f8f467064449f12a7d630cc2f9b6fc"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations", "8a58bd19096b51328dd8aea6a4d79bf40e1c0e6e98413858c5117dad2f1637f3", brace_context=(("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "BoundaryCapabilityKey", "26f2397d654f1f73d3800b194d54ecc23c1077fed2a7c2638f93011a0f339a8d", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "EffectCapabilityKey", "2a61193fbec35b7d98220de60e82297d9560b37f9e51518671215b4396daeb86", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "EffectSlotProjection", "c8600f9d3064b1107f31927092caf12005bafdd6dd398ea391d5c0b372eea27b", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "EffectTrace", "9404b0c35af3f4a1ae9f20ec7d8e7ce932ae5b3e76ea13742a3745704a040b6f", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ReplayPlanSlotProjection", "fb6183dfedfa450507e2246225a3cc0406c75f7e69bdfeaac13e704d11a7c5a0", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ReplayPlanProjection", "b4ca658003484dc3e313ef39c261535805a2760573cf7ad0bc26da0bda397c9f", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SubjectProjection", "ec3c03b7de6c0273a1bd5a97d6548c0dd0fdb25922953ceadd0bf964d5d7aea4", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "pending_projection", "7befc4ef727cb9762744e2f4a0b73bf5f9cc6bd747461abb9f0818cc6a4e8c7b", brace_context=(("impl", "Reducer"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_for_pending", "4fe215694a779d8427a824fda9103d1ad5ce9d52ba4dc050db63b3fa9b928a4c", brace_context=(("impl", "Reducer"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_claim", "09580b6e22e7434e6fb7627bc00719509613cd5f65eae3d6268014832e2e19e6", brace_context=(("impl", "Reducer"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_grant", "7b0e7dfdc7b309d13a00ac9054279a284f52ba2868189c2551abd05ac4f81821", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "pending_projection", "68fd42dda1c45572ad3911876d77c507ab2c4277c771e00ac432ec7fa6d2dadd", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_for_pending", "8b26caff839a21e4350fcfc48d65ad15485ef4740673caee4323c3111a3358ce", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_claim", "2be2c4e14a098fd2334fdbe96fa4b8044461d8d94b7f2a6a3f820274fc5d293e", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_grant", "1e263db662a7b2e1f7bbdead0f4bb3026e6fbd5174cde1c11ba254036a3dc7ff", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "transition_projection", "c4182b5c9d9a8f7dd0957adfed61256a25fb20192d32f1a9d8a4f869ad1142cb", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "progress_witness_violation", "6b877eb715c0e7b54c9d959c2c28a68b0c051431d83379b347dd9fb33af767bd", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "locked_commit_progress_witness_projection", "e6b0e4b9f17b976d0fc977be30a0a4b60bab23b67ff6b4489b77be67616b5a2d", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionTagProjection", "cedf388a1d75dd88d021cad5f9e1d32148bf6490f155ae5ab8da4b6277e9e3f8", "struct", (("verus", "!"),)),
-    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionPendingProjection", "07017f432e219f2e87a9dcc9a52bc3fe1170e6bb0597a74a3799ff3b11d65319", "struct", (("verus", "!"),)),
-    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionBoundaryCapabilityKeyProjection", "acaa11c0d2726d227e60a0a14f98149510db49db5a9e6f3f36f2929be5b6e8bb", "struct", (("verus", "!"),)),
-    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionEffectCapabilityKeyProjection", "a3fcc410b9d4e487ceb814299c400fbb495e9c099f25735ac060344663fc3ace", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionPendingProjection", "768c83d4e75107886e1a7571a6a36235cf9edeb929f0d06544c08bb74c335999", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionBoundaryCapabilityKeyProjection", "76b0228be37593251bb40524de9b19183930ffc21eeb39fda1c63716fe491673", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionEffectCapabilityKeyProjection", "0a1144e781ce9e2173a526351529ba26e3c207735bd0abec3c1025ca767fdc66", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionEffectSlotProjection", "cff4a20f7283faad47df2973426e7b6a2c5185c17b8ef67912896f3c0b4b7835", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionEffectTraceProjection", "8e21963a629bd08d8d678023679f639e72d7268be5499a4d9d12cf1d3f9a46c4", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReplayPlanSlotProjection", "74593e56aac37b4987c0b5dd718801770962ea55a61cb64fa4da3c9793fcc9af", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReplayPlanProjection", "4a6d3985352c693aa81b94f5c2c2dc635dd99bde36aa1a60a3f049c40703fd63", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionSubjectProjection", "dec194dd86582bafaaefc08d64d5e9d5b4a96a891deed91f6c84a6a3911450d9", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionDurableIntentTraceProjection", "155d58355db1f55df2029dcee4be1c4c9d83a8a7b2a956baa7333ff1666b9c5a", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "LockedCommitProgressWitnessProjection", "46f5c2901ce3cb2c3391f23f935ec2a94474bddf1b0284883e9eda31b34fa1af", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "locked_commit_progress_witness_projection", "2582b57e6acb3bbd6a693534e0e9a223cbfd322e6f2501b6d88973f4940a7c28", brace_context=(("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "locked_commit_progress_witness_is_valid_kernel", "4f82a73ea44bb746f347cc9348311b8007f181b13b482f7cb6f16a4aeb4ae84b", brace_context=(("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "locked_commit_progress_witness_is_valid", "95b00841bdc864b9be5efa8567b633c53f4d82f2f8ac92f83c9f6f1c0b0aedaa", brace_context=(("verus", "!"),)),
 )
 
 
@@ -462,34 +472,34 @@ _DECISION_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS = (
 
 _DECISION_IDENTITY_SOURCE_ITEM_SEALS = _DECISION_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS + (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "CanonicalIdentityProjection", "6988ca07a23b2b0b2f6f97862355cd26b65549402367584c30cc32311fa907b0", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionDecisionIdentityProjection", "47c1b7b777b1363b1e711750530a670ebeeee7afe1166a841921e6af1e4e2e80", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionDecisionIdentityProjection", "e25607726e5f9eee5d6028ce31204182c3076414227fd7d6dee638f7b8dca317", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionQuorumCertificateIdentityProjection", "7dcc65d36334e60d6f913e48672b53c5286cf3582eeb9c2f419bfbd7e6ae6737", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionDurableBodyIdentityProjection", "323488a9f69eb7ecd88214191fb6357dd7bf9c352f4c608618598f5a5b6ef947", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_identity_is_canonical_body", "ce431670642959f84a254edf3083b94b1c52c81882775ef437a0f430ec84c3fc", "macro"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_identity_equal_body", "bff7f86b8d140922e520030f6a95b41cc610a4cc60cc1ce0d31a30fa49698f02", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_identity_is_canonical_body", "2291fbf9b7dda6e8a1135cdb838764fc31c387b26edc642f1f82d380806193c8", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_identity_equal_body", "01270515691e6c245347e3be2f6340bfae1eddd315c721f22308de1737714272", "macro"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_quorum_certificate_is_canonical_body", "ba53e5ed996a6a73d16ca2b12ef98e0c0b1995ccb8d8ee059e60838fb67c0977", "macro"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_quorum_certificate_equal_body", "7c2af1e0691ae79d0cb43237ce1b30cf391e2392cb6fe1534a91c40bdf671a0f", "macro"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_durable_body_is_canonical_body", "b0f1095294209a6ba7c76d17729c545f663c1dd797c6cf8ef73ca6e9d51b6dc2", "macro"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_durable_body_equal_body", "c9c7e3991cf8a23b285f83186a39bfbec4896ec81420db1042e11277c8d57be0", "macro"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
-    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionDecisionIdentityProjection", "99e974dbbcb158dd63869a82e84fb53b1c6ee8372906c390446226ee05ebbd09", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionDecisionIdentityProjection", "1fdc0691a72f2d0d75a3c534621fda55ab26dd88ec9c7f6166c498bdff51461a", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionQuorumCertificateIdentityProjection", "3b11ab39d07b5c1beafd9f558c3404144ecd1741e25330839916204acaff1364", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionDurableBodyIdentityProjection", "e6c4fba52a718d7f0c6e3db642c0061dd0f40e9586da28af638043bd34d1deaa", "struct", (("verus", "!"),)),
 )
 
 
 _DECISION_RECOVERY_SOURCE_ITEM_SEALS = _DECISION_IDENTITY_SOURCE_ITEM_SEALS + (
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionDecisionRecoveryTraceProjection", "27be9b0c154c774d1f4076aad91d110c5802e42d83c1c4e5c363efc45aaf822d", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_recovery_trace_body", "61cf247e3aa7dd82e1209fb8dc7c4d4be59391da4ac7d43653a7e6157da436a0", "macro"),
-    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionDecisionRecoveryTraceProjection", "da8b7bb44412a9d8d6ab9dfecc7d29cf12a3ceaf4ac6a8be6137cba737e4711f", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionDecisionRecoveryTraceProjection", "c652698461c4f6ad894ee536cb7c670047951ec579d4a7d2e33c2f3ea884e061", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_recovery_trace_body", "98769edd7d3f1631548a9bd55621784e8a523884c46117e5e8e145d7b5a74ded", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionDecisionRecoveryTraceProjection", "43e1b475d9e888070aa00dee853d09ffb197fc62745a94791bb4d24b96435cd9", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "PendingKuraApply", "ae72d12b11f78a26b9604a5a97f5b0c354517eb5fb7d4e5c4537a83fee9979c8", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "PendingKuraApplyRecoveryEvidence", "4b78bb581ff0551c959d57dfc0d20b630c931f59bce962e082ff2e08cc90f22b", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "PendingKuraApplyRecoveryEvidence", "70dbf9941b5ea8a5f41dcb2799b18bd68c05bb6ef046db62f675bad6b8ab363b", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "canonical_typed_identity", "c23d82dc5bb245bf7be77d50d89071ca077a5739817f03bc3503b21c31cbbdcf"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "canonical_hash_identity", "305b2b34743122db5ea790b91c59d77b56d22f9a22c607da54ee7b6a40701437"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "recovery_decision_projection", "45a9f145367fcb48ba4b7534b657f8389c219bf73ffffd02db7912625cae6392"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "canonical_hash_identity", "4fd1019eace5b02f4e4ddc295066775995f4154b84c46029e47d0536f91764b6"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "recovery_decision_projection", "74f98dec8698675f48e5394d6bed80affb0939e11e88d8795e72d558e033e3a4"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "recovery_certificate_projection", "f757e341b8e778e85272f87c5d61473ecbf25d2cd1294c512e85974be6b08125"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "recovery_body_projection", "bd2d387d7a9ff306b662e4dc4292591a5b10c42002848cb370ae9bfb42122534"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "recovery_refinement_projection", "71bb4960505e0bbbc76ef08a9675b02c5b63374926759700c6a331aa5924d418", brace_context=(("impl", "PendingKuraApplyRecoveryEvidence"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "recovery_refinement_projection", "561267713efa4664b94996d9707c9a7e7206ad4984177edfc399e6024c9e3ea7", brace_context=(("impl", "PendingKuraApplyRecoveryEvidence"),)),
 )
 
 
@@ -537,16 +547,16 @@ _RELIABLE_FLUSH_SOURCE_ITEM_SEALS = _RELIABLE_FLUSH_IDENTITY_CONSTANT_SOURCE_ITE
 
 
 _APPLICATION_SOURCE_ITEM_SEALS = _DECISION_IDENTITY_SOURCE_ITEM_SEALS + (
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionApplicationTraceProjection", "ba10561de7693c4cb95b972995cdf7985cfdef7cd5180a9dfb7c4ccc7a26b5a7", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_application_trace_body", "8038719c8e9df95e10b8ce25dbe44e15ee810da93b0da0cf0606978689facecf", "macro"),
-    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionApplicationTraceProjection", "6dc0d8f3b0ca8c9711e36f7bcedf764fca9c4434e806c642749bfdc939234144", "struct", (("verus", "!"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "DurableApplicationEvidence", "d655c1c069aba815deb8aaf05dec7588b65685c444d45c38aa065bc74df4e247", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionApplicationTraceProjection", "12c5a94a04249a64ad0d02f0c8ca519b7756e1dd9a29df4581209965fa7d1496", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_application_trace_body", "f4cbb95a60bfdb99f2b0ee222024d1701cbae0baf7bf7c2414ddfa1d42b19cc1", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionApplicationTraceProjection", "6403b7daf3931631613c93432d3a3c55d546e4bb47f4bc88fbe8c571b259132f", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "DurableApplicationEvidence", "570baf9d8e7044ec944afe52e282de93eb6d4180f4a38973ceeb33761ca4557d", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_typed_identity", "bf0797326a94905ad34fbf1c0a042b0255403ffe70a8892cc760d4f74883401d"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_hash_identity", "96f1f520a6f1184503da85b089ebab78c09e9c636812c7d95508d7561736c7b5"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_decision_projection", "982aa9ff5c3c8b65f2feb1196a199dd2b73c812751b625ab3624a2f3b2f5db09"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_hash_identity", "d303c934eb8417c06c608edb365ece4f905d2db7ad925723597dbb302da9d172"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_decision_projection", "38df71952019e159d899b79564c44c99d59d2eaf17db3f56090fa30cc579439b"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_certificate_projection", "2e889e4b38a0f374c0684a099fad3affe8a09d543b016377e557292d0e3b0ca2"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_body_projection", "2de15e67317d9b499678fffc13159c125857b15b53d8da365d3dcdb431e55fd3"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_refinement_projection", "ffa355118b4978ab6880c7f32a796172f8762b91c02c475d2a9be6c0cd74609c", brace_context=(("impl", "DurableApplicationEvidence"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_refinement_projection", "bbe11f04a26bf614ec37d77c60d8e0fbfe3017870fc20f7d77d1eb0c22a375ac", brace_context=(("impl", "DurableApplicationEvidence"),)),
 )
 
 
@@ -1230,7 +1240,23 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_ensures="""
                     production_durable_intent_trace_refines_progress_witness_kernel(
                         production_durable_intent_trace_projection(projection),
-                    )
+                    ),
+                    projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+                        ==> projection.durable_sequence_before < u64::MAX,
+                    projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+                        ==> projection.pending_after.persistence_id
+                            == projection.durable_sequence_before + 1,
+                    projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+                        ==> projection.durable_sequence_after
+                            == projection.durable_sequence_before,
+                    projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+                        ==> projection.durable_sequence_before < u64::MAX,
+                    projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+                        ==> projection.durable_sequence_after
+                            == projection.durable_sequence_before + 1,
+                    projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+                        ==> projection.pending_before.persistence_id
+                            == projection.durable_sequence_after
                 """,
                 verified_kernel=(
                     "production_durable_intent_trace_refines_progress_witness_kernel"
@@ -1246,11 +1272,13 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_const=False,
                 verified_kernel_shared_macro_sha256=(
-                    ("production_durable_intent_trace_body", "7a328dc96f4c50743147f3a8fec7607787c6769440701a93ae233738c58c1222"),
-                    ("pending_projection_is_absent_body", "cd83d076187ffdfca2daacbdaaf79519afca5f0854fa3b7ad31112b8be535f0f"),
-                    ("pending_projection_equal_body", "d5835f798a8c88725967ed8fa9cd4610c3228983ad42eacc4e3ca78b2d8a4a83"),
-                    ("pending_projection_matches_boundary_body", "f5345b3cd5bed9f7f1078432802ca8b6589bcaaa0a24bba6b49ebbda1ea2bd34"),
-                    ("persist_slot_matches_boundary_body", "915684c96630b0a7872cade8c76833cb352a411f2e40f352f69d980145ff6e95"),
+                    ("production_durable_intent_trace_body", "2ca68c7a731d05dccc83cbb97a81487389cc80e21eb8e16da14f188ef02c23a5"),
+                    ("pending_projection_is_absent_body", "6d7500713b60c4b62cf7c3644afe6cb63072e416aafb30feefc6a9f55f1b9f95"),
+                    ("pending_projection_equal_body", "76c11e957c8c596fed3caa5b3685c25b1fdd3511b82ebdbb9b12c10cd30577f8"),
+                    ("pending_projection_matches_boundary_body", "5cc9a32b9cbe39fa8eb953596b684503b349ea2bb7e7b8a4771465f040478772"),
+                    ("wal_record_proposal_round_is_exact_body", "a38e693218988ba6cb194f8a3f711472585d4d946f43f6fdb15c9e768c91f61c"),
+                    ("wal_record_round_matches_owner_body", "96c05c2514d4b2ab94d2ec1d633eeba5a3c79f3b666a01f910c5874ce751c894"),
+                    ("persist_slot_matches_boundary_body", "7c02aa49f1f2a5d515959cc671c380b80812511b33e3045e2bb46bd5316191c6"),
                     ("tag_projection_equal_body", "d91ebfd02eabc6ce1b5ba4d26d463aab760936cd64fce0dbadd5f0ce7981fc84"),
                     ("wal_record_continuation_is_exact_body", "281170db9df6751d661e4efd18feb9e21b7d55c225d89353699f2a3874b0b37b"),
                     ("event_can_start_wal_record_body", "fe5d4434fe59c406588a0bef55d0bf7071e3a5b436597fe96187b7e845ce31ee"),
@@ -1258,11 +1286,11 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     ("effect_slots_authorized_body", "177751a58769f362d74418ab543f7dc5e86042722773af43cead0a68dfe77278"),
                     ("active_effect_slot_body", "f25929e357210020cbe386bf21bcf934df1dd744cbf4fec08cfaed6d6b2bb8f7"),
                     ("inactive_effect_slot_body", "4128eb97be4888d167f474bf0c6e9249b81e4764dce7d3499f9a2a2448f3cf27"),
-                    ("capability_key_equal_body", "012675777291bc60b12c41f2aa682f82ff13a9ebbe77a6bc5ec0d3200e61e903"),
+                    ("capability_key_equal_body", "4ffffdf23d3d44eac78fd7101d565c87234d494324bf188571a3502a4ee9cf3f"),
                     ("capability_key_is_none_body", "9095ad5d42ea25676c97d0ad4900a436ba76d38f8fd0c7c52ab091fe07c25e3b"),
-                    ("boundary_capability_equal_body", "b5f8e0c84ec514324c398fa194467d2aedb8db5e824fa6941a79fc1ce5d52982"),
-                    ("boundary_capability_is_absent_body", "89491630bf693650469867eff5622859d4d16a10798e807c79f94222f53dca8f"),
-                    ("boundary_identity_is_canonical_body", "68a458d1ad0316198b01a6c11ed188253b200b8fd8c2a1fedca16a04e6adda0b"),
+                    ("boundary_capability_equal_body", "c7e989a4f72d02abbdaa5cde20886314cbbbdd8fbf8c2df1666f846cf3c98916"),
+                    ("boundary_capability_is_absent_body", "f39d1f8368932e300b4aa610881a106ecc3c8fc8238dd56db8f98e2507b73f5a"),
+                    ("boundary_identity_is_canonical_body", "c5e43d7fb987fcbd36a09903aa8e42325d44a4b9d0e79acbbf8e222721c4c706"),
                     ("subject_projection_equal_body", "73088430b897bc3f1fe3a5bc6782527aa1243bb42b312c15392f7870764d287f"),
                     ("replay_plan_slot_well_formed_body", "9cb5c2ed24719ef74148515407d80e08154ebe803b0ce86e2d9be37aaef9a68b"),
                     ("replay_plan_well_formed_body", "7f42d9d48cdf49dbdb1233aa26b52d32c18a25456ea30dc32c969b9de2cc34eb"),
@@ -1317,7 +1345,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                 durable_sequence_after: next.durable.last_id().get(),
                             };
                             if !production_durable_intent_trace_refines_progress_witness_kernel(
-                                durable_intent_trace
+                                durable_intent_trace,
                             ) {
                                 return Err(ReducerError::RefinementViolation);
                             }
@@ -1346,7 +1374,15 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_ensures="""
                     production_decision_trace_refines_recovery_witness_kernel(
                         production_decision_recovery_trace_projection(projection),
-                    )
+                    ),
+                    projection.replay_tag.height == projection.owner_tag.height,
+                    projection.replay_tag.view == projection.owner_tag.view,
+                    projection.replay_tag.generation
+                        == projection.owner_tag.generation,
+                    projection.manifest_round.view
+                        == projection.durable_body.view,
+                    projection.durable_body.view
+                        == projection.commit_qc.decision.proposal_view
                 """,
                 verified_kernel=(
                     "production_decision_trace_refines_recovery_witness_kernel"
@@ -1728,7 +1764,13 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_ensures="""
                     production_application_trace_refines_decision_completion_kernel(
                         production_application_trace_projection(projection),
-                    )
+                    ),
+                    projection.task_tag.height == projection.owner_tag.height,
+                    projection.task_tag.view == projection.owner_tag.view,
+                    projection.task_tag.generation
+                        == projection.owner_tag.generation,
+                    projection.validated_body.view
+                        == projection.commit_qc.decision.proposal_view
                 """,
                 verified_kernel=(
                     "production_application_trace_refines_decision_completion_kernel"
@@ -2818,7 +2860,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "f18a91fa7f3a36481f622d6649b32e65960aa91d6053949861296735cf4ebc87"
     ),
     "tc_promoted_historical_commit_is_fsynced_before_sign_and_status": (
-        "1a7a40ec9ad7773c8a52ab8ac9e8d19b2a64d86109e4ccb314f19df54ff148c0"
+        "16eb1cb8584e9c16c195c81e8755ab7009c69e75abc641e0c3e7ec422dea4925"
     ),
 }
 
@@ -2827,7 +2869,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
 # adapter-owned Busy-deferred QC instead of claiming a second runtime slot.
 _DEFERRED_QC_OWNERSHIP_RUST_ITEM_SHA256 = {
     "reducer_qc_matches_wire": (
-        "6a33e438a552c3350b6870c75a583ca66e95bb380c5d60f0b015768793f8ad98"
+        "1e8f6891257f678e9a6b576d2caccae61dd2a69e92ea8a1eabe407e86568942d"
     ),
     "deferred_quorum_certificate_owner_tag": (
         "0a4829a381f776d10f33e89fabc5f5601bd8306201f86837f2ed7b4b6cb2c399"
@@ -2842,7 +2884,7 @@ _DEFERRED_QC_OWNERSHIP_RUST_ITEM_SHA256 = {
         "9c02f1659adf7776faa272c51fe41772848aed5347d1fbc6564e528d84ee17df"
     ),
     "commit_certificate_response_coalesces_with_exact_busy_deferred_qc": (
-        "4ce4c0b1e2e60bd018d0ebc163a55aef5e32ba3c4a9763f6435323d4c7fae15e"
+        "7f9b5a2b4e448ac09f8bbf4fbf6efa81550a654478e6f7c42516c3c8c40a7489"
     ),
 }
 
@@ -2852,14 +2894,22 @@ _DEFERRED_QC_OWNERSHIP_RUST_ITEM_SHA256 = {
 # progress-witness regression contract.
 _LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256 = {
     "locked_commit_progress_witness_rejects_inexact_or_empty_ownership": (
-        "6ff11e7c98fdc0be39ecd88662c4e6b9a2b9930208be27702e5b30c816395cb3"
+        "a40965bfa911b0f8b2cf118644aaf07d4cd6898246b1d5b72b9ea4e15649a9d6"
     ),
     "locked_commit_progress_witness_accepts_each_exact_owner": (
-        "243a8035c4249915983abf901d74b2e0acccba5942dba2c8338ddde58f15d3e5"
+        "07823a34cefc84c62880027df0898fd5524c5e1e7f9ec71e0ebc84d7998e45b7"
+    ),
+}
+_LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
+    "locked_commit_has_exact_progress_witness": (
+        "e63115adfa82478faa975238d72973dbe84791f45fb8c968732d62974d2c44f4"
+    ),
+    "validate_locked_commit_progress_witness": (
+        "6a3d419be24f3266f2a38b71cfb79c5431d127925dd133416723c5890da200e0"
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 406
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 438
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-kura-progress-durability", "kura::tests", 12),
     ("production-kura-lane-geometry", "kura::lane_geometry::tests", 8),
@@ -2867,29 +2917,57 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        25,
+        26,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 26),
-    ("production-v2-core", "sumeragi::v2_core::tests", 15),
-    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
+    ("production-v2-core", "sumeragi::v2_core::tests", 25),
+    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 4),
+    ("production-v2-core-reducer", "sumeragi::v2_core::reducer::tests", 2),
+    ("production-v2-core-wal", "sumeragi::v2_core::wal::tests", 1),
     (
         "production-v2-core-source-link",
         "sumeragi::v2_core::reducer::source_link_tests",
         3,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 38),
+    (
+        "production-v2-equivocation-evidence",
+        "sumeragi::evidence::tests",
+        1,
+    ),
+    ("production-v2-adapter", "sumeragi::v2::tests", 41),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 54),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 28),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 31),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 56),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 29),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 34),
+    ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 22),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 23),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 49),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
         18,
+    ),
+    (
+        "production-kagemusha-finality",
+        "zk::kagemusha_finality::tests",
+        1,
+    ),
+    (
+        "production-data-model-v2-finality",
+        "block::consensus_v2::finality::tests",
+        1,
+    ),
+    (
+        "production-data-model-offline-compact-qc",
+        "offline::kagemusha_v4_topup_provenance_tests",
+        1,
+    ),
+    (
+        "production-data-model-v2-context-identity",
+        "block::consensus_v2::tests",
+        1,
     ),
     ("production-v2-integration-runner", "sumeragi_v2_runner", 4),
     ("production-p2p-peer-reliable-flush", "peer::run::tests", 9),
@@ -3081,6 +3159,38 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "consensus_message_control::tests::fatal_controller_rejects_an_unchanged_command_poll",
     "consensus_message_control::tests::retired_release_finishes_drain_without_claiming_delivery",
     "network_relay_tests::obsolete_sumeragi_relay_message_completes_as_delivered",
+    "sumeragi::v2_core::tests::future_view_commit_qc_uses_current_owner_through_application",
+    "sumeragi::v2_core::tests::later_view_commit_qc_replays_and_applies_the_retained_lock_origin",
+    "sumeragi::v2_core::tests::height_context_rejects_invalid_parent_proposal_origin_geometry",
+    "sumeragi::v2_core::tests::stale_generation_completion_is_rejected_after_view_change",
+    "sumeragi::v2_core::tests::stale_persistence_completions_stutter_while_current_append_is_pending",
+    "sumeragi::v2_core::tests::strictly_ahead_install_timeout_advances_owner_and_protects_highest_prepare",
+    "sumeragi::v2_core::tests::same_round_timeout_with_strictly_higher_prepare_rebinds_lock_without_view_change",
+    "sumeragi::v2_core::tests::later_lock_and_commit_ack_retires_older_same_origin_commit_pool",
+    "sumeragi::v2_core::tests::validated_tc_lock_survives_current_view_timeout_and_commits_after_next_tc",
+    "sumeragi::v2_core::tests::replay_resigns_the_newest_commit_intent_for_one_proposal_origin",
+    "sumeragi::v2_core::refinement::tests::durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations",
+    "sumeragi::v2_core::refinement::tests::locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations",
+    "sumeragi::v2_core::reducer::tests::certified_fetch_capability_requires_the_exact_proposal_origin",
+    "sumeragi::v2_core::reducer::tests::historical_commit_cannot_cross_the_current_finality_timeout_fence",
+    "sumeragi::v2_core::wal::tests::same_round_timeout_replay_accepts_only_a_strict_prepare_origin_upgrade",
+    "sumeragi::evidence::tests::sumeragi_v2_equivocation_authenticates_vote_origin_and_execution",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance",
+    "sumeragi::v2::tests::deferred_projection_distinguishes_authenticated_proposal_origins",
+    "sumeragi::v2::tests::vote_body_ownership_uses_the_authenticated_proposal_origin",
+    "sumeragi::v2::tests::locked_subject_is_safe_only_at_its_exact_proposal_origin",
+    "sumeragi::v2_effects::tests::later_commit_qc_applies_the_exact_retained_lock_origin",
+    "sumeragi::v2_effects::tests::later_view_commit_signing_uses_the_fsynced_proposal_origin_marker",
+    "sumeragi::v2_lane_work::tests::prior_height_hydration_stays_local_under_successor_backpressure",
+    "sumeragi::v2_runner::tests::first_same_subject_lock_from_prior_view_retires_unlocked_work",
+    "sumeragi::v2_runtime::tests::exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot",
+    "sumeragi::v2_runtime::tests::same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically",
+    "sumeragi::v2_runtime::tests::runtime_ingress_carrier_capacity_returns_backpressure_atomically",
+    "sumeragi::v2_transport::tests::later_commit_qc_authenticates_the_exact_locked_body_origin",
+    "zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin",
+    "block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification",
+    "offline::kagemusha_v4_topup_provenance_tests::compact_qc_rejects_foreign_or_future_proposal_origin",
+    "block::consensus_v2::tests::height_context_identity_authenticates_the_parent_proposal_origin",
 )
 
 # The retained executor queue is the concrete FIFO consumer for reducer
@@ -3404,7 +3514,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
         "3e865b8a1b9b7136ab2cf81dd6d33fe84ae9e9b14eab2006156ae9cbc29520ff"
     ),
     "lane_output_identity": (
-        "df60d606e2439d75858acd1ed1b4457f491f24ac1cc9772601e8cdba5c094d2e"
+        "bf17d20ee94a5023ce4623b31eb333e8d7cb12c1a155d058a2a9f22840430b58"
     ),
     "validate_winning_lane_output": (
         "5944d18c4054801e9d25faed1f67317cfcd9d0fe3e8dea1cb17ba35de5566371"
@@ -3843,7 +3953,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "5904b0cb28ad048ab778e75e1f99bc19336b6712d817d33ac7a07e050f25c7e3"
     ),
     "fair_v2_ingress_required_quorum_certificate_bytes": (
-        "d0342e9789247b628c2b81178541db8156eee5aa53fe8a19485cea6b88258898"
+        "5bb74cbb0b57aca8bfd89205594b38c91d4b212f5d256b13636499c3424216ea"
     ),
     "fair_v2_ingress_required_proposal_bytes": (
         "f87150d121741f99778f8108a82cc95a0811afe51edae3cf06ee8e955337985b"
@@ -8627,6 +8737,32 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     errors: list[str] = []
 
     exact_liveness_operators = {
+        "ExactLockedCommitTimeoutRecoveryWitness": (
+            "/\\ qc.context = context "
+            "/\\ qc.height = height "
+            "/\\ qc.view = lockRank[node] "
+            "/\\ qc.subject = lockSubject[node] "
+            "/\\ qc.view < nodeView[node] "
+            "/\\ \\E timeoutVote \\in timeoutIntents: "
+            "/\\ timeoutVote.signer = node "
+            "/\\ timeoutVote.context = qc.context "
+            "/\\ timeoutVote.height = qc.height "
+            "/\\ timeoutVote.view = nodeView[node]"
+        ),
+        "HistoricalLockedCommitRecoveryWitness": (
+            "\\/ ExactLockedCommitIntents(node, qc.view, qc.subject) # {} "
+            "\\/ \\E request \\in pendingLockCommit: "
+            "/\\ request.node = node "
+            "/\\ request.qc = qc "
+            "\\/ \\E candidate \\in AsyncCandidateSet: "
+            "/\\ candidate.node = node "
+            "/\\ candidate.height = qc.context.height "
+            "/\\ candidate.view = qc.view "
+            "/\\ candidate.subject = qc.subject "
+            '/\\ candidate.kind = "BeginLockCommit" '
+            "/\\ CandidateScheduled(candidate) "
+            "\\/ ExactLockedCommitTimeoutRecoveryWitness(node, qc)"
+        ),
         "DecisionPipelineCandidate": (
             '/\\ candidate.class = "Completion" '
             "/\\ candidate.node = node "
@@ -8663,7 +8799,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         if normalized != exact_body:
             errors.append(
                 f"{path}:{line}: {symbol} must equal only the exact "
-                f"current-consumer Decision recovery contract {exact_body!r}; "
+                f"reviewed progress/recovery contract {exact_body!r}; "
                 f"found {normalized!r}"
             )
 
@@ -8675,6 +8811,40 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "~\\E decision \\in decisions: "
                 "/\\ decision.node = node "
                 "/\\ decision.qc.context = context"
+            ),
+            "NoHigherPrepareOriginKnown": (
+                "/\\ ~\\E vote \\in prepareIntents: "
+                "/\\ vote.signer = node "
+                "/\\ vote.context = qc.context "
+                '/\\ vote.phase = "Prepare" '
+                "/\\ vote.view > qc.view "
+                "/\\ ~(highestRank[node] > qc.view)"
+            ),
+            "StrictSameRoundTcUpgrade": (
+                "/\\ tc.view + 1 = nodeView[node] "
+                "/\\ NodeInstalledTC(node, tc.view) "
+                "/\\ TcHighRank(tc) > highestRank[node] "
+                "/\\ TcHighRank(tc) > lockRank[node] "
+                "/\\ generation[node] < MaxGeneration"
+            ),
+            "ProposalJustified": (
+                "\\/ /\\ proposal.view = 0 "
+                "/\\ proposal.justifyRank = NoRank "
+                "/\\ proposal.justifySubject = context.parent "
+                "\\/ /\\ proposal.view > 0 "
+                "/\\ \\E installed \\in installedTCs: "
+                "/\\ installed.node = node "
+                "/\\ installed.tc.context = context "
+                "/\\ installed.tc.view + 1 = proposal.view "
+                "/\\ TcHighRank(installed.tc) = NoRank "
+                "/\\ TcHighSubject(installed.tc) = NoSubject "
+                "/\\ proposal.justifyRank = NoRank "
+                "/\\ proposal.justifySubject = NoSubject"
+            ),
+            "SafeToPrepare": (
+                "\\/ lockRank[node] = NoRank "
+                "\\/ /\\ proposal.view = lockRank[node] "
+                "/\\ proposal.subject = lockSubject[node]"
             ),
         }
         for symbol, exact_body in exact_core_operators.items():
@@ -8705,11 +8875,15 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ node \\in up "
                 "/\\ NodeIdle(node) "
                 "/\\ NoDecisionForNode(node) "
-                "/\\ roundView + 1 \\in Views"
+                "/\\ roundView + 1 \\in Views "
+                "/\\ TCValid(tc) "
+                "/\\ \\/ roundView >= nodeView[node] "
+                "\\/ StrictSameRoundTcUpgrade(node, tc)"
             ),
             "BeginInstallTC": (
                 "/\\ tc.view + 1 \\in Views "
-                "/\\ tc.view >= nodeView[node] "
+                "/\\ \\/ tc.view >= nodeView[node] "
+                "\\/ StrictSameRoundTcUpgrade(node, tc) "
                 "/\\ NodeIdle(node) "
                 "/\\ NoDecisionForNode(node) "
                 "/\\ pendingInstallTC' = pendingInstallTC \\cup {request}"
@@ -8735,12 +8909,38 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             if (
                 normalized.count("NoDecisionForNode(node)") != 1
                 or exact_guard_sequence not in normalized
-                or "\\/" in normalized
             ):
                 errors.append(
                     f"{core_path}:{line}: {symbol} must have one direct, "
-                    "non-disjunctive NoDecisionForNode guard in the reviewed "
+                    "NoDecisionForNode guard in the reviewed "
                     f"action prefix {exact_guard_sequence!r}"
+                )
+
+        persist_install = _top_level_operator_body(
+            core_source, "PersistInstallTC", preserve_string_contents=True
+        )
+        required_persist_install_fragments = (
+            "sameRoundUpgrade == StrictSameRoundTcUpgrade(node, tc)",
+            "/\\ \\/ tc.view >= nodeView[node] \\/ sameRoundUpgrade",
+            "IF sameRoundUpgrade THEN @ ELSE tc.view + 1",
+            "generation' = [generation EXCEPT ![node] = "
+            "IF @ < MaxGeneration THEN @ + 1 ELSE @]",
+        )
+        if persist_install is None:
+            errors.append(f"{core_path}: missing PersistInstallTC action")
+        else:
+            body, line = persist_install
+            normalized = " ".join(body.split())
+            missing = tuple(
+                fragment
+                for fragment in required_persist_install_fragments
+                if fragment not in normalized
+            )
+            if missing:
+                errors.append(
+                    f"{core_path}:{line}: PersistInstallTC must preserve the "
+                    "strict same-round high-QC lock-upgrade contract; missing "
+                    f"{missing!r}"
                 )
 
         exact_delivery_contracts = {
@@ -9803,7 +10003,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     )
     exact_progress_obligation = (
         "\\A initialContext: "
-        "AsyncProgressWitnessAndHistoricalRecoveryProperty( "
+        "AsyncProgressWitnessAndHistoricalRecoveryProperty("
         "AsyncSpecAt(initialContext))"
     )
     if progress_obligation is None:
@@ -9903,6 +10103,29 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "prepare_qc_split_tests",
         ),
     )
+    for helper_name, expected_sha256 in (
+        _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256.items()
+    ):
+        item = _require_rust_item(
+            integration_path, integration_source, helper_name, errors
+        )
+        _require_rust_item_context(
+            integration_path,
+            item,
+            (),
+            f"locked-Commit progress-witness helper {helper_name}",
+            errors,
+        )
+        if item is None:
+            continue
+        observed_sha256 = _rust_item_token_sha256(item)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{integration_path}:{item.line}: locked-Commit "
+                f"progress-witness helper {helper_name} must match exact "
+                f"reviewed token digest {expected_sha256}; found "
+                f"{observed_sha256}"
+            )
     for test_name, expected_sha256 in (
         _LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256.items()
     ):
@@ -16286,6 +16509,15 @@ let sign = adapter
     .validation_succeeded(fetch_tag, round, subject, &validated)
     .expect("validated TC lock crosses the historical Commit WAL boundary")
     .into_effects();
+let commit_round = wire::ConsensusRound {
+    view: fetch_tag.view(),
+    ..round
+};
+assert_eq!(
+    commit_round.view,
+    round.view + 1,
+    "the TC installs the successor finality view"
+);
 let commit_vote = match sign.as_slice() {
     [
         AdapterEffect::Sign {
@@ -16293,7 +16525,8 @@ let commit_vote = match sign.as_slice() {
             request: SignRequest::Vote(vote),
         },
     ] if *tag == fetch_tag
-        && vote.round == round
+        && vote.round == commit_round
+        && vote.proposal_round == round
         && vote.phase == wire::GlobalPhase::Commit
         && vote.subject == subject
         && vote.execution_commitment == execution_commitment
@@ -16310,7 +16543,7 @@ assert_eq!(
     "LockAndCommit must be fsynced before the adapter returns Sign"
 );
 assert_eq!(adapter.reducer.durable_state().last_id().get(), 3);
-let core_round = reducer::Round::new(round.height, round.view);
+let core_round = reducer::Round::new(commit_round.height, commit_round.view);
 let core_commit_vote = adapter
     .registry
     .vote_to_core(commit_vote, &adapter.wire_context)
@@ -16323,7 +16556,8 @@ assert_eq!(
 let status = adapter.status().expect("historical Commit status");
 assert!(status.liveness.outbound_intents.iter().any(|intent| {
     intent.kind == wire::SumeragiV2OutboundIntentKind::CommitVote
-        && intent.round == round
+        && intent.round == commit_round
+        && intent.proposal_round == Some(round)
         && intent.subject == Some(subject)
         && intent.execution_commitment == Some(execution_commitment)
         && intent.stage == wire::SumeragiV2OutboundIntentStage::PendingSignature
@@ -26791,8 +27025,8 @@ def _production_liveness_release_inventory_errors(
             f"{release_path}: production liveness source count must be sealed as "
             f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
         )
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 175:
-        errors.append("internal release-regression seal must contain exactly 175 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 207:
+        errors.append("internal release-regression seal must contain exactly 207 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -26805,7 +27039,7 @@ def _production_liveness_release_inventory_errors(
     if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
         errors.append(
             f"{release_path}: production liveness modules must equal the reviewed "
-            f"ordered twenty-four-module inventory; found {modules}"
+            f"ordered thirty-two-module inventory; found {modules}"
         )
     leg_ids = shell_array("production_liveness_leg_ids")
     expected_leg_ids = [
@@ -26814,7 +27048,7 @@ def _production_liveness_release_inventory_errors(
     if leg_ids != expected_leg_ids or len(set(leg_ids)) != len(leg_ids):
         errors.append(
             f"{release_path}: production module leg IDs must equal the reviewed "
-            f"twenty-four-entry inventory; found {leg_ids}"
+            f"thirty-two-entry inventory; found {leg_ids}"
         )
     for _, module, expected_count in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS:
         observed_count = sum(
@@ -26825,10 +27059,10 @@ def _production_liveness_release_inventory_errors(
                 f"{release_path}: production module {module} must contain exactly "
                 f"{expected_count} named tests; found {observed_count}"
             )
-    if source.splitlines().count("  readonly expected_corridor_leg_count=47") != 1:
+    if source.splitlines().count("  readonly expected_corridor_leg_count=55") != 1:
         errors.append(
             f"{release_path}: complete pre-network release corridor must remain "
-            "sealed at forty-seven legs"
+            "sealed at fifty-five legs"
         )
 
     expected_p2p_list = (
@@ -26866,6 +27100,46 @@ def _production_liveness_release_inventory_errors(
             f"{release_path}: irohad route-control discovery must use the exact "
             "test-network-message-control feature"
         )
+
+    expected_data_model_modules = [
+        "block::consensus_v2::finality::tests",
+        "offline::kagemusha_v4_topup_provenance_tests",
+        "block::consensus_v2::tests",
+    ]
+    if shell_array("production_data_model_modules") != expected_data_model_modules:
+        errors.append(
+            f"{release_path}: production data-model routing must name the exact "
+            "finality, offline compact-QC, and context-identity modules"
+        )
+    expected_data_model_list = (
+        'production_data_model_unit_list="$(cargo test --locked '
+        '-p iroha_data_model --lib -- --list)"'
+    )
+    expected_data_model_ignored_list = (
+        'production_data_model_ignored_unit_list="$(\n'
+        '  cargo test --locked -p iroha_data_model --lib -- --list --ignored\n'
+        ')"'
+    )
+    if source.count(expected_data_model_list) != 1 or source.count(
+        expected_data_model_ignored_list
+    ) != 1:
+        errors.append(
+            f"{release_path}: production data-model modules must use exact non-ignored "
+            "iroha_data_model library discovery"
+        )
+    for fragment in (
+        'if is_production_data_model_module "$required_test_module"; then',
+        'elif is_production_data_model_module "$module"; then',
+        'module_command="cargo test --locked -p iroha_data_model --lib '
+        '${module} -- --test-threads=1"',
+        'cargo test --locked -p iroha_data_model --lib "$module" '
+        '-- --test-threads=1',
+    ):
+        if source.count(fragment) != 1:
+            errors.append(
+                f"{release_path}: production data-model discovery/execution routing "
+                f"must contain exactly {fragment!r}"
+            )
 
     source_sealed_commands = (
         (
@@ -26905,6 +27179,7 @@ def _production_liveness_release_inventory_errors(
             assignments: dict[str, list[Any]] = {
                 "_PRODUCTION_TEST_COUNT": [],
                 "_PRODUCTION_MODULES": [],
+                "_DATA_MODEL_PRODUCTION_MODULES": [],
             }
             for statement in receipt_tree.body:
                 if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
@@ -26930,6 +27205,25 @@ def _production_liveness_release_inventory_errors(
                     f"{receipt_path}: production module receipt tuple must equal the "
                     "exact shell leg/module/count inventory"
                 )
+            if assignments["_DATA_MODEL_PRODUCTION_MODULES"] != [
+                tuple(expected_data_model_modules)
+            ]:
+                errors.append(
+                    f"{receipt_path}: production data-model receipt routing must "
+                    "equal the exact shell data-model module inventory"
+                )
+            expected_receipt_route = (
+                "if module in _DATA_MODEL_PRODUCTION_MODULES:\n"
+                "        return (\n"
+                '            "cargo test --locked -p iroha_data_model --lib "\n'
+                '            f"{module} -- --test-threads=1"\n'
+                "        )"
+            )
+            if receipt_source.count(expected_receipt_route) != 1:
+                errors.append(
+                    f"{receipt_path}: production data-model receipt legs must execute "
+                    "against the iroha_data_model library"
+                )
 
     for assignment in (
         'required_data_model_status_test="block::consensus_v2::tests::'
@@ -26949,16 +27243,16 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "inventories 406 named tests\nacross 24 Rust modules",
-            "all 47 pre-network legs and the exact\n406-test inventory",
+            "inventories 438 named tests\nacross 32 Rust modules",
+            "all 55 pre-network legs and the exact\n438-test inventory",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "release inventory names 406 tests across twenty-four Rust\nmodules",
-            "pre-network corridor\nnow has 47 legs",
+            "release inventory names 438 tests across thirty-two Rust\nmodules",
+            "pre-network corridor\nnow has 55 legs",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
             "module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic\n"
-            "lane-certificate contracts bring the aggregate pre-network corridor to 47\n"
+            "lane-certificate contracts bring the aggregate pre-network corridor to 55\n"
             "legs",
         ),
     }

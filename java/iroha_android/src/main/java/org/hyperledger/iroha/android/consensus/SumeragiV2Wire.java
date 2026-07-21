@@ -334,6 +334,7 @@ public final class SumeragiV2Wire {
   /** Prepare or Commit vote. */
   public static final class Vote extends WireValue {
     public final ConsensusRound round;
+    public final ConsensusRound proposalRound;
     public final GlobalPhase phase;
     public final BlockSubject subject;
     public final ExecutionCommitment executionCommitment;
@@ -342,12 +343,14 @@ public final class SumeragiV2Wire {
 
     public Vote(
         ConsensusRound round,
+        ConsensusRound proposalRound,
         GlobalPhase phase,
         BlockSubject subject,
         ExecutionCommitment executionCommitment,
         long signer,
         byte[] signature) {
       this.round = nonNull(round, "round");
+      this.proposalRound = nonNull(proposalRound, "proposalRound");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
@@ -364,6 +367,7 @@ public final class SumeragiV2Wire {
     public byte[] encode() {
       return struct(
           round.encode(),
+          proposalRound.encode(),
           phase.encode(),
           subject.encode(),
           executionCommitment.encode(),
@@ -376,6 +380,7 @@ public final class SumeragiV2Wire {
       Vote value =
           new Vote(
               reader.field("vote round", ConsensusRound::decode),
+              reader.field("vote proposal round", ConsensusRound::decode),
               reader.field("vote phase", GlobalPhase::decode),
               reader.field("vote subject", BlockSubject::decode),
               reader.field("vote execution commitment", ExecutionCommitment::decode),
@@ -389,16 +394,19 @@ public final class SumeragiV2Wire {
   /** Stable reference to a full quorum certificate. */
   public static final class QuorumCertificateRef extends WireValue {
     public final ConsensusRound round;
+    public final ConsensusRound proposalRound;
     public final GlobalPhase phase;
     public final BlockSubject subject;
     public final ExecutionCommitment executionCommitment;
 
     public QuorumCertificateRef(
         ConsensusRound round,
+        ConsensusRound proposalRound,
         GlobalPhase phase,
         BlockSubject subject,
         ExecutionCommitment executionCommitment) {
       this.round = nonNull(round, "round");
+      this.proposalRound = nonNull(proposalRound, "proposalRound");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
@@ -406,7 +414,12 @@ public final class SumeragiV2Wire {
 
     @Override
     public byte[] encode() {
-      return struct(round.encode(), phase.encode(), subject.encode(), executionCommitment.encode());
+      return struct(
+          round.encode(),
+          proposalRound.encode(),
+          phase.encode(),
+          subject.encode(),
+          executionCommitment.encode());
     }
 
     static QuorumCertificateRef decode(byte[] bytes) {
@@ -414,6 +427,7 @@ public final class SumeragiV2Wire {
       QuorumCertificateRef value =
           new QuorumCertificateRef(
               reader.field("qc ref round", ConsensusRound::decode),
+              reader.field("qc ref proposal round", ConsensusRound::decode),
               reader.field("qc ref phase", GlobalPhase::decode),
               reader.field("qc ref subject", BlockSubject::decode),
               reader.field("qc ref execution commitment", ExecutionCommitment::decode));
@@ -425,6 +439,7 @@ public final class SumeragiV2Wire {
   /** Aggregate Prepare or Commit certificate. */
   public static final class QuorumCertificate extends WireValue {
     public final ConsensusRound round;
+    public final ConsensusRound proposalRound;
     public final GlobalPhase phase;
     public final BlockSubject subject;
     public final ExecutionCommitment executionCommitment;
@@ -433,12 +448,14 @@ public final class SumeragiV2Wire {
 
     public QuorumCertificate(
         ConsensusRound round,
+        ConsensusRound proposalRound,
         GlobalPhase phase,
         BlockSubject subject,
         ExecutionCommitment executionCommitment,
         List<Long> signers,
         byte[] aggregateSignature) {
       this.round = nonNull(round, "round");
+      this.proposalRound = nonNull(proposalRound, "proposalRound");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
@@ -452,13 +469,15 @@ public final class SumeragiV2Wire {
     }
 
     public QuorumCertificateRef reference() {
-      return new QuorumCertificateRef(round, phase, subject, executionCommitment);
+      return new QuorumCertificateRef(
+          round, proposalRound, phase, subject, executionCommitment);
     }
 
     @Override
     public byte[] encode() {
       return struct(
           round.encode(),
+          proposalRound.encode(),
           phase.encode(),
           subject.encode(),
           executionCommitment.encode(),
@@ -471,6 +490,7 @@ public final class SumeragiV2Wire {
       QuorumCertificate value =
           new QuorumCertificate(
               reader.field("qc round", ConsensusRound::decode),
+              reader.field("qc proposal round", ConsensusRound::decode),
               reader.field("qc phase", GlobalPhase::decode),
               reader.field("qc subject", BlockSubject::decode),
               reader.field("qc execution commitment", ExecutionCommitment::decode),
@@ -1484,18 +1504,21 @@ public final class SumeragiV2Wire {
   /** Partial dual-quorum state for one exact proposal round. */
   public static final class VoteQuorumStatus extends WireValue {
     public final ConsensusRound round;
+    public final ConsensusRound proposalRound;
     public final BlockSubject subject;
     public final ExecutionCommitment executionCommitment;
     public final long signerCount;
     public final long signedPower;
     public final long minSigners;
     public final long totalPower;
-    public VoteQuorumStatus(ConsensusRound round, BlockSubject subject,
+    public VoteQuorumStatus(ConsensusRound round, ConsensusRound proposalRound,
+        BlockSubject subject,
         ExecutionCommitment executionCommitment, long signerCount, long signedPower,
         long minSigners, long totalPower) {
       requireU32(signerCount, "signerCount");
       requireU32(minSigners, "minSigners");
       this.round = nonNull(round, "round");
+      this.proposalRound = nonNull(proposalRound, "proposalRound");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
       this.signerCount = signerCount;
@@ -1504,13 +1527,15 @@ public final class SumeragiV2Wire {
       this.totalPower = totalPower;
     }
     @Override public byte[] encode() {
-      return struct(round.encode(), subject.encode(), executionCommitment.encode(),
-          u32(signerCount), u64(signedPower), u32(minSigners), u64(totalPower));
+      return struct(round.encode(), proposalRound.encode(), subject.encode(),
+          executionCommitment.encode(), u32(signerCount), u64(signedPower), u32(minSigners),
+          u64(totalPower));
     }
     static VoteQuorumStatus decode(byte[] bytes) {
       Reader reader = new Reader(bytes);
       VoteQuorumStatus value = new VoteQuorumStatus(
           reader.field("liveness vote round", ConsensusRound::decode),
+          reader.field("liveness vote proposal round", ConsensusRound::decode),
           reader.field("liveness vote subject", BlockSubject::decode),
           reader.field("liveness vote execution", ExecutionCommitment::decode),
           reader.field("liveness vote signer count", SumeragiV2Wire::decodeU32),
@@ -1590,19 +1615,51 @@ public final class SumeragiV2Wire {
   public static final class OutboundIntentStatus extends WireValue {
     public final OutboundIntentKind kind;
     public final ConsensusRound round;
+    public final ConsensusRound proposalRound;
     public final BlockSubject subject;
     public final ExecutionCommitment executionCommitment;
     public final OutboundIntentStage stage;
     public OutboundIntentStatus(OutboundIntentKind kind, ConsensusRound round,
-        BlockSubject subject, ExecutionCommitment executionCommitment, OutboundIntentStage stage) {
+        ConsensusRound proposalRound, BlockSubject subject,
+        ExecutionCommitment executionCommitment, OutboundIntentStage stage) {
       this.kind = nonNull(kind, "kind");
       this.round = nonNull(round, "round");
+      this.proposalRound = proposalRound;
       this.subject = subject;
       this.executionCommitment = executionCommitment;
       this.stage = nonNull(stage, "stage");
+      boolean shapeIsValid;
+      switch (kind) {
+        case PROPOSAL:
+          shapeIsValid = proposalRound != null && subject != null && executionCommitment == null;
+          break;
+        case TIMEOUT_VOTE:
+        case TIMEOUT_CERTIFICATE:
+          shapeIsValid = proposalRound == null && subject == null && executionCommitment == null;
+          break;
+        default:
+          shapeIsValid = proposalRound != null && subject != null && executionCommitment != null;
+          break;
+      }
+      require(shapeIsValid, "Invalid outbound intent shape for " + kind);
+      if (proposalRound != null) {
+        require(proposalRound.contextId.equals(round.contextId)
+                && proposalRound.height == round.height,
+            "Outbound intent proposal round must share context and height");
+        require(proposalRound.view <= round.view,
+            "Outbound intent proposal round cannot be in a later view");
+        if (kind == OutboundIntentKind.PROPOSAL
+            || kind == OutboundIntentKind.PREPARE_VOTE
+            || kind == OutboundIntentKind.PREPARE_QC) {
+          require(proposalRound.equals(round),
+              "Prepare/proposal outbound intent origin must match its round");
+        }
+      }
     }
     @Override public byte[] encode() {
-      return struct(kind.encode(), round.encode(), option(subject == null ? null : subject.encode()),
+      return struct(kind.encode(), round.encode(),
+          option(proposalRound == null ? null : proposalRound.encode()),
+          option(subject == null ? null : subject.encode()),
           option(executionCommitment == null ? null : executionCommitment.encode()), stage.encode());
     }
     static OutboundIntentStatus decode(byte[] bytes) {
@@ -1610,6 +1667,8 @@ public final class SumeragiV2Wire {
       OutboundIntentStatus value = new OutboundIntentStatus(
           reader.field("liveness outbound kind", OutboundIntentKind::decode),
           reader.field("liveness outbound round", ConsensusRound::decode),
+          reader.field("liveness outbound proposal round",
+              data -> decodeOption(data, ConsensusRound::decode)),
           reader.field("liveness outbound subject", data -> decodeOption(data, BlockSubject::decode)),
           reader.field("liveness outbound execution", data -> decodeOption(data, ExecutionCommitment::decode)),
           reader.field("liveness outbound stage", OutboundIntentStage::decode));

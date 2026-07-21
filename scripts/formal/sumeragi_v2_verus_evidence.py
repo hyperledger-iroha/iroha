@@ -31,7 +31,7 @@ from compute_workspace_source_manifest import workspace_source_manifest  # noqa:
 SCHEMA_VERSION = 2
 EXPECTED_VERUS_VERSION = "0.2026.05.31.5dd6d83"
 EXPECTED_DEPENDENCY_VERIFIED = 1690
-EXPECTED_ROOT_VERIFIED = 126
+EXPECTED_ROOT_VERIFIED = 127
 EXPECTED_LOG_PATH = "target/formal/sumeragi_v2/verus.log"
 EXPECTED_INVOCATION = (
     "bash",

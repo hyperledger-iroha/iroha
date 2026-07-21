@@ -15,23 +15,34 @@ total voting power, and `w(S)` the power of signer set `S`. A dual quorum `Q`
 satisfies both `3|Q| > 2n` and `3w(Q) > 2P`. The Byzantine set `B` satisfies
 `3|B| < n` and `3w(B) < P`.
 
-Every signature binds the chain, protocol, height-context ID, height, view,
-phase, and subject through its canonical preimage. Correct validators obey the
-durable rules enforced by the reducer and WAL:
+Every Vote and QC signature binds the chain, protocol, height-context ID,
+certification round, immutable `proposal_round`, phase, subject, and execution
+commitment through its canonical preimage. Prepare evidence requires
+`proposal_round == round`. Commit evidence requires the same context and height
+and `proposal_round.view <= round.view`. The reducer lifecycle owner
+`(height, view, generation)` is separate local authorization and is not signed
+as either wire round. Correct validators obey the durable rules enforced by the
+reducer and WAL:
 
 1. they sign at most one Prepare and one Commit per `(context, view, phase)`;
 2. they store and deterministically validate the exact body before persisting
    and signing Prepare;
 3. they atomically persist a PrepareQC lock and Commit intent before signing
-   Commit;
+   Commit; the lock retains the PrepareQC origin while the Commit intent may
+   use a later finality round;
 4. a durable timeout intent prevents later Proposal or Prepare signing and
    ordinary creation of a new Commit intent in that view; after a TC durably
    promotes its selected PrepareQC to the exact active lock, local durable body
-   validation may persist that one historical Commit only if no higher
-   conflicting-subject local Prepare intent or known PrepareQC exists; an
+   validation may persist one later-finality Commit for that historical origin only if no higher
+   proposal-origin local Prepare intent or known PrepareQC exists, including one
+   for the same subject bytes; an
    already-durable Commit may be re-signed or retransmitted only while its
-   round and subject remain the exact active lock;
+   `proposal_round` and subject remain the exact active lock; among durable
+   Commit intents for that origin, only the greatest finality round is active;
 5. a TC is durable before view entry, and a decision is durable before apply;
+   a second TC for the immediately preceding timed-out round may be installed
+   without another view advance only when its selected Prepare origin strictly
+   exceeds both the installed high and lock;
 6. a lock is retained for the same subject and can change subject only through
    a strictly higher PrepareQC; and
 7. crash/restart preserves every complete WAL frame and discards volatile
@@ -43,7 +54,9 @@ work assumptions are the trusted contracts stated in the protocol document.
 The local-work contract is quantified only over validator hosts admitted by
 the first-release storage-platform gate. An unsupported-platform failure is
 not successful termination and cannot discharge application or
-successor-activation fairness.
+successor-activation fairness. Revision 3 has no legacy decoder premise: a
+Vote, QC, status record, or finality artifact without its canonical signed
+proposal origin is rejected.
 
 ## Quorum lemmas
 
@@ -78,11 +91,12 @@ signer; consequently every CommitQC does too.
 
 A PrepareQC contains a dual quorum and therefore at least one correct signer.
 By rule 2, each correct Prepare signer had the exact hash-matching body durably
-stored and validated before releasing its signature. Correct signers retain
-and serve that body. A Commit vote requires the same validated body and its
-PrepareQC, so a CommitQC inherits the claim. Thus a node that records a
-decision without the body can fetch the exact body from certified sources;
-hash comparison prevents substitution.
+stored and validated at the Prepare `proposal_round` before releasing its
+signature. Correct signers retain and serve that body. A Commit vote requires
+the same locked proposal origin, validated body, and PrepareQC, so a CommitQC
+inherits the claim even when its certification round is later. Thus a node
+that records a decision without the body can fetch the exact proposal origin
+from certified sources; hash and origin comparison prevent substitution.
 
 **Lemma 5 (lock monotonicity).** For a fixed height, a correct validator's lock
 rank never decreases, and its locked subject changes only at a strictly higher
@@ -98,17 +112,18 @@ context rather than mutating the old height's lock.
 
 **Lemma 6 (a formed TC either directly protects or intersects durable
 installed-TC authorization for every still-formable old CommitQC).** Consider
-a subject `x` at view `r` whose durable Commit-intent signers form a dual quorum
-`C`. Let a TC for a view `v >= r` have signer union `T`.
+a subject `x` with immutable proposal origin `p` whose durable Commit-intent
+signers form a dual quorum `C` at finality round `r >= p`. Let a TC for a view
+`v >= r` have signer union `T`.
 
 By the quorum lemmas, `C ∩ T` contains a correct validator `h`. If `h`'s
 timeout vote strictly protects its Commit intent, the TC's maximum semantic
-high-QC selection lifts that local fact to direct protection of `(r, x)`: its
-selected rank is at least `r`, and equality binds subject `x`. If the timeout
+high-QC selection lifts that local fact to direct protection of `(p, x)`: its
+selected rank is at least `p`, and equality binds subject `x`. If the timeout
 does not strictly protect the Commit, the Commit can only be the narrow
 late-created historical-lock exception. The durable provenance invariant then
 supplies an installed TC whose selected PrepareQC exactly authorizes `h`'s
-Commit round and subject. The authorizing installed TC is not required to be
+Commit proposal origin and subject. The authorizing installed TC is not required to be
 later than the formed TC being examined. The timeout signer sets are disjoint
 and their union is the quorum `T`, so grouping does not change the
 intersection argument.
@@ -117,33 +132,40 @@ An old CommitQC already formed before the TC remains directly decisive.
 Ordinary Commit-intent growth remains timeout-fenced. The sole late-growth
 case is the TC's exact selected PrepareQC: installation durably records that
 provenance and promotes the matching lock, body validation terminates, and the
-node has no higher conflicting-subject Prepare intent or known PrepareQC.
-Higher same-subject reproposals are harmless. The grouped-timeout set kernel is
-machine-checked for intents already present at timeout. The temporal induction
-which retains installed-TC authorization for the late exact intent, and the
-dependent direct-or-installed-authorization wrapper, are also ledgered
-`tlaps_proved` after their current strict proof closure succeeded.
+node has no higher proposal-origin Prepare intent or known PrepareQC, including
+one for the same subject bytes. The
+node signs that origin directly in its active finality round; it does not
+re-propose the same bytes. The grouped-timeout set kernel is
+machine-checked for intents already present at timeout. The earlier temporal
+induction for installed-TC authorization and its dependent wrapper was proved
+for the superseded transition relation. The stronger higher-origin fence and
+strict same-round TC lock-upgrade action have not received a fresh strict run,
+so the current ledger records this obligation as `specified_unproved`.
 
 ## Agreement and chain prefix
 
 **Theorem 1 (agreement).** Two valid CommitQCs in one height context cannot
 certify different subjects.
 
-Assume for contradiction that `CommitQC(x, r)` and `CommitQC(y, s)` exist with
-`x != y`; choose such a pair with the smallest later view `s`, and take
-`r <= s`. Lemma 3 rules out `r = s`. The earlier CommitQC gives a dual quorum
-of durable locks on `x` at rank `r`. Lemma 6 does not falsely infer that every
-older TC's own high protects a Commit created later. It instead preserves the
-two proof routes required by the durable lineage invariant: direct high-QC
-protection, or an honest intersection signer whose exact late Commit remains
-authorized by an installed TC selecting the same Prepare lock.
+Assume for contradiction that `CommitQC(x, r, p)` and `CommitQC(y, s, q)` exist
+with `x != y`, where `r` and `s` are finality rounds and `p <= r`, `q <= s` are
+their proposal origins. Order the pair by proposal rank and choose a
+counterexample with the smallest later origin `q`, taking `p <= q`. If
+`p = q`, the underlying PrepareQCs conflict in one proposal round, contradicting
+Lemma 3. The `x` CommitQC gives a dual quorum of durable locks on `x` at rank
+`p`. Lemma 6 does not falsely infer that every older TC's own high protects a
+Commit created later. It instead preserves the two proof routes required by
+the durable lineage invariant: direct high-QC protection, or an honest
+intersection signer whose later-finality Commit remains authorized by an
+installed TC selecting the same proposal-origin lock.
 
 For a correct validator from the intersection of the earlier Commit quorum and
-the Prepare quorum underlying `CommitQC(y, s)` to Prepare `y`, its proposal
-must carry a PrepareQC for `y` strictly above its `x` lock. Select the first
+the Prepare quorum at origin `q` underlying `CommitQC(y, s, q)` to Prepare `y`,
+its justification must carry a PrepareQC for `y` strictly above its `x` lock.
+Select the first
 such conflicting PrepareQC. Its own correct intersection validator can change
 from `x` only using an even earlier strictly higher conflicting PrepareQC.
-That is a smaller conflicting view above `r`, contradicting minimality.
+That is a smaller conflicting proposal view above `p`, contradicting minimality.
 Therefore no conflicting PrepareQC, and hence no conflicting CommitQC, exists.
 
 **Corollary 1 (decision agreement).** Persisting a CommitQC cannot create two
@@ -155,10 +177,11 @@ prefix comparable.
 
 The canonical slot `h + 1` is certified only from the exact durable decision
 carrying a valid CommitQC for the canonical height-`h` context. Its identity
-binds the chain, epoch, roster, lane/DA inputs, and semantic parent. Different
-valid CommitQC views, aggregate signatures, or signer subsets for that same
-semantic parent intentionally produce the same next context; a different
-parent produces a different context ID. Each correct validator advances only
+binds the chain, epoch, roster, lane/DA inputs, semantic parent, and immutable
+proposal origin. Different valid CommitQC finality views, aggregate signatures,
+or signer subsets for that same proposal-origin decision intentionally produce
+the same next context; another proposal origin or parent produces a different
+context ID. Each correct validator advances only
 after its own exact application receipt. It may lag, but another validator's
 receipt cannot advance it. Theorem 1 plus induction over these receipt-backed
 slots therefore makes all correct local histories prefix comparable without a
@@ -178,9 +201,18 @@ opens. Earlier corruption, a broken hash chain, or a chain/protocol/key mismatch
 fails closed. Generation tags reject completions from the crashed incarnation.
 The replay transition checks the same uniqueness and monotonicity predicates as
 the live transition. Prepare replay remains current-view and timeout-fenced.
-Commit replay may cross that timeout or a later installed TC only for the exact
-durable vote at the active lock's round and subject; it cannot authorize an
-unlocked historical Commit intent.
+Commit replay may cross that timeout or a later installed TC only for the
+newest durable vote whose `proposal_round` and subject equal the active lock;
+its finality round may be later. It cannot authorize an unlocked historical
+Commit intent.
+
+The executable refinement gate does not authorize this by comparing only
+effect-shaped values. Its pending projection binds the WAL record's primary
+proposal origin, and records with embedded Prepare evidence also bind that
+certificate's auxiliary proposal origin. Begin and acknowledgement boundaries,
+the requested persistence capability, and the independently reconstructed
+grant all match those fields to the pending record. A correlated mutation of
+requested and granted origins therefore still violates refinement.
 
 **Theorem 3 (epoch-boundary safety).** Certificates from one epoch cannot vote
 in another, and a roster/power change cannot invalidate an earlier decision.
@@ -218,36 +250,52 @@ pool. An exact vote already present in that pool is suppressed. Persisting a TC
 clears only the installing node's pool and advances its reducer generation
 (until the finite model's generation bound). At that acknowledgement boundary,
 the reducer compares the resulting lock with its durable Commit intents. An
-exact match is queued for re-signing. A newly TC-promoted lock without an
-intent never signs merely from installation. Its exact body recovery and
-current-generation validation schedule `BeginLockCommit`; only the matching
-historical WAL acknowledgement may then release the signature, and only when
-no higher conflicting-subject local Prepare intent or known PrepareQC exists.
+exact proposal-origin/subject match selects the greatest durable Commit
+finality round and queues only that intent for re-signing. A newly TC-promoted
+lock without an intent never signs merely from installation. Its exact body
+recovery and current-generation validation schedule `BeginLockCommit` for the
+active finality round while retaining the old proposal origin; only the
+matching WAL acknowledgement may then release the signature, and only when no
+higher proposal-origin local Prepare intent or known PrepareQC exists, including
+one for the same subject bytes.
 Completing the signature inserts the vote directly into the installing node's
-new pool, then broadcasts only to the other voters because the P2P broadcast
-does not deliver to its sender.
+new finality pool, then broadcasts only to the other voters because the P2P
+broadcast does not deliver to its sender.
 
 Every Commit vote, including one from the current view, is admissible only when
-its round and subject equal the active durable Prepare lock. A premature
-current-view Commit is a recoverable ignore. When the matching
-`LockAndCommit` acknowledgement applies a newer lock, the reducer then prunes
-the superseded historical pool before releasing the local Commit signature;
-pruning earlier would orphan the old reconstruction source if persistence
-failed. The adapter advances the locked-Commit consumer epoch at that boundary,
-so the ignored exact vote may enter once after authority exists. Thus the
-bounded live set is current Prepare plus either the historical locked Commit or
-the current locked Commit, never all three.
+its `proposal_round` and subject equal the active durable Prepare lock. A
+premature current-view Commit is a recoverable ignore. When the matching
+`LockAndCommit` acknowledgement makes a later-finality same-origin intent
+durable, the reducer prunes every older finality pool before releasing the
+local Commit signature; pruning earlier would orphan the old reconstruction
+source if persistence failed. The adapter advances the locked-Commit consumer
+epoch at that boundary, so the ignored exact vote may enter once after
+authority exists. Thus the bounded live set is current Prepare plus only the
+latest durable Commit finality pool for the locked origin.
 
 Retained signed Commit control remains the peer-delivery source, but cannot by
 itself witness local reconstruction because broadcast excludes its sender. A
-retransmitted historical Commit which matches the exact lock is classified as
+retransmitted Commit whose proposal origin matches the exact lock is classified as
 protected progress and consumes each peer's new pool epoch exactly once.
-Prepare votes and unrelated old Commit votes remain inadmissible. If a crash
+Prepare votes, unrelated proposal origins, and superseded Commit finality votes
+remain inadmissible. If a crash
 happened after the Commit intent became durable but before its signature or
 broadcast, `ResumeVote` reconstructs that same exact locked Commit even after
 the timeout or TC. The distinct validation path above may create the missing
-exact intent, but replay never invents one without its preceding installed-TC
-lock and acknowledged `LockAndCommit` frame.
+later-finality intent, but replay never invents one without its preceding
+installed-TC lock and acknowledged `LockAndCommit` frame. Equal body bytes at a
+later proposal origin are rejected; progress commits the installed origin
+directly rather than re-proposing it.
+
+The source-shared `locked_commit_progress_witness_body!` kernel covers the
+validation/timeout serialization race explicitly. A validated undecided lock
+has one of three exact owners: an active durable Commit with its signature or
+local-pool owner, the pending matching `LockAndCommit`, or an acknowledged
+timeout for the current view when the lock origin is historical. The timeout
+branch is recovery-only and cannot authorize a post-timeout Commit. Its Rust
+mutation regression rejects stale, wrong-signer, volatile-only, and non-exact
+projections; `locked_commit_progress_witness_is_valid` mirrors the same
+expression in Verus.
 
 **Lemma 8 (bounded scheduler and transport service).** A Byzantine flood cannot
 starve an authenticated responsive source or an admitted progress/completion
@@ -363,8 +411,9 @@ cannot reset the causal owner's position.
 
 An individual signed Vote cannot establish its own execution-commitment
 authority. It is serviceable only after a local validated receipt, verified WAL
-replay, or quorum-authenticated QC binds the exact round and subject; an unbound
-Vote is rejected recoverably until that binding arrives. Body-availability
+replay, or quorum-authenticated QC binds the exact proposal origin, finality
+round, subject, and execution commitment; an unbound Vote is rejected
+recoverably until that binding arrives. Body-availability
 rebind first requires the installed destination tag and preflights both source
 and destination owners. An uninstalled destination is a non-mutating recoverable
 caller error, one exact destination coalesces, and conflicting or duplicate
@@ -439,21 +488,28 @@ active, then requires that leader state to lead to all responsive decisions.
 Deterministic roster rotation supplies such a leader within one complete
 rotation.
 If an omitted lock prevents that first candidate round, Lemma 10 makes it known
-during the round's timeout, after which the next responsive correct leader
-proposes the selected safe subject. The responsive quorum obtains, stores, and
-validates the exact body before Prepare; forms and disseminates PrepareQC;
-atomically locks and persists Commit intents; and forms CommitQC within the
-timeout. Each node persists the decision, fetches the certified manifest and
+during the round's timeout. A selected PrepareQC installs its immutable
+proposal origin on the responsive quorum, which signs Commit for that lock in
+the active finality round without creating another proposal. A Timeout-justified
+Proposal carrying any selected PrepareQC is structurally invalid; the TC instead
+travels through the ordinary durable installation path above. Only if the TC has
+no selected PrepareQC may the next responsive correct leader propose while
+unlocked. The responsive quorum obtains, stores, and validates the exact body
+before Prepare; forms and disseminates PrepareQC; atomically locks and persists
+Commit intents; and forms CommitQC within the timeout. Each node persists the
+decision, fetches the certified manifest and
 chunks if needed, reconstructs and validates the exact body, applies it, and
 advances its own height. None of these local transitions waits for every other
 correct node.
 
-The mechanization records the missing step explicitly as
-`LockedBodyReproposalProgressObligation`: a stable available retained lock must
-eventually commit in its original round, be reproposed unchanged in a later
-round, or be legitimately decided/superseded by a higher certified Prepare
-lock. It sits between timeout/view and rotating-leader progress and remains
-`specified_unproved`; view movement or byte retention alone is not an outcome.
+The mechanization records the missing step under the legacy symbol
+`LockedBodyReproposalProgressObligation`. Its first-release obligation is
+locked-origin direct-commit progress: a stable available retained lock must
+eventually be committed with its original `proposal_round`, be decided, or be
+legitimately superseded by a higher certified Prepare lock. Equal bytes cannot
+be re-proposed at a later origin. The symbol must be restated and rerun before
+formal promotion; it remains `specified_unproved`, and view movement or byte
+retention alone is not an outcome.
 
 The application property is quantified per responsive validator: after GST,
 one validator's durable decision leads to that validator's application even
@@ -625,15 +681,17 @@ weakened claim or theorem, unreviewed helper theorem, duplicate TLC-only
 variable tuple, or alternate TLC fairness relation. The complete Core `Next`
 relation is not embedded in every `WF` target, because that redundant search
 causes TLC to test unrelated conflicting Core branches during `ENABLED`.
-This promotes `async-fair-action-refinement` to `tlaps_proved`. Independently,
-the post-Decision timeout frontier and exact durable Commit-Decision recovery
-lifecycle described below are also `tlaps_proved`.
+This historically promoted `async-fair-action-refinement` to `tlaps_proved`.
+Independently, the post-Decision timeout frontier and exact durable
+Commit-Decision recovery lifecycle described below were also proved for that
+superseded transition relation.
 The abstract protected-rank prerequisites are separately ledgered as
 `async-progress-ownership-invariant`,
 `protected-service-rank-stage4-ready-causal`,
 `protected-service-rank-serve-fifo`, and
-`protected-service-rank-stage5-consensus-fifo`. All four are now
-`tlaps_proved`. Fresh strict `--nofp` theorem-range runs under pinned TLAPM
+`protected-service-rank-stage5-consensus-fifo`. All four were
+`tlaps_proved` before the Core/Async transition change. Fresh strict `--nofp`
+theorem-range runs under pinned TLAPM
 `3ab43c7`, against
 `SumeragiV2AsyncLivenessProofs.tla` SHA-256
 `2fe00973f8f983fd7682667baadbccbbe422a6c34dec02205cfe9cfe697f95ec`,
@@ -641,14 +699,15 @@ proved the complete selected obligations: progress ownership at lines
 33324--33348 (15/15), Serve FIFO at 42007--42049 (15/15), Stage 4 at
 46313--46342 (9/9), and Stage 5 at 46344--46373 (9/9). Each invocation exited
 zero. Declaration-only `--line` attempts selected zero obligations and exited
-12; they were rejected rather than counted as evidence. Progress ownership
-consumes the proved async type closure; Stage 4 and Stage 5 additionally
-consume progress ownership, while all three rank leaves consume their exact
-proved fair-action prerequisites. The aggregate
+12; they were rejected rather than counted as evidence. Those receipts are
+historical: progress ownership consumed the then-proved async type closure;
+Stage 4 and Stage 5 additionally consumed progress ownership, while all three
+rank leaves consumed their exact fair-action prerequisites. The aggregate
 `protected-service-rank` obligation waits for every leaf, while production
 admission, runtime, ingress, and actor-to-flush ownership remain outside these
-abstract results. The 54-entry ledger contains 33 `tlaps_proved`, 14
-`specified_unproved`, 6
+abstract results. After invalidating proofs whose statements quantify over the
+changed Core/Async transition relation, the 54-entry ledger contains 10
+`tlaps_proved`, 37 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries, so
 `machine_checked_completion` remains false.
 
@@ -681,8 +740,9 @@ scheduler-only deadlock claim accepts a bare tick, whereas the productive claim
 rejects it until a concrete deadline, evidence, or rank repair exists. The
 productive release obligation remains `specified_unproved`. The production
 trace replayer and adversarial simulations exercise the exact reducer sources,
-while the pinned Verus harness
-proves the source-linked reducer/WAL and scheduler kernels. The
+while an older pinned Verus receipt proves only the source-linked reducer/WAL
+and scheduler kernels that it actually hashed. That receipt predates the
+proposal-origin changes and was not rerun for the current source. The
 remaining cryptographic, deterministic-execution, operating-system durability,
 post-GST transport, and host-service premises are listed explicitly in the
 ledger and formal README.
@@ -778,7 +838,7 @@ work before handoff. Manual or otherwise untyped `Exact` output remains owned
 and fails closed. These source contracts do not promote the application,
 reconstruction-refinement, or starvation obligations.
 
-The current pre-network release inventory names 406 tests across twenty-four Rust
+The current pre-network release inventory names 438 tests across thirty-two Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -788,13 +848,16 @@ distinct/cross-kind broadcast-residual and subscriber-backlog tests, and 1
 runtime/Busy-deferred exact CommitQC coalescing test, plus 4 Nexus lane-relay
 ownership/fairness tests. Removing the obsolete adapter cursor alias and two
 superseded network broadcast-residual tests yielded the net delta of 34.
-Relative to the resulting 298-name inventory, the current closure adds 110
-exact tests and removes two superseded names, for a net increase of 108 and an
-exact total of 406. The additions cover semantic request identity, independent
-per-source routes/cursors, writer-flush identity, sidecar source isolation,
-runner/worker route retention, daemon Hold/Release failure handling,
-actor-global deferred capabilities, scheduler ownership handoff, and typed
-fail-closed ordinal/debt boundaries.
+Relative to the resulting 298-name inventory, the current closure has a net
+increase of 140 and an exact total of 438. The additions cover semantic request
+identity, independent per-source routes/cursors, writer-flush identity, sidecar
+source isolation, runner/worker route retention, daemon Hold/Release failure
+handling, actor-global deferred capabilities, scheduler ownership handoff, and
+typed fail-closed ordinal/debt boundaries.
+The proposal-origin regressions additionally bind reducer and deferred
+identities, equivocation evidence, aggregate signatures, finality/header
+geometry, compact offline QCs, and parent height-context identity to the signed
+origin.
 They are local ownership and reconstruction
 contracts, not remote application acknowledgement, relay second-hop
 completion, or unbounded broadcast admission. The 264-name baseline added 32
@@ -807,10 +870,12 @@ owners (`4N+2` total), including a roster-origin completion relayed through an
 untrusted authenticated hop, and retains the capacity-negative boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 47 legs, including separate exact data-model status and atomic
-lane-certificate decode contracts. Its `iroha_p2p` legs use the crate's empty
+now has 55 legs, including separate exact data-model status and atomic
+lane-certificate decode contracts. Its finality, offline compact-QC, and
+height-context proposal-origin modules each use a dedicated `iroha_data_model`
+leg. Its `iroha_p2p` legs use the crate's empty
 default feature set; feature-gated QUIC first-packet geometry tests are not
-claimed by the twenty-four-module, forty-seven-leg corridor. It includes
+claimed by the thirty-two-module, fifty-five-leg corridor. It includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
@@ -829,17 +894,27 @@ request registration can retire the old request; durable reducer
 retransmission then reconstructs the blocked Fetch and lets it acquire both
 owners atomically. The
 preceding mutable-source discovery and direct execution evidence covered the
-earlier 168-name inventory. Fresh 406-name
+earlier 168-name inventory. Fresh 438-name
 discovery/execution and the clean committed, detached, source-sealed serial
 release leg remain pending. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
 inventory presence nor regression evidence is a machine proof.
+For the current proposal-origin source, the isolated source-shared harness
+passed 118/118 reducer/WAL/refinement tests and all 8 model-trace replay tests;
+fast-network passed all 9 named simulations. The 2026-07-21 100,000-height
+permissioned/NPoS chaos run completed both 50,000-height prefixes, 400,000
+validator finalizations, and zero failures in 91.29 seconds. These mutable-tree
+results are implementation evidence only. The pinned Verus receipt predates
+the proposal-origin changes and was not rerun, so it does not discharge the
+changed source-shared obligations.
 The Core delivery relation and normalized trace replay match exact-lock
 admission and post-WAL pruning. A recorded pre-current-edit strict run
-discharged all 7,826 induction obligations and all 565 downstream Core safety
-obligations, promoting only historical TC-lock authorization and timeout
-protection.
+discharged 7,826 induction obligations and 565 downstream Core safety
+obligations for the superseded transition relation. The new higher-origin
+fence, no-high proposal rule, same-round TC upgrade, and durable-timeout
+recovery witness make that receipt historical and current-source-unproved; it
+does not promote any changed obligation.
 The asynchronous liveness proof-premise repairs remain outstanding. A fresh
 pinned strict whole-module aggregate release TLAPS run, the clean source-sealed
 release gate, the release-profile 100,000-height chaos rerun, and the 24-hour

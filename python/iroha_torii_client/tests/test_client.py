@@ -164,6 +164,11 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
                     "height": 9,
                     "view": 1,
                 },
+                "proposal_round": {
+                    "context_id": [_canonical_hash(0x41)],
+                    "height": 9,
+                    "view": 1,
+                },
                 "phase": {"phase": "commit", "details": None},
                 "subject": dict(subject),
                 "execution_commitment": execution_commitment,
@@ -183,6 +188,11 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
                         "height": 10,
                         "view": 1,
                     },
+                    "proposal_round": {
+                        "context_id": [_canonical_hash(0x14)],
+                        "height": 10,
+                        "view": 1,
+                    },
                     "subject": dict(subject),
                     "execution_commitment": dict(execution_commitment),
                     "signer_count": 2,
@@ -197,6 +207,11 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
                 {
                     "kind": {"kind": "proposal", "details": None},
                     "round": {
+                        "context_id": [_canonical_hash(0x14)],
+                        "height": 10,
+                        "view": 1,
+                    },
+                    "proposal_round": {
                         "context_id": [_canonical_hash(0x14)],
                         "height": 10,
                         "view": 1,
@@ -3377,10 +3392,19 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     assert status.height_context.min_signers == 3
     assert status.last_commit_qc is not None
     assert status.last_commit_qc.certificate.round.height == 9
+    assert status.last_commit_qc.certificate.proposal_round.view == 1
     assert status.last_commit_qc.signed_power == 3
     assert status.liveness.generation == 2
     assert status.liveness.work.validation == "complete"
     assert status.liveness.prepare_quorums[0].signer_count == 2
+    assert (
+        status.liveness.prepare_quorums[0].proposal_round
+        == status.liveness.prepare_quorums[0].round
+    )
+    assert (
+        status.liveness.outbound_intents[0].proposal_round
+        == status.liveness.outbound_intents[0].round
+    )
     assert status.liveness.queues[0].queue == "network_ingress"
     assert status.liveness.last_progress is not None
     assert status.liveness.last_progress.transition == "prepare_vote_admitted"
@@ -3394,6 +3418,138 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     settlement = status.lane_settlement_commitments[0]
     assert settlement["total_local_amount"] == "10"
     assert settlement["swap_metadata"]["liquidity_profile"]["profile"] == "Tier1"
+
+
+def test_get_sumeragi_status_preserves_carried_proposal_origins() -> None:
+    payload = _sumeragi_v2_status_payload()
+    commit_quorum = copy.deepcopy(payload["liveness"]["prepare_quorums"][0])
+    commit_quorum["round"]["view"] = 2
+    commit_quorum["proposal_round"]["view"] = 1
+    payload["liveness"]["commit_quorums"] = [commit_quorum]
+
+    commit_intent = copy.deepcopy(payload["liveness"]["outbound_intents"][0])
+    commit_intent["kind"]["kind"] = "commit_vote"
+    commit_intent["round"]["view"] = 2
+    commit_intent["proposal_round"]["view"] = 1
+    commit_intent["execution_commitment"] = copy.deepcopy(
+        commit_quorum["execution_commitment"]
+    )
+    payload["liveness"]["outbound_intents"] = [commit_intent]
+    payload["last_commit_qc"]["certificate"]["round"]["view"] = 2
+    payload["last_commit_qc"]["certificate"]["proposal_round"]["view"] = 1
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.liveness.commit_quorums[0].round.view == 2
+    assert status.liveness.commit_quorums[0].proposal_round.view == 1
+    assert status.liveness.outbound_intents[0].round.view == 2
+    assert status.liveness.outbound_intents[0].proposal_round is not None
+    assert status.liveness.outbound_intents[0].proposal_round.view == 1
+    assert status.last_commit_qc is not None
+    assert status.last_commit_qc.certificate.proposal_round.view == 1
+
+    later_commit_payload = _sumeragi_v2_status_payload()
+    later_commit_intent = later_commit_payload["liveness"]["outbound_intents"][0]
+    later_commit_intent["kind"]["kind"] = "commit_qc"
+    later_commit_intent["round"]["view"] = 3
+    later_commit_intent["execution_commitment"] = copy.deepcopy(
+        later_commit_payload["last_commit_qc"]["certificate"][
+            "execution_commitment"
+        ]
+    )
+    later_commit_status = _get_sumeragi_status(later_commit_payload)
+    assert later_commit_status.liveness.outbound_intents[0].round.view == 3
+    assert (
+        later_commit_status.liveness.outbound_intents[0].proposal_round.view == 1
+    )
+
+    timeout_payload = _sumeragi_v2_status_payload()
+    timeout_intent = timeout_payload["liveness"]["outbound_intents"][0]
+    timeout_intent["kind"]["kind"] = "timeout_certificate"
+    del timeout_intent["proposal_round"]
+    del timeout_intent["subject"]
+    timeout_status = _get_sumeragi_status(timeout_payload)
+    assert timeout_status.liveness.outbound_intents[0].proposal_round is None
+
+
+def test_get_sumeragi_status_enforces_vote_quorum_proposal_geometry() -> None:
+    missing_origin = _sumeragi_v2_status_payload()
+    del missing_origin["liveness"]["prepare_quorums"][0]["proposal_round"]
+    with pytest.raises(RuntimeError, match="proposal_round"):
+        _get_sumeragi_status(missing_origin)
+
+    prepare_reproposal = _sumeragi_v2_status_payload()
+    prepare_reproposal["liveness"]["prepare_quorums"][0]["proposal_round"][
+        "view"
+    ] = 0
+    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
+        _get_sumeragi_status(prepare_reproposal)
+
+    future_commit_origin = _sumeragi_v2_status_payload()
+    commit_quorum = copy.deepcopy(
+        future_commit_origin["liveness"]["prepare_quorums"][0]
+    )
+    commit_quorum["proposal_round"]["view"] = 2
+    future_commit_origin["liveness"]["commit_quorums"] = [commit_quorum]
+    with pytest.raises(RuntimeError, match="proposal_round.view must not exceed"):
+        _get_sumeragi_status(future_commit_origin)
+
+    foreign_origin = _sumeragi_v2_status_payload()
+    foreign_origin["liveness"]["prepare_quorums"][0]["proposal_round"][
+        "context_id"
+    ] = [_canonical_hash(0x55)]
+    with pytest.raises(RuntimeError, match="proposal_round.*active height context"):
+        _get_sumeragi_status(foreign_origin)
+
+    wrong_height = _sumeragi_v2_status_payload()
+    wrong_height["liveness"]["prepare_quorums"][0]["proposal_round"]["height"] = 9
+    with pytest.raises(RuntimeError, match="proposal_round.*active height context"):
+        _get_sumeragi_status(wrong_height)
+
+
+def test_get_sumeragi_status_enforces_outbound_intent_proposal_geometry() -> None:
+    missing_origin = _sumeragi_v2_status_payload()
+    del missing_origin["liveness"]["outbound_intents"][0]["proposal_round"]
+    with pytest.raises(RuntimeError, match="inconsistent proposal_round"):
+        _get_sumeragi_status(missing_origin)
+
+    timeout_with_origin = _sumeragi_v2_status_payload()
+    timeout_intent = timeout_with_origin["liveness"]["outbound_intents"][0]
+    timeout_intent["kind"]["kind"] = "timeout_vote"
+    timeout_intent["subject"] = None
+    with pytest.raises(RuntimeError, match="inconsistent proposal_round"):
+        _get_sumeragi_status(timeout_with_origin)
+
+    prepare_reproposal = _sumeragi_v2_status_payload()
+    prepare_intent = prepare_reproposal["liveness"]["outbound_intents"][0]
+    prepare_intent["kind"]["kind"] = "prepare_vote"
+    prepare_intent["execution_commitment"] = copy.deepcopy(
+        prepare_reproposal["last_commit_qc"]["certificate"][
+            "execution_commitment"
+        ]
+    )
+    prepare_intent["round"]["view"] = 2
+    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
+        _get_sumeragi_status(prepare_reproposal)
+
+    future_commit_origin = _sumeragi_v2_status_payload()
+    commit_intent = future_commit_origin["liveness"]["outbound_intents"][0]
+    commit_intent["kind"]["kind"] = "commit_vote"
+    commit_intent["execution_commitment"] = copy.deepcopy(
+        future_commit_origin["last_commit_qc"]["certificate"][
+            "execution_commitment"
+        ]
+    )
+    commit_intent["proposal_round"]["view"] = 2
+    with pytest.raises(RuntimeError, match="proposal_round.view must not exceed"):
+        _get_sumeragi_status(future_commit_origin)
+
+    foreign_origin = _sumeragi_v2_status_payload()
+    foreign_origin["liveness"]["outbound_intents"][0]["proposal_round"][
+        "context_id"
+    ] = [_canonical_hash(0x55)]
+    with pytest.raises(RuntimeError, match="proposal_round.*active height context"):
+        _get_sumeragi_status(foreign_origin)
 
 
 def test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker() -> None:
@@ -3981,6 +4137,32 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     )
     with pytest.raises(RuntimeError, match="does not certify the committed subject"):
         _get_sumeragi_status(wrong_subject)
+
+    missing_proposal_round = _sumeragi_v2_status_payload()
+    del missing_proposal_round["last_commit_qc"]["certificate"]["proposal_round"]
+    with pytest.raises(RuntimeError, match="proposal_round"):
+        _get_sumeragi_status(missing_proposal_round)
+
+    foreign_proposal_round = _sumeragi_v2_status_payload()
+    foreign_proposal_round["last_commit_qc"]["certificate"]["proposal_round"][
+        "context_id"
+    ] = [_canonical_hash(0x42)]
+    with pytest.raises(RuntimeError, match="proposal_round must match round context"):
+        _get_sumeragi_status(foreign_proposal_round)
+
+    wrong_proposal_height = _sumeragi_v2_status_payload()
+    wrong_proposal_height["last_commit_qc"]["certificate"]["proposal_round"][
+        "height"
+    ] = 8
+    with pytest.raises(RuntimeError, match="proposal_round must match round context"):
+        _get_sumeragi_status(wrong_proposal_height)
+
+    future_proposal_round = _sumeragi_v2_status_payload()
+    future_proposal_round["last_commit_qc"]["certificate"]["proposal_round"][
+        "view"
+    ] = 2
+    with pytest.raises(RuntimeError, match="proposal_round.view must not exceed"):
+        _get_sumeragi_status(future_proposal_round)
 
     underpowered = _sumeragi_v2_status_payload()
     underpowered["last_commit_qc"]["signed_power"] = 2

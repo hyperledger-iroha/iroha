@@ -1158,6 +1158,10 @@ fn offline_paths() -> Map {
         "/v1/offline/readiness".to_owned(),
         Value::Object(offline_readiness_operation()),
     );
+    paths.insert(
+        "/v1/offline/receiver-lineage".to_owned(),
+        Value::Object(offline_recipient_lineage_operation()),
+    );
     for (path, operation_id, summary, description, norito_schema, maximum_bytes) in [
         (
             "/v1/offline/top-up",
@@ -1192,6 +1196,91 @@ fn offline_paths() -> Map {
         Value::Object(offline_operation_status_operation()),
     );
     paths
+}
+
+fn offline_recipient_lineage_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Offline".to_owned())]),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("offlineRecipientLineage".to_owned()),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Resolve a receiver's active registration lineage.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Validate one canonical device-signed KagemushaRecipientPaymentRequestV2 and return the unique current-policy, unexpired on-chain P-256 registration together with its exact committed transaction, bounded entrypoint/result Merkle proofs, admission block header, and independently verifiable historical Sumeragi-v2 finality artifact. Policy rotation, expiry, ambiguous registrations, incomplete history, and proof gaps fail closed."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(offline_typed_request_body(
+            iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_REQUEST_SCHEMA_NAME,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
+        )),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        norito_binary_response(
+            "The active receiver registration and its admission proofs.",
+            "OfflineRecipientRegistrationLineage",
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        dual_format_error_response_with_reject_codes(
+            "The signed receiver request is malformed, expired, or targets another chain.",
+            "Exact receiver-lineage request validation code.",
+            &[
+                "offline_receiver_lineage_request_invalid",
+                "offline_receiver_lineage_chain_mismatch",
+            ],
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        dual_format_error_response_with_reject_codes(
+            "No exact on-chain registration matches the signed receiver request.",
+            "Exact receiver-registration resource code.",
+            &["offline_receiver_not_registered"],
+        ),
+    );
+    responses.insert(
+        "409".to_owned(),
+        dual_format_error_response_with_reject_codes(
+            "The matching registration is expired or was admitted under a superseded policy.",
+            "Exact inactive-registration code.",
+            &["offline_receiver_registration_inactive"],
+        ),
+    );
+    responses.insert("401".to_owned(), api_token_unauthorized_response());
+    responses.insert("406".to_owned(), offline_not_acceptable_response());
+    responses.insert(
+        "429".to_owned(),
+        retryable_error_response(
+            "The receiver-lineage request was rejected by an ingress or route rate limit.",
+            &[],
+        ),
+    );
+    responses.insert(
+        "503".to_owned(),
+        retryable_error_response(
+            "Canonical registration state, transaction history, or finality proof is unavailable or inconsistent.",
+            &["offline_receiver_lineage_inconsistent"],
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
 }
 
 fn offline_readiness_operation() -> Map {
@@ -3299,9 +3388,9 @@ fn zk_paths() -> Map {
         Value::Object(json_post_operation(
             "ZK",
             "Fetch ZK roots.",
-            "Fetch zero-knowledge root set information.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "Fetch zero-knowledge roots bound to one exact committed snapshot.",
+            "#/components/schemas/ZkRootsGetRequest",
+            "#/components/schemas/ZkRootsGetResponse",
             Vec::new(),
         )),
     );
@@ -3310,9 +3399,9 @@ fn zk_paths() -> Map {
         Value::Object(json_post_operation(
             "ZK",
             "Fetch ZK Merkle paths.",
-            "Fetch current confidential-v2 commitment inclusion paths.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "Fetch current confidential-v2 commitment inclusion paths bound to one exact committed snapshot.",
+            "#/components/schemas/ZkMerklePathGetRequest",
+            "#/components/schemas/ZkMerklePathGetResponse",
             Vec::new(),
         )),
     );
@@ -8769,6 +8858,24 @@ fn binary_response(description: &str) -> Value {
     Value::Object(body)
 }
 
+fn norito_binary_response(description: &str, type_name: &str) -> Value {
+    let mut schema = Map::new();
+    schema.insert("type".into(), Value::String("string".to_owned()));
+    schema.insert("format".into(), Value::String("binary".to_owned()));
+    schema.insert(
+        "description".into(),
+        Value::String(format!("Canonical Norito encoding of `{type_name}`.")),
+    );
+    let mut media = Map::new();
+    media.insert("schema".into(), Value::Object(schema));
+    let mut content = Map::new();
+    content.insert("application/x-norito".into(), Value::Object(media));
+    let mut body = Map::new();
+    body.insert("description".into(), Value::String(description.to_owned()));
+    body.insert("content".into(), Value::Object(content));
+    Value::Object(body)
+}
+
 fn json_get_operation(
     tag: &str,
     summary: &str,
@@ -11406,10 +11513,17 @@ fn entry_hash_parameter() -> Map {
     param.insert("required".into(), Value::Bool(true));
     param.insert(
         "description".into(),
-        Value::String("Transaction entrypoint hash encoded as lowercase hexadecimal.".to_owned()),
+        Value::String(
+            "Transaction entrypoint hash encoded as exactly 32 hexadecimal bytes; an optional 0x prefix is accepted."
+                .to_owned(),
+        ),
     );
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("string".to_owned()));
+    schema.insert(
+        "pattern".into(),
+        Value::String("^(?:0x)?[0-9a-fA-F]{64}$".to_owned()),
+    );
     param.insert("schema".into(), Value::Object(schema));
     param
 }
@@ -11649,10 +11763,7 @@ fn ledger_block_proof_responses() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".to_owned(),
-        json_response(
-            "Merkle proofs for the requested entrypoint.",
-            schema_ref("BlockProofs"),
-        ),
+        norito_binary_response("Merkle proofs for the requested entrypoint.", "BlockProofs"),
     );
     responses.insert(
         "400".to_owned(),
@@ -15674,6 +15785,102 @@ fn openapi_schemas() -> Map {
     schemas.extend(sccp_schemas());
     bridge_finality_schemas(&mut schemas);
     schemas.insert(
+        "ZkSnapshotBlockHash".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Canonical lowercase hash of the committed block whose immutable state supplied the witness. The all-zero value is reserved for a pre-genesis bootstrap state and cannot match an offline-readiness snapshot."
+        }),
+    );
+    schemas.insert(
+        "ZkRootsGetRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["asset_id", "max"],
+            "additionalProperties": false,
+            "properties": {
+                "asset_id": { "type": "string", "minLength": 1 },
+                "max": { "type": "integer", "format": "uint32", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkRootsGetResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["latest", "roots", "evaluated_block_height", "evaluated_block_hash"],
+            "additionalProperties": false,
+            "properties": {
+                "latest": { "type": "string", "pattern": "^$|^[0-9a-f]{64}$" },
+                "roots": {
+                    "type": "array",
+                    "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                },
+                "evaluated_block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "evaluated_block_hash": { "$ref": "#/components/schemas/ZkSnapshotBlockHash" }
+            },
+            "description": "Recent roots and the exact committed height/hash from the same immutable state view. Offline wallets must match both evaluated fields to readiness before using a root."
+        }),
+    );
+    schemas.insert(
+        "ZkMerklePathGetRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["asset_id", "commitments"],
+            "additionalProperties": false,
+            "properties": {
+                "asset_id": { "type": "string", "minLength": 1 },
+                "commitments": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "uniqueItems": true,
+                    "items": { "type": "string", "pattern": "^(0x)?[0-9a-fA-F]{64}$" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkMerklePathEntry".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["commitment", "leaf_index", "siblings", "directions", "witness_nodes", "root"],
+            "additionalProperties": false,
+            "properties": {
+                "commitment": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "leaf_index": { "type": "integer", "format": "uint32", "minimum": 0 },
+                "siblings": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+                "directions": { "type": "array", "items": { "type": "integer", "enum": [0, 1] } },
+                "witness_nodes": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+                "root": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkMerklePathGetResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["evaluated_block_height", "evaluated_block_hash", "root", "frontier_len", "tree_depth", "next_zero_path", "paths"],
+            "additionalProperties": false,
+            "properties": {
+                "evaluated_block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "evaluated_block_hash": { "$ref": "#/components/schemas/ZkSnapshotBlockHash" },
+                "root": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "frontier_len": { "type": "integer", "format": "uint32", "minimum": 0 },
+                "tree_depth": { "type": "integer", "format": "uint32", "minimum": 1 },
+                "next_zero_path": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/ZkMerklePathEntry" },
+                        { "type": "null" }
+                    ]
+                },
+                "paths": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/ZkMerklePathEntry" } }
+            },
+            "description": "Current frontier witnesses and exact committed height/hash from the same immutable state view. Offline wallets must match root plus both evaluated fields to readiness."
+        }),
+    );
+    schemas.insert(
         "Quantity".to_owned(),
         norito::json!({
             "type": "string",
@@ -17464,10 +17671,13 @@ fn openapi_schemas() -> Map {
         "SumeragiV2QuorumCertificateRef".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["round", "phase", "subject", "execution_commitment"],
+            "required": [
+                "round", "proposal_round", "phase", "subject", "execution_commitment"
+            ],
             "additionalProperties": false,
             "properties": {
                 "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "proposal_round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
                 "phase": { "$ref": "#/components/schemas/SumeragiV2GlobalPhase" },
                 "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
                 "execution_commitment": { "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment" }
@@ -18209,6 +18419,42 @@ fn openapi_schemas() -> Map {
                     "items": { "$ref": "#/components/schemas/OfflineReadinessBlocker" }
                 }
             }
+        }),
+    );
+    schemas.insert(
+        "OfflineRecipientRegistrationLineage".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "request_digest", "registration_hash",
+                "admission_policy_hash", "evaluated_policy_hash", "registration",
+                "admission_block_height", "admission_block_header",
+                "registration_transaction_hash", "registration_transaction",
+                "admission_finality", "evaluated_block_height", "evaluated_block_hash"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "enum": [1] },
+                "request_digest": { "$ref": "#/components/schemas/OfflineTransactionHash" },
+                "registration_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" },
+                "admission_policy_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" },
+                "evaluated_policy_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" },
+                "registration": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Exact canonical OfflineDeviceAttestationRegistration committed by the admitting transaction."
+                },
+                "admission_block_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "admission_block_header": { "$ref": "#/components/schemas/BlockHeader" },
+                "registration_transaction_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" },
+                "registration_transaction": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Exact CommittedTransaction with bounded entrypoint and result Merkle paths."
+                },
+                "admission_finality": { "$ref": "#/components/schemas/SumeragiV2FinalityArtifact" },
+                "evaluated_block_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "evaluated_block_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" }
+            },
+            "description": "Proof-bearing receiver registration lineage. Clients verify the request/registration tuple, the admitting transaction and its Merkle paths against the block header, and the header hash against the finality artifact before accepting offline cash."
         }),
     );
     schemas.insert(
@@ -21048,11 +21294,13 @@ fn openapi_schemas() -> Map {
                 },
                 "audit_path": {
                     "type": "array",
-                    "description": "Sibling nodes from leaf to root; null denotes an absent sibling for balanced padding.",
+                    "maxItems": 32,
+                    "description": "Sibling nodes from leaf to root; null denotes an absent right sibling promoted by the canonical Iroha Merkle algorithm.",
                     "items": {
-                        "type": "string",
-                        "nullable": true,
-                        "description": "Sibling hash encoded as lowercase hexadecimal."
+                        "anyOf": [
+                            { "$ref": "#/components/schemas/Hash" },
+                            { "type": "null" }
+                        ]
                     }
                 }
             }
@@ -21066,8 +21314,7 @@ fn openapi_schemas() -> Map {
             "additionalProperties": false,
             "properties": {
                 "leaf": {
-                    "type": "string",
-                    "description": "Transaction entrypoint hash encoded as lowercase hexadecimal."
+                    "$ref": "#/components/schemas/Hash"
                 },
                 "proof": { "$ref": "#/components/schemas/BlockMerkleProof" }
             }
@@ -21081,10 +21328,90 @@ fn openapi_schemas() -> Map {
             "additionalProperties": false,
             "properties": {
                 "leaf": {
-                    "type": "string",
-                    "description": "Execution result hash encoded as lowercase hexadecimal."
+                    "$ref": "#/components/schemas/Hash"
                 },
                 "proof": { "$ref": "#/components/schemas/BlockMerkleProof" }
+            }
+        }),
+    );
+    schemas.insert(
+        "BlockProofTransferSmtWitness".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["root_before", "root_after", "path_bits", "siblings"],
+            "additionalProperties": false,
+            "properties": {
+                "root_before": {
+                    "type": "array",
+                    "minItems": 32,
+                    "maxItems": 32,
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+                },
+                "root_after": {
+                    "type": "array",
+                    "minItems": 32,
+                    "maxItems": 32,
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+                },
+                "path_bits": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+                },
+                "siblings": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "minItems": 32,
+                        "maxItems": 32,
+                        "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BlockProofTransferDeltaTranscript".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "from_account", "to_account", "asset_definition", "amount",
+                "from_balance_before", "from_balance_after", "to_balance_before",
+                "to_balance_after", "from_smt_witness", "to_smt_witness"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "from_account": { "type": "string" },
+                "to_account": { "type": "string" },
+                "asset_definition": { "type": "string" },
+                "amount": { "$ref": "#/components/schemas/Quantity" },
+                "from_balance_before": { "$ref": "#/components/schemas/Quantity" },
+                "from_balance_after": { "$ref": "#/components/schemas/Quantity" },
+                "to_balance_before": { "$ref": "#/components/schemas/Quantity" },
+                "to_balance_after": { "$ref": "#/components/schemas/Quantity" },
+                "from_smt_witness": { "$ref": "#/components/schemas/BlockProofTransferSmtWitness" },
+                "to_smt_witness": { "$ref": "#/components/schemas/BlockProofTransferSmtWitness" }
+            }
+        }),
+    );
+    schemas.insert(
+        "BlockProofTransferTranscript".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["batch_hash", "deltas", "authority_digest", "poseidon_preimage_digest"],
+            "additionalProperties": false,
+            "properties": {
+                "batch_hash": { "$ref": "#/components/schemas/Hash" },
+                "deltas": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/BlockProofTransferDeltaTranscript" }
+                },
+                "authority_digest": { "$ref": "#/components/schemas/Hash" },
+                "poseidon_preimage_digest": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                }
             }
         }),
     );
@@ -21092,20 +21419,20 @@ fn openapi_schemas() -> Map {
         "BlockProofs".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["block_height", "entry_hash", "entry_root", "entry_proof", "result_root", "result_proof"],
+            "required": ["block_height", "entry_hash", "entry_root", "entry_proof", "result_root", "result_proof", "fastpq_transcripts"],
             "additionalProperties": false,
             "properties": {
                 "block_height": {
                     "type": "integer",
                     "format": "uint64",
+                    "minimum": 1,
                     "description": "Height of the block containing the entrypoint."
                 },
                 "entry_hash": {
-                    "type": "string",
-                    "description": "Transaction entrypoint hash encoded as lowercase hexadecimal."
+                    "$ref": "#/components/schemas/Hash"
                 },
                 "entry_root": {
-                    "type": "string",
+                    "allOf": [{ "$ref": "#/components/schemas/Hash" }],
                     "description": "Merkle root that authenticates the entrypoint proof (consensus root for external transactions, extended root after time-trigger execution otherwise)."
                 },
                 "entry_proof": {
@@ -21113,7 +21440,7 @@ fn openapi_schemas() -> Map {
                 },
                 "result_root": {
                     "anyOf": [
-                        { "type": "string" },
+                        { "$ref": "#/components/schemas/Hash" },
                         { "type": "null" }
                     ],
                     "description": "Merkle root that authenticates the execution proof when results are available; null when the block contains no execution results."
@@ -21124,6 +21451,15 @@ fn openapi_schemas() -> Map {
                         { "type": "null" }
                     ],
                     "description": "Execution result proof when the block carries execution results; null otherwise."
+                },
+                "fastpq_transcripts": {
+                    "type": "object",
+                    "description": "FASTPQ transfer transcripts keyed by canonical transaction entrypoint hash literal.",
+                    "propertyNames": { "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$" },
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": { "$ref": "#/components/schemas/BlockProofTransferTranscript" }
+                    }
                 }
             }
         }),
@@ -26124,6 +26460,53 @@ mod tests {
     }
 
     #[test]
+    fn ledger_block_proof_documents_its_exact_norito_contract() {
+        let document = generate_spec();
+        let operation = openapi_operation(
+            &document,
+            "/v1/ledger/block/{height}/proof/{entry_hash}",
+            "get",
+        );
+        let content = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .expect("block proof success content");
+        assert_eq!(
+            content.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["application/x-norito"]
+        );
+
+        let schemas = component_schemas(&document);
+        let block_proofs = schemas
+            .get("BlockProofs")
+            .and_then(Value::as_object)
+            .expect("BlockProofs schema");
+        assert!(
+            block_proofs
+                .get("required")
+                .and_then(Value::as_array)
+                .is_some_and(|required| required
+                    .iter()
+                    .any(|field| { field.as_str() == Some("fastpq_transcripts") }))
+        );
+        assert!(schemas.contains_key("BlockProofTransferTranscript"));
+        assert_eq!(
+            block_proofs
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("entry_hash"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/Hash")
+        );
+    }
+
+    #[test]
     fn generated_spec_includes_documented_paths() {
         let doc = generate_spec();
         if std::env::var("PRINT_TORII_SPEC").is_ok() {
@@ -26339,6 +26722,7 @@ mod tests {
         assert!(paths.contains_key("/v1/contracts/events"));
         assert!(paths.contains_key("/v1/contracts/events/sse"));
         assert!(paths.contains_key("/v1/offline/readiness"));
+        assert!(paths.contains_key("/v1/offline/receiver-lineage"));
         assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
         assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
         assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
@@ -26486,6 +26870,7 @@ mod tests {
         assert!(paths.contains_key("/v1/notify/devices"));
         for path in [
             "/v1/offline/readiness",
+            "/v1/offline/receiver-lineage",
             "/v1/offline/top-up",
             "/v1/offline/redeem",
             "/v1/offline/operations/{operation_id}",
@@ -27662,6 +28047,7 @@ mod tests {
             .expect("paths section");
         for (path, method) in [
             ("/v1/offline/readiness", "get"),
+            ("/v1/offline/receiver-lineage", "post"),
             ("/v1/offline/top-up", "post"),
             ("/v1/offline/redeem", "post"),
             ("/v1/offline/operations/{operation_id}", "get"),

@@ -17101,6 +17101,7 @@ pub(crate) mod valid {
                 );
             let vote = iroha_data_model::block::consensus_v2::Vote {
                 round,
+                proposal_round: round,
                 phase: iroha_data_model::block::consensus_v2::GlobalPhase::Commit,
                 subject,
                 execution_commitment: execution,
@@ -17118,6 +17119,7 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             let qc = iroha_data_model::block::consensus_v2::QuorumCertificate {
                 round,
+                proposal_round: round,
                 phase: iroha_data_model::block::consensus_v2::GlobalPhase::Commit,
                 subject,
                 execution_commitment: execution,

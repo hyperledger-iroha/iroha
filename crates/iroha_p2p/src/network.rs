@@ -3632,7 +3632,10 @@ impl NetworkReplyFlushIdentity {
                 route.tenure.connection_ordinal
             ))
         );
-        debug_assert_eq!(ticket.source.target.as_ref(), Some(&route.tenure.delivery_peer));
+        debug_assert_eq!(
+            ticket.source.target.as_ref(),
+            Some(&route.tenure.delivery_peer)
+        );
         debug_assert!(!ticket.shape.broadcast);
         Some(Self { route, ticket })
     }
@@ -3894,10 +3897,7 @@ impl NetworkReplyFlushAckTestFixture {
     /// tests cannot mistake equal visible ticket fields for the same opaque
     /// admission authority.
     #[must_use]
-    pub fn for_reply<T>(
-        post: &Post<T>,
-        route: &NetworkReplyRoute,
-    ) -> (Self, NetworkReplyFlushAck)
+    pub fn for_reply<T>(post: &Post<T>, route: &NetworkReplyRoute) -> (Self, NetworkReplyFlushAck)
     where
         T: Pload + message::ClassifyTopic,
     {
@@ -3914,11 +3914,8 @@ impl NetworkReplyFlushAckTestFixture {
             "test reply post must use a reliable-progress route"
         );
         let mut canonical_post = post.clone();
-        canonical_post.priority = canonical_outbound_priority(
-            topic,
-            subscriber_route,
-            canonical_post.priority,
-        );
+        canonical_post.priority =
+            canonical_outbound_priority(topic, subscriber_route, canonical_post.priority);
         // The fixture has no local peer/encryptor context from which to reproduce
         // the production stream charge, so retain a deterministic positive budget
         // from the same canonical payload serialization used by actor admission.
@@ -8492,10 +8489,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             admitted_ticket.map(|ticket| {
                 let identity = NetworkReplyFlushIdentity::from_admitted_ticket(ticket)
                     .expect("reply admission must retain exact reply authority");
-                NetworkReplyFlushAck::new(
-                    identity,
-                    reply_flush_receiver,
-                )
+                NetworkReplyFlushAck::new(identity, reply_flush_receiver)
             })
         })
         .map_err(|error| {
@@ -19053,16 +19047,10 @@ mod tests {
             51,
             31,
         );
-        let first_route = NetworkReplyRoute::new(
-            semantic_target.clone(),
-            Arc::clone(&tenure_a),
-            70,
-        );
-        let later_route = NetworkReplyRoute::new(
-            semantic_target.clone(),
-            Arc::clone(&tenure_a),
-            71,
-        );
+        let first_route =
+            NetworkReplyRoute::new(semantic_target.clone(), Arc::clone(&tenure_a), 70);
+        let later_route =
+            NetworkReplyRoute::new(semantic_target.clone(), Arc::clone(&tenure_a), 71);
         let reconnected_route = NetworkReplyRoute::new(
             semantic_target.clone(),
             test_reply_tenure(
@@ -19364,8 +19352,7 @@ mod tests {
             peer_id: semantic_target,
             priority: Priority::Low,
         };
-        let (mut first_control, first) =
-            NetworkReplyFlushAckTestFixture::for_reply(&post, &route);
+        let (mut first_control, first) = NetworkReplyFlushAckTestFixture::for_reply(&post, &route);
         let (mut second_control, second) =
             NetworkReplyFlushAckTestFixture::for_reply(&post, &route);
 

@@ -809,6 +809,11 @@ pub(super) mod tests {
                     height: context.height,
                     view: 7,
                 },
+                proposal_round: wire::ConsensusRound {
+                    context_id: context.id(),
+                    height: context.height,
+                    view: 7,
+                },
                 phase: wire::GlobalPhase::Commit,
                 subject,
                 execution_commitment: execution_commitment(0x41),
@@ -879,7 +884,7 @@ pub(super) mod tests {
 
         fn body_request(&self, certificate: wire::QuorumCertificate) -> wire::CertifiedBodyRequest {
             let mut request = wire::CertifiedBodyRequest {
-                round: certificate.round,
+                round: certificate.proposal_round,
                 subject: certificate.subject,
                 certificate,
                 requester: peer(&self.requester),
@@ -917,6 +922,7 @@ pub(super) mod tests {
     fn aggregate_commit(certificate: &wire::QuorumCertificate, keys: &[KeyPair]) -> Vec<u8> {
         let preimage = wire::Vote {
             round: certificate.round,
+            proposal_round: certificate.proposal_round,
             phase: certificate.phase,
             subject: certificate.subject,
             execution_commitment: certificate.execution_commitment,
@@ -1007,6 +1013,11 @@ pub(super) mod tests {
         execution.executed_block_wire_hash = executed_block_wire_hash;
         let mut certificate = wire::QuorumCertificate {
             round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 4,
+            },
+            proposal_round: wire::ConsensusRound {
                 context_id: context.id(),
                 height: context.height,
                 view: 4,
@@ -1283,6 +1294,11 @@ pub(super) mod tests {
         };
         let commit_two = wire::QuorumCertificate {
             round: wire::ConsensusRound {
+                context_id: context_two.id(),
+                height: 2,
+                view: 1,
+            },
+            proposal_round: wire::ConsensusRound {
                 context_id: context_two.id(),
                 height: 2,
                 view: 1,
@@ -1583,6 +1599,11 @@ pub(super) mod tests {
                 height: 1,
                 view: 4,
             },
+            proposal_round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: 1,
+                view: 4,
+            },
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment: exact_execution_commitment,
@@ -1634,7 +1655,7 @@ pub(super) mod tests {
         let decoded_response = iroha_data_model::block::decode_framed_signed_block(&response.body)
             .expect("decode historical response proposal");
         assert!(decoded_response.is_resultless_proposal());
-        assert_eq!(response.manifest.round, certificate.round);
+        assert_eq!(response.manifest.round, certificate.proposal_round);
         assert_eq!(response.manifest.subject, subject);
         assert_eq!(response.responder, 0);
         let replay = server

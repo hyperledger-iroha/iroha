@@ -931,15 +931,16 @@ pub enum BridgeFinalityVerifyError {
     /// Block header predecessor differs from the finalized subject predecessor.
     #[error("block header predecessor does not match the finalized subject")]
     BlockHeaderParentMismatch,
-    /// `CommitQC` round view precedes the block header's immutable origin view.
+    /// `CommitQC` proposal origin differs from the block header's immutable origin view and the
+    /// header is not the canonical fixed-view genesis exception.
     #[error(
-        "finality certificate view {certificate_view} precedes block header origin view {header_view}"
+        "finality proposal origin view {proposal_view} does not match block header origin view {header_view}"
     )]
-    BlockHeaderViewMismatch {
+    BlockHeaderProposalViewMismatch {
         /// View-change index recomputed from the block header.
         header_view: u64,
-        /// View carried by the exact `CommitQC` round.
-        certificate_view: u64,
+        /// View carried by the exact `CommitQC` proposal round.
+        proposal_view: u64,
     },
     /// V2 certificate/roster cryptography failed.
     #[error("Sumeragi-v2 finality cryptography failed: {0}")]
@@ -1179,10 +1180,10 @@ fn validate_bridge_finality_proof_structure(
         return Err(BridgeFinalityVerifyError::BlockHeaderParentMismatch);
     }
     let header_view = proof.block_header.view_change_index();
-    if artifact.commit_qc.round.view < header_view {
-        return Err(BridgeFinalityVerifyError::BlockHeaderViewMismatch {
+    if !artifact.proposal_origin_matches_header(&proof.block_header) {
+        return Err(BridgeFinalityVerifyError::BlockHeaderProposalViewMismatch {
             header_view,
-            certificate_view: artifact.commit_qc.round.view,
+            proposal_view: artifact.commit_qc.proposal_round.view,
         });
     }
     Ok(())
@@ -1492,6 +1493,7 @@ mod tests {
         );
         let mut commit_qc = QuorumCertificate {
             round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -1500,6 +1502,7 @@ mod tests {
         };
         let preimage = Vote {
             round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -1621,6 +1624,7 @@ mod tests {
         );
         let commit_qc = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -1646,8 +1650,10 @@ mod tests {
     fn resign_v2_proof(proof: &mut BridgeFinalityProof, keys: &[KeyPair]) {
         let artifact = &mut proof.finality_artifact;
         artifact.commit_qc.round.context_id = artifact.height_context.id();
+        artifact.commit_qc.proposal_round.context_id = artifact.height_context.id();
         let preimage = wire::Vote {
             round: artifact.commit_qc.round,
+            proposal_round: artifact.commit_qc.proposal_round,
             phase: wire::GlobalPhase::Commit,
             subject: artifact.subject,
             execution_commitment: artifact.commit_qc.execution_commitment,
@@ -2863,6 +2869,7 @@ mod tests {
 
         let mut view_attack = make_v2_fixture("chain-a");
         view_attack.proof.block_header.set_view_change_index(7);
+        view_attack.proof.finality_artifact.commit_qc.round.view = 9;
         rebind_v2_proof_to_header(&mut view_attack.proof, &view_attack.keys);
         assert_eq!(
             view_attack
@@ -2870,8 +2877,8 @@ mod tests {
                 .finality_artifact
                 .validate_for_header(&view_attack.proof.block_header),
             Err(
-                crate::block::consensus_v2::finality::V2FinalityValidationError::AssociatedViewMismatch {
-                    certificate: 0,
+                crate::block::consensus_v2::finality::V2FinalityValidationError::AssociatedProposalViewMismatch {
+                    proposal: 0,
                     block: 7,
                 }
             )
@@ -2887,9 +2894,9 @@ mod tests {
         );
         assert_eq!(
             verifier.verify(&view_attack.proof),
-            Err(BridgeFinalityVerifyError::BlockHeaderViewMismatch {
+            Err(BridgeFinalityVerifyError::BlockHeaderProposalViewMismatch {
                 header_view: 7,
-                certificate_view: 0,
+                proposal_view: 0,
             })
         );
     }
@@ -2897,8 +2904,15 @@ mod tests {
     #[test]
     fn verifier_accepts_locked_block_certified_after_its_origin_view() {
         let mut delayed = make_v2_fixture("chain-a");
+        delayed.proof.block_header.set_view_change_index(3);
+        delayed
+            .proof
+            .finality_artifact
+            .commit_qc
+            .proposal_round
+            .view = 3;
         delayed.proof.finality_artifact.commit_qc.round.view = 5;
-        resign_v2_proof(&mut delayed.proof, &delayed.keys);
+        rebind_v2_proof_to_header(&mut delayed.proof, &delayed.keys);
 
         delayed
             .proof

@@ -1,4 +1,4 @@
-//! Generate and finalize calibrated ABI-20 Kagemusha release bundles.
+//! Generate and finalize calibrated ABI-21 Kagemusha release bundles.
 //!
 //! Candidate generation runs the current recursion source exactly once and
 //! publishes eight immutable `KRV4KEY` artifacts plus one canonical pre-evidence
@@ -76,7 +76,7 @@ use norito::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest, Sha256};
 
 const HELP: &str = "\
-Generate an unsigned ABI-20 candidate, then finalize those exact bytes after approval.
+Generate an unsigned ABI-21 candidate, then finalize those exact bytes after approval.
 
 Usage:
   cargo run -p iroha_core --bin kagemusha_recursive_spend_v4_bundle -- \\

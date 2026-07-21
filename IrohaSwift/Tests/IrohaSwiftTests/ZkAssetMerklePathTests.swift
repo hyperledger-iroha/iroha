@@ -111,6 +111,8 @@ final class ZkAssetMerklePathTests: XCTestCase {
         let root = try PastaPoseidonNodeHasher().hashPair(left: commitment, right: sibling)
         let response = """
         {
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "\(String(repeating: "0a", count: 32))",
           "root": "\(root.hexEncodedString())",
           "frontier_len": 1,
           "tree_depth": 1,
@@ -154,6 +156,47 @@ final class ZkAssetMerklePathTests: XCTestCase {
         XCTAssertEqual(path.rootAtHeight, root)
         XCTAssertEqual(path.siblings, [sibling])
         XCTAssertEqual(path.directions, Data([0]))
+    }
+
+    func testToriiClientFetchesRootsBoundToCommittedSnapshot() async throws {
+        let root = scalar(7)
+        let blockHash = Data(repeating: 0x0a, count: 32)
+        let response = """
+        {
+          "latest": "\(root.hexEncodedString())",
+          "roots": ["\(root.hexEncodedString())"],
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "\(blockHash.hexEncodedString())"
+        }
+        """.data(using: .utf8)!
+
+        ZkMerklePathStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/zk/roots")
+            let http = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (http, response)
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ZkMerklePathStubURLProtocol.self]
+        let client = ToriiClient(
+            baseURL: URL(string: "https://torii.example")!,
+            session: URLSession(configuration: config)
+        )
+
+        let roots = try await client.getZkAssetRoots(asset: "usd#bank", max: 3)
+        XCTAssertEqual(roots.latest, root)
+        XCTAssertEqual(roots.roots, [root])
+        XCTAssertNoThrow(try roots.requireEvaluatedSnapshot(height: 7, blockHash: blockHash))
+        XCTAssertThrowsError(try roots.requireEvaluatedSnapshot(height: 8, blockHash: blockHash))
+        XCTAssertThrowsError(try roots.requireEvaluatedSnapshot(
+            height: 7,
+            blockHash: Data(repeating: 0x0b, count: 32)
+        ))
     }
 
     func testToriiSnapshotPreservesAndVerifiesAuthoritativeNextZeroPath() async throws {
@@ -398,6 +441,27 @@ final class ZkAssetMerklePathTests: XCTestCase {
         }
     }
 
+    func testWitnessSnapshotRequiresBothReadinessHeightAndHash() throws {
+        let root = String(repeating: "ab", count: 32)
+        let blockHash = Data(repeating: 0x0a, count: 32)
+        let response = try ToriiZkMerklePathResponse.decodeStrict(merklePathPayload(
+            root: root,
+            commitment: String(repeating: "02", count: 32),
+            leafIndex: "0",
+            siblings: [String(repeating: "00", count: 32)],
+            directions: ["0"],
+            witnessNodes: [String(repeating: "00", count: 32)],
+            pathRoot: root
+        ))
+
+        XCTAssertNoThrow(try response.requireEvaluatedSnapshot(height: 7, blockHash: blockHash))
+        XCTAssertThrowsError(try response.requireEvaluatedSnapshot(height: 8, blockHash: blockHash))
+        XCTAssertThrowsError(try response.requireEvaluatedSnapshot(
+            height: 7,
+            blockHash: Data(repeating: 0x0b, count: 32)
+        ))
+    }
+
     private func scalar(_ value: UInt8) -> Data {
         var data = Data(repeating: 0, count: 32)
         data[0] = value
@@ -485,6 +549,8 @@ final class ZkAssetMerklePathTests: XCTestCase {
         } ?? "null"
         let json = """
         {
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "\(String(repeating: "0a", count: 32))",
           "root": "\(root.hexEncodedString())",
           "frontier_len": \(frontierLen),
           "tree_depth": \(treeDepth),
@@ -512,6 +578,8 @@ final class ZkAssetMerklePathTests: XCTestCase {
         let depth = treeDepth ?? String(siblings.count)
         let json = """
         {
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "\(String(repeating: "0a", count: 32))",
           "root": "\(root)",
           "frontier_len": \(frontierLen),
           "tree_depth": \(depth),

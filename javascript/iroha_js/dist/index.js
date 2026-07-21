@@ -88,6 +88,7 @@ export {
 export {
   ToriiBrowserClient,
   ToriiBrowserHttpError,
+  ToriiBrowserStreamGapError,
 } from "./toriiBrowserClient.js";
 export {
   KAGEMUSHA_MANIFEST_VERSION,
@@ -186,6 +187,7 @@ export {
   computeAxtBinding,
 } from "./axt.js";
 export {
+  noritoDecodeBlockProofs,
   noritoEncodeInstruction,
   noritoDecodeInstruction,
   noritoEncodePrivacyProofEnvelope,
@@ -195,6 +197,8 @@ export {
   noritoEncodeMultisigProposeRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigContractCallApproveRequest,
+  verifyBlockMerkleProof,
+  verifyBlockProofs,
   validateNoritoFrame,
 } from "./norito.js";
 export {

@@ -252,6 +252,7 @@ object SumeragiV2Wire {
     /** Prepare or Commit vote. */
     class Vote(
         @JvmField val round: ConsensusRound,
+        @JvmField val proposalRound: ConsensusRound,
         @JvmField val phase: GlobalPhase,
         @JvmField val subject: BlockSubject,
         @JvmField val executionCommitment: ExecutionCommitment,
@@ -264,6 +265,7 @@ object SumeragiV2Wire {
 
         override fun encode(): ByteArray = struct(
             round.encode(),
+            proposalRound.encode(),
             phase.encode(),
             subject.encode(),
             executionCommitment.encode(),
@@ -275,6 +277,7 @@ object SumeragiV2Wire {
             internal fun decode(bytes: ByteArray): Vote = decodeStruct(bytes) { reader ->
                 Vote(
                     reader.field("vote.round") { ConsensusRound.decode(it.remainingBytes()) },
+                    reader.field("vote.proposal_round") { ConsensusRound.decode(it.remainingBytes()) },
                     reader.field("vote.phase") { GlobalPhase.decode(it.remainingBytes()) },
                     reader.field("vote.subject") { BlockSubject.decode(it.remainingBytes()) },
                     reader.field("vote.execution_commitment") {
@@ -290,12 +293,14 @@ object SumeragiV2Wire {
     /** Stable reference to a quorum certificate. */
     class QuorumCertificateRef(
         @JvmField val round: ConsensusRound,
+        @JvmField val proposalRound: ConsensusRound,
         @JvmField val phase: GlobalPhase,
         @JvmField val subject: BlockSubject,
         @JvmField val executionCommitment: ExecutionCommitment,
     ) : WireValue() {
         override fun encode(): ByteArray = struct(
             round.encode(),
+            proposalRound.encode(),
             phase.encode(),
             subject.encode(),
             executionCommitment.encode(),
@@ -306,6 +311,9 @@ object SumeragiV2Wire {
                 decodeStruct(bytes) { reader ->
                     QuorumCertificateRef(
                         reader.field("qc_ref.round") { ConsensusRound.decode(it.remainingBytes()) },
+                        reader.field("qc_ref.proposal_round") {
+                            ConsensusRound.decode(it.remainingBytes())
+                        },
                         reader.field("qc_ref.phase") { GlobalPhase.decode(it.remainingBytes()) },
                         reader.field("qc_ref.subject") { BlockSubject.decode(it.remainingBytes()) },
                         reader.field("qc_ref.execution_commitment") {
@@ -319,6 +327,7 @@ object SumeragiV2Wire {
     /** Aggregate Prepare or Commit certificate. */
     class QuorumCertificate(
         @JvmField val round: ConsensusRound,
+        @JvmField val proposalRound: ConsensusRound,
         @JvmField val phase: GlobalPhase,
         @JvmField val subject: BlockSubject,
         @JvmField val executionCommitment: ExecutionCommitment,
@@ -336,6 +345,7 @@ object SumeragiV2Wire {
 
         override fun encode(): ByteArray = struct(
             round.encode(),
+            proposalRound.encode(),
             phase.encode(),
             subject.encode(),
             executionCommitment.encode(),
@@ -344,12 +354,15 @@ object SumeragiV2Wire {
         )
 
         fun reference(): QuorumCertificateRef =
-            QuorumCertificateRef(round, phase, subject, executionCommitment)
+            QuorumCertificateRef(round, proposalRound, phase, subject, executionCommitment)
 
         companion object {
             internal fun decode(bytes: ByteArray): QuorumCertificate = decodeStruct(bytes) { reader ->
                 QuorumCertificate(
                     reader.field("qc.round") { ConsensusRound.decode(it.remainingBytes()) },
+                    reader.field("qc.proposal_round") {
+                        ConsensusRound.decode(it.remainingBytes())
+                    },
                     reader.field("qc.phase") { GlobalPhase.decode(it.remainingBytes()) },
                     reader.field("qc.subject") { BlockSubject.decode(it.remainingBytes()) },
                     reader.field("qc.execution_commitment") {
@@ -1207,6 +1220,7 @@ object SumeragiV2Wire {
     /** Partial dual-quorum state for one exact proposal round. */
     class VoteQuorumStatus(
         @JvmField val round: ConsensusRound,
+        @JvmField val proposalRound: ConsensusRound,
         @JvmField val subject: BlockSubject,
         @JvmField val executionCommitment: ExecutionCommitment,
         @JvmField val signerCount: Long,
@@ -1216,6 +1230,7 @@ object SumeragiV2Wire {
     ) : WireValue() {
         override fun encode(): ByteArray = struct(
             round.encode(),
+            proposalRound.encode(),
             subject.encode(),
             executionCommitment.encode(),
             u32(signerCount),
@@ -1228,6 +1243,9 @@ object SumeragiV2Wire {
             internal fun decode(bytes: ByteArray): VoteQuorumStatus = decodeStruct(bytes) { reader ->
                 VoteQuorumStatus(
                     reader.field("status.liveness.vote.round") { ConsensusRound.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.vote.proposal_round") {
+                        ConsensusRound.decode(it.remainingBytes())
+                    },
                     reader.field("status.liveness.vote.subject") { BlockSubject.decode(it.remainingBytes()) },
                     reader.field("status.liveness.vote.execution") { ExecutionCommitment.decode(it.remainingBytes()) },
                     reader.field("status.liveness.vote.signer_count") { it.u32Only("status.liveness.vote.signer_count") },
@@ -1304,12 +1322,40 @@ object SumeragiV2Wire {
     class OutboundIntentStatus(
         @JvmField val kind: OutboundIntentKind,
         @JvmField val round: ConsensusRound,
+        @JvmField val proposalRound: ConsensusRound?,
         @JvmField val subject: BlockSubject?,
         @JvmField val executionCommitment: ExecutionCommitment?,
         @JvmField val stage: OutboundIntentStage,
     ) : WireValue() {
+        init {
+            val shapeIsValid = when (kind) {
+                OutboundIntentKind.PROPOSAL ->
+                    proposalRound != null && subject != null && executionCommitment == null
+                OutboundIntentKind.TIMEOUT_VOTE, OutboundIntentKind.TIMEOUT_CERTIFICATE ->
+                    proposalRound == null && subject == null && executionCommitment == null
+                else -> proposalRound != null && subject != null && executionCommitment != null
+            }
+            require(shapeIsValid) { "Invalid outbound intent shape for $kind" }
+            proposalRound?.let { origin ->
+                require(origin.contextId == round.contextId && origin.height == round.height) {
+                    "Outbound intent proposal round must share context and height"
+                }
+                require(origin.view <= round.view) {
+                    "Outbound intent proposal round cannot be in a later view"
+                }
+                if (kind == OutboundIntentKind.PROPOSAL ||
+                    kind == OutboundIntentKind.PREPARE_VOTE ||
+                    kind == OutboundIntentKind.PREPARE_QC
+                ) {
+                    require(origin == round) {
+                        "Prepare/proposal outbound intent origin must match its round"
+                    }
+                }
+            }
+        }
+
         override fun encode(): ByteArray = struct(
-            kind.encode(), round.encode(), option(subject?.encode()),
+            kind.encode(), round.encode(), option(proposalRound?.encode()), option(subject?.encode()),
             option(executionCommitment?.encode()), stage.encode(),
         )
 
@@ -1318,6 +1364,11 @@ object SumeragiV2Wire {
                 OutboundIntentStatus(
                     reader.field("status.liveness.outbound.kind") { OutboundIntentKind.decode(it.remainingBytes()) },
                     reader.field("status.liveness.outbound.round") { ConsensusRound.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.outbound.proposal_round") {
+                        optionDecode(it, "status.liveness.outbound.proposal_round") {
+                            ConsensusRound.decode(it)
+                        }
+                    },
                     reader.field("status.liveness.outbound.subject") {
                         optionDecode(it, "status.liveness.outbound.subject") { BlockSubject.decode(it) }
                     },

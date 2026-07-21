@@ -8460,6 +8460,15 @@ const KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_REQUEST_MAX_BYTES_V4: 
 const KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_RESULT_MAX_BYTES_V4: usize = 64 * 1024;
 const KAGEMUSHA_REDEMPTION_CHANGE_OPENING_DERIVATION_DOMAIN_V4: &str =
     "iroha.kagemusha.redemption-change-opening.v4";
+const KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_VERSION_V4: u16 = 4;
+const KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_REQUEST_MAX_BYTES_V4: usize =
+    2 * iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        + 3 * KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2;
+const KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_RESULT_MAX_BYTES_V4: usize = 64 * 1024;
+const KAGEMUSHA_PEER_SPLIT_CHANGE_OPENING_DERIVATION_DOMAIN_V4: &str =
+    "iroha.kagemusha.peer-split-change-opening.v4";
+const KAGEMUSHA_PEER_SPLIT_CHANGE_SPEND_KEY_DERIVATION_CONTEXT_V4: &str =
+    "iroha.kagemusha.peer-split-change-spend-key.v4";
 const KAGEMUSHA_SECRET_BUFFER_HEADER_MAGIC: u64 = 0x4b41_4745_4d55_5348;
 
 #[repr(C)]
@@ -8761,6 +8770,88 @@ impl KagemushaRecursiveSpendRedemptionChangePrepareResultV4 {
 }
 
 impl Drop for KagemushaRecursiveSpendRedemptionChangePrepareResultV4 {
+    fn drop(&mut self) {
+        self.opening.zeroize();
+    }
+}
+
+/// Secret-bearing KDF input for ordinary peer-split change.
+///
+/// This is deliberately distinct from the redemption-change domain. Ordered
+/// descriptors and openings, the signed receiver intent, both exact amounts,
+/// the operation id, and caller entropy all participate in the derivation.
+#[derive(norito::Encode)]
+struct KagemushaPeerSplitChangeOpeningDerivationV4 {
+    domain: String,
+    input_notes: Vec<iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2>,
+    input_openings: Vec<KagemushaNoteOpeningV2>,
+    recipient_request_digest: [u8; 32],
+    recipient_output_commitment: [u8; 32],
+    payment_amount: iroha_data_model::offline::KagemushaScaledAmountV2,
+    change_amount: iroha_data_model::offline::KagemushaScaledAmountV2,
+    operation_id: [u8; 32],
+    entropy: [u8; 32],
+}
+
+impl Drop for KagemushaPeerSplitChangeOpeningDerivationV4 {
+    fn drop(&mut self) {
+        self.recipient_request_digest.zeroize();
+        self.recipient_output_commitment.zeroize();
+        self.operation_id.zeroize();
+        self.entropy.zeroize();
+    }
+}
+
+/// Canonical local-only C request for ordinary peer-split change preparation.
+#[derive(Clone, norito::Encode, norito::Decode)]
+struct KagemushaRecursiveSpendPeerSplitChangePrepareRequestV4 {
+    version: u16,
+    bundles: Vec<iroha_data_model::offline::KagemushaRecursiveSpendBundleV4>,
+    input_openings: Vec<KagemushaNoteOpeningV2>,
+    recipient_request: iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+    change_amount: iroha_data_model::offline::KagemushaScaledAmountV2,
+    operation_id: [u8; 32],
+    entropy: [u8; 32],
+}
+
+impl Drop for KagemushaRecursiveSpendPeerSplitChangePrepareRequestV4 {
+    fn drop(&mut self) {
+        self.operation_id.zeroize();
+        self.entropy.zeroize();
+    }
+}
+
+/// Canonical owned secret result for ordinary peer-split change preparation.
+#[derive(Clone, PartialEq, Eq, norito::Encode, norito::Decode)]
+struct KagemushaRecursiveSpendPeerSplitChangePrepareResultV4 {
+    version: u16,
+    opening: KagemushaNoteOpeningV2,
+    output: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2,
+}
+
+impl KagemushaRecursiveSpendPeerSplitChangePrepareResultV4 {
+    fn validate(&self) -> BridgeResult<()> {
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_VERSION_V4 {
+            return Err(BridgeError::KagemushaProve);
+        }
+        self.opening.validate()?;
+        self.output
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let expected = derive_kagemusha_owned_note_v2(
+            &self.output.chain_id,
+            &self.output.asset,
+            self.output.amount,
+            &self.opening,
+        )?;
+        if expected != self.output {
+            return Err(BridgeError::KagemushaProve);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for KagemushaRecursiveSpendPeerSplitChangePrepareResultV4 {
     fn drop(&mut self) {
         self.opening.zeroize();
     }
@@ -10433,6 +10524,162 @@ fn derive_kagemusha_redemption_change_opening_v4(
     Ok(result)
 }
 
+fn prepare_kagemusha_peer_split_change_opening_v4(
+    bundles: &[iroha_data_model::offline::KagemushaRecursiveSpendBundleV4],
+    input_openings: &[KagemushaNoteOpeningV2],
+    recipient_request: &iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+    change_amount: iroha_data_model::offline::KagemushaScaledAmountV2,
+    operation_id: &[u8; 32],
+    entropy: &[u8; 32],
+) -> BridgeResult<KagemushaRecursiveSpendPeerSplitChangePrepareResultV4> {
+    use iroha_core::zk::confidential_v2::default_confidential_diversifier_v2;
+
+    if bundles.is_empty()
+        || bundles.len()
+            > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
+        || bundles.len() != input_openings.len()
+        || *operation_id == [0; 32]
+        || *entropy == [0; 32]
+        || operation_id == entropy
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    recipient_request
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    change_amount
+        .validate()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+
+    let first_statement = &bundles[0].statement;
+    let mut total_atomic_units = 0_u128;
+    let mut input_notes = Vec::with_capacity(bundles.len());
+    for (index, (bundle, opening)) in bundles.iter().zip(input_openings).enumerate() {
+        bundle
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        opening.validate()?;
+        let statement = &bundle.statement;
+        if statement.chain_id != first_statement.chain_id
+            || statement.asset != first_statement.asset
+            || statement.asset_scale != first_statement.asset_scale
+            || statement.final_root != first_statement.final_root
+            || statement.next_zero_leaf_index != first_statement.next_zero_leaf_index
+            || statement.artifact_binding != first_statement.artifact_binding
+            || statement.verifier_key_id != first_statement.verifier_key_id
+            || statement.current_note.chain_id != statement.chain_id
+            || statement.current_note.asset != statement.asset
+            || statement.current_note.amount.scale != statement.asset_scale
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let expected_note = derive_kagemusha_owned_note_v2(
+            &statement.chain_id,
+            &statement.asset,
+            statement.current_note.amount,
+            opening,
+        )?;
+        if expected_note != statement.current_note {
+            return Err(BridgeError::KagemushaProve);
+        }
+        if bundles[..index].iter().any(|prior| {
+            prior.statement.current_note.note_commitment
+                == statement.current_note.note_commitment
+                || prior.statement.current_note.spend_nullifier
+                    == statement.current_note.spend_nullifier
+        }) {
+            return Err(BridgeError::KagemushaProve);
+        }
+        total_atomic_units = total_atomic_units
+            .checked_add(statement.current_note.amount.atomic_units)
+            .ok_or(BridgeError::KagemushaProve)?;
+        input_notes.push(statement.current_note.clone());
+    }
+
+    let payment_amount = recipient_request.amount();
+    let recipient_output = recipient_request.recipient_output();
+    if recipient_request.chain_id() != &first_statement.chain_id
+        || recipient_request.asset() != &first_statement.asset
+        || payment_amount.scale != first_statement.asset_scale
+        || change_amount.scale != first_statement.asset_scale
+        || change_amount.atomic_units >= total_atomic_units
+        || payment_amount
+            .atomic_units
+            .checked_add(change_amount.atomic_units)
+            != Some(total_atomic_units)
+        || recipient_output.chain_id != first_statement.chain_id
+        || recipient_output.asset != first_statement.asset
+        || recipient_output.amount != payment_amount
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let recipient_request_digest = recipient_request
+        .digest()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let derivation = KagemushaPeerSplitChangeOpeningDerivationV4 {
+        domain: KAGEMUSHA_PEER_SPLIT_CHANGE_OPENING_DERIVATION_DOMAIN_V4.to_owned(),
+        input_notes,
+        input_openings: input_openings.to_vec(),
+        recipient_request_digest,
+        recipient_output_commitment: recipient_output.note_commitment,
+        payment_amount,
+        change_amount,
+        operation_id: *operation_id,
+        entropy: *entropy,
+    };
+    let canonical = Zeroizing::new(
+        norito::to_bytes(&derivation).map_err(|_| BridgeError::KagemushaProve)?,
+    );
+    let spend_key = Zeroizing::new(blake3::derive_key(
+        KAGEMUSHA_PEER_SPLIT_CHANGE_SPEND_KEY_DERIVATION_CONTEXT_V4,
+        canonical.as_slice(),
+    ));
+    let rho = Zeroizing::new(
+        *blake3::keyed_hash(&spend_key, canonical.as_slice()).as_bytes(),
+    );
+    let diversifier = default_confidential_diversifier_v2();
+    if *spend_key == [0; 32]
+        || *rho == [0; 32]
+        || *rho == *spend_key
+        || *rho == diversifier
+        || input_openings.iter().any(|opening| {
+            *spend_key == opening.spend_key
+                || *rho == opening.rho
+                || *rho == opening.diversifier
+        })
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let opening = KagemushaNoteOpeningV2 {
+        spend_key: *spend_key,
+        rho: *rho,
+        diversifier,
+    };
+    opening.validate()?;
+    let output = derive_kagemusha_owned_note_v2(
+        &first_statement.chain_id,
+        &first_statement.asset,
+        change_amount,
+        &opening,
+    )?;
+    if output.note_commitment == recipient_output.note_commitment
+        || output.spend_nullifier == recipient_output.spend_nullifier
+        || bundles.iter().any(|bundle| {
+            output.note_commitment == bundle.statement.current_note.note_commitment
+                || output.spend_nullifier == bundle.statement.current_note.spend_nullifier
+        })
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let result = KagemushaRecursiveSpendPeerSplitChangePrepareResultV4 {
+        version: KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_VERSION_V4,
+        opening,
+        output,
+    };
+    result.validate()?;
+    Ok(result)
+}
+
 fn require_kagemusha_confidential_verifier_v2(
     id: &VerifyingKeyId,
     commitment: [u8; 32],
@@ -11703,6 +11950,55 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redemption_cha
     bridge_result_to_code(result)
 }
 
+/// Prepare a proof-bound ordinary peer-split change opening from one or two inputs.
+///
+/// This uses a peer-split-only KDF domain and returns secret-owned opening
+/// material that must be released with
+/// [`connect_norito_kagemusha_secret_free_buffer`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_result_ptr: *mut *mut c_uchar,
+    out_result_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_result_ptr, out_result_len)?;
+        let request_bytes = Zeroizing::new(unsafe {
+            read_kagemusha_archive_bytes_bounded(
+                request_norito_ptr,
+                request_norito_len,
+                KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_REQUEST_MAX_BYTES_V4,
+            )
+        }?);
+        let request = decode_canonical_kagemusha_archive::<
+            KagemushaRecursiveSpendPeerSplitChangePrepareRequestV4,
+        >(request_bytes.as_slice())?;
+        if request.version != KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_VERSION_V4 {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let preparation = prepare_kagemusha_peer_split_change_opening_v4(
+            &request.bundles,
+            &request.input_openings,
+            &request.recipient_request,
+            request.change_amount,
+            &request.operation_id,
+            &request.entropy,
+        )?;
+        let archive = Zeroizing::new(
+            norito::to_bytes(&preparation).map_err(|_| BridgeError::KagemushaProve)?,
+        );
+        if kagemusha_archive_out_of_bounds_for(
+            archive.len(),
+            KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_RESULT_MAX_BYTES_V4,
+        ) {
+            return Err(BridgeError::KagemushaProve);
+        }
+        unsafe { write_kagemusha_secret_bytes(out_result_ptr, out_result_len, archive.as_slice()) }
+    })();
+    bridge_result_to_code(result)
+}
+
 /// Derive the domain-separated receiver-key reference carried by request and ACK archives.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_receiver_key_reference_v2(
@@ -11753,6 +12049,30 @@ fn kagemusha_recipient_payment_request_verify_v2(
         .validate_at(verified_at_ms)
         .map_err(|_| BridgeError::KagemushaProve)?;
     request.digest().map_err(|_| BridgeError::KagemushaProve)
+}
+
+fn kagemusha_recipient_registration_lineage_verify_v1(
+    request_archive: &[u8],
+    lineage_archive: &[u8],
+    verified_at_ms: u64,
+    expected_evaluated_block_height: u64,
+    expected_evaluated_block_hash: &[u8; 32],
+) -> BridgeResult<Vec<u8>> {
+    let request = decode_canonical_kagemusha_archive::<
+        iroha_torii_shared::offline_api::OfflineRecipientLineageRequest,
+    >(request_archive)?;
+    let lineage = decode_canonical_kagemusha_archive::<
+        iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage,
+    >(lineage_archive)?;
+    lineage
+        .verify_against(
+            &request,
+            verified_at_ms,
+            expected_evaluated_block_height,
+            expected_evaluated_block_hash,
+        )
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    Ok(lineage_archive.to_vec())
 }
 
 fn kagemusha_request_authorization_preparation_v2(
@@ -12036,6 +12356,59 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_payment_request_veri
         }?;
         let digest = kagemusha_recipient_payment_request_verify_v2(&request, verified_at_ms)?;
         unsafe { write_kagemusha_archive_bridge(out_digest_ptr, out_digest_len, &digest) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Verify a canonical proof-bearing receiver-registration lineage response.
+///
+/// The returned archive is byte-identical to the canonical input and is
+/// emitted only after request, registration, transaction/Merkle, policy, and
+/// historical Sumeragi-v2 finality verification succeeds.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recipient_registration_lineage_verify_v1(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    lineage_norito_ptr: *const c_uchar,
+    lineage_norito_len: c_ulong,
+    verified_at_ms: u64,
+    expected_evaluated_block_height: u64,
+    expected_evaluated_block_hash_ptr: *const c_uchar,
+    expected_evaluated_block_hash_len: c_ulong,
+    out_lineage_ptr: *mut *mut c_uchar,
+    out_lineage_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_lineage_ptr, out_lineage_len)?;
+        let request = unsafe {
+            read_kagemusha_archive_bytes_bounded(
+                request_norito_ptr,
+                request_norito_len,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
+            )
+        }?;
+        let lineage = unsafe {
+            read_kagemusha_archive_bytes_bounded(
+                lineage_norito_ptr,
+                lineage_norito_len,
+                iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES,
+            )
+        }?;
+        let expected_evaluated_block_hash = unsafe {
+            read_fixed_array::<32>(
+                expected_evaluated_block_hash_ptr,
+                expected_evaluated_block_hash_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let verified = kagemusha_recipient_registration_lineage_verify_v1(
+            &request,
+            &lineage,
+            verified_at_ms,
+            expected_evaluated_block_height,
+            &expected_evaluated_block_hash,
+        )?;
+        unsafe { write_kagemusha_archive_bridge(out_lineage_ptr, out_lineage_len, &verified) }
     })();
     bridge_result_to_code(result)
 }
@@ -27822,6 +28195,98 @@ fn java_native_kagemusha_prepare_redemption_change_v4(
     target_os = "macos",
     target_os = "windows"
 ))]
+#[allow(clippy::too_many_arguments)]
+fn java_native_kagemusha_prepare_peer_split_change_v4(
+    env: &mut jni::JNIEnv<'_>,
+    bundles: jni::objects::JObjectArray<'_>,
+    input_openings: jni::objects::JObjectArray<'_>,
+    recipient_request: jni::objects::JByteArray<'_>,
+    atomic_units: jni::objects::JByteArray<'_>,
+    scale: jni::sys::jint,
+    operation_id: jni::objects::JByteArray<'_>,
+    entropy: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_kagemusha_archive_array_result(env, "V4 peer-split change preparation", |env| {
+        let maximum_inputs = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2;
+        let bundle_archives = java_kagemusha_byte_array_vector_bounded(
+            env,
+            &bundles,
+            "bundles",
+            maximum_inputs,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
+        )?;
+        let opening_archives = java_kagemusha_byte_array_vector_bounded(
+            env,
+            &input_openings,
+            "inputOpenings",
+            maximum_inputs,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
+        )?;
+        if bundle_archives.is_empty() || bundle_archives.len() != opening_archives.len() {
+            return Err("bundles and inputOpenings must have the same 1..2 count".to_owned());
+        }
+        let mut decoded_bundles = Vec::with_capacity(bundle_archives.len());
+        let mut decoded_openings = Vec::with_capacity(opening_archives.len());
+        for index in 0..bundle_archives.len() {
+            decoded_bundles.push(
+                decode_canonical_kagemusha_archive::<
+                    iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
+                >(&bundle_archives[index])
+                .map_err(|_| format!("bundles[{index}] is not canonical V4"))?,
+            );
+            decoded_openings.push(
+                decode_canonical_kagemusha_sensitive_archive::<KagemushaNoteOpeningV2>(
+                    &opening_archives[index],
+                )
+                .map_err(|_| format!("inputOpenings[{index}] is not canonical"))?,
+            );
+        }
+        let recipient_request = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+        >(
+            env,
+            &recipient_request,
+            "recipientRequest",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
+        )?;
+        let change_amount = java_kagemusha_amount(env, &atomic_units, scale)?;
+        let operation_id = java_kagemusha_fixed32_sensitive(env, &operation_id, "operationId")?;
+        let entropy = java_kagemusha_fixed32_sensitive(env, &entropy, "entropy")?;
+        let preparation = prepare_kagemusha_peer_split_change_opening_v4(
+            &decoded_bundles,
+            &decoded_openings,
+            &recipient_request,
+            change_amount,
+            &operation_id,
+            &entropy,
+        )
+        .map_err(|_| {
+            "peer-split change must bind distinct exact inputs, recipient request, conserved amounts, operation id, and fresh entropy"
+                .to_owned()
+        })?;
+        let opening_archive = Zeroizing::new(
+            norito::to_bytes(&preparation.opening)
+                .map_err(|error| format!("failed to encode peer-split change opening: {error}"))?,
+        );
+        let mut fields = vec![
+            opening_archive.to_vec(),
+            preparation.opening.rho.to_vec(),
+            preparation.opening.diversifier.to_vec(),
+            preparation.output.note_commitment.to_vec(),
+            preparation.output.spend_nullifier.to_vec(),
+            preparation.output.amount.atomic_units.to_string().into_bytes(),
+            preparation.output.amount.scale.to_string().into_bytes(),
+        ];
+        java_kagemusha_secret_byte_arrays(env, &mut fields)
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_kagemusha_create_recipient_request_v2(
     env: &mut jni::JNIEnv<'_>,
     payload: jni::objects::JByteArray<'_>,
@@ -27863,6 +28328,71 @@ fn java_native_kagemusha_verify_recipient_request_v2(
         let digest = kagemusha_recipient_payment_request_verify_v2(&request, verified_at_ms)
             .map_err(|_| "request signature, expiry, or binding was rejected".to_owned())?;
         env.byte_array_from_slice(&digest)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_kagemusha_verify_recipient_registration_lineage_v1(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+    lineage: jni::objects::JByteArray<'_>,
+    verified_at_ms: jni::sys::jlong,
+    expected_evaluated_block_height: jni::sys::jlong,
+    expected_evaluated_block_hash: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "recipient registration lineage verification", |env| {
+        let request = read_java_byte_array(env, &request, "request")
+            .ok_or_else(|| "request must be bytes".to_owned())?;
+        if request.len()
+            > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        {
+            return Err("request exceeds the maximum peer archive size".to_owned());
+        }
+        let lineage = read_java_byte_array(env, &lineage, "lineage")
+            .ok_or_else(|| "lineage must be bytes".to_owned())?;
+        if lineage.len()
+            > iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES
+        {
+            return Err("lineage exceeds the maximum response size".to_owned());
+        }
+        let verified_at_ms = u64::try_from(verified_at_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "verifiedAtMilliseconds must be positive".to_owned())?;
+        let expected_evaluated_block_height = u64::try_from(expected_evaluated_block_height)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "expectedEvaluatedBlockHeight must be positive".to_owned())?;
+        let expected_evaluated_block_hash: [u8; 32] = read_java_byte_array(
+            env,
+            &expected_evaluated_block_hash,
+            "expectedEvaluatedBlockHash",
+        )
+        .ok_or_else(|| "expectedEvaluatedBlockHash must contain exactly 32 bytes".to_owned())?
+        .try_into()
+        .map_err(|_| "expectedEvaluatedBlockHash must contain exactly 32 bytes".to_owned())?;
+        if expected_evaluated_block_hash.iter().all(|byte| *byte == 0) {
+            return Err("expectedEvaluatedBlockHash must be non-zero".to_owned());
+        }
+        let verified = kagemusha_recipient_registration_lineage_verify_v1(
+            &request,
+            &lineage,
+            verified_at_ms,
+            expected_evaluated_block_height,
+            &expected_evaluated_block_hash,
+        )
+        .map_err(|_| {
+            "receiver lineage request, registration, transaction, policy, or finality was rejected"
+                .to_owned()
+        })?;
+        env.byte_array_from_slice(&verified)
             .map(jni::objects::JByteArray::into_raw)
             .map_err(|error| error.to_string())
     })
@@ -33134,6 +33664,33 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    lineage: jni::objects::JByteArray<'_>,
+    verified_at_ms: jni::sys::jlong,
+    expected_evaluated_block_height: jni::sys::jlong,
+    expected_evaluated_block_hash: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_verify_recipient_registration_lineage_v1(
+        &mut env,
+        request,
+        lineage,
+        verified_at_ms,
+        expected_evaluated_block_height,
+        expected_evaluated_block_hash,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipFrontierV4(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -33841,6 +34398,37 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     target_os = "macos",
     target_os = "windows"
 ))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePreparePeerSplitChangeV4(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    bundles: jni::objects::JObjectArray<'_>,
+    input_openings: jni::objects::JObjectArray<'_>,
+    recipient_request: jni::objects::JByteArray<'_>,
+    atomic_units: jni::objects::JByteArray<'_>,
+    scale: jni::sys::jint,
+    operation_id: jni::objects::JByteArray<'_>,
+    entropy: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_kagemusha_prepare_peer_split_change_v4(
+        &mut env,
+        bundles,
+        input_openings,
+        recipient_request,
+        atomic_units,
+        scale,
+        operation_id,
+        entropy,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareNoteOpeningV2(
@@ -34254,6 +34842,33 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     verified_at_ms: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_verify_recipient_request_v2(&mut env, request, verified_at_ms)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    lineage: jni::objects::JByteArray<'_>,
+    verified_at_ms: jni::sys::jlong,
+    expected_evaluated_block_height: jni::sys::jlong,
+    expected_evaluated_block_hash: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_verify_recipient_registration_lineage_v1(
+        &mut env,
+        request,
+        lineage,
+        verified_at_ms,
+        expected_evaluated_block_height,
+        expected_evaluated_block_hash,
+    )
 }
 
 #[cfg(any(
@@ -34958,6 +35573,37 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         &mut env,
         bundle,
         input_opening,
+        atomic_units,
+        scale,
+        operation_id,
+        entropy,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePreparePeerSplitChangeV4(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    bundles: jni::objects::JObjectArray<'_>,
+    input_openings: jni::objects::JObjectArray<'_>,
+    recipient_request: jni::objects::JByteArray<'_>,
+    atomic_units: jni::objects::JByteArray<'_>,
+    scale: jni::sys::jint,
+    operation_id: jni::objects::JByteArray<'_>,
+    entropy: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_kagemusha_prepare_peer_split_change_v4(
+        &mut env,
+        bundles,
+        input_openings,
+        recipient_request,
         atomic_units,
         scale,
         operation_id,

@@ -7,12 +7,33 @@ public enum KagemushaToriiAPI {
         case topUp = "/v1/offline/top-up"
         case redeem = "/v1/offline/redeem"
         case operations = "/v1/offline/operations"
+        case receiverLineage = "/v1/offline/receiver-lineage"
 
         public var path: String { rawValue }
     }
 
     public static func operationPath(_ operationId: String) throws -> String {
         "\(Endpoint.operations.path)/\(try KagemushaOperationValidation.operationId(operationId))"
+    }
+}
+
+/// Native-verified proof that a signed payment request's exact receiver registration is finalized.
+///
+/// Construction is restricted to the Torii client after native verification of the request
+/// digest, registration tuple/lifetime, admitting transaction and Merkle paths, policy, header,
+/// and historical V2 finality certificate.
+public struct KagemushaRecipientRegistrationLineage: Equatable, Sendable {
+    public static let maximumArchiveBytes = 4 * 1024 * 1024
+    public let noritoArchive: Data
+
+    init(verifiedArchive: Data) throws {
+        guard !verifiedArchive.isEmpty,
+              verifiedArchive.count <= Self.maximumArchiveBytes else {
+            throw ToriiClientError.invalidPayload(
+                "Kagemusha receiver lineage exceeds its canonical response bound"
+            )
+        }
+        self.noritoArchive = Data(verifiedArchive)
     }
 }
 

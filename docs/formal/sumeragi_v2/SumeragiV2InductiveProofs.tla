@@ -1452,7 +1452,7 @@ PROOF
          DEF PendingVoteWritesAuthorized, CurrentOpenPrepareForCommit,
              HistoricalLockedPrepareForCommit,
              InstalledTcSelectsPrepareFor,
-             NoHigherConflictingPrepareKnown, NodeTimedOut
+             NoHigherPrepareOriginKnown, NodeTimedOut
     <2>4. (\A request \in pendingTimeout:
              /\ request.node \in Honest
              /\ request.vote.signer = request.node
@@ -2411,7 +2411,7 @@ PROOF
                    CurrentOpenPrepareForCommit,
                    HistoricalLockedPrepareForCommit,
                    InstalledTcSelectsPrepareFor,
-                   NoHigherConflictingPrepareKnown, NodeTimedOut
+                   NoHigherPrepareOriginKnown, NodeTimedOut
           <5> QED BY <5>2, <5>6
         <4> QED BY <4>1
       <3>4. \A request \in pendingTimeout':
@@ -3410,7 +3410,7 @@ PROOF
                CurrentOpenPrepareForCommit,
                HistoricalLockedPrepareForCommit,
                InstalledTcSelectsPrepareFor,
-               NoHigherConflictingPrepareKnown, NodeTimedOut
+               NoHigherPrepareOriginKnown, NodeTimedOut
       <3>7. \A pending \in pendingTimeout':
                /\ pending.node \in Honest
                /\ pending.vote.signer = pending.node
@@ -3777,12 +3777,12 @@ PROOF
                         pending.node, pending.qc)'
             <6>1. request.vote.signer = request.node
               BY <3>1, <5>1 DEF PendingVoteWritesAuthorized
-            <6>2. NoHigherConflictingPrepareKnown(
+            <6>2. NoHigherPrepareOriginKnown(
                      pending.node, pending.qc)
-                     => NoHigherConflictingPrepareKnown(
+                     => NoHigherPrepareOriginKnown(
                           pending.node, pending.qc)'
               BY <5>3, <5>5, <6>1, Isa
-                 DEF NoHigherConflictingPrepareKnown
+                 DEF NoHigherPrepareOriginKnown
             <6> QED BY <5>5, <6>2, Isa
                DEF HistoricalLockedPrepareForCommit,
                    InstalledTcSelectsPrepareFor
@@ -4753,7 +4753,7 @@ PROOF
               BY <3>2, <6>2, Isa
                  DEF HistoricalLockedPrepareForCommit,
                      InstalledTcSelectsPrepareFor,
-                     NoHigherConflictingPrepareKnown
+                     NoHigherPrepareOriginKnown
             <6> QED BY <5>2, <6>1, <6>2
           <5> QED BY <3>2, <5>2, <5>3, Isa
         <4> QED BY <4>1
@@ -4979,7 +4979,7 @@ PROOF
                 BY <3>1, <7>2, Isa
                    DEF HistoricalLockedPrepareForCommit,
                        InstalledTcSelectsPrepareFor,
-                       NoHigherConflictingPrepareKnown
+                       NoHigherPrepareOriginKnown
               <7> QED BY <6>2, <7>1, <7>2
             <6> QED BY <3>1, <6>2, <6>3, Isa
           <5> QED BY <5>1
@@ -5344,7 +5344,7 @@ PROOF
                   BY <4>1, <8>2, Isa
                      DEF HistoricalLockedPrepareForCommit,
                          InstalledTcSelectsPrepareFor,
-                         NoHigherConflictingPrepareKnown
+                         NoHigherPrepareOriginKnown
                 <8> QED BY <7>2, <8>1, <8>2
               <7> QED BY <4>1, <7>2, <7>3, Isa
             <6> QED BY <6>1
@@ -5828,7 +5828,7 @@ PROOF
                CurrentOpenPrepareForCommit,
                HistoricalLockedPrepareForCommit,
                InstalledTcSelectsPrepareFor,
-               NoHigherConflictingPrepareKnown, NodeTimedOut
+               NoHigherPrepareOriginKnown, NodeTimedOut
       <3>6. \A pending \in pendingTimeout':
                /\ pending.node \in Honest
                /\ pending.vote.signer = pending.node
@@ -6242,7 +6242,7 @@ PROOF
                DEF CurrentOpenPrepareForCommit,
                    HistoricalLockedPrepareForCommit,
                    InstalledTcSelectsPrepareFor,
-                   NoHigherConflictingPrepareKnown, NodeTimedOut
+                   NoHigherPrepareOriginKnown, NodeTimedOut
           <5> QED BY <5>4, <5>5, <5>6, Isa
         <4> QED BY <4>1
       <3> QED BY <3>2, <3>3, <3>4
@@ -7084,7 +7084,7 @@ PROOF
                      /\ TCValid(pending.tc)'
                      /\ pending.tc.votes # {}
                      /\ pending.tc.view + 1 \in Views
-                     /\ pending.tc.view >= nodeView'[pending.node]
+                     /\ pending.tc.view + 1 >= nodeView'[pending.node]
             /\ \A pending \in pendingDecision':
                      /\ pending.qc \in commitQCs'
                      /\ pending.qc.context = context'
@@ -7330,7 +7330,7 @@ PROOF
              DEF PersistObservePrepare,
                  HistoricalLockedPrepareForCommit,
                  InstalledTcSelectsPrepareFor,
-                 NoHigherConflictingPrepareKnown
+                 NoHigherPrepareOriginKnown
         <4>8. (\A pending \in pendingLockCommit:
                  /\ pending.node \in Honest
                  /\ pending.vote.phase = "Commit"
@@ -7784,7 +7784,7 @@ PROOF
                  DEF CurrentOpenPrepareForCommit,
                      HistoricalLockedPrepareForCommit,
                      InstalledTcSelectsPrepareFor,
-                     NoHigherConflictingPrepareKnown, NodeTimedOut
+                     NoHigherPrepareOriginKnown, NodeTimedOut
             <6> QED BY <6>1, <6>2, <6>3, Isa
           <5>3. CASE pending = Request
             <6>1. /\ context' = context
@@ -7805,7 +7805,7 @@ PROOF
                DEF CurrentOpenPrepareForCommit,
                    HistoricalLockedPrepareForCommit,
                    InstalledTcSelectsPrepareFor,
-                   NoHigherConflictingPrepareKnown, NodeTimedOut
+                   NoHigherPrepareOriginKnown, NodeTimedOut
           <5> QED BY <5>1, <5>2, <5>3
         <4> QED BY <4>1
       <3>4. UNCHANGED
@@ -8575,7 +8575,7 @@ PROOF
                  DEF CurrentOpenPrepareForCommit,
                      HistoricalLockedPrepareForCommit,
                      InstalledTcSelectsPrepareFor,
-                     NoHigherConflictingPrepareKnown, NodeTimedOut
+                     NoHigherPrepareOriginKnown, NodeTimedOut
             <6> QED BY <6>3, <6>5, <6>7, <6>8
           <5> QED BY <5>1
         <4>5. \A pending \in pendingTimeout':
@@ -8707,7 +8707,7 @@ PROOF
                        /\ TCValid(pending.tc)'
                        /\ pending.tc.votes # {}
                        /\ pending.tc.view + 1 \in Views
-                       /\ pending.tc.view >= nodeView'[pending.node]
+                       /\ pending.tc.view + 1 >= nodeView'[pending.node]
               /\ \A pending \in pendingDecision':
                        /\ pending.qc \in commitQCs'
                        /\ pending.qc.context = context'
@@ -9172,7 +9172,7 @@ PROOF
                          /\ prepareVote.subject # request.qc.subject
                   BY <7>7
                      DEF HistoricalLockedPrepareForCommit,
-                         NoHigherConflictingPrepareKnown
+                         NoHigherPrepareOriginKnown
                 <8>4. \E prepareVote \in prepareIntents:
                          /\ prepareVote.signer = request.node
                          /\ prepareVote.context = request.qc.context
@@ -9533,7 +9533,7 @@ PROOF
                  /\ TCValid(pending.tc)'
                  /\ pending.tc.votes # {}
                  /\ pending.tc.view + 1 \in Views
-                 /\ pending.tc.view >= nodeView'[pending.node]
+                 /\ pending.tc.view + 1 >= nodeView'[pending.node]
           BY <1>1, <4>1, <4>2, Isa
              DEF PendingCertificateWritesAuthorized, FormCommitQC,
                  TCValid, AuthenticatedHighRef, HighRefValid,
@@ -9838,20 +9838,20 @@ PROOF
                  /\ TCValid(pending.tc)'
                  /\ pending.tc.votes # {}
                  /\ pending.tc.view + 1 \in Views
-                 /\ pending.tc.view >= nodeView'[pending.node]
+                 /\ pending.tc.view + 1 >= nodeView'[pending.node]
           <5>1. ASSUME NEW pending \in pendingInstallTC'
                  PROVE /\ pending.tc \in formedTCs'
                        /\ pending.tc.context = context'
                        /\ TCValid(pending.tc)'
                        /\ pending.tc.votes # {}
                        /\ pending.tc.view + 1 \in Views
-                       /\ pending.tc.view >= nodeView'[pending.node]
+                       /\ pending.tc.view + 1 >= nodeView'[pending.node]
             <6>1. /\ pending.tc \in formedTCs
                   /\ pending.tc.context = context
                   /\ TCValid(pending.tc)
                   /\ pending.tc.votes # {}
                   /\ pending.tc.view + 1 \in Views
-                  /\ pending.tc.view >= nodeView[pending.node]
+                  /\ pending.tc.view + 1 >= nodeView[pending.node]
               BY <1>1, <4>0, <5>1
                  DEF StrongInductiveInvariant,
                      ReducerProvenanceInvariant,
@@ -10653,7 +10653,7 @@ PROOF
            /\ TCValid(Request.tc)'
            /\ Request.tc.votes # {}
            /\ Request.tc.view + 1 \in Views
-           /\ Request.tc.view >= nodeView'[Request.node]
+           /\ Request.tc.view + 1 >= nodeView'[Request.node]
       <3>1. Request.tc \in formedTCs'
         BY <1>1, <2>1, <2>9, Isa DEF FormTC
       <3>2. Request.tc.context = context'
@@ -10673,7 +10673,7 @@ PROOF
         BY <2>1, <2>9
       <3>5. Request.tc.view + 1 \in Views
         BY <2>1, <2>9
-      <3>6. Request.tc.view >= nodeView'[Request.node]
+      <3>6. Request.tc.view + 1 >= nodeView'[Request.node]
         BY <1>1, <2>1, <2>9 DEF FormTC
       <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5, <3>6
     <2>11. formedTCs \subseteq formedTCs'
@@ -10697,20 +10697,20 @@ PROOF
                  /\ TCValid(pending.tc)'
                  /\ pending.tc.votes # {}
                  /\ pending.tc.view + 1 \in Views
-                 /\ pending.tc.view >= nodeView'[pending.node]
+                 /\ pending.tc.view + 1 >= nodeView'[pending.node]
         <4>1. ASSUME NEW pending \in pendingInstallTC
                PROVE /\ pending.tc \in formedTCs'
                      /\ pending.tc.context = context'
                      /\ TCValid(pending.tc)'
                      /\ pending.tc.votes # {}
                      /\ pending.tc.view + 1 \in Views
-                     /\ pending.tc.view >= nodeView'[pending.node]
+                     /\ pending.tc.view + 1 >= nodeView'[pending.node]
           <5>1. /\ pending.tc \in formedTCs
                 /\ pending.tc.context = context
                 /\ TCValid(pending.tc)
                 /\ pending.tc.votes # {}
                 /\ pending.tc.view + 1 \in Views
-                /\ pending.tc.view >= nodeView[pending.node]
+                /\ pending.tc.view + 1 >= nodeView[pending.node]
             BY <1>1, <4>1
                DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
                    PendingCertificateWritesAuthorized
@@ -10731,14 +10731,14 @@ PROOF
                  /\ TCValid(pending.tc)'
                  /\ pending.tc.votes # {}
                  /\ pending.tc.view + 1 \in Views
-                 /\ pending.tc.view >= nodeView'[pending.node]
+                 /\ pending.tc.view + 1 >= nodeView'[pending.node]
         <4>1. ASSUME NEW pending \in pendingInstallTC'
                PROVE /\ pending.tc \in formedTCs'
                      /\ pending.tc.context = context'
                      /\ TCValid(pending.tc)'
                      /\ pending.tc.votes # {}
                      /\ pending.tc.view + 1 \in Views
-                     /\ pending.tc.view >= nodeView'[pending.node]
+                     /\ pending.tc.view + 1 >= nodeView'[pending.node]
           <5>1. pending \in pendingInstallTC \/ pending = Request
             BY <3>3, <4>1, Isa
           <5>2. CASE pending \in pendingInstallTC
@@ -11126,7 +11126,7 @@ PROOF
           /\ TCValid(tc)
           /\ tc.votes # {}
           /\ tc.view + 1 \in Views
-          /\ tc.view >= nodeView[node]
+          /\ tc.view + 1 >= nodeView[node]
           /\ node \in ValidatorIds
           /\ TcWellTyped(tc)
       <3>1. TcAt(node, tc) \in receivedTCs
@@ -11147,7 +11147,7 @@ PROOF
            DEF StrongInductiveInvariant, Safety, TypeInvariant, TcAt
       <3>4. /\ tc.votes # {}
             /\ tc.view + 1 \in Views
-            /\ tc.view >= nodeView[node]
+            /\ tc.view + 1 >= nodeView[node]
         BY <1>1, <3>2 DEF BeginInstallTC, TCValid
       <3> QED BY <3>2, <3>3, <3>4
     <2>2. OnePendingPersistencePerNode'
@@ -11174,7 +11174,7 @@ PROOF
           /\ TCValid(Request.tc)'
           /\ Request.tc.votes # {}
           /\ Request.tc.view + 1 \in Views
-          /\ Request.tc.view >= nodeView'[Request.node]
+          /\ Request.tc.view + 1 >= nodeView'[Request.node]
       BY <2>1, <2>3, Isa
          DEF StableVars, Request, InstallTcWal,
              TCValid, AuthenticatedHighRef, HighRefValid,
@@ -11895,11 +11895,11 @@ PROOF
           <5>6. InstalledTcSelectsPrepareFor(other.node, other.qc)
                    => InstalledTcSelectsPrepareFor(other.node, other.qc)'
             BY <5>4, Isa DEF InstalledTcSelectsPrepareFor
-          <5>7. NoHigherConflictingPrepareKnown(other.node, other.qc)
-                   <=> NoHigherConflictingPrepareKnown(
+          <5>7. NoHigherPrepareOriginKnown(other.node, other.qc)
+                   <=> NoHigherPrepareOriginKnown(
                         other.node, other.qc)'
             BY <3>6, <3>7, <5>1, Isa
-               DEF NoHigherConflictingPrepareKnown
+               DEF NoHigherPrepareOriginKnown
           <5>8. HistoricalLockedPrepareForCommit(
                    other.node, other.qc)
                    => HistoricalLockedPrepareForCommit(
@@ -11981,14 +11981,14 @@ PROOF
                 /\ TCValid(other.tc)'
                 /\ other.tc.votes # {}
                 /\ other.tc.view + 1 \in Views
-                /\ other.tc.view >= nodeView'[other.node]
+                /\ other.tc.view + 1 >= nodeView'[other.node]
         <4>1. ASSUME NEW other \in pendingInstallTC'
                PROVE /\ other.tc \in formedTCs'
                      /\ other.tc.context = context'
                      /\ TCValid(other.tc)'
                      /\ other.tc.votes # {}
                      /\ other.tc.view + 1 \in Views
-                     /\ other.tc.view >= nodeView'[other.node]
+                     /\ other.tc.view + 1 >= nodeView'[other.node]
           <5>1. other \in AllPendingRequests'
             BY <4>1 DEF AllPendingRequests
           <5>2. /\ other.tc \in formedTCs
@@ -11996,7 +11996,7 @@ PROOF
                 /\ TCValid(other.tc)
                 /\ other.tc.votes # {}
                 /\ other.tc.view + 1 \in Views
-                /\ other.tc.view >= nodeView[other.node]
+                /\ other.tc.view + 1 >= nodeView[other.node]
             BY <3>1, <3>8, <4>1
                DEF PendingCertificateWritesAuthorized
           <5>3. /\ formedTCs' = formedTCs

@@ -2293,15 +2293,28 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         self.loadedBridgeAbiVersion = abiVersion
 
-        self.encodeTransferFn = connect_norito_encode_transfer_signed_transaction
-        self.encodeTransferWithAlgFn = connect_norito_encode_transfer_signed_transaction_alg
         let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
         self.bridgeHandle = Self.bridgeHandleForStaticFallback(
             currentHandle: self.bridgeHandle,
             processHandle: staticHandle
         )
-        self.encodeMintFn = connect_norito_encode_mint_signed_transaction
-        self.encodeMintWithAlgFn = connect_norito_encode_mint_signed_transaction_alg
+        // Swift 6.2 can fail to produce a diagnostic while coercing these large
+        // imported C signatures directly to @convention(c) optionals. Resolve
+        // the statically linked symbols through the process handle instead;
+        // this is the same typed binding path used for a dynamically loaded
+        // bridge and keeps the ABI contract identical.
+        self.encodeTransferFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_encode_transfer_signed_transaction") }
+            .map { unsafeBitCast($0, to: EncodeTransferFn.self) }
+        self.encodeTransferWithAlgFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_encode_transfer_signed_transaction_alg") }
+            .map { unsafeBitCast($0, to: EncodeTransferWithAlgFn.self) }
+        self.encodeMintFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_encode_mint_signed_transaction") }
+            .map { unsafeBitCast($0, to: EncodeMintFn.self) }
+        self.encodeMintWithAlgFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_encode_mint_signed_transaction_alg") }
+            .map { unsafeBitCast($0, to: EncodeMintWithAlgFn.self) }
         if let instructionBoxSymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_encode_transfer_instruction_box")
         }) {

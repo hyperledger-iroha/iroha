@@ -253,6 +253,8 @@ fn application_decision_projection(
         ),
         height: decision.round.height,
         view: decision.round.view,
+        proposal_height: decision.proposal_round.height,
+        proposal_view: decision.proposal_round.view,
         phase: decision.phase as u8,
         subject: application_typed_identity(
             IDENTITY_DOMAIN_SUBJECT,
@@ -349,6 +351,7 @@ fn application_body_projection(
 #[must_use]
 pub(crate) struct DurableApplicationEvidence {
     task_tag: EventTag,
+    owner_tag: EventTag,
     task_generation: u64,
     task_work_id: EffectWorkId,
     context: wire::HeightContext,
@@ -373,6 +376,11 @@ impl DurableApplicationEvidence {
     /// Reducer incarnation which created the Apply task.
     pub(crate) const fn task_tag(&self) -> EventTag {
         self.task_tag
+    }
+
+    /// Reducer incarnation captured by the executor when it authorized Apply.
+    pub(crate) const fn owner_tag(&self) -> EventTag {
+        self.owner_tag
     }
 
     /// Actor-local task generation, distinct from consensus view.
@@ -548,6 +556,11 @@ impl DurableApplicationEvidence {
                 view: self.task_tag().view(),
                 generation: self.task_tag().generation().get(),
             },
+            owner_tag: TagProjection {
+                height: self.owner_tag().height(),
+                view: self.owner_tag().view(),
+                generation: self.owner_tag().generation().get(),
+            },
             task_generation: self.task_generation(),
             context_id,
             context_height: self.context().height,
@@ -623,7 +636,10 @@ impl DurableApplicationEvidence {
         context.validate().is_ok()
             && certificate.validate(context).is_ok()
             && self.task_tag().height() == context.height
-            && self.task_tag().view() == self.commit_round().view
+            // Lifecycle ownership is independent of the certificate's
+            // intrinsic consensus round. The executor mints this owner only
+            // after matching the effect tag to the current reducer tag.
+            && self.task_tag() == self.owner_tag()
             && self.task_tag().generation().get() == self.task_generation()
             && self.commit_phase() == wire::GlobalPhase::Commit
             && self.commit_round().context_id == context.id()
@@ -634,7 +650,11 @@ impl DurableApplicationEvidence {
             && self.commit_aggregate_signature()
                 == artifact.commit_qc.aggregate_signature.as_slice()
             && self.validated_context_id() == context.id()
-            && self.validated_round() == self.commit_round()
+            && self.validated_round().height == context.height
+            // The durable body must be the exact immutable proposal origin
+            // authenticated by the CommitQC, independently of its later
+            // finality round.
+            && self.validated_round() == certificate.proposal_round
             && self.validated_subject() == self.subject()
             && self.validated_manifest_hash() == self.validated_receipt().durable().manifest_hash()
             && self.validated_body_frame_hash() == self.validated_receipt().durable().frame_hash()
@@ -985,6 +1005,7 @@ impl V2ApplyService {
         let artifact_hash = HashOf::new(&artifact);
         let evidence = DurableApplicationEvidence {
             task_tag: task.tag(),
+            owner_tag: task.authorized_owner_tag(),
             task_generation: task.tag().generation().get(),
             task_work_id: task.id(),
             context: context.clone(),
@@ -1684,6 +1705,7 @@ mod tests {
                 .expect("derive exact fixture execution commitment");
             let mut certificate = wire::QuorumCertificate {
                 round,
+                proposal_round: round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
                 execution_commitment,
@@ -1692,6 +1714,7 @@ mod tests {
             };
             let preimage = wire::Vote {
                 round,
+                proposal_round: round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
                 execution_commitment,
@@ -1915,6 +1938,7 @@ mod tests {
         let artifact = completion.artifact().clone();
         let evidence = DurableApplicationEvidence {
             task_tag: fixture.task.tag(),
+            owner_tag: fixture.task.authorized_owner_tag(),
             task_generation: fixture.task.tag().generation().get(),
             task_work_id: fixture.task.id(),
             context: fixture.context.clone(),
@@ -1941,6 +1965,7 @@ mod tests {
         };
         assert!(evidence.is_exact());
         assert_eq!(evidence.task_tag(), fixture.task.tag());
+        assert_eq!(evidence.owner_tag(), fixture.task.authorized_owner_tag());
         assert_eq!(
             evidence.task_generation(),
             fixture.task.tag().generation().get()
@@ -2017,6 +2042,47 @@ mod tests {
                 .is_ok(),
             "the exact native evidence must mint the typed completion"
         );
+
+        let mut delayed_decision = evidence.clone();
+        delayed_decision.task_tag = EventTag::new(
+            delayed_decision.task_tag.height(),
+            delayed_decision
+                .task_tag
+                .view()
+                .checked_add(1)
+                .expect("fixture lifecycle view increment"),
+            Generation::new(
+                delayed_decision
+                    .task_generation
+                    .checked_add(1)
+                    .expect("fixture lifecycle generation increment"),
+            ),
+        );
+        delayed_decision.owner_tag = delayed_decision.task_tag;
+        delayed_decision.task_generation = delayed_decision.task_tag.generation().get();
+        assert!(
+            delayed_decision.is_exact(),
+            "a current lifecycle owner must retain an exact historical CommitQC"
+        );
+        assert!(
+            fixture
+                .service
+                .finish_durable_apply_completion(delayed_decision)
+                .is_ok(),
+            "a delayed CommitQC must mint the typed completion after a timeout fence"
+        );
+
+        let mut altered = evidence.clone();
+        altered.owner_tag = EventTag::new(
+            altered.task_tag.height(),
+            altered
+                .task_tag
+                .view()
+                .checked_add(1)
+                .expect("fixture owner view increment"),
+            altered.task_tag.generation(),
+        );
+        assert!(!altered.is_exact());
 
         let mut altered = evidence.clone();
         altered.task_generation = altered
@@ -2728,6 +2794,7 @@ mod tests {
             certificate.round.view = fixture.body.header().view_change_index().saturating_add(1);
             let preimage = wire::Vote {
                 round: certificate.round,
+                proposal_round: certificate.proposal_round,
                 phase: certificate.phase,
                 subject: certificate.subject,
                 execution_commitment: certificate.execution_commitment,
@@ -3130,6 +3197,7 @@ mod tests {
             keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let preimage = wire::Vote {
                 round: certificate.round,
+                proposal_round: certificate.proposal_round,
                 phase: certificate.phase,
                 subject: certificate.subject,
                 execution_commitment: forged_commitment,

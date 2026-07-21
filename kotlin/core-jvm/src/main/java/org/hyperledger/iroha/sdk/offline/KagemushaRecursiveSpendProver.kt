@@ -947,6 +947,83 @@ class KagemushaRecursiveSpendProver private constructor() {
             }
         }
 
+        /**
+         * Prepare sender change for an ordinary one- or two-input peer split.
+         *
+         * Native reauthenticates every ordered bundle/opening pair, enforces shared
+         * chain/asset/root/artifact context and exact value conservation against [recipientRequest],
+         * then derives an owned opening under a peer-split-only domain.
+         */
+        @JvmStatic
+        fun preparePeerSplitChangeV4(
+            inputs: List<SpendableBranchV4>,
+            recipientRequest: VerifiedRecipientPaymentRequest,
+            changeAmount: KagemushaScaledAmount,
+            operationId: ByteArray,
+            entropy: ByteArray,
+        ): PeerSplitChangePreparationV4 {
+            requireArtifactBridge()
+            require(inputs.size in 1..MAXIMUM_INPUTS_PER_TRANSITION) {
+                "inputs must contain one or two spendable branches"
+            }
+            val operation = requireDigest(operationId, "operationId")
+            val freshEntropy = requireDigest(entropy, "entropy")
+            require(!operation.contentEquals(freshEntropy)) {
+                "entropy must be distinct from operationId"
+            }
+            val bundles = inputs.map { it.bundle.noritoEncoded() }.toTypedArray()
+            val openings = inputs.map { it.opening.noritoEncoded() }.toTypedArray()
+            val signedRequest = recipientRequest.request.noritoEncoded()
+            val atomicUnits = utf8(changeAmount.atomicUnits, "atomicUnits")
+            var fields: Array<ByteArray>? = null
+            var opening: NoteOpening? = null
+            return try {
+                val nativeFields = nativePreparePeerSplitChangeV4(
+                    bundles,
+                    openings,
+                    signedRequest,
+                    atomicUnits,
+                    changeAmount.scale,
+                    operation,
+                    freshEntropy,
+                ).also { fields = it }
+                requireFieldCount(nativeFields, 7, "V4 peer-split change preparation")
+                for ((index, name) in listOf(
+                    1 to "rho",
+                    2 to "diversifier",
+                    3 to "commitment",
+                    4 to "spendNullifier",
+                )) {
+                    require(nativeFields[index].size == 32 && nativeFields[index].any { it != 0.toByte() }) {
+                        "$name must be a non-zero 32-byte native field"
+                    }
+                }
+                val projectedAmount = amount(nativeFields[5], nativeFields[6])
+                check(projectedAmount == changeAmount) {
+                    "native Kagemusha peer-split change amount changed"
+                }
+                val preparedOpening = NoteOpening(nativeFields[0]).also { opening = it }
+                opening = null
+                PeerSplitChangePreparationV4(
+                    preparedOpening,
+                    nativeFields[1],
+                    nativeFields[2],
+                    nativeFields[3],
+                    nativeFields[4],
+                    projectedAmount,
+                )
+            } finally {
+                opening?.destroy()
+                fields?.forEach { it.fill(0) }
+                atomicUnits.fill(0)
+                signedRequest.fill(0)
+                openings.forEach { it.fill(0) }
+                bundles.forEach { it.fill(0) }
+                freshEntropy.fill(0)
+                operation.fill(0)
+            }
+        }
+
         @JvmStatic
         fun signRecipientPaymentRequest(
             preparation: RecipientRequestPreparation,
@@ -978,6 +1055,50 @@ class KagemushaRecursiveSpendProver private constructor() {
                 verifiedAtMilliseconds,
                 projection,
             )
+        }
+
+        /**
+         * Verify a proof-bearing receiver registration lineage against the exact signed request.
+         *
+         * Native authenticates the registration tuple and lifetime, admitting transaction and
+         * Merkle paths, policy continuity, block header, and historical V2 finality certificate.
+         */
+        @JvmStatic
+        fun verifyRecipientRegistrationLineage(
+            request: RecipientPaymentRequest,
+            lineageArchive: ByteArray,
+            verifiedAtMilliseconds: Long,
+            expectedEvaluatedBlockHeight: Long,
+            expectedEvaluatedBlockHash: ByteArray,
+        ): RecipientRegistrationLineage {
+            requireArtifactBridge()
+            require(verifiedAtMilliseconds > 0) { "verifiedAtMilliseconds must be positive" }
+            require(expectedEvaluatedBlockHeight > 0) {
+                "expectedEvaluatedBlockHeight must be positive"
+            }
+            val expectedHash = requireDigest(
+                expectedEvaluatedBlockHash,
+                "expectedEvaluatedBlockHash",
+            )
+            val bounded = requireBoundedBytes(
+                lineageArchive,
+                "lineageArchive",
+                MAX_TORII_RESPONSE_BYTES,
+            )
+            return try {
+                RecipientRegistrationLineage(
+                    nativeVerifyRecipientRegistrationLineageV1(
+                        request.noritoEncoded(),
+                        bounded,
+                        verifiedAtMilliseconds,
+                        expectedEvaluatedBlockHeight,
+                        expectedHash,
+                    ),
+                )
+            } finally {
+                expectedHash.fill(0)
+                bounded.fill(0)
+            }
         }
 
         @JvmStatic
@@ -1941,7 +2062,8 @@ class KagemushaRecursiveSpendProver private constructor() {
                     header.compression == NoritoHeader.COMPRESSION_NONE &&
                         header.flags == NoritoHeader.COMPACT_LEN &&
                         decoded.payload.isNotEmpty() &&
-                        archive.size == NoritoHeader.HEADER_LENGTH + decoded.payload.size &&
+                        archive.size == NoritoHeader.HEADER_LENGTH +
+                            peerArchivePadding(schema) + decoded.payload.size &&
                         header.encode().contentEquals(
                             archive.copyOfRange(0, NoritoHeader.HEADER_LENGTH),
                         ),
@@ -1952,6 +2074,13 @@ class KagemushaRecursiveSpendProver private constructor() {
                 archive.fill(0)
                 throw failure
             }
+        }
+
+        private fun peerArchivePadding(schema: String): Int = when (schema) {
+            "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" -> 8
+            "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2" -> 0
+            else -> 0
         }
 
         private fun hex(digest: ByteArray): String = buildString(64) {
@@ -2045,6 +2174,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic private external fun nativeCreateRecipientRequestV2(payload: ByteArray, signature: ByteArray): ByteArray
         @JvmStatic private external fun nativeVerifyRecipientRequestV2(request: ByteArray, verifiedAtMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativeVerifyRecipientRegistrationLineageV1(request: ByteArray, lineage: ByteArray, verifiedAtMilliseconds: Long, expectedEvaluatedBlockHeight: Long, expectedEvaluatedBlockHash: ByteArray): ByteArray
         @JvmStatic private external fun nativeBuildOutputMembershipFrontierV4(leafIndex: Int, flattenedSiblings: ByteArray, directions: ByteArray, root: ByteArray): ByteArray
         @JvmStatic private external fun nativeDeriveOutputMembershipPathsV4(frontier: ByteArray, recipientCommitment: ByteArray, changeCommitment: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeValidateSpendableBranchV4(bundle: ByteArray, provenance: ByteArray, membershipWitness: ByteArray, opening: ByteArray, blockHeight: Long): ByteArray
@@ -2076,6 +2206,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeProjectOperationStatusV4(status: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBranchClaimsConflictV2(left: ByteArray, right: ByteArray): Boolean
         @JvmStatic private external fun nativePrepareRedemptionChangeV4(bundle: ByteArray, inputOpening: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, entropy: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativePreparePeerSplitChangeV4(bundles: Array<ByteArray>, inputOpenings: Array<ByteArray>, recipientRequest: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, entropy: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativePrepareNoteOpeningV2(spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray): ByteArray
         @JvmStatic private external fun nativeProjectRecipientRequestV2(request: ByteArray): Array<ByteArray>
     }
@@ -2171,21 +2302,29 @@ class KagemushaRecursiveSpendProver private constructor() {
 
     class RecipientPaymentRequest internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecipientPaymentRequestV2",
+        "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
         "recipientPaymentRequest",
         MAX_PEER_ARCHIVE_BYTES_V2,
     )
 
+    /** Native-verified proof that the request's exact receiver registration is finalized. */
+    class RecipientRegistrationLineage internal constructor(archive: ByteArray) : CanonicalArchive(
+        archive,
+        "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage",
+        "recipientRegistrationLineage",
+        MAX_TORII_RESPONSE_BYTES,
+    )
+
     class PeerPayment internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendPeerPaymentV4",
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4",
         "peerPayment",
         MAX_PEER_ARCHIVE_BYTES_V4,
     )
 
     class ReceiverAcknowledgement internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaReceiverAcknowledgementV2",
+        "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2",
         "receiverAcknowledgement",
         MAX_PEER_ARCHIVE_BYTES_V2,
     )
@@ -2340,6 +2479,64 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         private fun requireOpen() {
             check(!closed) { "redemption change preparation has been destroyed" }
+        }
+    }
+
+    /** Owns native-derived ordinary peer-split change until [takeOpening] transfers it. */
+    class PeerSplitChangePreparationV4 internal constructor(
+        opening: NoteOpening,
+        rho: ByteArray,
+        diversifier: ByteArray,
+        commitment: ByteArray,
+        spendNullifier: ByteArray,
+        val amount: KagemushaScaledAmount,
+    ) : AutoCloseable {
+        private var openingValue: NoteOpening? = opening
+        private val rhoValue = requireDigest(rho, "rho")
+        private val diversifierValue = requireDigest(diversifier, "diversifier")
+        private val commitmentValue = requireDigest(commitment, "commitment")
+        private val spendNullifierValue = requireDigest(spendNullifier, "spendNullifier")
+        private var closed = false
+
+        init {
+            check(!opening.isDestroyed()) { "opening has already been destroyed" }
+            check(!rhoValue.contentEquals(diversifierValue)) {
+                "native Kagemusha peer-split opening coordinates collide"
+            }
+        }
+
+        @Synchronized fun takeOpening(): NoteOpening {
+            requireOpen()
+            val owned = checkNotNull(openingValue) {
+                "peer-split change opening has already been transferred"
+            }
+            openingValue = null
+            return owned
+        }
+
+        @Synchronized fun rho(): ByteArray = copyOpen(rhoValue)
+        @Synchronized fun diversifier(): ByteArray = copyOpen(diversifierValue)
+        @Synchronized fun commitment(): ByteArray = copyOpen(commitmentValue)
+        @Synchronized fun spendNullifier(): ByteArray = copyOpen(spendNullifierValue)
+
+        @Synchronized override fun close() {
+            if (closed) return
+            openingValue?.destroy()
+            openingValue = null
+            rhoValue.fill(0)
+            diversifierValue.fill(0)
+            commitmentValue.fill(0)
+            spendNullifierValue.fill(0)
+            closed = true
+        }
+
+        private fun copyOpen(value: ByteArray): ByteArray {
+            requireOpen()
+            return value.copyOf()
+        }
+
+        private fun requireOpen() {
+            check(!closed) { "peer-split change preparation has been destroyed" }
         }
     }
 
@@ -3448,13 +3645,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun transactionHash(): ByteArray = transactionHashValue.copyOf()
     }
 
-    /** Strict typed client for the four first-release Kagemusha Torii routes. */
+    /** Strict typed client for the five first-release Kagemusha Torii routes. */
     class ToriiClient internal constructor(baseUri: URI, private val transport: TransportExecutor) {
         companion object {
             const val READINESS_PATH: String = "/v1/offline/readiness"
             const val TOP_UP_PATH: String = "/v1/offline/top-up"
             const val REDEEM_PATH: String = "/v1/offline/redeem"
             const val OPERATIONS_PATH: String = "/v1/offline/operations"
+            const val RECEIVER_LINEAGE_PATH: String = "/v1/offline/receiver-lineage"
             const val NORITO_MEDIA_TYPE: String = "application/x-norito"
 
             private fun requireOperationId(value: String?): String {
@@ -3499,6 +3697,38 @@ class KagemushaRecursiveSpendProver private constructor() {
                     .build(),
                 200,
             ).thenApply { Readiness(it.body) }
+        }
+
+        fun getRecipientRegistrationLineage(
+            request: RecipientPaymentRequest,
+            readiness: Readiness,
+            verifiedAtMilliseconds: Long,
+        ): CompletableFuture<RecipientRegistrationLineage> {
+            require(verifiedAtMilliseconds > 0) { "verifiedAtMilliseconds must be positive" }
+            val readinessProjection = projectReadiness(readiness)
+            val requestProjection = projectRecipientPaymentRequest(request)
+            require(readinessProjection.assetDefinitionId == requestProjection.assetDefinitionId) {
+                "readiness asset must match the recipient request asset"
+            }
+            return execute(
+                TransportRequest.builder()
+                    .setMethod("POST")
+                    .setUri(URI.create("$baseUri$RECEIVER_LINEAGE_PATH"))
+                    .addHeader("Accept", NORITO_MEDIA_TYPE)
+                    .addHeader("Content-Type", NORITO_MEDIA_TYPE)
+                    .setBody(request.noritoEncoded())
+                    .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
+                    .build(),
+                200,
+            ).thenApply {
+                verifyRecipientRegistrationLineage(
+                    request,
+                    it.body,
+                    verifiedAtMilliseconds,
+                    readinessProjection.evaluatedBlockHeight,
+                    readinessProjection.evaluatedBlockHash(),
+                )
+            }
         }
 
         fun submitTopUp(

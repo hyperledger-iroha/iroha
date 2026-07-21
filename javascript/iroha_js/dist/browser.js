@@ -64,16 +64,20 @@ export {
 } from "./instructionBuilders.js";
 
 export {
+  noritoDecodeBlockProofs,
   noritoDecodeInstruction,
   noritoEncodeInstruction,
   noritoEncodeMultisigContractCallApproveRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigProposeRequest,
+  verifyBlockMerkleProof,
+  verifyBlockProofs,
 } from "./norito.js";
 
 export {
   ToriiBrowserClient,
   ToriiBrowserHttpError,
+  ToriiBrowserStreamGapError,
   ToriiBrowserClient as ToriiClient,
   ToriiBrowserHttpError as ToriiHttpError,
 } from "./toriiBrowserClient.js";

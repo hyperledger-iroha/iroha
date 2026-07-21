@@ -151,6 +151,9 @@ pub mod uri {
     pub const QUERY: &str = "/v1/query";
     /// URI used to evaluate offline-payment readiness.
     pub const OFFLINE_READINESS: &str = crate::route_catalog::offline::READINESS_PATH;
+    /// URI used to resolve proof-bearing active receiver registration lineage.
+    pub const OFFLINE_RECIPIENT_LINEAGE: &str =
+        crate::route_catalog::offline::RECIPIENT_LINEAGE_PATH;
     /// URI used to submit an online-to-offline top-up operation.
     pub const OFFLINE_TOP_UP: &str = crate::route_catalog::offline::TOP_UP_PATH;
     /// URI used to submit an offline redemption operation.

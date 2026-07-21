@@ -244,6 +244,10 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_bridge::KagemushaRecursiveSpendRedemptionChangePrepareRequestV4"
     public static let redemptionChangePrepareResultWireNameV4 =
         "connect_norito_bridge::KagemushaRecursiveSpendRedemptionChangePrepareResultV4"
+    public static let peerSplitChangePrepareRequestWireNameV4 =
+        "connect_norito_bridge::KagemushaRecursiveSpendPeerSplitChangePrepareRequestV4"
+    public static let peerSplitChangePrepareResultWireNameV4 =
+        "connect_norito_bridge::KagemushaRecursiveSpendPeerSplitChangePrepareResultV4"
     public static let branchPathWireName = wire("KagemushaRecursiveSpendBranchPathV2")
     public static let branchClaimWireName = wire("KagemushaRecursiveSpendBranchClaimV2")
     public static let recipientRequestPayloadWireName =
@@ -422,6 +426,9 @@ public enum KagemushaRecursiveSpend {
     public static let maximumOutputMembershipFrontierArchiveBytesV4 = 4 * 1024
     public static let maximumOutputMembershipPathsArchiveBytesV4 = 16 * 1024
     public static let maximumRedemptionChangePreparationArchiveBytesV4 = 64 * 1024
+    public static let maximumPeerSplitChangePreparationArchiveBytesV4 = 64 * 1024
+    public static let maximumPeerSplitChangePreparationRequestArchiveBytesV4 =
+        2 * maximumPeerArchiveBytesV4 + 3 * maximumPeerArchiveBytesV2
     public static let maximumBranchClaims = 2
     public static let transitionTagBytes = 24
     public static let transitionTagDomain =

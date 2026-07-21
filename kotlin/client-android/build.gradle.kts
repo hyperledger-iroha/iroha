@@ -71,7 +71,25 @@ publishing {
 
 dependencies {
     api(project(":core-jvm"))
+    implementation(libs.play.services.nearby)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
+    testImplementation(kotlin("test"))
+    testImplementation(libs.junit.params)
+    testRuntimeOnly(libs.junit.jupiter.engine)
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+    if (name == "testDebugUnitTest") {
+        dependsOn("processDebugManifest")
+        systemProperty(
+            "iroha.clientAndroid.mergedManifest",
+            layout.buildDirectory.file(
+                "intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml",
+            ).get().asFile.absolutePath,
+        )
+    }
 }
 
 val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs")

@@ -45,6 +45,7 @@ tasks.test {
     useJUnitPlatform()
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/sumeragi_v2/wire_v2.tsv"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/peer_transport_v1.json"))
 
     // Host JNI bridge (libconnect_norito_bridge) for the opt-in localnet integration tests.
     // Build it from the iroha repo root with: cargo build -p connect_norito_bridge --lib

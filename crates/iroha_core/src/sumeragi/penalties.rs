@@ -884,6 +884,7 @@ mod tests {
         };
         let mut certificate = QuorumCertificate {
             round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,

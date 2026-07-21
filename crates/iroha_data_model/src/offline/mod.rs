@@ -4020,6 +4020,54 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
 }
 
 impl KagemushaRecipientPaymentRequestV2 {
+    /// Chain namespace for the requested offline note.
+    #[must_use]
+    pub fn chain_id(&self) -> &ChainId {
+        &self.chain_id
+    }
+
+    /// Account that must own the admitted receiver registration.
+    #[must_use]
+    pub fn recipient(&self) -> &AccountId {
+        &self.recipient
+    }
+
+    /// Asset definition that must be admitted by the receiver registration.
+    #[must_use]
+    pub fn asset(&self) -> &AssetDefinitionId {
+        &self.asset
+    }
+
+    /// Exact requested amount at the authoritative asset scale.
+    #[must_use]
+    pub const fn amount(&self) -> KagemushaScaledAmountV2 {
+        self.amount
+    }
+
+    /// Recipient output commitment and nullifier bound by the signed request.
+    #[must_use]
+    pub fn recipient_output(&self) -> &KagemushaSpendableNoteDescriptorV2 {
+        &self.recipient_output
+    }
+
+    /// Registered receiver-device identifier bound by this request.
+    #[must_use]
+    pub fn receiver_device_id(&self) -> &str {
+        &self.receiver_device_id
+    }
+
+    /// P-256 receiver key that must match the admitted registration.
+    #[must_use]
+    pub fn receiver_public_key(&self) -> &KagemushaDevicePublicKeyV2 {
+        &self.receiver_public_key
+    }
+
+    /// Absolute request expiry in Unix milliseconds.
+    #[must_use]
+    pub const fn expires_at_ms(&self) -> u64 {
+        self.expires_at_ms
+    }
+
     /// Construct the canonical request from prevalidated fields and a device signature.
     pub fn from_signed_payload(
         payload: KagemushaRecipientPaymentRequestSigningPayloadV2,
@@ -6111,6 +6159,9 @@ impl KagemushaTopUpFinalityCompactQcV2 {
         context.validate_structure()?;
         if certificate.round.context_id != context.context_id
             || certificate.round.height != context.height
+            || certificate.proposal_round.context_id != context.context_id
+            || certificate.proposal_round.height != context.height
+            || certificate.proposal_round.view > certificate.round.view
             || certificate.phase != GlobalPhase::Commit
             || certificate.aggregate_signature.len() != 96
             || certificate.execution_commitment.validate().is_err()
@@ -9522,12 +9573,14 @@ mod kagemusha_v4_topup_provenance_tests {
         .finalize_digest()
         .expect("test anchor");
         let context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new([seed, 8])));
+        let round = ConsensusRound {
+            context_id,
+            height: anchor.finalized_height,
+            view: 0,
+        };
         let certificate = QuorumCertificate {
-            round: ConsensusRound {
-                context_id,
-                height: anchor.finalized_height,
-                view: 0,
-            },
+            round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject: BlockSubject {
                 parent_block_hash: None,
@@ -9771,6 +9824,32 @@ mod kagemusha_v4_topup_provenance_tests {
             .height_context
             .parent_commit_qc = Some(parent_qc);
         rejects(&fixture, &oversized, 50);
+    }
+
+    #[test]
+    fn compact_qc_rejects_foreign_or_future_proposal_origin() {
+        let fixture = fixture_with_seeds(&[0x32]);
+        let compact_qc = &fixture.provenance.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc;
+        compact_qc
+            .validate_structure()
+            .expect("fixture compact QC structure");
+
+        let mut future = compact_qc.clone();
+        future.certificate.proposal_round.view = future.certificate.round.view.saturating_add(1);
+        assert!(future.validate_structure().is_err());
+
+        let mut foreign_context = compact_qc.clone();
+        foreign_context.certificate.proposal_round.context_id = HeightContextId(
+            HashOf::from_untyped_unchecked(Hash::new(b"foreign compact QC proposal context")),
+        );
+        assert!(foreign_context.validate_structure().is_err());
+
+        let mut foreign_height = compact_qc.clone();
+        foreign_height.certificate.proposal_round.height =
+            foreign_height.certificate.round.height.saturating_add(1);
+        assert!(foreign_height.validate_structure().is_err());
     }
 
     #[test]

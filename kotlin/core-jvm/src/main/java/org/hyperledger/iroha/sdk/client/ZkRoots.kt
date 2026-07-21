@@ -25,15 +25,23 @@ class ZkRootsRequest @JvmOverloads constructor(
 class ZkRootsResponse(
     latest: String,
     roots: List<String>,
-    @JvmField val height: Int,
+    @JvmField val evaluatedBlockHeight: Long,
+    evaluatedBlockHash: String,
 ) {
     @JvmField val latest: String = normalizeRootHexOrEmpty(latest, "latest")
+    @JvmField val evaluatedBlockHash: String = normalizeRootHex(
+        evaluatedBlockHash,
+        "evaluated_block_hash",
+    )
     private val normalizedRoots: List<String> = roots.mapIndexed { index, value ->
         normalizeRootHex(value, "roots[$index]")
     }
 
     init {
-        require(height >= 0) { "height must be non-negative" }
+        require(evaluatedBlockHeight >= 0) { "evaluated_block_height must be non-negative" }
+        require((evaluatedBlockHeight == 0L) == (this.evaluatedBlockHash == "0".repeat(64))) {
+            "the zero block hash is reserved for evaluated_block_height=0"
+        }
     }
 
     val roots: List<String> get() = normalizedRoots.toList()
@@ -42,6 +50,17 @@ class ZkRootsResponse(
 
     fun getRootBytes(index: Int): ByteArray = decodeHex32(normalizedRoots[index], "roots[$index]")
 
+    fun evaluatedBlockHashBytes(): ByteArray =
+        decodeHex32(evaluatedBlockHash, "evaluated_block_hash")
+
+    fun requireEvaluatedSnapshot(expectedHeight: Long, expectedBlockHash: ByteArray): ZkRootsResponse {
+        require(expectedHeight == evaluatedBlockHeight) { "root witness height does not match readiness" }
+        require(expectedBlockHash.contentEquals(evaluatedBlockHashBytes())) {
+            "root witness block hash does not match readiness"
+        }
+        return this
+    }
+
     companion object {
         @JvmStatic
         internal fun parse(payload: ByteArray): ZkRootsResponse {
@@ -49,14 +68,21 @@ class ZkRootsResponse(
             require(root is Map<*, *>) { "zk roots response must be a JSON object" }
             val latest = root["latest"]
             val roots = root["roots"]
-            val height = root["height"]
+            val evaluatedBlockHeight = root["evaluated_block_height"]
+            val evaluatedBlockHash = root["evaluated_block_hash"]
             require(latest is String) { "latest must be a string" }
             require(roots is List<*>) { "roots must be an array" }
             val rootStrings = roots.mapIndexed { index, value ->
                 require(value is String) { "roots[$index] must be a string" }
                 value
             }
-            return ZkRootsResponse(latest, rootStrings, jsonInt(height, "height"))
+            require(evaluatedBlockHash is String) { "evaluated_block_hash must be a string" }
+            return ZkRootsResponse(
+                latest,
+                rootStrings,
+                jsonUnsignedLong(evaluatedBlockHeight, "evaluated_block_height"),
+                evaluatedBlockHash,
+            )
         }
 
         @JvmStatic
@@ -116,6 +142,26 @@ class ZkRootsResponse(
             }
             require(parsed in 0..Int.MAX_VALUE) { "$field is outside u32-compatible Int range" }
             return parsed.toInt()
+        }
+
+        @JvmStatic
+        internal fun jsonUnsignedLong(value: Any?, field: String): Long {
+            val parsed = when (value) {
+                is Byte -> value.toLong()
+                is Short -> value.toLong()
+                is Int -> value.toLong()
+                is Long -> value
+                is java.math.BigInteger -> {
+                    require(
+                        value >= java.math.BigInteger.ZERO &&
+                            value <= java.math.BigInteger.valueOf(Long.MAX_VALUE),
+                    ) { "$field is outside the supported uint64 range" }
+                    value.toLong()
+                }
+                else -> throw IllegalArgumentException("$field must be a JSON integer")
+            }
+            require(parsed >= 0) { "$field is outside the supported uint64 range" }
+            return parsed
         }
 
         private fun hexDigit(char: Char, field: String, index: Int): Int = when (char) {

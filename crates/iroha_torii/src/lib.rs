@@ -295,19 +295,23 @@ use iroha_data_model::{
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
-    isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource},
+    isi::{
+        offline::RegisterOfflineDeviceAttestation,
+        settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource},
+    },
     musubi::{MusubiNamespace, MusubiPackageId, MusubiPackageRef},
     name::Name,
     nexus::{DataSpaceId, FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId, LaneId},
     nft::NftId,
     peer::{Peer, PeerId},
     permission::Permission,
-    query::SignedQuery,
+    query::{CommittedTransaction, SignedQuery},
     rwa::RwaId,
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{
         SignedTransaction, TransactionPayload, TransactionSubmissionReceipt,
-        TransactionSubmissionReceiptPayload, signed::TransactionEntrypoint,
+        TransactionSubmissionReceiptPayload,
+        signed::{TransactionEntrypoint, TransactionResult},
     },
 };
 use iroha_executor_data_model::permission::account::{
@@ -5414,6 +5418,7 @@ async fn enforce_offline_cache_policy(
 ) -> Result<axum::response::Response, Infallible> {
     const OPERATION_PREFIX: &str = "/v1/offline/operations/";
     const READINESS_PATH: &str = "/v1/offline/readiness";
+    const RECIPIENT_LINEAGE_PATH: &str = "/v1/offline/receiver-lineage";
     const TOP_UP_PATH: &str = "/v1/offline/top-up";
     const REDEEM_PATH: &str = "/v1/offline/redeem";
 
@@ -5430,8 +5435,11 @@ async fn enforce_offline_cache_policy(
         id == route_catalog::offline::TOP_UP.stable_route_id()
             || id == route_catalog::offline::REDEEM.stable_route_id()
     }) || matches!(req.uri().path(), TOP_UP_PATH | REDEEM_PATH);
+    let recipient_lineage = route.is_some_and(|route| {
+        route.stable_route_id() == route_catalog::offline::RECIPIENT_LINEAGE.stable_route_id()
+    }) || req.uri().path() == RECIPIENT_LINEAGE_PATH;
     let mut response = next.run(req).await;
-    let policy = if operation_status || command {
+    let policy = if operation_status || command || recipient_lineage {
         Some("no-store")
     } else if readiness {
         if matches!(response.status(), StatusCode::OK | StatusCode::NOT_MODIFIED) {
@@ -12638,6 +12646,250 @@ async fn handler_offline_readiness(
     }
     append_vary_accept(response.headers_mut());
     Ok(response)
+}
+
+#[cfg(feature = "app_api")]
+fn offline_receiver_lineage_inconsistent(message: impl Into<String>) -> Error {
+    Error::AppServiceUnavailable {
+        code: "offline_receiver_lineage_inconsistent",
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn committed_transactions_for_lineage_block(
+    block: &iroha_data_model::block::SignedBlock,
+) -> Vec<CommittedTransaction> {
+    let block_hash = block.hash();
+    block
+        .entrypoint_hashes()
+        .zip(block.entrypoint_proofs())
+        .zip(block.entrypoints_cloned())
+        .zip(block.result_hashes())
+        .zip(block.result_proofs())
+        .zip(block.results().cloned())
+        .map(
+            |(
+                ((((entrypoint_hash, entrypoint_proof), entrypoint), result_hash), result_proof),
+                result,
+            )| CommittedTransaction {
+                block_hash,
+                entrypoint_hash,
+                entrypoint_proof,
+                entrypoint,
+                result_hash,
+                result_proof,
+                result,
+                merge_inclusion: None,
+            },
+        )
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn registration_transaction_for_lineage(
+    block: &iroha_data_model::block::SignedBlock,
+    transaction_hash: HashOf<SignedTransaction>,
+    expected_registration: &iroha_data_model::offline::OfflineDeviceAttestationRegistration,
+) -> Result<CommittedTransaction, Error> {
+    let mut matches = committed_transactions_for_lineage_block(block)
+        .into_iter()
+        .filter(|committed| match &committed.entrypoint {
+            TransactionEntrypoint::External(transaction) => transaction.hash() == transaction_hash,
+            _ => false,
+        });
+    let committed = matches.next().ok_or_else(|| {
+        offline_receiver_lineage_inconsistent(
+            "The persisted registration transaction is absent from its admission block.",
+        )
+    })?;
+    if matches.next().is_some() {
+        return Err(offline_receiver_lineage_inconsistent(
+            "The registration transaction appears more than once in its admission block.",
+        ));
+    }
+    if committed.result.as_ref().is_err() {
+        return Err(offline_receiver_lineage_inconsistent(
+            "The persisted registration provenance names a rejected transaction.",
+        ));
+    }
+    let TransactionEntrypoint::External(transaction) = &committed.entrypoint else {
+        unreachable!("the lookup selected only external transactions")
+    };
+    let registrations = transaction
+        .instructions()
+        .explicit_instructions()
+        .filter_map(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterOfflineDeviceAttestation>()
+        })
+        .filter(|instruction| instruction.registration() == expected_registration)
+        .count();
+    if registrations != 1 {
+        return Err(offline_receiver_lineage_inconsistent(
+            "The admitting transaction does not contain exactly one copy of the canonical registration.",
+        ));
+    }
+    Ok(committed)
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_recipient_lineage(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoOnly(request): crate::utils::extractors::NoritoOnly<
+        iroha_torii_shared::offline_api::OfflineRecipientLineageRequest,
+    >,
+) -> Result<NoritoBody<iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage>, Error>
+{
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/receiver-lineage",
+    )
+    .await?;
+    let state_view = app.state.view();
+    let evaluated_height = u64::try_from(state_view.height()).map_err(|_| {
+        offline_receiver_lineage_inconsistent(
+            "The evaluated block height does not fit the public lineage contract.",
+        )
+    })?;
+    let evaluated_block = state_view
+        .latest_block()
+        .ok_or_else(|| Error::AppNotFound {
+            code: "offline_receiver_lineage_unavailable",
+            message: "No committed block is available for receiver-lineage evaluation.".to_owned(),
+        })?;
+    let evaluated_header = evaluated_block.header();
+    let evaluated_at_ms =
+        u64::try_from(evaluated_header.creation_time().as_millis()).unwrap_or(u64::MAX);
+    if request.chain_id != *app.chain_id {
+        return Err(Error::AppQueryValidation {
+            code: "offline_receiver_lineage_chain_mismatch",
+            message: "The signed recipient request targets a different chain.".to_owned(),
+        });
+    }
+    request
+        .validate_at(evaluated_at_ms)
+        .map_err(|error| Error::AppQueryValidation {
+            code: "offline_receiver_lineage_request_invalid",
+            message: format!("The signed recipient request is invalid: {error}"),
+        })?;
+    let request_digest = request
+        .digest()
+        .map_err(|error| Error::AppQueryValidation {
+            code: "offline_receiver_lineage_request_invalid",
+            message: format!("The signed recipient request digest is invalid: {error}"),
+        })?;
+    let resolution =
+        iroha_core::smartcontracts::isi::offline::isi::resolve_kagemusha_recipient_registration_v1(
+            state_view.world(),
+            &request,
+            evaluated_height,
+            evaluated_at_ms,
+        )
+        .map_err(|message| {
+            if message.starts_with("no on-chain registration") {
+                Error::AppNotFound {
+                    code: "offline_receiver_not_registered",
+                    message,
+                }
+            } else if message.contains("superseded") || message.contains("expired") {
+                Error::AppConflict {
+                    code: "offline_receiver_registration_inactive",
+                    message,
+                }
+            } else if message.starts_with("the recipient payment request") {
+                Error::AppQueryValidation {
+                    code: "offline_receiver_lineage_request_invalid",
+                    message,
+                }
+            } else {
+                offline_receiver_lineage_inconsistent(message)
+            }
+        })?;
+    let evaluated_block_hash = evaluated_block.hash();
+    drop(evaluated_block);
+    drop(state_view);
+
+    let admission_height_usize = usize::try_from(resolution.admission_height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .ok_or_else(|| {
+            offline_receiver_lineage_inconsistent(
+                "The persisted registration admission height is outside the host range.",
+            )
+        })?;
+    let indexed_heights = app
+        .kura
+        .get_block_heights_by_transaction_hash(resolution.admission_transaction_hash)
+        .ok_or_else(|| {
+            offline_receiver_lineage_inconsistent(
+                "The transaction index is incomplete for receiver-lineage resolution.",
+            )
+        })?;
+    if indexed_heights.len() != 1 || !indexed_heights.contains(&admission_height_usize) {
+        return Err(offline_receiver_lineage_inconsistent(
+            "The registration transaction index does not match persisted admission provenance.",
+        ));
+    }
+    let admission_block = app.kura.get_block(admission_height_usize).ok_or_else(|| {
+        offline_receiver_lineage_inconsistent(
+            "The registration admission block body is unavailable on this Torii node.",
+        )
+    })?;
+    let admission_block_header = admission_block.header();
+    let registration_transaction = registration_transaction_for_lineage(
+        &admission_block,
+        resolution.admission_transaction_hash,
+        &resolution.registration,
+    )?;
+    let admission_finality = app
+        .kura
+        .v2_finality_artifact(resolution.admission_height)
+        .map_err(|error| {
+            offline_receiver_lineage_inconsistent(format!(
+                "The registration finality artifact is invalid: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            offline_receiver_lineage_inconsistent(
+                "The registration admission block has no retained finality artifact.",
+            )
+        })?;
+    if admission_finality.height != resolution.admission_height
+        || admission_finality.block_hash != admission_block.hash()
+        || admission_block_header.hash() != admission_finality.block_hash
+        || registration_transaction.block_hash != admission_finality.block_hash
+    {
+        return Err(offline_receiver_lineage_inconsistent(
+            "The registration transaction, header, and finality artifact are not bound to one block.",
+        ));
+    }
+
+    Ok(NoritoBody(
+        iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage {
+            version: iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION,
+            request_digest: hex::encode(request_digest),
+            registration_hash: hex::encode(resolution.registration_hash),
+            admission_policy_hash: hex::encode(resolution.admission_policy_hash),
+            evaluated_policy_hash: hex::encode(resolution.admission_policy_hash),
+            registration: resolution.registration,
+            admission_block_height: resolution.admission_height,
+            admission_block_header,
+            registration_transaction_hash: hex::encode(
+                resolution.admission_transaction_hash.as_ref(),
+            ),
+            registration_transaction,
+            admission_finality,
+            evaluated_block_height: evaluated_height,
+            evaluated_block_hash: hex::encode(evaluated_block_hash.as_ref()),
+        },
+    ))
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -51139,6 +51391,12 @@ impl Torii {
             catalog_get(handler_offline_readiness),
         );
         builder.route(
+            &route_catalog::offline::RECIPIENT_LINEAGE,
+            catalog_post(handler_offline_recipient_lineage).layer(DefaultBodyLimit::max(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
+            )),
+        );
+        builder.route(
             &route_catalog::offline::TOP_UP,
             catalog_post(handler_offline_top_up)
                 .layer(DefaultBodyLimit::max(offline_top_up_body_limit_bytes)),
@@ -66866,12 +67124,14 @@ pub(crate) mod tests_runtime_handlers {
                 .canonical_proposal_wire_hash()
                 .expect("hash exact SCCP fixture proposal wire"),
         };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: HEIGHT,
+            view: block.header().view_change_index(),
+        };
         let mut commit_qc = QuorumCertificate {
-            round: ConsensusRound {
-                context_id: context.id(),
-                height: HEIGHT,
-                view: block.header().view_change_index(),
-            },
+            round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment: ExecutionCommitment::without_topups(

@@ -45,7 +45,7 @@ The bundle task assembles the binaries, manifest, and config stubs under `target
 Run the UI directly from cargo:
 
 ```bash
-cargo run -p mochi-ui
+cargo run -p mochi-ui --features gui --bin mochi
 ```
 
 By default MOCHI opens on the **Network** page with a single-peer preset rooted at the current
@@ -59,7 +59,7 @@ workspace:
 Use CLI flags to override the defaults when launching:
 
 ```bash
-cargo run -p mochi-ui -- \
+cargo run -p mochi-ui --features gui --bin mochi -- \
   --workspace-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -91,7 +91,10 @@ scripts/mochi_local_sandbox.sh env
 scripts/mochi_local_sandbox.sh mcp-add-command
 ```
 
-`up` launches `cargo run -p mochi-ui -- sandbox serve` in a detached process group, waits for
+The helper uses `python3` for path/JSON handling and detached process launch. Set
+`MOCHI_PYTHON=/absolute/path/to/python3` to select a specific validated interpreter.
+
+`up` launches `cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve` in a detached process group, waits for
 `/status` readiness, runs a local smoke transaction, validates local MCP, writes
 `<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes `.env.local` plus
 `.mochi/generated/*`. The helper records the actual long-lived Mochi PID in `serve.pid`, so
@@ -153,12 +156,12 @@ The **Maintenance** controls expose the reset flows you use when iterating on a 
 
 - **Export snapshot** — copies peer storage/config/logs and the current genesis manifest into
   `snapshots/<label>` under the active data root. Labels are sanitized automatically.
-- **Restore snapshot** — rehydrates peer storage, snapshot roots, configs, logs, and the genesis
+- **Restore snapshot** — rehydrates integrity-checked peer storage (including snapshot roots), configs, logs, and the genesis
   manifest from an existing bundle. `Supervisor::restore_snapshot` accepts either an absolute path or
   the sanitised `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore
   can replay evidence bundles without touching files manually.
-- **Reset lane** — clears a configured Nexus lane when lane management is enabled for the current
-  profile.
+- **Reset lane** — submits a signed retire/add lifecycle replacement for a configured Nexus lane;
+  Kura owns the authenticated storage-incarnation transition.
 - **Wipe & re-genesis** — stops running peers, removes storage directories, regenerates genesis via
   Kagami, and restarts peers when the wipe completes.
 

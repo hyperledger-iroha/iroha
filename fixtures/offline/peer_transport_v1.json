@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "description": "Cross-SDK IPM1/IQR1 static, compressed, and animated golden vectors",
+  "profile": 1,
+  "kind": 2,
+  "schema_version": 1,
+  "canonical_utf8": "offline peer golden payload",
+  "canonical_hash_hex": "36e83d15b16238fb12f5fb82a7ba5a80da2e4b3bf38f7b41c4151e8c8572e50e",
+  "wire_hash_hex": "e0558ed5c9696f6083b28c8e1f572eb4e8845255d94a12c83772d00a88cd8299",
+  "ipm1_hex": "49504d3101000001020000010000001b0000001b36e83d15b16238fb12f5fb82a7ba5a80da2e4b3bf38f7b41c4151e8c8572e50ee0558ed5c9696f6083b28c8e1f572eb4e8845255d94a12c83772d00a88cd82996f66666c696e65207065657220676f6c64656e207061796c6f6164",
+  "iqr1": "IQR1:5C9SCAV50100HB09GSP2I KPR3E9TGRYHD/3V+5000100L203C96Y9V50100HB0100000R00000R00G.6MW75JM797%H2 ZV89L%JB9QR:M9QZU8QFMZOZ%37*G3/S9GSP2I KPR3E9TGRYHD/3V+5YHTHIA6LR%G2J07NDQBDH/MGX3EU.CZEDDZCI9E5$CF44*3E6VCM-DE9EYFFS3E-VC0BKT5:",
+  "animated": {
+    "canonical_generator": "lcg32-high-byte",
+    "canonical_seed": 324508639,
+    "canonical_count": 2049,
+    "profile": 1,
+    "kind": 2,
+    "schema_version": 1,
+    "wire_hash_hex": "7a1665b141f9b7b2a00c65f305173f19a9ed2e5644354a3961eb30262082777a",
+    "frame_kind_index_total": [
+      "1:0:9", "2:0:9", "2:1:9", "3:0:9", "2:2:9", "2:3:9", "3:1:9", "2:4:9",
+      "2:5:9", "3:2:9", "2:6:9", "2:7:9", "3:3:9", "1:0:9", "2:8:9", "3:4:9"
+    ],
+    "frame_blake2b_256_hex": [
+      "9e1190deda94f42c93cb8d7090057f5ada295b7b25b775cc15f602517ab8cf02",
+      "c5e3d583c07e2365191b4fa3086c04d765ea31df8e95c99a7ca5f27397204e81",
+      "c39e6ddac7ac8afd3d3c9daf294e59388c7b5e58424554fc432e3c62812f3e18",
+      "f55f5f053a8d25f20a67e555f3c8c943302989ef3df20e2a537a0c961946ab73",
+      "b0404eae064403aadb4b1330ccbf3b4e8d6c4ac8a2e42ea2f85be3fcd17e644d",
+      "ed58a5b6d67b5901258b9c782418559c495f0fb89f5d5d0a7c3572724c40edc9",
+      "bfabaa7e3ba5e755ece061aad8433ccf1b0d67f3cbc0fb626e9d135266d5ca77",
+      "95e6811b1b37f5d7cb018428d853fc8155bd90658ef448f5be626dbbfb67f39c",
+      "6d2734c936a623b7522a84beac830b14d31e04f217b0f3a38e5c4fe48e7ba76e",
+      "f2a768a8b215c4d5fc6d78c48cf073be2ab72e3b1f8e26c4d4f501a8b5b73bb4",
+      "21e4bb938b5522548e17dd3fff2e95d77a962275f559467d172aee73301ef64b",
+      "3ed4f388134786c7ed2e4703976a29a6639dbd792e6d09630c7e129c0e8ddb89",
+      "efbf2cff24ba55a7aa00564c0cfc04e034996c94b3b6ff03ea64bc9b2e90f4b4",
+      "9e1190deda94f42c93cb8d7090057f5ada295b7b25b775cc15f602517ab8cf02",
+      "92d72a9c2bb26e6f5a2588ecc7cf1775cd628ebf80cd5cb79191d204c0cae16e",
+      "61b72786fba7f670a88b0a96564fe80886f6969c9b9dc028a39dc9baa22b263f"
+    ]
+  },
+  "zlib": {
+    "canonical_repeat_byte": 65,
+    "canonical_count": 1024,
+    "encoded_body_hex": "789c73741c05a360148c540000a4780410",
+    "canonical_hash_hex": "f33384a82b5102685496bdbc75d81162d91d99090715207acbbd821e0a7a478a",
+    "wire_hash_hex": "d7e5b1101fcf577065ae98aa83516e8a4687a9ea454fcdf91332e0b604696890",
+    "ipm1_hex": "49504d3101010001020000010000040000000011f33384a82b5102685496bdbc75d81162d91d99090715207acbbd821e0a7a478ad7e5b1101fcf577065ae98aa83516e8a4687a9ea454fcdf91332e0b604696890789c73741c05a360148c540000a4780410",
+    "iqr1": "IQR1:5C9SCAV50100HB09DRDHM/04J2BK%CMDJ2RG%/D000100B203C96Y9W50100HB0100000YM0000H00OXUUYGJL5VD09VAH:NI+E+826KRRFJD+0Y442YPAKGRE1:199DRDHM/04J2BK%CMDJ2RG%/DA-8SLLDY8Y1Q9J2GIS4P0%9D6BF QEIO3JTK+Q2*RAT30Y7F732XE930:"
+  }
+}

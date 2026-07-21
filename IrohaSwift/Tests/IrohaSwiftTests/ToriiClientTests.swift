@@ -17078,6 +17078,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 "height": 15,
                 "view": 3,
             ],
+            "proposal_round": [
+                "context_id": [contextHash],
+                "height": 15,
+                "view": 3,
+            ],
             "phase": ["phase": "prepare", "details": NSNull()],
             "subject": subject,
             "execution_commitment": executionCommitment,
@@ -17134,6 +17139,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(snapshot.phase, .commit)
         XCTAssertEqual(snapshot.leader, 1)
         XCTAssertEqual(snapshot.lockedPrepareQC?.round.view, 3)
+        XCTAssertEqual(snapshot.lockedPrepareQC?.proposalRound.view, 3)
         XCTAssertEqual(snapshot.highestPrepareQC?.phase, .prepare)
         XCTAssertEqual(
             snapshot.highestPrepareQC?.executionCommitment.executedBlockWireHash,

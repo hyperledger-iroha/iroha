@@ -326,6 +326,83 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
     }
 }
 
+public struct ToriiZkRootsRequest: Encodable, Sendable {
+    public let assetId: String
+    public let max: UInt32
+
+    public init(assetId: String, max: UInt32 = 0) throws {
+        let trimmed = assetId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed == assetId else {
+            throw ZkAssetMerklePathError.invalidField("assetId")
+        }
+        self.assetId = assetId
+        self.max = max
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case assetId = "asset_id"
+        case max
+    }
+}
+
+public struct ToriiZkRootsResponse: Decodable, Equatable, Sendable {
+    public let latest: Data?
+    public let roots: [Data]
+    public let evaluatedBlockHeight: UInt64
+    public let evaluatedBlockHash: Data
+
+    private enum CodingKeys: String, CodingKey {
+        case latest
+        case roots
+        case evaluatedBlockHeight = "evaluated_block_height"
+        case evaluatedBlockHash = "evaluated_block_hash"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let latestHex = try container.decode(String.self, forKey: .latest)
+        latest = latestHex.isEmpty
+            ? nil
+            : try ToriiZkMerklePathEntry.fixed32Hex(latestHex, field: "latest")
+        roots = try container.decode([String].self, forKey: .roots).enumerated().map {
+            try ToriiZkMerklePathEntry.fixed32Hex($0.element, field: "roots[\($0.offset)]")
+        }
+        evaluatedBlockHeight = try container.decode(UInt64.self, forKey: .evaluatedBlockHeight)
+        evaluatedBlockHash = try ToriiZkMerklePathEntry.fixed32Hex(
+            container.decode(String.self, forKey: .evaluatedBlockHash),
+            field: "evaluated_block_hash"
+        )
+        guard (evaluatedBlockHeight == 0) == evaluatedBlockHash.allSatisfy({ $0 == 0 }) else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "the zero block hash is reserved for evaluated_block_height=0"
+            ))
+        }
+    }
+
+    public static func decodeStrict(_ data: Data) throws -> ToriiZkRootsResponse {
+        try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
+            in: data,
+            integerKeys: ["evaluated_block_height"]
+        )
+        return try JSONDecoder().decode(ToriiZkRootsResponse.self, from: data)
+    }
+
+    @discardableResult
+    public func requireEvaluatedSnapshot(
+        height: UInt64,
+        blockHash: Data
+    ) throws -> ToriiZkRootsResponse {
+        guard height == evaluatedBlockHeight else {
+            throw ZkAssetMerklePathError.invalidField("evaluated_block_height")
+        }
+        guard blockHash == evaluatedBlockHash else {
+            throw ZkAssetMerklePathError.invalidField("evaluated_block_hash")
+        }
+        return self
+    }
+}
+
 public struct ToriiZkMerklePathRequest: Encodable, Sendable {
     public let assetId: String
     public let commitments: [Data]
@@ -456,6 +533,8 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
     public static let confidentialTreeDepthV2 = 16
     public static let confidentialTreeCapacityV2 = 1 << confidentialTreeDepthV2
 
+    public let evaluatedBlockHeight: UInt64
+    public let evaluatedBlockHash: Data
     public let root: Data
     public let frontierLen: Int
     public let treeDepth: Int
@@ -468,6 +547,8 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
     public let paths: [ToriiZkMerklePathEntry]
 
     private enum CodingKeys: String, CodingKey {
+        case evaluatedBlockHeight = "evaluated_block_height"
+        case evaluatedBlockHash = "evaluated_block_hash"
         case root
         case frontierLen = "frontier_len"
         case treeDepth = "tree_depth"
@@ -477,6 +558,17 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        evaluatedBlockHeight = try container.decode(UInt64.self, forKey: .evaluatedBlockHeight)
+        evaluatedBlockHash = try ToriiZkMerklePathEntry.fixed32Hex(
+            container.decode(String.self, forKey: .evaluatedBlockHash),
+            field: "evaluated_block_hash"
+        )
+        guard (evaluatedBlockHeight == 0) == evaluatedBlockHash.allSatisfy({ $0 == 0 }) else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "the zero block hash is reserved for evaluated_block_height=0"
+            ))
+        }
         root = try ToriiZkMerklePathEntry.fixed32Hex(
             container.decode(String.self, forKey: .root),
             field: "root"
@@ -550,10 +642,36 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
     public static func decodeStrict(_ data: Data) throws -> ToriiZkMerklePathResponse {
         try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
             in: data,
-            integerKeys: ["frontier_len", "tree_depth", "leaf_index"],
+            integerKeys: [
+                "evaluated_block_height", "frontier_len", "tree_depth", "leaf_index",
+            ],
             integerArrayKeys: ["directions"]
         )
         return try JSONDecoder().decode(ToriiZkMerklePathResponse.self, from: data)
+    }
+
+    @discardableResult
+    public func requireEvaluatedSnapshot(
+        height: UInt64,
+        blockHash: Data
+    ) throws -> ToriiZkMerklePathResponse {
+        guard height == evaluatedBlockHeight else {
+            throw ZkAssetMerklePathError.invalidField("evaluated_block_height")
+        }
+        guard blockHash == evaluatedBlockHash else {
+            throw ZkAssetMerklePathError.invalidField("evaluated_block_hash")
+        }
+        return self
+    }
+
+    @discardableResult
+    public func requireSameSnapshot(
+        as roots: ToriiZkRootsResponse
+    ) throws -> ToriiZkMerklePathResponse {
+        try requireEvaluatedSnapshot(
+            height: roots.evaluatedBlockHeight,
+            blockHash: roots.evaluatedBlockHash
+        )
     }
 
     public func validatedPaths(

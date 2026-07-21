@@ -98,6 +98,7 @@ fn execution_commitment(seed: u8) -> ExecutionCommitment {
 fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertificate {
     QuorumCertificate {
         round: round(context, view),
+        proposal_round: round(context, view),
         phase,
         subject: subject(u8::try_from(view + 1).expect("small fixture view")),
         execution_commitment: execution_commitment(
@@ -173,6 +174,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         "vote",
         ConsensusMessageV2Payload::Vote(Vote {
             round: manifest.round,
+            proposal_round: manifest.round,
             phase: GlobalPhase::Prepare,
             subject: manifest.subject,
             execution_commitment: prepare.execution_commitment,
@@ -235,9 +237,15 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         signature: vec![0x81; 48],
     };
     assert_eq!(commit_request.validate(&context), Ok(()));
+    let mut delayed_commit = prepare.clone();
+    delayed_commit.round = round(&context, 9);
+    delayed_commit.phase = GlobalPhase::Commit;
+    assert_eq!(delayed_commit.validate(&context), Ok(()));
+    assert_eq!(delayed_commit.proposal_round.view, 1);
+    assert_eq!(delayed_commit.round.view, 9);
     let commit_response = CommitCertificateResponse {
         request_hash: HashOf::new(&commit_request),
-        certificate: qc(&context, 9, GlobalPhase::Commit),
+        certificate: delayed_commit.clone(),
         responder: peer(100),
         signature: vec![0x82; 48],
     };
@@ -248,6 +256,22 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
     insert_message(
         "commit_certificate_request",
         ConsensusMessageV2Payload::CommitCertificateRequest(commit_request.clone()),
+    );
+    insert_message(
+        "commit_vote_later_view",
+        ConsensusMessageV2Payload::Vote(Vote {
+            round: delayed_commit.round,
+            proposal_round: delayed_commit.proposal_round,
+            phase: GlobalPhase::Commit,
+            subject: delayed_commit.subject,
+            execution_commitment: delayed_commit.execution_commitment,
+            signer: 0,
+            signature: vec![0x7A],
+        }),
+    );
+    insert_message(
+        "commit_quorum_certificate_later_view",
+        ConsensusMessageV2Payload::QuorumCertificate(delayed_commit),
     );
     insert_message(
         "commit_certificate_response",
@@ -285,6 +309,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
             generation: 3,
             prepare_quorums: vec![SumeragiV2VoteQuorumStatus {
                 round: prepare.round,
+                proposal_round: prepare.proposal_round,
                 subject: prepare.subject,
                 execution_commitment: prepare.execution_commitment,
                 signer_count: 2,
@@ -293,7 +318,8 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
                 total_power: context.quorum.total_power,
             }],
             commit_quorums: vec![SumeragiV2VoteQuorumStatus {
-                round: prepare.round,
+                round: round(&context, 3),
+                proposal_round: prepare.proposal_round,
                 subject: prepare.subject,
                 execution_commitment: prepare.execution_commitment,
                 signer_count: 1,
@@ -311,7 +337,8 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
             }],
             outbound_intents: vec![SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::CommitVote,
-                round: prepare.round,
+                round: round(&context, 3),
+                proposal_round: Some(prepare.proposal_round),
                 subject: Some(prepare.subject),
                 execution_commitment: Some(prepare.execution_commitment),
                 stage: SumeragiV2OutboundIntentStage::Sent,

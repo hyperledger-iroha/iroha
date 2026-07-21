@@ -444,6 +444,7 @@ fn verify_commit_aggregate(
         .ok_or(KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
     let preimage = Vote {
         round: certificate.round,
+        proposal_round: certificate.proposal_round,
         phase: certificate.phase,
         subject: certificate.subject,
         execution_commitment: certificate.execution_commitment,
@@ -831,6 +832,13 @@ mod tests {
                     height: height - 1,
                     view: 0,
                 },
+                proposal_round: ConsensusRound {
+                    context_id: iroha_data_model::block::consensus_v2::HeightContextId(
+                        HashOf::from_untyped_unchecked(Hash::new(b"parent context")),
+                    ),
+                    height: height - 1,
+                    view: 0,
+                },
                 phase: GlobalPhase::Commit,
                 subject: BlockSubject {
                     parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
@@ -879,12 +887,14 @@ mod tests {
             Hash::new(b"finalized executed block wire"),
         )
         .expect("execution commitment");
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height,
+            view: 3,
+        };
         let mut certificate = QuorumCertificate {
-            round: ConsensusRound {
-                context_id: context.id(),
-                height,
-                view: 3,
-            },
+            round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -893,6 +903,7 @@ mod tests {
         };
         let preimage = Vote {
             round: certificate.round,
+            proposal_round: certificate.proposal_round,
             phase: certificate.phase,
             subject: certificate.subject,
             execution_commitment: certificate.execution_commitment,
@@ -1055,8 +1066,10 @@ mod tests {
         };
         let certificate = &mut proof.commit_qc.certificate;
         certificate.round.context_id = context.id();
+        certificate.proposal_round.context_id = context.id();
         let preimage = Vote {
             round: certificate.round,
+            proposal_round: certificate.proposal_round,
             phase: certificate.phase,
             subject: certificate.subject,
             execution_commitment: certificate.execution_commitment,
@@ -1094,6 +1107,31 @@ mod tests {
             fixture.finality_artifact.context_id()
         );
         assert_eq!(verified.block_hash(), fixture.finality_artifact.block_hash);
+    }
+
+    #[test]
+    fn aggregate_signature_authenticates_proposal_origin() {
+        let fixture = fixture();
+        let mut changed_origin = fixture.proof.clone();
+        changed_origin.commit_qc.certificate.proposal_round.view = changed_origin
+            .commit_qc
+            .certificate
+            .proposal_round
+            .view
+            .saturating_sub(1);
+
+        assert_eq!(
+            KagemushaTopUpFinalityVerifier::new()
+                .verify_v4(
+                    &changed_origin,
+                    &fixture.roster,
+                    &fixture.anchor,
+                    &fixture.manifest,
+                    fixture.manifest_digest,
+                )
+                .expect_err("a tampered proposal origin must fail aggregate verification"),
+            KagemushaTopUpFinalityVerifyError::InvalidAggregateSignature
+        );
     }
 
     #[test]

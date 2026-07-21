@@ -4,6 +4,15 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added browser ledger evidence reads for headers, state roots, state QCs, and
+  canonical Norito `BlockProofs`. The SDK validates the exact proof schema and
+  frame checksum, decodes bounded entry/result audit paths plus FASTPQ
+  transcripts, and locally verifies the Iroha BLAKE2b Merkle paths without
+  claiming to verify the node-provided finality QC.
+- Added browser Connect `SignRequestRaw` support and a canonical-request auth
+  adapter. Apps can request the explicit `sign_raw` permission, keep account
+  keys inside the approved wallet, and sign the exact Torii canonical message
+  under a fixed domain tag with shared single-flight and local Ed25519 checks.
 - Added digest-anchored browser instantiation for the raw shared
   `ivm_artifact_admission` WebAssembly verifier. Browser contract deployment
   now requires that authenticated verifier and cross-checks its semantic

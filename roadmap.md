@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-20
+Last updated: 2026-07-21
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -8,6 +8,36 @@ Completed history lives in [`status.md`](./status.md).
 Mixed-executable-batch follow-up is limited to completing the full workspace
 suite and the complete platform SDK suites on toolchains with their required
 native bridges and runtimes available.
+
+## Peer transport V1 release evidence
+
+- Treat the green codec, lifecycle, replay, callback-epoch, delivery-barrier,
+  APDU, and checkpoint suites as automated evidence only. Complete and archive
+  the physical-device matrix before promotion:
+  - iOS-to-iOS over QR camera, Google Nearby, and entitlement/device-eligible
+    Core NFC/CardSession;
+  - Android-to-Android over QR camera, Google Nearby, and IsoDep/HCE; and
+  - iOS-to-Android in both sender/receiver directions over QR, Nearby, and
+    capability-eligible Core NFC/CardSession-to-IsoDep/HCE.
+- Exercise the shared profile-1/schema-1 `IPM1`, `IQR1`/`IRQR`, `IPD1`/`IPN1`,
+  and F049 NFC vectors in every applicable leg. Promotion evidence must cover
+  header-last scans, one lost shard per parity pair, duplicate/conflicting
+  frames, quarantine expiry and clean reuse, app background/foreground,
+  stop/restart with delayed callbacks, completed-session rollover, replay and
+  reordered Nearby records, RF loss before and after each durability boundary,
+  retap/`GET_STATUS` recovery, and explicit profile/kind/schema mismatch
+  rejection.
+- Verify optimization without changing the common wire: same-platform peers
+  must use their mutually supported radio and NFC chunk capabilities, while
+  cross-platform NFC uses the minimum advertised safe limit. Record payload
+  bytes, hashes, terminal delivery updates, exact compact-payment/native-ACK
+  binding, and final durable checkpoints so optimization cannot mask a wire
+  divergence.
+- Re-run the complete Swift package suite with a bridge artifact accepted by
+  the active Swift compiler. Keep Kagemusha native-canonical bytes and bridge
+  ABI 21 unchanged while platform delivery adapters converge on the shared
+  peer-message core. Do not add a backend endpoint or backend reconciliation
+  fallback to close a device-only evidence gap.
 
 ## Wallet activity query follow-ups
 
@@ -25737,10 +25767,21 @@ transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
 (305/305), its strong caller and bracket (63/63), the exact type obligation
 (16/16), and the named always-strong wrapper (10/10).
 
-The 54-entry ledger contains 33 `tlaps_proved`, 14 `specified_unproved`, 6
+The 54-entry ledger contains 10 `tlaps_proved`, 37 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
 remains false. Outstanding release work:
 
+- rerun and repair the strict induction, Core safety, timeout-view, and
+  dependent Async proof slices for `NoHigherPrepareOriginKnown`,
+  `StrictSameRoundTcUpgrade`, no-high `ProposalJustified` plus exact-origin
+  `SafeToPrepare`, and `ExactLockedCommitTimeoutRecoveryWitness`. The old
+  7,826-obligation induction and 565-obligation downstream Core receipt is
+  historical evidence for the superseded transition relation and cannot
+  promote the current source;
+- execute the fresh source-sealed 438-test, 32-module, 55-leg pre-network
+  corridor. Its eight newly sealed regressions cover strict same-round TC
+  upgrade/replay and exact locked-Commit recovery ownership; inventory presence
+  is not execution evidence;
 - mechanize the complete typed applied-height handoff rather than promoting its
   source tests to a liveness proof. Production independently rereads exact Kura
   sources for historical CommitQC, body, and lane-certificate responses; binds
@@ -25770,8 +25811,8 @@ remains false. Outstanding release work:
 - discharge the ledgered abstract progress-ownership invariant and the Stage-4
   ready/causal, nonce-unique Serve FIFO, and Stage-5 Consensus-I/O FIFO rank
   leaves before composing `protected-service-rank`. Progress ownership consumes
-  the now-proved async type closure; Stage 4 and Serve FIFO also consume the
-  proved exact fair-action refinement; Stage 5 still waits for progress
+  a freshly reproved async type closure; Stage 4 and Serve FIFO also consume a
+  freshly reproved exact fair-action refinement; Stage 5 still waits for progress
   ownership. Keep
   production candidate admission, runtime, ingress, and actor-to-flush identity
   refinement outside these abstract leaves. Rerun the repaired Stage-4 proof

@@ -9040,18 +9040,97 @@ class SumeragiV2BlockSubject:
 
 
 @dataclass(frozen=True)
+class SumeragiV2ExecutionCommitment:
+    """Exact deterministic execution result authenticated by a v2 QC."""
+
+    parent_state_root: str
+    post_state_root: str
+    ordinary_writes_root: str
+    topup_anchor_root: Optional[str]
+    topup_anchor_count: int
+    executed_block_wire_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Any, context: str
+    ) -> "SumeragiV2ExecutionCommitment":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(
+            payload,
+            (
+                "parent_state_root",
+                "post_state_root",
+                "ordinary_writes_root",
+                "topup_anchor_root",
+                "topup_anchor_count",
+                "executed_block_wire_hash",
+            ),
+            context,
+        )
+        topup_anchor_count = _sumeragi_v2_uint(
+            payload.get("topup_anchor_count"),
+            f"{context}.topup_anchor_count",
+            maximum=16,
+        )
+        topup_anchor_root_value = payload.get("topup_anchor_root")
+        topup_anchor_root = (
+            None
+            if topup_anchor_root_value is None
+            else _sumeragi_v2_string(
+                topup_anchor_root_value, f"{context}.topup_anchor_root"
+            )
+        )
+        if (topup_anchor_count == 0) != (topup_anchor_root is None):
+            raise ValueError(
+                f"{context}.topup_anchor_root must be present exactly when "
+                "topup_anchor_count is positive"
+            )
+        return cls(
+            parent_state_root=_sumeragi_v2_string(
+                payload.get("parent_state_root"), f"{context}.parent_state_root"
+            ),
+            post_state_root=_sumeragi_v2_string(
+                payload.get("post_state_root"), f"{context}.post_state_root"
+            ),
+            ordinary_writes_root=_sumeragi_v2_string(
+                payload.get("ordinary_writes_root"),
+                f"{context}.ordinary_writes_root",
+            ),
+            topup_anchor_root=topup_anchor_root,
+            topup_anchor_count=topup_anchor_count,
+            executed_block_wire_hash=_sumeragi_v2_string(
+                payload.get("executed_block_wire_hash"),
+                f"{context}.executed_block_wire_hash",
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class SumeragiV2QuorumCertificateRef:
     """Stable reference to a PrepareQC or CommitQC."""
 
     round: SumeragiV2ConsensusRound
+    proposal_round: SumeragiV2ConsensusRound
     phase: SumeragiV2GlobalPhase
     subject: SumeragiV2BlockSubject
+    execution_commitment: SumeragiV2ExecutionCommitment
 
     @classmethod
     def from_payload(cls, payload: Any, context: str) -> "SumeragiV2QuorumCertificateRef":
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
-        _sumeragi_v2_exact_fields(payload, ("round", "phase", "subject"), context)
+        _sumeragi_v2_exact_fields(
+            payload,
+            (
+                "round",
+                "proposal_round",
+                "phase",
+                "subject",
+                "execution_commitment",
+            ),
+            context,
+        )
         phase = _sumeragi_v2_tagged_unit(
             payload.get("phase"),
             "phase",
@@ -9062,9 +9141,16 @@ class SumeragiV2QuorumCertificateRef:
             round=SumeragiV2ConsensusRound.from_payload(
                 payload.get("round"), f"{context}.round"
             ),
+            proposal_round=SumeragiV2ConsensusRound.from_payload(
+                payload.get("proposal_round"), f"{context}.proposal_round"
+            ),
             phase=SumeragiV2GlobalPhase(phase),
             subject=SumeragiV2BlockSubject.from_payload(
                 payload.get("subject"), f"{context}.subject"
+            ),
+            execution_commitment=SumeragiV2ExecutionCommitment.from_payload(
+                payload.get("execution_commitment"),
+                f"{context}.execution_commitment",
             ),
         )
 
@@ -9148,6 +9234,19 @@ class SumeragiStatusSnapshot:
             payload_hash=subject.payload_hash,
         )
 
+    @staticmethod
+    def _execution_commitment_from_canonical(
+        execution_commitment: Any,
+    ) -> SumeragiV2ExecutionCommitment:
+        return SumeragiV2ExecutionCommitment(
+            parent_state_root=execution_commitment.parent_state_root,
+            post_state_root=execution_commitment.post_state_root,
+            ordinary_writes_root=execution_commitment.ordinary_writes_root,
+            topup_anchor_root=execution_commitment.topup_anchor_root,
+            topup_anchor_count=execution_commitment.topup_anchor_count,
+            executed_block_wire_hash=execution_commitment.executed_block_wire_hash,
+        )
+
     @classmethod
     def _qc_from_canonical(cls, qc: Any) -> SumeragiV2QuorumCertificateRef:
         return SumeragiV2QuorumCertificateRef(
@@ -9156,8 +9255,18 @@ class SumeragiStatusSnapshot:
                 height=qc.round.height,
                 view=qc.round.view,
             ),
+            proposal_round=SumeragiV2ConsensusRound(
+                context_id=SumeragiV2HeightContextId(
+                    hash=qc.proposal_round.context_id[0]
+                ),
+                height=qc.proposal_round.height,
+                view=qc.proposal_round.view,
+            ),
             phase=SumeragiV2GlobalPhase(qc.phase),
             subject=cls._subject_from_canonical(qc.subject),
+            execution_commitment=cls._execution_commitment_from_canonical(
+                qc.execution_commitment
+            ),
         )
 
     @classmethod
@@ -11095,6 +11204,7 @@ __all__ = [
     "SumeragiV2HeightContextId",
     "SumeragiV2ConsensusRound",
     "SumeragiV2BlockSubject",
+    "SumeragiV2ExecutionCommitment",
     "SumeragiV2QuorumCertificateRef",
     "SumeragiV2TimeoutCertificateRef",
     "SumeragiLaneSettlementReceipt",

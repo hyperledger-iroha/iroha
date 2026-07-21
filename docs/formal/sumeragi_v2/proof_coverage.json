@@ -78,91 +78,91 @@
       "requirement": "Every honest pending, durable, signing, and transported timeout vote is tied to the frozen voter roster, context, height, an authenticated PrepareQC high reference, and a high rank no greater than its timeout view",
       "module": "SumeragiV2TimeoutWireAuthorization",
       "symbol": "CoreSpecAtAlwaysStrongTimeoutWireAuthorizationInvariant / StrongWireInvariantAuthorizesPendingTimeoutSignature / StrongWireInvariantAuthorizesHonestTimeoutEnvelope",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "durable-vote-uniqueness",
       "requirement": "Honest Prepare, Commit, and Timeout intents are unique per context and view",
       "module": "SumeragiV2Proofs",
       "symbol": "DurableVoteUniquenessObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "lock-monotonicity",
       "requirement": "A lock never decreases and changes subject only at a strictly higher PrepareQC",
       "module": "SumeragiV2Proofs",
       "symbol": "LockMonotonicityObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "external-validity",
       "requirement": "PrepareQCs, CommitQCs, and decisions certify only deterministically valid subjects",
       "module": "SumeragiV2Proofs",
       "symbol": "ExternalValidityObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "certified-body-availability",
       "requirement": "Every PrepareQC and CommitQC retains an honest durable body source",
       "module": "SumeragiV2Proofs",
       "symbol": "AvailabilityObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "certificate-uniqueness",
       "requirement": "No two same-view PrepareQCs or CommitQCs certify different subjects",
       "module": "SumeragiV2Proofs",
       "symbol": "CertificateUniquenessObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "historical-tc-lock-commit",
-      "requirement": "After a TC durably selects an exact historical Prepare lock, and only when no higher conflicting-subject local Prepare intent or known PrepareQC exists, current-generation durable body validation may create the exact WAL-backed Commit intent; higher same-subject reproposals remain admissible and every lower-high timeout/Commit pair retains installed-TC provenance",
+      "requirement": "After a TC durably selects an exact historical Prepare lock, and only when no higher local Prepare origin or known PrepareQC exists, current-generation durable body validation may create the exact WAL-backed Commit intent; a higher same-subject origin fences that historical Commit just like a conflicting subject, an alternate certificate for the already-installed timeout round may rebind the lock only to a strictly higher Prepare origin without advancing the lifecycle view twice, and every lower-high timeout/Commit pair retains installed-TC provenance",
       "module": "SumeragiV2Proofs",
       "symbol": "HistoricalTcLockedCommitAuthorizationObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "timeout-protection",
       "requirement": "Every formed TC and dual-quorum still-formable old-view Commit has either direct protection from that TC's high reference or an honest TC/Commit quorum-intersection witness whose non-strict timeout/Commit pair retains durable installed-TC authorization",
       "module": "SumeragiV2Proofs",
       "symbol": "TimeoutProtectionObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "agreement",
       "requirement": "Correct validators cannot decide different subjects in one height context",
       "module": "SumeragiV2Proofs",
       "symbol": "AgreementObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "no-conflicting-commit-qcs",
       "requirement": "No two CommitQCs in one context certify different subjects",
       "module": "SumeragiV2Proofs",
       "symbol": "NoConflictingCommitCertificatesObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "chain-prefix",
       "requirement": "Finalized chains at correct validators are prefix comparable",
       "module": "SumeragiV2ChainEpochProofs",
       "symbol": "ChainPrefixObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "crash-restart",
       "requirement": "Crash/restart preserves durable safety state and suppresses incomplete writes and stale completions",
       "module": "SumeragiV2Proofs",
       "symbol": "CrashRecoveryObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "epoch-boundary",
       "requirement": "Reconfiguration occurs only after applied finality and old-context certificates cannot cross the boundary",
       "module": "SumeragiV2ChainEpochProofs",
       "symbol": "EpochBoundaryObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "effective-lock-body-acquisition-model",
@@ -183,49 +183,49 @@
       "requirement": "Every concrete responsive run-loop transition preserves the scheduler type invariant",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "AsyncRunnerStepPreservesSchedulerType",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "async-type-invariant",
       "requirement": "The concrete asynchronous scheduler and transport preserve the full typed state invariant from every admissible frozen height context",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "AsyncTypeInvariantObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "async-progress-ownership-invariant",
       "requirement": "Every behavior of the executable asynchronous specification preserves duplicate-free logical candidate ownership within scheduler sequences and pairwise disjoint queued, deferred, causal, and outstanding-work carriers; outstanding work equals the modeled Consensus-I/O plus ready-completion carrier union; serialized Busy owners remain node-unique and every non-idle node retains an active Completion witness. This is an abstract model invariant; production effect/work identity refinement remains outside this leaf.",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "AsyncSpecAlwaysProgressOwnershipInvariant",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "post-decision-timeout-exclusion",
       "requirement": "Once a node has a durable Decision in the current context, no pending timeout write, pending TC install, or timeout-signature owner remains; BeginTimeout, FormTC, BeginInstallTC, and durable timeout replay are structurally disabled; authenticated TimeoutVote and TC envelopes are consumed without repopulating volatile receipt pools; and the asynchronous causal adapter emits no post-Decision FormTC or BeginInstallTC successor. Pending Decision persistence carries the historical timeout-work exclusion needed by PersistDecision, and the complete Core action induction is lifted through the asynchronous bracket and temporal specification",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "PostDecisionTimeoutExclusionObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "decision-recovery-across-restart",
       "requirement": "Durable Commit Decisions are unique by node and context, and pending Decision persistence excludes an existing durable Decision at that exact node/context frontier. Crash and authenticated restart preserve one generation-free certified-request registration identity derived from requester, height, view, subject, certificate, and exact signed request while the executor generation advances separately. Replay clears the old registration and installs exactly one FetchBody candidate carrying the same Commit certificate at the current node generation. The complete Core frontier induction and asynchronous temporal lift prove this Commit-only lifecycle and explicitly reject Prepare authority; generic all-stage body, validation, application, and production trace preservation remain separate progress-witness debts",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "DecisionRecoveryAcrossRestartObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "async-fair-action-refinement",
       "requirement": "At every state satisfying the Core and scheduler type invariants, each of the exact 18 weak-fairness targets is one fully framed AsyncNext transition; the proof must project runner command execution to a typed Core Next arm without conjoining the global Core disjunction to every fairness ENABLED query",
       "module": "SumeragiV2AsyncFairnessRefinementProofs",
       "symbol": "AsyncFairActionsRefineAsyncNextObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "generation-scoped-vote-delivery",
       "requirement": "An authenticated vote crosses a volatile receipt pool at most once; Prepare admission is current-view-only while every Commit admission and locally formed CommitQC requires the exact durable lock; TC installation clears the local pool and queues an exact matching durable locked Commit for re-signing; durable LockCommit acknowledgement retires superseded historical pools while preserving current-view work and the new exact locked Commit pool; signature completion reconstructs the local vote; and outbound peer delivery excludes the signer",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "GenerationScopedVoteDeliveryObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "progress-witness-production-refinement",
@@ -236,7 +236,7 @@
     },
     {
       "id": "progress-witness-preservation",
-      "requirement": "Every active durable locked Commit intent retains a concrete signing, retransmission, receipt, certificate, decision, or exact node-and-generation crash/replay authority until WAL reconstruction; every durable decision retains an exact body-recovery, validation, application, completion, or exact node-and-generation Decision-recovery witness; every exact historical locked Prepare source retains either its post-validation Commit witness, exact active certified request, or a current-consumer FetchBody, RequestCertifiedBody, FetchCertifiedBody, StoreBody, or ValidateBody candidate; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness; and locked-Commit signer, TimeoutVote signer, PrepareQC, CommitQC, and TC deferred owners remain unique within their exact two-times-validator-count-plus-three partition. Commit crash authority discharges only the durable Commit carrier, and Decision recovery authority retires only into an exact current-consumer FetchBody owner",
+      "requirement": "Every active durable locked Commit intent retains a concrete signing, retransmission, receipt, certificate, decision, or exact node-and-generation crash/replay authority until WAL reconstruction; every durable decision retains an exact body-recovery, validation, application, completion, or exact node-and-generation Decision-recovery witness; every exact historical locked Prepare source retains either its post-validation Commit witness, exact active certified request, or a current-consumer FetchBody, RequestCertifiedBody, FetchCertifiedBody, StoreBody, or ValidateBody candidate; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness, except that an exact durable local TimeoutIntent for the current finality view owns the retry frontier when validation finishes after that view closes and the next certified transition restarts recovery without authorizing a closed-view Commit; and locked-Commit signer, TimeoutVote signer, PrepareQC, CommitQC, and TC deferred owners remain unique within their exact two-times-validator-count-plus-three partition. Commit crash authority discharges only the durable Commit carrier, and Decision recovery authority retires only into an exact current-consumer FetchBody owner",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProgressWitnessObligation",
       "status": "specified_unproved"
@@ -253,21 +253,21 @@
       "requirement": "In the executable asynchronous model, every protected protocol candidate already owned by a responsive current voter at an exact Stage-4 ready-completion position, under the exact weak-fairness target for PostGstRunNode, eventually leaves protected scheduler ownership or acquires a strictly smaller service rank; the proof covers ready-run auxiliary descent and non-Completion causal admission-capacity debt, while stages 2, 3, 5, and 6, candidate admission/provenance, and production transport/runtime refinement remain outside this abstract leaf",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedStage4RankProgressFromFairScheduler",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "protected-service-rank-serve-fifo",
       "requirement": "In the executable asynchronous model, every nonce-unique Serve occurrence owned by a responsive current voter in its typed I/O queue, under the exact weak fairness target for PostGstServiceIoWorker, eventually leaves Serve ownership or has a strictly smaller Stage-5 FIFO position; production request admission, ingress identity, and reliable actor-to-flush refinement remain outside this abstract leaf",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedServeRankProgressFromFairFifo",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "protected-service-rank-stage5-consensus-fifo",
       "requirement": "In the executable asynchronous model, every protected candidate owned at Stage 5 by a responsive current voter, under exact progress ownership and PostGstServiceIoWorker weak fairness, eventually exits scheduler ownership, moves to a lower stage, or has a strictly smaller Consensus-I/O FIFO position; Serve/Control heads may delay but cannot overtake it. Production candidate construction/admission identity and reliable actor-to-flush refinement remain outside this leaf.",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedStage5RankProgressFromFairFifo",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "protected-service-rank",

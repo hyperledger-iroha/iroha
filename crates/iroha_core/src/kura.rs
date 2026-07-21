@@ -38645,12 +38645,14 @@ mod tests {
                 .canonical_proposal_wire_hash()
                 .expect("canonical proposal block wire"),
         };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height,
+            view: block.header().view_change_index(),
+        };
         let mut commit_qc = QuorumCertificate {
-            round: ConsensusRound {
-                context_id: context.id(),
-                height,
-                view: block.header().view_change_index(),
-            },
+            round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,

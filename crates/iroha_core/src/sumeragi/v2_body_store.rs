@@ -192,8 +192,7 @@ impl BodyValidationError for String {}
 /// signature check for ordinary blocks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum BlockSignaturePolicy {
-    /// Require the rotating leader selected for the block's immutable origin
-    /// view. A later proposal leader authenticates the re-proposal separately.
+    /// Require the rotating leader selected for the exact proposal round.
     RotatingLeader,
     /// Require signature index zero and the configured genesis public key.
     GenesisAuthority(PublicKey),
@@ -298,8 +297,8 @@ impl DurableBodyReceipt {
 /// The validation snapshot is part of that height ownership contract: callers
 /// must not change world state or context-bound validation inputs while this
 /// store is active. A committed-parent change retires the store and creates a
-/// new height context. This makes an execution commitment for byte-identical
-/// proposal bodies reusable across views of this one context.
+/// new height context. Validation receipts remain bound to one exact proposal
+/// round and are never promoted across views.
 pub(crate) struct V2BodyStore {
     context: wire::HeightContext,
     signature_policy: BlockSignaturePolicy,
@@ -517,15 +516,11 @@ impl V2BodyStore {
     /// run in the caller's storage/validation service context, never on the
     /// serialized reducer owner. Production callers use
     /// `ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block` so the
-    /// store-verified immutable-origin signature is not incorrectly rechecked
-    /// as the current proposal leader while all transaction/state checks remain.
-    /// An exact body already validated in an earlier view of this immutable
-    /// height context reuses its durable execution commitment. The current
-    /// round still receives its own synced body receipt and validation marker,
-    /// but view rotation cannot repeatedly place identical deterministic
-    /// execution ahead of the next round deadline. This promotion relies on
-    /// the store-level frozen-validation-snapshot contract documented on
-    /// [`V2BodyStore`]; final application re-executes and checks the commitment.
+    /// store-verified proposal-round signature is not redundantly rechecked
+    /// while all transaction/state checks remain. Validation success is bound
+    /// to the exact durable proposal round; a marker from another view cannot
+    /// authorize this task. Final application re-executes and checks the
+    /// commitment.
     pub(crate) fn execute_validation_task<F, E>(
         &mut self,
         task: &BodyValidationTask,
@@ -548,31 +543,6 @@ impl V2BodyStore {
             return Ok(BodyValidationCompletion::Validated {
                 work_id: task.id(),
                 receipt: validated.clone(),
-            });
-        }
-        let reusable = self
-            .validated
-            .iter()
-            .rev()
-            .find(|((round, subject), _)| {
-                *subject == task.subject()
-                    && round.context_id == task.round().context_id
-                    && round.height == task.round().height
-                    && round.view < task.round().view
-            })
-            .map(|(_, receipt)| receipt.clone());
-        if let Some(reusable) = reusable {
-            let prior_wire = self.load_canonical_wire(reusable.durable())?;
-            let current_wire = self.load_canonical_wire(task.durable_receipt())?;
-            if prior_wire != current_wire {
-                return Err(V2BodyStoreError::ReceiptMismatch);
-            }
-            return Ok(BodyValidationCompletion::Validated {
-                work_id: task.id(),
-                receipt: self.persist_validated_receipt(
-                    task.durable_receipt(),
-                    reusable.execution_commitment(),
-                )?,
             });
         }
         let block = self.load(task.durable_receipt())?;
@@ -649,7 +619,7 @@ impl V2BodyStore {
     /// Load the exact canonical `SignedBlockWire` bytes represented by a
     /// durable receipt.
     ///
-    /// Certified fetch responses and safe locked-subject reproposals must
+    /// Certified fetch responses and exact locked-subject recovery must
     /// preserve byte identity. Re-encoding a decoded block at those boundaries
     /// would be an unnecessary second source of truth, so callers receive the
     /// checksummed bytes from the final store frame itself.
@@ -662,10 +632,10 @@ impl V2BodyStore {
 
     /// Find the newest durable proposal round retaining one exact subject.
     ///
-    /// A later certified leader may only re-propose its lock's exact body. The
-    /// BTreeMap order makes the selected source deterministic across restart,
-    /// while the returned receipt still has to pass the normal frame checks
-    /// before bytes can be loaded.
+    /// Locked-candidate recovery uses this lookup to find the retained body for
+    /// the exact subject. The BTreeMap order makes selection deterministic
+    /// across restart, while the returned receipt still has to pass the normal
+    /// frame checks before bytes can be loaded.
     pub(crate) fn latest_for_subject(
         &self,
         subject: wire::BlockSubject,
@@ -861,11 +831,14 @@ impl V2BodyStore {
         let header = block.header();
         let body_origin_view = header.view_change_index();
         let view_matches = match &self.signature_policy {
-            // A later certified leader may re-propose the exact body protected
-            // by a lock. Its separately authenticated Proposal uses the new
-            // round, while the immutable block retains its creation view.
-            BlockSignaturePolicy::RotatingLeader => body_origin_view <= envelope.round.view,
-            BlockSignaturePolicy::GenesisAuthority(_) => header.view_change_index() == 0,
+            BlockSignaturePolicy::RotatingLeader => body_origin_view == envelope.round.view,
+            // Genesis is the sole exception: height one retains the fixed
+            // authority-signed view-zero body across certified view changes.
+            // `open_with_policy` separately rejects this policy outside an
+            // unparented height-one context.
+            BlockSignaturePolicy::GenesisAuthority(_) => {
+                header.height().get() == 1 && body_origin_view == 0
+            }
         };
         if header.height().get() != envelope.round.height
             || !view_matches
@@ -1493,7 +1466,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_body_reproposal_reuses_durable_validation_across_views() {
+    fn rotating_leader_body_cannot_bind_to_a_later_proposal_round() {
         let directory = TempDir::new().expect("temporary directory");
         let (context, keys) = context_and_keys();
         let (body, origin_manifest) = body_and_manifest(&context, &keys, None);
@@ -1522,7 +1495,7 @@ mod tests {
 
         drop(store);
         let mut store = V2BodyStore::open(directory.path(), context.clone())
-            .expect("recover the origin-view validation marker before re-proposal");
+            .expect("recover the exact origin-view validation marker");
 
         let later_round = wire::ConsensusRound {
             context_id: context.id(),
@@ -1537,57 +1510,38 @@ mod tests {
             std::slice::from_ref(&body),
         )
         .expect("derive the later-view manifest for the exact body");
-        let later_receipt = store
+        let error = store
             .store(later_manifest, body)
-            .expect("durably bind the exact body to the later round");
-        let later_task = BodyValidationTask::for_test(52, later_receipt.clone());
-        let repeated_callback_ran = Cell::new(false);
-        let later_validation = store
-            .execute_validation_task(&later_task, |_| {
-                repeated_callback_ran.set(true);
-                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
-                    "exact reproposal must reuse its durable validation witness",
-                ))
-            })
-            .expect("promote the exact earlier validation into the later round");
-        assert!(!repeated_callback_ran.get());
-        assert_eq!(
-            later_validation
-                .validated_receipt()
-                .map(ValidatedBodyReceipt::durable),
-            Some(&later_receipt)
-        );
-        assert_eq!(
-            later_validation
-                .validated_receipt()
-                .map(ValidatedBodyReceipt::execution_commitment),
-            Some(execution_commitment)
-        );
+            .expect_err("a rotating-leader body cannot change proposal origin");
+        assert!(matches!(error, V2BodyStoreError::BlockSubjectMismatch));
         assert!(
-            store
+            !store
                 .validated_path_for(later_round, origin_manifest.subject)
                 .exists()
         );
-
-        drop(store);
-        let reopened = V2BodyStore::open(directory.path(), context)
-            .expect("both round-bound validation markers replay");
         assert_eq!(
-            reopened
+            store
                 .validated_recovery_catalog()
-                .get(&(later_round, origin_manifest.subject))
-                .map(ValidatedBodyReceipt::execution_commitment),
-            Some(execution_commitment)
+                .get(&(origin_manifest.round, origin_manifest.subject))
+                .map(ValidatedBodyReceipt::durable),
+            Some(&origin_receipt)
         );
     }
 
     #[test]
-    fn conflicting_cross_view_validation_commitments_fail_closed() {
+    fn genesis_cross_view_validation_is_reexecuted_and_conflicts_fail_closed() {
         let directory = TempDir::new().expect("temporary directory");
-        let (context, keys) = context_and_keys();
-        let (body, origin_manifest) = body_and_manifest(&context, &keys, None);
-        let mut store =
-            V2BodyStore::open(directory.path(), context.clone()).expect("open body store");
+        let (context, _keys) = context_and_keys();
+        let genesis = KeyPair::try_from_seed(vec![0xC4; 32], Algorithm::Ed25519)
+            .expect("deterministic genesis key");
+        let (body, origin_manifest) =
+            body_and_manifest_with_signature_and_views(&context, &genesis, 0, 0, 0);
+        let mut store = V2BodyStore::open_with_policy(
+            directory.path(),
+            context.clone(),
+            BlockSignaturePolicy::GenesisAuthority(genesis.public_key().clone()),
+        )
+        .expect("open genesis body store");
         let origin_receipt = store
             .store(origin_manifest.clone(), body.clone())
             .expect("store the origin-view body");
@@ -1617,9 +1571,18 @@ mod tests {
             ValidatedBodyReceipt::for_test(later_receipt.clone()).execution_commitment();
         assert_ne!(origin_commitment, conflicting_commitment);
 
+        let callback_ran = Cell::new(false);
+        let later_task = BodyValidationTask::for_test(52, later_receipt.clone());
         let error = store
-            .persist_validated_receipt(&later_receipt, conflicting_commitment)
-            .expect_err("the live store must reject a conflicting exact-body commitment");
+            .execute_validation_task(&later_task, |_| {
+                callback_ran.set(true);
+                Ok::<_, FixtureValidationError>(conflicting_commitment)
+            })
+            .expect_err("a prior-view marker must not bypass exact-round validation");
+        assert!(
+            callback_ran.get(),
+            "the later proposal round must be revalidated"
+        );
         assert!(matches!(
             error,
             V2BodyStoreError::ConflictingValidationCommitment
@@ -1637,10 +1600,14 @@ mod tests {
             execution_commitment: conflicting_commitment,
         };
         write_validated_marker(&marker_path, &conflicting_marker)
-            .expect("write a syntactically valid legacy conflicting marker");
+            .expect("write a syntactically valid conflicting marker");
         drop(store);
 
-        let error = match V2BodyStore::open(directory.path(), context) {
+        let error = match V2BodyStore::open_with_policy(
+            directory.path(),
+            context,
+            BlockSignaturePolicy::GenesisAuthority(genesis.public_key().clone()),
+        ) {
             Ok(_) => panic!("recovery must reject conflicting exact-body commitments"),
             Err(error) => error,
         };
@@ -1890,7 +1857,7 @@ mod tests {
     }
 
     #[test]
-    fn locked_body_keeps_its_origin_signature_when_reproposed_in_a_later_view() {
+    fn rotating_leader_body_with_a_stale_header_view_fails_closed() {
         let directory = TempDir::new().expect("temporary directory");
         let (context, keys) = context_and_keys();
         let origin_view = 1;
@@ -1905,9 +1872,10 @@ mod tests {
         );
         let mut store = V2BodyStore::open(directory.path(), context).expect("open body store");
 
-        let _receipt = store
-            .store(manifest, body)
-            .expect("later proposal retains the locked body's origin signature");
+        assert!(matches!(
+            store.store(manifest, body),
+            Err(V2BodyStoreError::BlockSubjectMismatch)
+        ));
     }
 
     #[test]

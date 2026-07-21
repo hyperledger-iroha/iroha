@@ -1,5 +1,6 @@
 import { Buffer } from "buffer";
 import { blake3 } from "@noble/hashes/blake3";
+import { blake2b } from "@noble/hashes/blake2.js";
 import { sha256 } from "@noble/hashes/sha2";
 import {
   AccountAddress,
@@ -94,6 +95,9 @@ const CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH = Buffer.from(
   "b4bb42540d44c468ed44d5f94c59b007",
   "hex",
 );
+const BLOCK_PROOFS_TYPE_NAME =
+  "iroha_data_model::block::proofs::BlockProofs";
+const BLOCK_MERKLE_MAX_HEIGHT = 32;
 const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
   "iroha.mint": Buffer.from("ec0b538ed0e5b46ed163e0aedb335e73", "hex"),
   "iroha.burn": Buffer.from("361f279124a0aad61978c80ff1c9ce0a", "hex"),
@@ -1254,6 +1258,335 @@ export function noritoDecodeInstruction(bytes, options = {}) {
     return json;
   }
   return JSON.parse(json);
+}
+
+function decodeBlockMerkleProofValue(payload, context) {
+  const fields = decodeTupleFields(payload, context, ["leaf_index", "audit_path"]);
+  return {
+    leaf_index: decodeU32Value(fields.leaf_index, `${context}.leaf_index`),
+    audit_path: decodeNoritoVec(
+      fields.audit_path,
+      (entry, index) =>
+        decodeOptionValue(
+          entry,
+          decodeHashValue,
+          `${context}.audit_path[${index}]`,
+        ),
+      `${context}.audit_path`,
+    ),
+  };
+}
+
+function decodeBlockReceiptProofValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["leaf", "proof"]);
+  return {
+    leaf: decodeHashValue(fields.leaf, `${context}.leaf`),
+    proof: decodeBlockMerkleProofValue(fields.proof, `${context}.proof`),
+  };
+}
+
+function decodeTransferSmtWitnessValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "root_before",
+    "root_after",
+    "path_bits",
+    "siblings",
+  ]);
+  return {
+    root_before: decodeFixedByteArrayArchiveValue(
+      fields.root_before,
+      32,
+      `${context}.root_before`,
+    ).toString("hex"),
+    root_after: decodeFixedByteArrayArchiveValue(
+      fields.root_after,
+      32,
+      `${context}.root_after`,
+    ).toString("hex"),
+    path_bits: decodeNoritoVec(
+      fields.path_bits,
+      (entry, index) => decodeU8Value(entry, `${context}.path_bits[${index}]`),
+      `${context}.path_bits`,
+    ),
+    siblings: decodeNoritoVec(
+      fields.siblings,
+      (entry, index) =>
+        decodeFixedByteArrayArchiveValue(
+          entry,
+          32,
+          `${context}.siblings[${index}]`,
+        ).toString("hex"),
+      `${context}.siblings`,
+    ),
+  };
+}
+
+function decodeTransferDeltaTranscriptValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "from_account",
+    "to_account",
+    "asset_definition",
+    "amount",
+    "from_balance_before",
+    "from_balance_after",
+    "to_balance_before",
+    "to_balance_after",
+    "from_smt_witness",
+    "to_smt_witness",
+  ]);
+  return {
+    from_account: decodeAccountIdValue(fields.from_account, `${context}.from_account`),
+    to_account: decodeAccountIdValue(fields.to_account, `${context}.to_account`),
+    asset_definition: decodeAssetDefinitionIdValue(
+      fields.asset_definition,
+      `${context}.asset_definition`,
+    ),
+    amount: decodeQuantityValue(fields.amount, `${context}.amount`),
+    from_balance_before: decodeQuantityValue(
+      fields.from_balance_before,
+      `${context}.from_balance_before`,
+    ),
+    from_balance_after: decodeQuantityValue(
+      fields.from_balance_after,
+      `${context}.from_balance_after`,
+    ),
+    to_balance_before: decodeQuantityValue(
+      fields.to_balance_before,
+      `${context}.to_balance_before`,
+    ),
+    to_balance_after: decodeQuantityValue(
+      fields.to_balance_after,
+      `${context}.to_balance_after`,
+    ),
+    from_smt_witness: decodeTransferSmtWitnessValue(
+      fields.from_smt_witness,
+      `${context}.from_smt_witness`,
+    ),
+    to_smt_witness: decodeTransferSmtWitnessValue(
+      fields.to_smt_witness,
+      `${context}.to_smt_witness`,
+    ),
+  };
+}
+
+function decodeTransferTranscriptValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "batch_hash",
+    "deltas",
+    "authority_digest",
+    "poseidon_preimage_digest",
+  ]);
+  return {
+    batch_hash: decodeHashValue(fields.batch_hash, `${context}.batch_hash`),
+    deltas: decodeNoritoVec(
+      fields.deltas,
+      (entry, index) =>
+        decodeTransferDeltaTranscriptValue(entry, `${context}.deltas[${index}]`),
+      `${context}.deltas`,
+    ),
+    authority_digest: decodeHashValue(
+      fields.authority_digest,
+      `${context}.authority_digest`,
+    ),
+    poseidon_preimage_digest: decodeOptionValue(
+      fields.poseidon_preimage_digest,
+      decodeHashValue,
+      `${context}.poseidon_preimage_digest`,
+    ),
+  };
+}
+
+function decodeFastpqTranscriptMap(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const count = bigintToSafeNumber(reader.readU64LE("count"), `${context}.count`);
+  const entries = [];
+  let previousKey = null;
+  for (let index = 0; index < count; index += 1) {
+    const keyPayload = readNoritoField(reader, `key${index}`);
+    const valuePayload = readNoritoField(reader, `value${index}`);
+    const keyBytes = decodeFixedBytesValue(keyPayload, 32, `${context}.key[${index}]`);
+    if (previousKey !== null && Buffer.compare(previousKey, keyBytes) >= 0) {
+      throw new Error(`${context} keys are not in canonical strict order`);
+    }
+    previousKey = keyBytes;
+    const key = decodeHashValue(keyPayload, `${context}.key[${index}]`);
+    const value = decodeNoritoVec(
+      valuePayload,
+      (entry, transcriptIndex) =>
+        decodeTransferTranscriptValue(
+          entry,
+          `${context}[${key}][${transcriptIndex}]`,
+        ),
+      `${context}[${key}]`,
+    );
+    entries.push([key, value]);
+  }
+  reader.assertEof();
+  return Object.fromEntries(entries);
+}
+
+/**
+ * Decode the canonical Norito `BlockProofs` response returned by
+ * `/v1/ledger/block/{height}/proof/{entry_hash}`.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @returns {object}
+ */
+export function noritoDecodeBlockProofs(bytes) {
+  const frame = validateNoritoFrame(bytes, {
+    context: "BlockProofs",
+    expectedTypeName: BLOCK_PROOFS_TYPE_NAME,
+    requireNonEmptyPayload: true,
+  });
+  if ((frame.flags & (NORITO_PACKED_SEQ_FLAG | NORITO_PACKED_STRUCT_FLAG | NORITO_FIELD_BITSET_FLAG)) !== 0) {
+    throw new Error("BlockProofs uses an unsupported packed Norito layout");
+  }
+  return withNoritoLengthFlags(frame.flags & COMPACT_LEN_FLAG, () => {
+    const fields = decodeStructFields(frame.payload, "BlockProofs", [
+      "block_height",
+      "entry_hash",
+      "entry_root",
+      "entry_proof",
+      "result_root",
+      "result_proof",
+      "fastpq_transcripts",
+    ]);
+    const blockHeight = decodeU64Value(fields.block_height, "BlockProofs.block_height");
+    if (blockHeight === "0") {
+      throw new Error("BlockProofs.block_height must be non-zero");
+    }
+    return {
+      block_height: blockHeight,
+      entry_hash: decodeHashValue(fields.entry_hash, "BlockProofs.entry_hash"),
+      entry_root: decodeHashValue(fields.entry_root, "BlockProofs.entry_root"),
+      entry_proof: decodeBlockReceiptProofValue(
+        fields.entry_proof,
+        "BlockProofs.entry_proof",
+      ),
+      result_root: decodeOptionValue(
+        fields.result_root,
+        decodeHashValue,
+        "BlockProofs.result_root",
+      ),
+      result_proof: decodeOptionValue(
+        fields.result_proof,
+        decodeBlockReceiptProofValue,
+        "BlockProofs.result_proof",
+      ),
+      fastpq_transcripts: decodeFastpqTranscriptMap(
+        fields.fastpq_transcripts,
+        "BlockProofs.fastpq_transcripts",
+      ),
+    };
+  });
+}
+
+function blockProofHashBytes(value, context) {
+  const bytes = encodeHashLiteralBytes(value, context);
+  if ((bytes[bytes.length - 1] & 1) !== 1) {
+    throw new Error(`${context} does not carry Iroha's hash marker bit`);
+  }
+  return bytes;
+}
+
+function blockProofHashesEqual(left, right, context) {
+  return blockProofHashBytes(left, `${context}.left`).equals(
+    blockProofHashBytes(right, `${context}.right`),
+  );
+}
+
+/** Verify one Iroha block Merkle audit path locally. */
+export function verifyBlockMerkleProof(leaf, proof, root) {
+  try {
+    const leafBytes = blockProofHashBytes(leaf, "Merkle proof leaf");
+    const rootBytes = blockProofHashBytes(root, "Merkle proof root");
+    if (!isPlainObject(proof)) return false;
+    const leafIndex = proof.leaf_index;
+    const auditPath = proof.audit_path;
+    if (
+      !Number.isInteger(leafIndex) ||
+      leafIndex < 0 ||
+      leafIndex > 0xffff_ffff ||
+      !Array.isArray(auditPath) ||
+      auditPath.length > BLOCK_MERKLE_MAX_HEIGHT
+    ) {
+      return false;
+    }
+    if (leafIndex >= 2 ** auditPath.length) return false;
+
+    let index = 2 ** auditPath.length - 1 + leafIndex;
+    let accumulator = leafBytes;
+    for (let level = 0; level < auditPath.length; level += 1) {
+      const rawSibling = auditPath[level];
+      const sibling = rawSibling === null
+        ? null
+        : blockProofHashBytes(rawSibling, `Merkle proof audit_path[${level}]`);
+      const currentIsRight = index % 2 === 0;
+      if (currentIsRight && sibling === null) return false;
+      if (!currentIsRight && sibling === null) {
+        index = Math.max(0, index - 1) >> 1;
+        continue;
+      }
+      const parentInput = currentIsRight
+        ? Buffer.concat([sibling, accumulator])
+        : Buffer.concat([accumulator, sibling]);
+      accumulator = Buffer.from(blake2b(parentInput, { dkLen: 32 }));
+      accumulator[31] |= 1;
+      index = Math.max(0, index - 1) >> 1;
+    }
+    return accumulator.equals(rootBytes);
+  } catch {
+    return false;
+  }
+}
+
+/** Verify the locally-checkable entry and execution paths in `BlockProofs`. */
+export function verifyBlockProofs(proofs) {
+  const invalid = {
+    valid: false,
+    entry_hash_matches: false,
+    entry_proof_valid: false,
+    result_pair_consistent: false,
+    result_proof_valid: null,
+  };
+  if (!isPlainObject(proofs) || !isPlainObject(proofs.entry_proof)) return invalid;
+  try {
+    const entryHashMatches = blockProofHashesEqual(
+      proofs.entry_hash,
+      proofs.entry_proof.leaf,
+      "BlockProofs entry hash",
+    );
+    const entryProofValid = verifyBlockMerkleProof(
+      proofs.entry_proof.leaf,
+      proofs.entry_proof.proof,
+      proofs.entry_root,
+    );
+    const hasResultRoot = proofs.result_root !== null && proofs.result_root !== undefined;
+    const hasResultProof = proofs.result_proof !== null && proofs.result_proof !== undefined;
+    const resultPairConsistent = hasResultRoot === hasResultProof;
+    const resultProofValid = !hasResultRoot && !hasResultProof
+      ? null
+      : resultPairConsistent && isPlainObject(proofs.result_proof)
+        ? verifyBlockMerkleProof(
+            proofs.result_proof.leaf,
+            proofs.result_proof.proof,
+            proofs.result_root,
+          )
+        : false;
+    return {
+      valid:
+        entryHashMatches &&
+        entryProofValid &&
+        resultPairConsistent &&
+        resultProofValid !== false,
+      entry_hash_matches: entryHashMatches,
+      entry_proof_valid: entryProofValid,
+      result_pair_consistent: resultPairConsistent,
+      result_proof_valid: resultProofValid,
+    };
+  } catch {
+    return invalid;
+  }
 }
 
 /**

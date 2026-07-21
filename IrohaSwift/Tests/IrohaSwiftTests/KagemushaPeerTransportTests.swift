@@ -2,6 +2,54 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaPeerTransportTests: XCTestCase {
+    func testIPM1AdapterReservesOnlyNativeArchiveSchema0102() throws {
+        let payload = KagemushaPeerPayload.receiveRequest(
+            try KagemushaPeerTransportTestFixtures.receiveRequest()
+        )
+        let message = try IrohaPeerKagemushaAdapterV1.wrap(payload)
+        XCTAssertEqual(message.profile, .kagemusha)
+        XCTAssertEqual(message.schemaVersion, 0x0102)
+        XCTAssertEqual(try IrohaPeerKagemushaAdapterV1.decode(message), payload)
+
+        XCTAssertThrowsError(try IrohaPeerWireMessageV1(
+            profile: .kagemusha,
+            kind: .receiveRequest,
+            schemaVersion: 1,
+            canonicalPayload: payload.archive
+        )) {
+            XCTAssertEqual(
+                $0 as? IrohaPeerWireMessageErrorV1,
+                .schemaVersionMismatch(
+                    profile: .kagemusha,
+                    expected: 0x0102,
+                    actual: 1
+                )
+            )
+        }
+
+        let tight = IrohaPeerWireLimitsV1(
+            maximumCanonicalBytes: 32 * 1_024,
+            maximumOfflineNoteEncodedBytes: 24_576,
+            maximumKagemushaEncodedBytes: payload.archive.count - 1
+        )
+        XCTAssertThrowsError(
+            try IrohaPeerKagemushaAdapterV1.wrap(payload, limits: tight)
+        )
+
+        let offline = try IrohaPeerWireMessageV1(
+            profile: .offlineNote,
+            kind: .receiveRequest,
+            schemaVersion: 1,
+            canonicalPayload: payload.archive
+        )
+        XCTAssertThrowsError(try IrohaPeerKagemushaAdapterV1.decode(offline)) {
+            XCTAssertEqual(
+                $0 as? IrohaPeerWireMessageErrorV1,
+                .unexpectedProfile(expected: .kagemusha, actual: .offlineNote)
+            )
+        }
+    }
+
     func testFirstReleaseIdentifiersAreExactAndUnique() {
         XCTAssertEqual(KagemushaPeerPayloadKind.receiveRequest.rawValue, 1)
         XCTAssertEqual(KagemushaPeerPayloadKind.payment.rawValue, 2)
@@ -41,7 +89,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
         ), text)
     }
 
-    func testCanonicalPaymentFixtureUsesFirstReleaseABI20Envelope() throws {
+    func testCanonicalPaymentFixtureUsesFirstReleaseABI21Envelope() throws {
         let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
 

@@ -508,6 +508,14 @@ struct GlobalBodyLock {
     subject: wire::BlockSubject,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum LockedGlobalBodyOrigin<'a> {
+    ExactProposalView,
+    FixedGenesisViewZero {
+        authenticated_genesis: &'a SignedBlock,
+    },
+}
+
 #[derive(Clone, Debug)]
 struct PendingMerge {
     stage: PendingMergeStage,
@@ -689,7 +697,7 @@ impl DurableLaneSessionSource {
     }
 }
 
-fn lane_output_identity(message: &BlockMessage) -> Option<(u64, Hash)> {
+pub(crate) fn lane_output_identity(message: &BlockMessage) -> Option<(u64, Hash)> {
     match message {
         BlockMessage::LaneBlockProposal(proposal) => {
             Some((proposal.descriptor.proposal_height, proposal.proposal_hash))
@@ -1366,7 +1374,40 @@ impl V2LaneWorkAdapter {
 
     /// Bind lane proposals reconstructed from the exact durable globally
     /// locked body, then release their bounded lane-local consensus sessions.
+    ///
+    /// This ordinary path requires the immutable block header view to equal the
+    /// exact locked proposal round. Height-one recovery must use
+    /// [`Self::bind_locked_genesis_body`] instead.
     pub(crate) fn bind_locked_global_body(&mut self, block: &SignedBlock) -> V2LaneIngressOutcome {
+        self.bind_locked_global_body_from_origin(block, LockedGlobalBodyOrigin::ExactProposalView)
+    }
+
+    /// Bind the exact authenticated fixed view-zero genesis body under its
+    /// durable proposal-origin lock.
+    ///
+    /// Genesis is signed once by its configured authority and therefore keeps
+    /// a view-zero header when a certified view change moves its Proposal to a
+    /// later round. The supplied staged genesis is the runner-authenticated
+    /// source of truth; this path rejects every other byte sequence and every
+    /// parented, context-bearing, or non-height-one body.
+    pub(crate) fn bind_locked_genesis_body(
+        &mut self,
+        block: &SignedBlock,
+        authenticated_genesis: &SignedBlock,
+    ) -> V2LaneIngressOutcome {
+        self.bind_locked_global_body_from_origin(
+            block,
+            LockedGlobalBodyOrigin::FixedGenesisViewZero {
+                authenticated_genesis,
+            },
+        )
+    }
+
+    fn bind_locked_global_body_from_origin(
+        &mut self,
+        block: &SignedBlock,
+        origin: LockedGlobalBodyOrigin<'_>,
+    ) -> V2LaneIngressOutcome {
         let output_guard = Arc::clone(&self.output_guard);
         let Some(validation_permit) = output_guard.acquire() else {
             return V2LaneIngressOutcome::Rejected;
@@ -1383,7 +1424,35 @@ impl V2LaneWorkAdapter {
         let Some(global_lock) = self.globally_locked_body else {
             return V2LaneIngressOutcome::Rejected;
         };
-        if global_lock.subject != subject || block.header().height().get() != self.context.height {
+        let origin_matches = match origin {
+            LockedGlobalBodyOrigin::ExactProposalView => {
+                global_lock.round.view == block.header().view_change_index()
+            }
+            LockedGlobalBodyOrigin::FixedGenesisViewZero {
+                authenticated_genesis,
+            } => {
+                let Ok(authenticated_wire) = authenticated_genesis
+                    .canonical_resultless_proposal()
+                    .encode_wire()
+                else {
+                    return V2LaneIngressOutcome::Rejected;
+                };
+                self.context.height == 1
+                    && self.context.parent_commit_qc.is_none()
+                    && self.context.snapshot_bootstrap.is_none()
+                    && block.header().height().get() == 1
+                    && block.header().view_change_index() == 0
+                    && block.header().prev_block_hash().is_none()
+                    && block.header().execution_context_hash().is_none()
+                    && block.execution_context().is_none()
+                    && block.is_resultless_proposal()
+                    && canonical_wire == authenticated_wire
+            }
+        };
+        if global_lock.subject != subject
+            || !origin_matches
+            || block.header().height().get() != self.context.height
+        {
             return V2LaneIngressOutcome::Rejected;
         }
         let bundle = block.execution_context();
@@ -2096,9 +2165,9 @@ impl V2LaneWorkAdapter {
     }
 
     /// Register a deterministic validation blocked only on one exact certified
-    /// merge sidecar. Locked bodies may be re-proposed in a later consensus
-    /// round, so the immutable carrier view is taken from the merge QC and may
-    /// be earlier than `round.view`; it is never rebound to the later view.
+    /// merge sidecar. The merge QC authenticates its own immutable carrier view,
+    /// which may precede the enclosing proposal round and is never rebound to
+    /// that proposal's view.
     pub(crate) fn defer_missing_merge_sidecar(
         &mut self,
         round: wire::ConsensusRound,
@@ -2156,7 +2225,7 @@ impl V2LaneWorkAdapter {
             || reference.merge_qc.view > round.view
         {
             return Ok(MergeSidecarDeferralDisposition::Rejected(
-                "certified merge reference is not bound to the body's exact carrier height, parent, and immutable origin view"
+                "certified merge reference is not bound to the body's exact carrier height, parent, and carrier view"
                     .to_owned(),
             ));
         }
@@ -2526,8 +2595,8 @@ impl V2LaneWorkAdapter {
         self.schedule_committed_lane_outputs();
         let mut lane_artifacts = Vec::new();
         for proposal in self.lane_sessions.proposals_without_commit_qc() {
-            if !self.proposal_body_available(&proposal)
-                || self.historical_certificate_is_owned_or_durable(&proposal)
+            if proposal.descriptor.proposal_height != self.context.height
+                || !self.proposal_body_available(&proposal)
             {
                 continue;
             }
@@ -2540,8 +2609,8 @@ impl V2LaneWorkAdapter {
             .lane_sessions
             .local_vote_rebroadcast_artifacts_for(&self.local_peer)
         {
-            if !self.proposal_body_available(&proposal)
-                || self.historical_certificate_is_owned_or_durable(&proposal)
+            if proposal.descriptor.proposal_height != self.context.height
+                || !self.proposal_body_available(&proposal)
             {
                 continue;
             }
@@ -2551,8 +2620,8 @@ impl V2LaneWorkAdapter {
             ));
         }
         for qc in self.lane_sessions.qcs_for_incomplete_sessions() {
-            if !self.lane_vote_body_available(&qc.body)
-                || self.historical_certificate_body_is_owned_or_durable(&qc.body)
+            if qc.body.proposal_height != self.context.height
+                || !self.lane_vote_body_available(&qc.body)
             {
                 continue;
             }
@@ -2573,38 +2642,6 @@ impl V2LaneWorkAdapter {
             }
             self.lane_artifact_cursor = (start + advanced.max(1)) % lane_artifacts.len();
         }
-    }
-
-    fn historical_certificate_is_owned_or_durable(&self, proposal: &LaneBlockProposalV1) -> bool {
-        if proposal.descriptor.proposal_height >= self.context.height {
-            return false;
-        }
-        self.historical_recovery_sessions
-            .iter()
-            .any(|pending| &pending.proposal == proposal)
-            || self
-                .kura
-                .read_certified_lane_block_artifact(
-                    proposal.descriptor.lane_id,
-                    proposal.descriptor.lane_block_height,
-                )
-                .is_some_and(|durable| &durable.proposal == proposal)
-    }
-
-    fn historical_certificate_body_is_owned_or_durable(
-        &self,
-        body: &iroha_data_model::block::consensus::LaneBlockVoteBodyV1,
-    ) -> bool {
-        if body.proposal_height >= self.context.height {
-            return false;
-        }
-        self.historical_recovery_sessions
-            .iter()
-            .any(|pending| pending.proposal.proposal_hash == body.proposal_hash)
-            || self
-                .kura
-                .read_certified_lane_block_artifact(body.lane_id, body.lane_block_height)
-                .is_some_and(|durable| durable.proposal.proposal_hash == body.proposal_hash)
     }
 
     fn schedule_native_retransmissions(&mut self) {
@@ -3270,7 +3307,9 @@ impl V2LaneWorkAdapter {
             .lane_sessions
             .local_prepare_vote_proposals_for(&self.local_peer);
         for proposal in proposals {
-            if !self.proposal_body_available(&proposal) {
+            if proposal.descriptor.proposal_height != self.context.height
+                || !self.proposal_body_available(&proposal)
+            {
                 continue;
             }
             let body = proposal.vote_body(CertPhase::Prepare);
@@ -3293,7 +3332,9 @@ impl V2LaneWorkAdapter {
             .lane_sessions
             .local_commit_vote_requests_for(&self.local_peer);
         for request in commit_requests {
-            if !self.proposal_body_available(&request.proposal) {
+            if request.proposal.descriptor.proposal_height != self.context.height
+                || !self.proposal_body_available(&request.proposal)
+            {
                 continue;
             }
             let body = request.proposal.vote_body(CertPhase::Commit);
@@ -3313,8 +3354,8 @@ impl V2LaneWorkAdapter {
         }
 
         for qc in self.lane_sessions.drain_newly_sealed_qcs() {
-            if qc.body.proposal_height < self.context.height {
-                // Earlier-height certificates are recovery inputs, not fresh
+            if qc.body.proposal_height != self.context.height {
+                // Other-height certificates are recovery inputs, not fresh
                 // current-carrier fanout. Their durable Kura source answers
                 // exact proposal retransmissions after local persistence.
                 continue;
@@ -3345,6 +3386,11 @@ impl V2LaneWorkAdapter {
     }
 
     fn fanout_lane_message(&mut self, message: BlockMessage, validators: &[PeerId]) {
+        if !lane_output_identity(&message)
+            .is_some_and(|(proposal_height, _)| proposal_height == self.context.height)
+        {
+            return;
+        }
         let mut seen = BTreeSet::new();
         let peers = validators
             .iter()
@@ -5773,7 +5819,11 @@ pub(super) mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-        sync::{Arc, Barrier, mpsc},
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
         thread,
         time::{Duration, Instant},
     };
@@ -5812,7 +5862,10 @@ pub(super) mod tests {
         merge_sidecar::CertifiedMergeSidecarChunkV1,
         query::store::LiveQueryStore,
         state::World,
-        sumeragi::{fair_v2_ingress_admit_for_test, network_topology::Topology},
+        sumeragi::{
+            fair_v2_ingress_admit_for_test, network_topology::Topology,
+            v2_worker::tests::service_for_history_context,
+        },
     };
 
     pub(in crate::sumeragi) fn fixture(
@@ -5951,6 +6004,13 @@ pub(super) mod tests {
             mode,
             parent_commit_qc: (height > 1).then(|| wire::QuorumCertificate {
                 round: wire::ConsensusRound {
+                    context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                        format!("v2-lane-work-parent-context:{}", height - 1).as_bytes(),
+                    ))),
+                    height: height - 1,
+                    view: 0,
+                },
+                proposal_round: wire::ConsensusRound {
                     context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
                         format!("v2-lane-work-parent-context:{}", height - 1).as_bytes(),
                     ))),
@@ -7435,6 +7495,123 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn prior_height_hydration_stays_local_under_successor_backpressure() {
+        const PRIOR_HEIGHT: u64 = 4;
+        const SUCCESSOR_HEIGHT: u64 = 5;
+
+        let (adapter, keys) =
+            fixture_at_height(wire::ConsensusMode::Permissioned, SUCCESSOR_HEIGHT);
+        let lane_id = LaneId::SINGLE;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
+        let incarnation = adapter
+            .state
+            .lane_incarnation_at_height(lane_id, PRIOR_HEIGHT)
+            .expect("canonical lane incarnation is active at the prior height");
+        let proposal = proposal_for_route(
+            &adapter,
+            &keys,
+            lane_id,
+            dataspace_id,
+            incarnation,
+            PRIOR_HEIGHT,
+            1,
+        );
+        let canonical = store_canonical_anchor(&adapter, &proposal, &keys[0]);
+        let descriptor = &canonical.descriptor;
+        let session_key = crate::lane_consensus::LaneBlockSessionKey {
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            proposal_hash: canonical.proposal_hash,
+        };
+
+        let context = adapter.context.clone();
+        let local_peer = adapter.local_peer.clone();
+        let local_key = adapter.key_pair.clone();
+        let state = Arc::clone(&adapter.state);
+        let kura = Arc::clone(&adapter.kura);
+        let limits = adapter.limits;
+        drop(adapter);
+
+        let mut recovered = V2LaneWorkAdapter::new(
+            context.clone(),
+            local_peer,
+            local_key,
+            true,
+            state,
+            Arc::clone(&kura),
+            limits,
+            None,
+        )
+        .expect("open successor-height adapter");
+        assert!(
+            recovered.lane_sessions.get(&session_key).is_some(),
+            "the prior-height proposal remains available for historical certificate recovery"
+        );
+        let mut effects = recovered.drain_effects(usize::MAX);
+        recovered
+            .schedule_retransmission()
+            .expect("schedule bounded successor-height retransmission");
+        effects.extend(recovered.drain_effects(usize::MAX));
+        assert!(
+            effects.iter().all(|effect| !matches!(
+                effect,
+                V2LaneWorkEffect::PostLaneBlock { message, .. }
+                    if lane_output_identity(message)
+                        .is_some_and(|(proposal_height, _)| proposal_height == PRIOR_HEIGHT)
+            )),
+            "a hydrated prior-height artifact must never become successor-height lane fanout"
+        );
+
+        let target = canonical
+            .descriptor
+            .validator_set
+            .iter()
+            .find(|peer| *peer != &recovered.local_peer)
+            .expect("fixture has a remote lane validator")
+            .clone();
+        let stale_effect = V2LaneWorkEffect::PostLaneBlock {
+            peer: target.clone(),
+            message: BlockMessage::LaneBlockProposal(canonical.clone()),
+        };
+        let mut service = service_for_history_context(kura, context, &keys);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_hook = Arc::clone(&attempts);
+        service.set_exact_output_admission_hook(move |post, ticket| {
+            attempts_for_hook.fetch_add(1, Ordering::Relaxed);
+            Err(
+                iroha_p2p::network::NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 1,
+                },
+            )
+        });
+
+        let reservation_error = service
+            .can_retain_lane_work_effect(&stale_effect)
+            .expect_err("the h5 service must reject an h4 generic lane claim");
+        assert!(reservation_error.contains("differs from immutable height context 5"));
+        let post_error = service
+            .post_lane_block(target, BlockMessage::LaneBlockProposal(canonical))
+            .expect_err("the stale proposal must fail before actor admission");
+        assert!(post_error.contains("differs from immutable height context 5"));
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            0,
+            "the stale output must not reach the backpressured target"
+        );
+        assert!(
+            !service
+                .has_pending_exact_output()
+                .expect("inspect exact-output corridor"),
+            "the h4 proposal must not be retained under an h5 rollover claim"
+        );
+    }
+
+    #[test]
     fn persisted_v2_lane_qc_records_globally_applied_receipt_and_unblocks_next_height() {
         let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
         let lane_id = LaneId::SINGLE;
@@ -8430,6 +8607,7 @@ pub(super) mod tests {
             subject,
             wire::QuorumCertificate {
                 round,
+                proposal_round: round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
                 execution_commitment: wire::ExecutionCommitment::without_topups(
@@ -8464,6 +8642,11 @@ pub(super) mod tests {
         context.height = context.height.checked_add(1).expect("successor height");
         context.parent_commit_qc = Some(wire::QuorumCertificate {
             round: wire::ConsensusRound {
+                context_id: parent_context_id,
+                height: parent.header().height().get(),
+                view: parent.header().view_change_index(),
+            },
+            proposal_round: wire::ConsensusRound {
                 context_id: parent_context_id,
                 height: parent.header().height().get(),
                 view: parent.header().view_change_index(),
@@ -11054,7 +11237,66 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn same_body_binds_after_prepare_lock_advances_beyond_header_view() {
+    fn fixed_view_zero_genesis_binds_under_a_later_proposal_lock() {
+        let (mut adapter, _keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let genesis_key = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
+            .expect("deterministic genesis key");
+        let genesis_transaction = TransactionBuilder::new(
+            ChainId::from("fixed-view-zero-genesis"),
+            AccountId::new(genesis_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(genesis_key.private_key());
+        let staged_genesis = SignedBlock::genesis(
+            vec![genesis_transaction.clone()],
+            genesis_key.private_key(),
+            None,
+            None,
+        );
+        let proposal = staged_genesis.canonical_resultless_proposal();
+        let canonical_wire = proposal.encode_wire().expect("encode genesis proposal");
+        let subject = wire::BlockSubject {
+            parent_block_hash: proposal.header().prev_block_hash(),
+            block_hash: proposal.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let later_round = wire::ConsensusRound {
+            context_id: adapter.context.id(),
+            height: 1,
+            view: 3,
+        };
+        assert_eq!(
+            adapter.mark_global_body_locked(later_round, subject),
+            Ok(GlobalBodyLockOutcome::Inserted)
+        );
+        assert_eq!(
+            adapter.bind_locked_global_body(&proposal),
+            V2LaneIngressOutcome::Rejected,
+            "the ordinary binding path must keep exact proposal-view semantics"
+        );
+
+        let wrong_key = KeyPair::try_from_seed(vec![0xE2; 32], Algorithm::Ed25519)
+            .expect("different deterministic genesis key");
+        let wrong_genesis = SignedBlock::genesis(
+            vec![genesis_transaction],
+            wrong_key.private_key(),
+            None,
+            None,
+        );
+        assert_eq!(
+            adapter.bind_locked_genesis_body(&proposal, &wrong_genesis),
+            V2LaneIngressOutcome::Rejected,
+            "the fixed-view exception must match the authenticated staged genesis bytes"
+        );
+        assert_ne!(
+            adapter.bind_locked_genesis_body(&proposal, &staged_genesis),
+            V2LaneIngressOutcome::Rejected,
+            "the exact authenticated view-zero genesis remains recoverable after a certified view change"
+        );
+    }
+
+    #[test]
+    fn cross_view_global_lock_fails_exact_body_binding() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let (block, _) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
         let (original_round, subject) = global_lock_for_block(&adapter, &block);
@@ -11075,10 +11317,15 @@ pub(super) mod tests {
             adapter.mark_global_body_locked(higher_round, subject),
             Ok(GlobalBodyLockOutcome::Inserted)
         );
-        assert_ne!(
+        assert_eq!(
             adapter.bind_locked_global_body(&block),
             V2LaneIngressOutcome::Rejected,
-            "PrepareQC rank may advance while immutable body/header view stays fixed"
+            "the exact lock round must match the immutable body header view"
+        );
+        assert_eq!(
+            adapter.bind_locked_genesis_body(&block, &block),
+            V2LaneIngressOutcome::Rejected,
+            "the fixed-view genesis path cannot weaken a successor-height lock"
         );
     }
 

@@ -27,6 +27,7 @@ public final class ConfidentialAssetToriiClientTests {
 
   private static void rootsUsesCanonicalPostPathAndParsesBody() {
     final String root = "01".repeat(32);
+    final String blockHash = "0a".repeat(32);
     final StubExecutor executor =
         new StubExecutor(
             200,
@@ -34,10 +35,11 @@ public final class ConfidentialAssetToriiClientTests {
             {
               "latest": "%s",
               "roots": ["%s"],
-              "height": 1
+              "evaluated_block_height": 7,
+              "evaluated_block_hash": "%s"
             }
             """
-                .formatted(root, root));
+                .formatted(root, root, blockHash));
     final ConfidentialAssetToriiClient client =
         ConfidentialAssetToriiClient.builder()
             .executor(executor)
@@ -57,7 +59,8 @@ public final class ConfidentialAssetToriiClientTests {
         : "request body mismatch: " + executor.lastBody;
     assert root.equals(response.latest()) : "latest mismatch";
     assert response.roots().equals(List.of(root)) : "roots mismatch";
-    assert response.height() == 1 : "height mismatch";
+    assert response.evaluatedBlockHeight() == 7 : "height mismatch";
+    assert blockHash.equals(response.evaluatedBlockHash()) : "block hash mismatch";
     assert java.util.Arrays.equals(filled((byte) 1), response.latestRootBytes())
         : "latest bytes mismatch";
     assert java.util.Arrays.equals(filled((byte) 1), response.rootBytes(0))
@@ -68,11 +71,14 @@ public final class ConfidentialAssetToriiClientTests {
     final String commitment = "02".repeat(32);
     final String sibling = "00".repeat(32);
     final String root = "03".repeat(32);
+    final String blockHash = "0a".repeat(32);
     final StubExecutor executor =
         new StubExecutor(
             200,
             """
             {
+              "evaluated_block_height": 7,
+              "evaluated_block_hash": "%s",
               "root": "%s",
               "frontier_len": 1,
               "tree_depth": 1,
@@ -94,7 +100,7 @@ public final class ConfidentialAssetToriiClientTests {
               }]
             }
             """
-                .formatted(root, "00".repeat(32), sibling, root, root, commitment, sibling, root, root));
+                .formatted(blockHash, root, "00".repeat(32), sibling, root, root, commitment, sibling, root, root));
     final ConfidentialAssetToriiClient client =
         ConfidentialAssetToriiClient.builder()
             .executor(executor)
@@ -116,6 +122,11 @@ public final class ConfidentialAssetToriiClientTests {
             .equals(executor.lastBody)
         : "request body mismatch: " + executor.lastBody;
     assert root.equals(response.root()) : "root mismatch";
+    assert response.evaluatedBlockHeight() == 7 : "snapshot height mismatch";
+    assert blockHash.equals(response.evaluatedBlockHash()) : "snapshot hash mismatch";
+    response.requireEvaluatedSnapshot(7, filled((byte) 0x0a));
+    expectIllegalArgument(() -> response.requireEvaluatedSnapshot(8, filled((byte) 0x0a)));
+    expectIllegalArgument(() -> response.requireEvaluatedSnapshot(7, filled((byte) 0x0b)));
     assert response.frontierLen() == 1 : "frontier length mismatch";
     assert response.treeDepth() == 1 : "tree depth mismatch";
     assert response.paths().size() == 1 : "path count mismatch";
@@ -127,20 +138,20 @@ public final class ConfidentialAssetToriiClientTests {
 
   private static void emptyLatestRootIsNotNullableOnWireButNullInByteHelper() {
     final ZkRootsResponse response =
-        ZkRootsResponse.parse("{\"latest\":\"\",\"roots\":[],\"height\":0}".getBytes(StandardCharsets.UTF_8));
+        ZkRootsResponse.parse(("{\"latest\":\"\",\"roots\":[],\"evaluated_block_height\":0,\"evaluated_block_hash\":\"" + "00".repeat(32) + "\"}").getBytes(StandardCharsets.UTF_8));
     assert response.latest().isEmpty() : "latest should be empty";
     assert response.latestRootBytes() == null : "empty latest should map to null bytes";
   }
 
   private static void rootsRejectNonCanonicalHexAndNullLatest() {
     try {
-      new ZkRootsResponse("AA".repeat(32), List.of(), 0);
+      new ZkRootsResponse("AA".repeat(32), List.of(), 0, "00".repeat(32));
       throw new AssertionError("expected uppercase latest rejection");
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("canonical lowercase") : "wrong message";
     }
     try {
-      ZkRootsResponse.parse("{\"latest\":null,\"roots\":[],\"height\":0}".getBytes(StandardCharsets.UTF_8));
+      ZkRootsResponse.parse(("{\"latest\":null,\"roots\":[],\"evaluated_block_height\":0,\"evaluated_block_hash\":\"" + "00".repeat(32) + "\"}").getBytes(StandardCharsets.UTF_8));
       throw new AssertionError("expected null latest rejection");
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("latest") : "wrong message";
@@ -161,8 +172,10 @@ public final class ConfidentialAssetToriiClientTests {
         () ->
             ZkMerklePathResponse.parse(
                 """
-                {
-                  "root": "%s",
+            {
+              "evaluated_block_height": 7,
+              "evaluated_block_hash": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+              "root": "%s",
                   "frontier_len": "3",
                   "tree_depth": 1,
                   "paths": []
@@ -352,6 +365,8 @@ public final class ConfidentialAssetToriiClientTests {
     final String witnessJson = quotedStrings(witnessNodes);
     return """
             {
+              "evaluated_block_height": 7,
+              "evaluated_block_hash": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
               "root": "%s",
               "frontier_len": %d,
               "tree_depth": %d,

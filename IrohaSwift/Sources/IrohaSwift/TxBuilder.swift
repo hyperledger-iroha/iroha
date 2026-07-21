@@ -1267,94 +1267,101 @@ public final class IrohaSDK: @unchecked Sendable {
             throw KagemushaRecursiveSpendError.invalidField("assetId")
         }
         let assetDefinitionId = String(assetParts[0])
-        let readiness = try await toriiRestClient.getKagemushaReadiness(
-            assetDefinitionId: assetDefinitionId
-        )
-        guard readiness.ready,
-              readiness.blockers.isEmpty,
-              readiness.assetDefinitionId == assetDefinitionId,
-              readiness.assetDefinitionId == expectedReadiness.assetDefinitionID,
-              readiness.assetScale == amount.scale,
-              readiness.assetScale == expectedReadiness.assetScale,
-              readiness.evaluatedBlockHeight >= expectedReadiness.minimumEvaluatedBlockHeight,
-              let verifier = readiness.activeTopUpShieldVerifier,
-              expectedReadiness.verifier.matches(verifier),
-              let verifierCommitment = Data(hexString: verifier.commitment),
-              verifierCommitment.count == 32 else {
-            throw KagemushaRecursiveSpendError.invalidField("topUp.readiness")
-        }
-        let snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot(
-            asset: assetDefinitionId,
-            commitments: []
-        )
-        guard snapshot.frontierLen + 1
-                < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 else {
-            throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath.capacity")
-        }
-        let zeroPath = try snapshot.validatedNextZeroPath()
-        guard zeroPath.rootAtHeight == snapshot.root,
-              zeroPath.leafIndex == UInt64(snapshot.frontierLen) else {
-            throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath")
-        }
-        let unsigned = try KagemushaTopUpShieldBuildRequestV4(
-            chainID: chainId,
-            assetID: canonicalAssetId,
-            amount: amount,
-            payer: payer,
-            operationID: operationId,
-            opening: opening,
-            leafIndex: UInt32(zeroPath.leafIndex),
-            zeroPath: PrivacyConfidentialMerklePathWitnessV2(path: zeroPath),
-            shieldVerifierID: "\(verifier.id.backend):\(verifier.id.name)",
-            shieldVerifierCommitment: verifierCommitment,
-            artifactBinding: artifactBinding
-        ).buildUnsigned()
-        guard try zeroPath.root(
-            replacingLeafWith: unsigned.currentNote.noteCommitment
-        ) == unsigned.shieldEvidence.finalizedRoot,
-              unsigned.shieldEvidence.initialRoot == zeroPath.rootAtHeight,
-              unsigned.shieldEvidence.leafIndex == UInt32(zeroPath.leafIndex) else {
-            throw KagemushaRecursiveSpendError.invalidField("topUp.membershipWitness")
-        }
-        let dummyZeroPath = try zeroPath.nextZeroPathAfterInsertion(
-            commitment: unsigned.currentNote.noteCommitment,
-            expectedRoot: unsigned.shieldEvidence.finalizedRoot
-        )
-        let membershipWitness = try KagemushaNoteMembershipWitness(
-            leafIndex: UInt32(zeroPath.leafIndex),
-            inputPath: PrivacyConfidentialMerklePathWitnessV2(
-                siblings: zeroPath.siblings,
-                directions: zeroPath.directions,
-                root: unsigned.shieldEvidence.finalizedRoot
-            ),
-            dummyInputPath: PrivacyConfidentialMerklePathWitnessV2(path: dummyZeroPath)
-        )
-        let currentReadiness = try await toriiRestClient.getKagemushaReadiness(
-            assetDefinitionId: assetDefinitionId
-        )
-        guard currentReadiness.ready,
-              currentReadiness.blockers.isEmpty,
-              currentReadiness.assetDefinitionId == readiness.assetDefinitionId,
-              currentReadiness.assetScale == readiness.assetScale,
-              currentReadiness.evaluatedBlockHeight >= readiness.evaluatedBlockHeight,
-              let currentVerifier = currentReadiness.activeTopUpShieldVerifier,
-              expectedReadiness.verifier.matches(currentVerifier) else {
-            throw KagemushaRecursiveSpendError.invalidField("topUp.readiness.changed")
-        }
-        return KagemushaTopUpShieldPreparation(
-            unsigned: unsigned,
-            opening: opening,
-            membershipWitness: membershipWitness,
-            binding: KagemushaTopUpShieldSnapshotBinding(
-                assetDefinitionID: assetDefinitionId,
-                assetScale: amount.scale,
-                evaluatedBlockHeight: currentReadiness.evaluatedBlockHeight,
-                evaluatedBlockHash: currentReadiness.evaluatedBlockHashBytes,
-                verifier: expectedReadiness.verifier,
-                initialRoot: zeroPath.rootAtHeight,
-                leafIndex: UInt32(zeroPath.leafIndex)
+        for attempt in 0..<3 {
+            let readiness = try await toriiRestClient.getKagemushaReadiness(
+                assetDefinitionId: assetDefinitionId
             )
-        )
+            guard readiness.ready,
+                  readiness.blockers.isEmpty,
+                  readiness.assetDefinitionId == assetDefinitionId,
+                  readiness.assetDefinitionId == expectedReadiness.assetDefinitionID,
+                  readiness.assetScale == amount.scale,
+                  readiness.assetScale == expectedReadiness.assetScale,
+                  readiness.evaluatedBlockHeight >= expectedReadiness.minimumEvaluatedBlockHeight,
+                  let verifier = readiness.activeTopUpShieldVerifier,
+                  expectedReadiness.verifier.matches(verifier),
+                  let verifierCommitment = Data(hexString: verifier.commitment),
+                  verifierCommitment.count == 32 else {
+                throw KagemushaRecursiveSpendError.invalidField("topUp.readiness")
+            }
+            let snapshot: ToriiZkMerklePathResponse
+            do {
+                snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot(
+                    asset: assetDefinitionId,
+                    commitments: [],
+                    matching: readiness
+                )
+            } catch let error as ZkAssetMerklePathError {
+                let isSnapshotDrift: Bool
+                switch error {
+                case .invalidField("evaluated_block_height"),
+                     .invalidField("evaluated_block_hash"):
+                    isSnapshotDrift = true
+                default:
+                    isSnapshotDrift = false
+                }
+                guard isSnapshotDrift else { throw error }
+                if attempt < 2 { continue }
+                throw KagemushaRecursiveSpendError.invalidField("topUp.readiness.snapshotDrift")
+            }
+            guard snapshot.frontierLen + 1
+                    < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 else {
+                throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath.capacity")
+            }
+            let zeroPath = try snapshot.validatedNextZeroPath()
+            guard zeroPath.rootAtHeight == snapshot.root,
+                  zeroPath.leafIndex == UInt64(snapshot.frontierLen) else {
+                throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath")
+            }
+            let unsigned = try KagemushaTopUpShieldBuildRequestV4(
+                chainID: chainId,
+                assetID: canonicalAssetId,
+                amount: amount,
+                payer: payer,
+                operationID: operationId,
+                opening: opening,
+                leafIndex: UInt32(zeroPath.leafIndex),
+                zeroPath: PrivacyConfidentialMerklePathWitnessV2(path: zeroPath),
+                shieldVerifierID: "\(verifier.id.backend):\(verifier.id.name)",
+                shieldVerifierCommitment: verifierCommitment,
+                artifactBinding: artifactBinding
+            ).buildUnsigned()
+            guard try zeroPath.root(
+                replacingLeafWith: unsigned.currentNote.noteCommitment
+            ) == unsigned.shieldEvidence.finalizedRoot,
+                  unsigned.shieldEvidence.initialRoot == zeroPath.rootAtHeight,
+                  unsigned.shieldEvidence.leafIndex == UInt32(zeroPath.leafIndex) else {
+                throw KagemushaRecursiveSpendError.invalidField("topUp.membershipWitness")
+            }
+            let dummyZeroPath = try zeroPath.nextZeroPathAfterInsertion(
+                commitment: unsigned.currentNote.noteCommitment,
+                expectedRoot: unsigned.shieldEvidence.finalizedRoot
+            )
+            let membershipWitness = try KagemushaNoteMembershipWitness(
+                leafIndex: UInt32(zeroPath.leafIndex),
+                inputPath: PrivacyConfidentialMerklePathWitnessV2(
+                    siblings: zeroPath.siblings,
+                    directions: zeroPath.directions,
+                    root: unsigned.shieldEvidence.finalizedRoot
+                ),
+                dummyInputPath: PrivacyConfidentialMerklePathWitnessV2(path: dummyZeroPath)
+            )
+            return KagemushaTopUpShieldPreparation(
+                unsigned: unsigned,
+                opening: opening,
+                membershipWitness: membershipWitness,
+                binding: KagemushaTopUpShieldSnapshotBinding(
+                    assetDefinitionID: assetDefinitionId,
+                    assetScale: amount.scale,
+                    evaluatedBlockHeight: readiness.evaluatedBlockHeight,
+                    evaluatedBlockHash: readiness.evaluatedBlockHashBytes,
+                    verifier: expectedReadiness.verifier,
+                    initialRoot: zeroPath.rootAtHeight,
+                    leafIndex: UInt32(zeroPath.leafIndex)
+                )
+            )
+        }
+        throw KagemushaRecursiveSpendError.invalidField("topUp.readiness.snapshotDrift")
     }
 
     /// Generates a new signing key using `defaultSigningAlgorithm`.

@@ -49,9 +49,8 @@ pub(crate) use refinement::{
     ProductionDecisionIdentityProjection, ProductionDecisionRecoveryTraceProjection,
     ProductionDurableBodyIdentityProjection, ProductionIngressIdentityAndClassTraceProjection,
     ProductionQuorumCertificateIdentityProjection, ProductionReliableFlushTraceProjection,
-    ProductionSchedulerTraceProjection, SERVICE_CLASS_COMPLETION, SERVICE_CLASS_NONE,
-    SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS, TagProjection,
-    classify_exact_body_completion_ownership, exact_body_stage_is_owned,
+    SERVICE_CLASS_COMPLETION, SERVICE_CLASS_NONE, SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS,
+    TagProjection, classify_exact_body_completion_ownership, exact_body_stage_is_owned,
     plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
     plan_exact_body_retirement_accounting, prepend_causal_continuation,
     production_application_trace_refines_decision_completion_kernel,
@@ -61,7 +60,7 @@ pub(crate) use refinement::{
     production_decision_trace_refines_recovery_witness_kernel,
     production_ingress_identity_and_class_trace_refines_protected_ownership_kernel,
     production_reliable_flush_trace_refines_outbound_ownership_kernel,
-    production_scheduler_trace_refines_protected_ownership_kernel, select_bounded_service_class,
+    select_bounded_service_class,
 };
 pub(crate) use scheduler::{ScheduleState, ScheduledWork};
 pub(crate) use types::{

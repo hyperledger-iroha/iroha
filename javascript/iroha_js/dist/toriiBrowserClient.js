@@ -32,6 +32,64 @@ const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
   "CANCELED",
   "EXPIRED",
 ]);
+const COUNTED_LIST_OPTION_KEYS = new Set([
+  "limit",
+  "offset",
+  "countMode",
+  "count_mode",
+  "signal",
+]);
+const ACCOUNT_HISTORY_OPTION_KEYS = new Set([
+  ...COUNTED_LIST_OPTION_KEYS,
+  "assetId",
+  "asset_id",
+]);
+const CONTRACT_ACTIVITY_OPTION_KEYS = new Set([
+  ...COUNTED_LIST_OPTION_KEYS,
+  "authority",
+  "contractAddress",
+  "contract_address",
+  "contractAlias",
+  "contract_alias",
+  "contractEntrypoint",
+  "contract_entrypoint",
+  "sinceTimestampMs",
+  "since_timestamp_ms",
+  "untilTimestampMs",
+  "until_timestamp_ms",
+  "resultOk",
+  "result_ok",
+]);
+const CONTRACT_EVENT_FILTER_OPTION_KEYS = new Set([
+  "authority",
+  "contractAddress",
+  "contract_address",
+  "contractAlias",
+  "contract_alias",
+  "module",
+  "eventKind",
+  "event_kind",
+  "participant",
+  "assetId",
+  "asset_id",
+  "provenance",
+  "sinceTimestampMs",
+  "since_timestamp_ms",
+  "untilTimestampMs",
+  "until_timestamp_ms",
+  "resultOk",
+  "result_ok",
+]);
+const CONTRACT_EVENT_LIST_OPTION_KEYS = new Set([
+  ...COUNTED_LIST_OPTION_KEYS,
+  ...CONTRACT_EVENT_FILTER_OPTION_KEYS,
+]);
+const CONTRACT_EVENT_STREAM_OPTION_KEYS = new Set([
+  "signal",
+  ...CONTRACT_EVENT_FILTER_OPTION_KEYS,
+]);
+const LEDGER_HEADERS_OPTION_KEYS = new Set(["from", "limit", "signal"]);
+const LEDGER_READ_OPTION_KEYS = new Set(["signal"]);
 
 let noritoEncodersPromise;
 
@@ -505,6 +563,98 @@ function normalizeCountMode(value, context) {
   return mode;
 }
 
+function requireSupportedOptions(value, context, supportedKeys) {
+  const options = requireObject(value, context);
+  const unsupported = Object.keys(options).find((key) => !supportedKeys.has(key));
+  if (unsupported !== undefined) {
+    throw new TypeError(`${context} contains unsupported option ${unsupported}`);
+  }
+  return options;
+}
+
+function optionAlias(options, camelCase, snakeCase) {
+  return options[camelCase] ?? options[snakeCase];
+}
+
+function normalizeCountedListParams(options, context) {
+  return {
+    ...normalizeIterablePagination(options, context),
+    count_mode: normalizeCountMode(
+      optionAlias(options, "countMode", "count_mode"),
+      `${context}.countMode`,
+    ),
+  };
+}
+
+function normalizeOptionalString(value, context) {
+  if (value === undefined || value === null) return undefined;
+  return requireNonEmptyString(value, context);
+}
+
+function normalizeOptionalUnsignedInteger(value, context) {
+  if (value === undefined || value === null) return undefined;
+  return normalizeOffset(value, context);
+}
+
+function normalizeOptionalBoolean(value, context) {
+  if (value === undefined || value === null) return undefined;
+  return normalizeBoolean(value, context);
+}
+
+function normalizeLedgerHeight(value, context) {
+  return normalizePositiveInteger(value, context, undefined);
+}
+
+function normalizeLedgerEntryHash(value, context) {
+  const literal = requireNonEmptyString(String(value), context);
+  const normalized = literal.startsWith("0x") ? literal.slice(2) : literal;
+  if (!/^[0-9a-fA-F]{64}$/u.test(normalized)) {
+    throw new TypeError(`${context} must be exactly 32 bytes of hexadecimal`);
+  }
+  return normalized.toLowerCase();
+}
+
+function normalizeContractEventFilterParams(options, context) {
+  const provenance = normalizeOptionalString(options.provenance, `${context}.provenance`);
+  if (provenance !== undefined && provenance !== "emitted" && provenance !== "derived") {
+    throw new TypeError(`${context}.provenance must be emitted or derived`);
+  }
+  return {
+    authority: normalizeOptionalString(options.authority, `${context}.authority`),
+    contract_address: normalizeOptionalString(
+      optionAlias(options, "contractAddress", "contract_address"),
+      `${context}.contractAddress`,
+    ),
+    contract_alias: normalizeOptionalString(
+      optionAlias(options, "contractAlias", "contract_alias"),
+      `${context}.contractAlias`,
+    ),
+    module: normalizeOptionalString(options.module, `${context}.module`),
+    event_kind: normalizeOptionalString(
+      optionAlias(options, "eventKind", "event_kind"),
+      `${context}.eventKind`,
+    ),
+    participant: normalizeOptionalString(options.participant, `${context}.participant`),
+    asset_id: normalizeOptionalString(
+      optionAlias(options, "assetId", "asset_id"),
+      `${context}.assetId`,
+    ),
+    provenance,
+    since_timestamp_ms: normalizeOptionalUnsignedInteger(
+      optionAlias(options, "sinceTimestampMs", "since_timestamp_ms"),
+      `${context}.sinceTimestampMs`,
+    ),
+    until_timestamp_ms: normalizeOptionalUnsignedInteger(
+      optionAlias(options, "untilTimestampMs", "until_timestamp_ms"),
+      `${context}.untilTimestampMs`,
+    ),
+    result_ok: normalizeOptionalBoolean(
+      optionAlias(options, "resultOk", "result_ok"),
+      `${context}.resultOk`,
+    ),
+  };
+}
+
 function normalizeSelectEntry(entry, context) {
   if (typeof entry === "string") {
     const fieldPath = entry.trim();
@@ -735,6 +885,106 @@ export class ToriiBrowserHttpError extends Error {
   }
 }
 
+export class ToriiBrowserStreamGapError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = "ToriiBrowserStreamGapError";
+    this.code = options.code ?? "stream_gap";
+    this.droppedMessages = options.droppedMessages ?? null;
+    this.replayAvailable = options.replayAvailable === true;
+    this.payload = options.payload ?? null;
+  }
+}
+
+function streamRequestHeaders(defaultHeaders) {
+  const headers = {};
+  for (const [name, value] of Object.entries(defaultHeaders)) {
+    const normalizedName = name.toLowerCase();
+    if (normalizedName === "accept" || normalizedName === "last-event-id") continue;
+    headers[name] = value;
+  }
+  headers.Accept = "text/event-stream";
+  return headers;
+}
+
+function parseSseEventFrame(rawFrame) {
+  let event = null;
+  let id = null;
+  let retry = null;
+  const dataLines = [];
+  for (const line of rawFrame.split(/\r\n|\r|\n/u)) {
+    if (line === "" || line.startsWith(":")) continue;
+    const separator = line.indexOf(":");
+    const field = separator === -1 ? line : line.slice(0, separator);
+    let value = separator === -1 ? "" : line.slice(separator + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") {
+      event = value || null;
+    } else if (field === "data") {
+      dataLines.push(value);
+    } else if (field === "id" && !value.includes("\0")) {
+      id = value || null;
+    } else if (field === "retry" && /^\d+$/u.test(value)) {
+      const parsed = Number(value);
+      if (Number.isSafeInteger(parsed)) retry = parsed;
+    }
+  }
+  if (dataLines.length === 0 && event === null && id === null) return null;
+  const raw = dataLines.length > 0 ? dataLines.join("\n") : null;
+  let data = raw ?? "";
+  if (raw !== null && raw.trim() !== "") {
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = raw;
+    }
+  }
+  return { event, data, id, retry, raw };
+}
+
+function extractSseFrames(buffer) {
+  const frames = [];
+  let remainder = buffer;
+  while (true) {
+    const boundary = /\r\n\r\n|\r\r|\n\n/u.exec(remainder);
+    if (boundary === null) break;
+    const parsed = parseSseEventFrame(remainder.slice(0, boundary.index));
+    if (parsed !== null) frames.push(parsed);
+    remainder = remainder.slice(boundary.index + boundary[0].length);
+  }
+  return { frames, remainder };
+}
+
+function streamGapFromEvent(event) {
+  const payload = isPlainObject(event.data) ? event.data : null;
+  const code =
+    typeof payload?.code === "string" && payload.code.trim() !== ""
+      ? payload.code
+      : "stream_error";
+  const message =
+    typeof payload?.message === "string" && payload.message.trim() !== ""
+      ? payload.message
+      : "The contract event stream reported a non-replayable gap.";
+  const droppedMessages =
+    Number.isSafeInteger(payload?.dropped_messages) && payload.dropped_messages >= 0
+      ? payload.dropped_messages
+      : null;
+  const replayAvailable = payload?.replay_available === true;
+  return new ToriiBrowserStreamGapError(message, {
+    code,
+    droppedMessages,
+    replayAvailable,
+    payload: payload === null
+      ? null
+      : {
+          code,
+          message,
+          dropped_messages: droppedMessages,
+          replay_available: replayAvailable,
+        },
+  });
+}
+
 export class ToriiBrowserClient {
   constructor(baseUrl, options = {}) {
     const normalizedOptions = requireObject(options, "ToriiBrowserClient options");
@@ -906,6 +1156,53 @@ export class ToriiBrowserClient {
     }
     const text = await response.text();
     return text ? jsonParser(text) : null;
+  }
+
+  async _bytes(method, path, options = {}) {
+    const normalizedOptions = requireObject(options, `${method} ${path} options`);
+    const headers = {
+      ...this.defaultHeaders,
+      ...(normalizedOptions.headers ?? {}),
+      Accept: "application/x-norito",
+    };
+    let timeoutId;
+    let signal = normalizedOptions.signal;
+    if (
+      signal === undefined &&
+      this.timeoutMs !== null &&
+      this.timeoutMs !== undefined &&
+      Number(this.timeoutMs) > 0
+    ) {
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), Number(this.timeoutMs));
+      signal = controller.signal;
+    }
+    let response;
+    try {
+      response = await this.fetchImpl(this._url(path, normalizedOptions.params), {
+        method,
+        cache: "no-store",
+        headers,
+        signal,
+      });
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
+    const status = responseStatus(response);
+    const successStatuses = normalizedOptions.successStatuses ?? DEFAULT_SUCCESS_STATUSES;
+    if (!successStatuses.includes(status)) {
+      const errorResponse = typeof response?.clone === "function" ? response.clone() : response;
+      const bodyText = await responseText(response);
+      throw new ToriiBrowserHttpError(errorResponse, bodyText, status);
+    }
+    const contentType = response.headers?.get?.("content-type") ?? "";
+    if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
+      throw new TypeError(`${method} ${path} must return application/x-norito`);
+    }
+    if (typeof response.arrayBuffer !== "function") {
+      throw new TypeError(`${method} ${path} requires an arrayBuffer-capable response`);
+    }
+    return Buffer.from(await response.arrayBuffer());
   }
 
   async _canonicalJson(method, path, body, options, successStatuses = [200]) {
@@ -1232,6 +1529,40 @@ export class ToriiBrowserClient {
     );
   }
 
+  /** List effective direct and role-inherited permissions for an account. */
+  listAccountPermissions(accountId, options = {}) {
+    const context = "listAccountPermissions options";
+    const opts = requireSupportedOptions(options, context, COUNTED_LIST_OPTION_KEYS);
+    return this._json(
+      "GET",
+      `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/permissions`,
+      {
+        params: normalizeCountedListParams(opts, context),
+        signal: signalFrom(opts),
+      },
+    );
+  }
+
+  /** List indexed value movement and affected-transaction history for an account. */
+  listAccountHistory(accountId, options = {}) {
+    const context = "listAccountHistory options";
+    const opts = requireSupportedOptions(options, context, ACCOUNT_HISTORY_OPTION_KEYS);
+    return this._json(
+      "GET",
+      `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/history`,
+      {
+        params: {
+          ...normalizeCountedListParams(opts, context),
+          asset_id: normalizeOptionalString(
+            optionAlias(opts, "assetId", "asset_id"),
+            `${context}.assetId`,
+          ),
+        },
+        signal: signalFrom(opts),
+      },
+    );
+  }
+
   queryAccountTransactions(accountId, options = {}) {
     const opts = requireObject(options, "queryAccountTransactions options");
     return this._json("POST", `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/transactions/query`, {
@@ -1254,6 +1585,122 @@ export class ToriiBrowserClient {
       body: normalizeTransactionQueryEnvelope(opts, "queryVisibleTransactions"),
       signal: signalFrom(opts),
     });
+  }
+
+  /** List committed contract-call activity using Torii's route-specific filters. */
+  listContractActivity(options = {}) {
+    const context = "listContractActivity options";
+    const opts = requireSupportedOptions(options, context, CONTRACT_ACTIVITY_OPTION_KEYS);
+    return this._json("GET", "/v1/contracts/activity", {
+      params: {
+        ...normalizeCountedListParams(opts, context),
+        authority: normalizeOptionalString(opts.authority, `${context}.authority`),
+        contract_address: normalizeOptionalString(
+          optionAlias(opts, "contractAddress", "contract_address"),
+          `${context}.contractAddress`,
+        ),
+        contract_alias: normalizeOptionalString(
+          optionAlias(opts, "contractAlias", "contract_alias"),
+          `${context}.contractAlias`,
+        ),
+        contract_entrypoint: normalizeOptionalString(
+          optionAlias(opts, "contractEntrypoint", "contract_entrypoint"),
+          `${context}.contractEntrypoint`,
+        ),
+        since_timestamp_ms: normalizeOptionalUnsignedInteger(
+          optionAlias(opts, "sinceTimestampMs", "since_timestamp_ms"),
+          `${context}.sinceTimestampMs`,
+        ),
+        until_timestamp_ms: normalizeOptionalUnsignedInteger(
+          optionAlias(opts, "untilTimestampMs", "until_timestamp_ms"),
+          `${context}.untilTimestampMs`,
+        ),
+        result_ok: normalizeOptionalBoolean(
+          optionAlias(opts, "resultOk", "result_ok"),
+          `${context}.resultOk`,
+        ),
+      },
+      signal: signalFrom(opts),
+    });
+  }
+
+  /** List indexed generic contract events using Torii's route-specific filters. */
+  listContractEvents(options = {}) {
+    const context = "listContractEvents options";
+    const opts = requireSupportedOptions(options, context, CONTRACT_EVENT_LIST_OPTION_KEYS);
+    return this._json("GET", "/v1/contracts/events", {
+      params: {
+        ...normalizeCountedListParams(opts, context),
+        ...normalizeContractEventFilterParams(opts, context),
+      },
+      signal: signalFrom(opts),
+    });
+  }
+
+  /**
+   * Open one non-replayable fetch stream for generic contract events.
+   * Stream gaps and an unrequested EOF are terminal; callers must explicitly resubscribe.
+   */
+  streamContractEvents(options = {}) {
+    const context = "streamContractEvents options";
+    const opts = requireSupportedOptions(options, context, CONTRACT_EVENT_STREAM_OPTION_KEYS);
+    const params = normalizeContractEventFilterParams(opts, context);
+    const client = this;
+    return (async function* contractEventIterator() {
+      const response = await client.fetchImpl(client._url("/v1/contracts/events/sse", params), {
+        method: "GET",
+        cache: "no-store",
+        headers: streamRequestHeaders(client.defaultHeaders),
+        signal: signalFrom(opts),
+      });
+      const status = responseStatus(response);
+      if (status !== 200) {
+        const errorResponse = typeof response?.clone === "function" ? response.clone() : response;
+        const bodyText = await responseText(response);
+        throw new ToriiBrowserHttpError(errorResponse, bodyText, status);
+      }
+      if (typeof response?.body?.getReader !== "function") {
+        throw new ToriiBrowserStreamGapError(
+          "The contract event stream ended without a readable response body.",
+          { code: "stream_unexpected_eof" },
+        );
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let ended = false;
+      try {
+        while (!ended) {
+          const chunk = await reader.read();
+          ended = chunk.done === true;
+          if (chunk.value !== undefined) {
+            buffer += decoder.decode(chunk.value, { stream: !ended });
+          }
+          if (ended) buffer += decoder.decode();
+          const parsed = extractSseFrames(buffer);
+          buffer = parsed.remainder;
+          for (const event of parsed.frames) {
+            if (event.event === "stream_error") throw streamGapFromEvent(event);
+            yield event;
+          }
+        }
+        if (opts.signal?.aborted === true) return;
+        throw new ToriiBrowserStreamGapError(
+          "The contract event stream ended unexpectedly and cannot be resumed.",
+          { code: "stream_unexpected_eof" },
+        );
+      } finally {
+        if (!ended && typeof reader.cancel === "function") {
+          try {
+            await reader.cancel();
+          } catch {
+            // Preserve the stream error or consumer cancellation that entered this block.
+          }
+        }
+        if (typeof reader.releaseLock === "function") reader.releaseLock();
+      }
+    })();
   }
 
   listAssetHolders(assetDefinitionId, options = {}) {
@@ -1415,6 +1862,61 @@ export class ToriiBrowserClient {
     return this._json("GET", `/v1/explorer/blocks/${encodeURIComponent(String(identifier))}`, {
       signal: signalFrom(opts),
     });
+  }
+
+  /** List newest-first canonical ledger headers with Torii's bounded window. */
+  listLedgerHeaders(options = {}) {
+    const context = "listLedgerHeaders options";
+    const opts = requireSupportedOptions(options, context, LEDGER_HEADERS_OPTION_KEYS);
+    return this._json("GET", "/v1/ledger/headers", {
+      params: {
+        from: opts.from === undefined
+          ? undefined
+          : normalizeLedgerHeight(opts.from, `${context}.from`),
+        limit: opts.limit === undefined
+          ? undefined
+          : normalizePositiveInteger(opts.limit, `${context}.limit`, undefined),
+      },
+      signal: signalFrom(opts),
+    });
+  }
+
+  /** Fetch the node-provided execution state root recorded at a block height. */
+  getLedgerStateRoot(height, options = {}) {
+    const context = "getLedgerStateRoot options";
+    const opts = requireSupportedOptions(options, context, LEDGER_READ_OPTION_KEYS);
+    const normalizedHeight = normalizeLedgerHeight(height, "getLedgerStateRoot height");
+    return this._json("GET", `/v1/ledger/state/${normalizedHeight}`, {
+      signal: signalFrom(opts),
+    });
+  }
+
+  /** Fetch the node-provided execution QC at a block height. */
+  getLedgerStateProof(height, options = {}) {
+    const context = "getLedgerStateProof options";
+    const opts = requireSupportedOptions(options, context, LEDGER_READ_OPTION_KEYS);
+    const normalizedHeight = normalizeLedgerHeight(height, "getLedgerStateProof height");
+    return this._json("GET", `/v1/ledger/state-proof/${normalizedHeight}`, {
+      signal: signalFrom(opts),
+    });
+  }
+
+  /** Fetch and decode the canonical Norito block inclusion/execution proof. */
+  async getLedgerBlockProof(height, entryHash, options = {}) {
+    const context = "getLedgerBlockProof options";
+    const opts = requireSupportedOptions(options, context, LEDGER_READ_OPTION_KEYS);
+    const normalizedHeight = normalizeLedgerHeight(height, "getLedgerBlockProof height");
+    const normalizedHash = normalizeLedgerEntryHash(
+      entryHash,
+      "getLedgerBlockProof entryHash",
+    );
+    const bytes = await this._bytes(
+      "GET",
+      `/v1/ledger/block/${normalizedHeight}/proof/${normalizedHash}`,
+      { signal: signalFrom(opts) },
+    );
+    const { noritoDecodeBlockProofs } = await loadNoritoEncoders();
+    return noritoDecodeBlockProofs(bytes);
   }
 
   getExplorerMetrics(options = {}) {

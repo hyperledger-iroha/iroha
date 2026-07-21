@@ -207,7 +207,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 406
+_PRODUCTION_TEST_COUNT = 438
 _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
@@ -227,29 +227,57 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        25,
+        26,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 26),
-    ("production-v2-core", "sumeragi::v2_core::tests", 15),
-    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
+    ("production-v2-core", "sumeragi::v2_core::tests", 25),
+    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 4),
+    ("production-v2-core-reducer", "sumeragi::v2_core::reducer::tests", 2),
+    ("production-v2-core-wal", "sumeragi::v2_core::wal::tests", 1),
     (
         "production-v2-core-source-link",
         "sumeragi::v2_core::reducer::source_link_tests",
         3,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 38),
+    (
+        "production-v2-equivocation-evidence",
+        "sumeragi::evidence::tests",
+        1,
+    ),
+    ("production-v2-adapter", "sumeragi::v2::tests", 41),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 54),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 28),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 31),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 56),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 29),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 34),
+    ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 22),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 23),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 49),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
         18,
+    ),
+    (
+        "production-kagemusha-finality",
+        "zk::kagemusha_finality::tests",
+        1,
+    ),
+    (
+        "production-data-model-v2-finality",
+        "block::consensus_v2::finality::tests",
+        1,
+    ),
+    (
+        "production-data-model-offline-compact-qc",
+        "offline::kagemusha_v4_topup_provenance_tests",
+        1,
+    ),
+    (
+        "production-data-model-v2-context-identity",
+        "block::consensus_v2::tests",
+        1,
     ),
     (
         "production-v2-integration-runner",
@@ -283,6 +311,11 @@ _PRODUCTION_MODULES = (
     ),
 )
 _PRODUCTION_INTEGRATION_MODULE = "sumeragi_v2_runner::prepare_qc_split_tests"
+_DATA_MODEL_PRODUCTION_MODULES = (
+    "block::consensus_v2::finality::tests",
+    "offline::kagemusha_v4_topup_provenance_tests",
+    "block::consensus_v2::tests",
+)
 _DATA_STATUS_TEST = (
     "block::consensus_v2::tests::"
     "status_validation_accepts_all_ignore_reasons_and_rejects_a_thirteenth_entry"
@@ -343,6 +376,9 @@ def _canonical_production_tests(repo_root: Path) -> list[str]:
                 (
                     "sumeragi::",
                     "sumeragi_v2_runner::",
+                    "block::",
+                    "offline::",
+                    "zk::",
                     "merge_sidecar::",
                     "kura::",
                     "nexus::",
@@ -380,6 +416,11 @@ def _production_module_command(module: str) -> str:
         return (
             "cargo test --locked -p irohad --bin irohad "
             "--features test-network-message-control "
+            f"{module} -- --test-threads=1"
+        )
+    if module in _DATA_MODEL_PRODUCTION_MODULES:
+        return (
+            "cargo test --locked -p iroha_data_model --lib "
             f"{module} -- --test-threads=1"
         )
     return f"cargo test --locked -p iroha_core --lib {module} -- --test-threads=1"

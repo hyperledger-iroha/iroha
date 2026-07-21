@@ -298,7 +298,7 @@ impl FaultClient for MochiFaultClient {
 struct MochiFaultPeer {
     supervisor: Arc<Mutex<Supervisor>>,
     alias: String,
-    storage_dir: PathBuf,
+    kura_store_dir: PathBuf,
     trusted_peer_entry: String,
     isolated_trusted_peers_pop: Vec<Value>,
     client: MochiFaultClient,
@@ -343,11 +343,7 @@ impl MochiFaultPeer {
                 "peer config missing trusted_peers_pop entry for `{peer_public_key}`"
             )));
         }
-        let peer_dir = peer
-            .config_path()
-            .parent()
-            .ok_or_else(|| ChaosError::Message("peer config is missing a parent dir".to_owned()))?
-            .to_path_buf();
+        let kura_store_dir = peer.kura_store_dir().to_path_buf();
         let client = guard.torii_client(alias).ok_or_else(|| {
             ChaosError::Message(format!("torii client unavailable for `{alias}`"))
         })?;
@@ -355,7 +351,7 @@ impl MochiFaultPeer {
         Ok(Self {
             supervisor: shared.clone(),
             alias: alias.to_owned(),
-            storage_dir: peer_dir.join("storage"),
+            kura_store_dir,
             trusted_peer_entry,
             isolated_trusted_peers_pop,
             client: MochiFaultClient { client },
@@ -371,7 +367,7 @@ impl FaultPeer for MochiFaultPeer {
     }
 
     fn kura_store_dir(&self) -> PathBuf {
-        self.storage_dir.clone()
+        self.kura_store_dir.clone()
     }
 
     fn client(&self) -> Self::Client {

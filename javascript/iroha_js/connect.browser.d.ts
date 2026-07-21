@@ -1,3 +1,8 @@
+import type { CanonicalJsonRequestSignerInput } from "./canonical-request.js";
+
+/** Wallet policy domain for exact Torii canonical-request message bytes. */
+export const TORII_CANONICAL_REQUEST_DOMAIN_TAG: "iroha:torii:canonical-request:v1";
+
 export interface BrowserConnectKeyPair {
   publicKey: Uint8Array;
   privateKey: Uint8Array;
@@ -102,7 +107,19 @@ export interface BrowserConnectAppSession {
   readonly approvedAccountId: string | null;
   waitForApproval(): Promise<BrowserConnectApproval>;
   signTransaction(unsignedTxBytes: BrowserConnectBinaryLike): Promise<Uint8Array>;
+  /** Requires the corresponding `sign_raw` permission to be granted by the wallet. */
+  signRaw(
+    domainTag: string,
+    bytes: BrowserConnectBinaryLike,
+  ): Promise<Uint8Array>;
   close(reason?: string): void;
+}
+
+export interface BrowserConnectCanonicalRequestAuth {
+  readonly authAccountId: string;
+  readonly sign: (
+    input: CanonicalJsonRequestSignerInput,
+  ) => Promise<Uint8Array>;
 }
 
 export class ConnectApprovalRejectedError extends Error {
@@ -171,3 +188,6 @@ export function openConnectWebSocket(options: BrowserConnectSocketOptions & {
 export function createConnectAppSession(
   options: BrowserConnectAppSessionOptions,
 ): BrowserConnectAppSession;
+export function createConnectCanonicalRequestAuth(
+  session: Pick<BrowserConnectAppSession, "waitForApproval" | "signRaw">,
+): Promise<BrowserConnectCanonicalRequestAuth>;

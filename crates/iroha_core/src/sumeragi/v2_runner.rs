@@ -79,7 +79,7 @@ const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LocalProposalOwner {
     tag: EventTag,
-    locked_subject: Option<wire::BlockSubject>,
+    locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     decided_subject: Option<wire::BlockSubject>,
 }
 
@@ -87,9 +87,24 @@ impl From<LocalProposalDirective> for LocalProposalOwner {
     fn from(directive: LocalProposalDirective) -> Self {
         Self {
             tag: directive.tag(),
-            locked_subject: directive.locked_subject(),
+            locked_body: directive.locked_body(),
             decided_subject: directive.decided_subject(),
         }
+    }
+}
+
+impl LocalProposalOwner {
+    /// Return whether this owner installs the first exact lock for prior
+    /// unlocked proposal work from the same reducer incarnation.
+    fn installs_first_exact_lock_for(self, prior: Self, subject: wire::BlockSubject) -> bool {
+        prior.tag == self.tag
+            && prior.decided_subject == self.decided_subject
+            && prior.locked_body.is_none()
+            && self.locked_body.is_some_and(|(round, locked_subject)| {
+                round.height == self.tag.height()
+                    && round.view == self.tag.view()
+                    && locked_subject == subject
+            })
     }
 }
 
@@ -224,10 +239,7 @@ impl LocalProposalState {
         if let Some((candidate, subject)) = self.submitted
             && candidate != owner
         {
-            if candidate.tag == owner.tag
-                && candidate.decided_subject == owner.decided_subject
-                && owner.locked_subject == Some(subject)
-            {
+            if owner.installs_first_exact_lock_for(candidate, subject) {
                 self.submitted = Some((owner, subject));
             } else {
                 self.submitted = None;
@@ -239,9 +251,7 @@ impl LocalProposalState {
             .is_some_and(|pending| pending.owner != owner)
         {
             let preserve = self.pending_events.as_ref().is_some_and(|pending| {
-                pending.owner.tag == owner.tag
-                    && pending.owner.decided_subject == owner.decided_subject
-                    && owner.locked_subject == Some(pending.subject)
+                owner.installs_first_exact_lock_for(pending.owner, pending.subject)
             });
             if preserve {
                 self.pending_events
@@ -252,7 +262,7 @@ impl LocalProposalState {
                 self.pending_events = None;
             }
         }
-        let continued_exact_subject = self
+        let continued_exact_work = self
             .submitted
             .is_some_and(|(candidate, _)| candidate == owner)
             || self
@@ -260,7 +270,7 @@ impl LocalProposalState {
                 .as_ref()
                 .is_some_and(|pending| pending.owner == owner);
         if self.attempted.is_some_and(|candidate| candidate != owner) {
-            self.attempted = continued_exact_subject.then_some(owner);
+            self.attempted = continued_exact_work.then_some(owner);
         }
         if self
             .heartbeat_only
@@ -705,6 +715,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&output_guard),
             effect_queue,
         )?;
+        if let Some(authenticated_genesis) = first_height_genesis.as_ref() {
+            executor.install_authenticated_genesis_body(authenticated_genesis)?;
+        }
         // A replayed ProposalIntent already owns this reducer incarnation.  Its
         // asynchronous signature completion must restore and broadcast the
         // exact durable payload before any fresh candidate work is admitted.
@@ -1183,19 +1196,11 @@ fn schedule_local_proposal(
     if directive.decided_subject().is_some() {
         return Ok(());
     }
-    // Do not consume a prepared candidate or register outbound payload bytes
-    // until the executor can reserve the local StoreBody owner. Timers,
-    // retransmission, and completions continue to run while this producer
-    // waits, so local proposal work cannot turn bounded capacity into a fatal
-    // adapter error.
-    if !executor.can_admit_local_proposal() {
-        return Ok(());
-    }
     // Bind the immutable disk acquisition to the current reducer incarnation
     // before observing readiness. A TC may have advanced the view after the
     // worker completed its one exact-subject load; consuming only after this
-    // rebind prevents an old tag from turning ready bytes into another FIFO
-    // read.
+    // consumer retag prevents an old tag from turning ready bytes into another
+    // FIFO read; it does not change the locked proposal origin.
     if let Some((locked_round, locked)) = directive.locked_body() {
         services
             .request_locked_candidate(directive.tag(), locked_round, locked)
@@ -1203,8 +1208,10 @@ fn schedule_local_proposal(
     }
     while let Some(loaded) = services.take_loaded_candidate() {
         let current = executor.local_proposal_directive()?;
+        let loaded_round = loaded.round();
+        let loaded_subject = loaded.subject();
         if loaded.tag() != current.tag()
-            || current.locked_body() != Some((loaded.round(), loaded.subject()))
+            || current.locked_body() != Some((loaded_round, loaded_subject))
         {
             iroha_logger::debug!(
                 loaded_height = loaded.tag().height(),
@@ -1213,52 +1220,57 @@ fn schedule_local_proposal(
                 current_view = current.tag().view(),
                 loaded_subject = ?loaded.subject(),
                 current_locked_subject = ?current.locked_subject(),
-                "discarded stale locked-body load before Sumeragi v2 re-proposal"
+                "discarded stale locked-body load before exact-origin Sumeragi v2 recovery"
             );
             continue;
         }
-        let loaded_subject = loaded.subject();
+        let (locked_round, locked_subject) = current
+            .locked_body()
+            .expect("loaded candidate matched the current durable lock above");
         let canonical_wire = loaded.into_canonical_wire();
         let block = iroha_data_model::block::decode_framed_signed_block(&canonical_wire)
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
         if !block.is_resultless_proposal() {
             return Err(V2RunnerError::ResultBearingProposal);
         }
-        if lane_work.bind_locked_global_body(&block) == V2LaneIngressOutcome::Rejected {
+        let lane_binding = if context.height == 1 {
+            let authenticated_genesis = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
+            lane_work.bind_locked_genesis_body(&block, authenticated_genesis)
+        } else {
+            lane_work.bind_locked_global_body(&block)
+        };
+        if lane_binding == V2LaneIngressOutcome::Rejected {
             return Err(V2RunnerError::LaneCandidateBinding);
         }
-        if current.leader() != local_validator {
-            executor.retain_locked_body_for_reproposal(
-                current.tag(),
-                loaded_subject,
-                canonical_wire,
-                services,
-            )?;
-            iroha_logger::debug!(
-                height = current.tag().height(),
-                view = current.tag().view(),
-                leader = current.leader(),
-                local_validator,
-                "staged locked body for current-view round binding and validation-witness promotion"
-            );
-            continue;
-        }
+        executor.retain_locked_body_for_recovery(
+            current.tag(),
+            locked_round,
+            locked_subject,
+            canonical_wire,
+            services,
+        )?;
         iroha_logger::debug!(
             height = current.tag().height(),
-            view = current.tag().view(),
-            leader = current.leader(),
-            subject = ?current.locked_subject(),
-            "submitting exact locked body for Sumeragi v2 re-proposal"
+            consumer_view = current.tag().view(),
+            proposal_view = locked_round.view,
+            subject = ?locked_subject,
+            local_validator,
+            "staged exact locked origin for local Sumeragi v2 body recovery"
         );
-        submit_exact_body(
-            context,
-            current,
-            canonical_wire,
-            executor,
-            services,
-            proposal_state,
-        )?;
-        proposal_state.attempted = Some(LocalProposalOwner::from(current));
+    }
+    // An installed lock is finalized from its immutable proposal origin. Local
+    // disk bytes may satisfy that origin's recovery pipeline above, but no
+    // validator rebinds them into a current-view Proposal.
+    if directive.locked_body().is_some() {
+        return Ok(());
+    }
+    // Do not consume a prepared candidate or register outbound payload bytes
+    // until the executor can reserve the local StoreBody owner. Timers,
+    // retransmission, and completions continue to run while this producer
+    // waits, so local proposal work cannot turn bounded capacity into a fatal
+    // adapter error. Exact locked-origin recovery is intentionally not gated by
+    // proposal capacity.
+    if !executor.can_admit_local_proposal() {
         return Ok(());
     }
     if directive.leader() != local_validator
@@ -1270,9 +1282,7 @@ fn schedule_local_proposal(
         return Ok(());
     }
 
-    if directive.locked_subject().is_some() {
-        proposal_state.attempted = Some(owner);
-    } else if context.height == 1 {
+    if context.height == 1 {
         let body = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
         // Genesis staging retains its deterministic execution image for application, while
         // consensus authenticates the canonical resultless proposal. Project exactly once at
@@ -1925,7 +1935,7 @@ fn reconcile_executor_locked_body(
     if directive.decided_subject().is_none()
         && let Some(lock) = directive.locked_body()
     {
-        executor.reconcile_locked_body_for_reproposal(directive.tag(), lock, services)?;
+        executor.reconcile_locked_body_for_recovery(directive.tag(), lock, services)?;
     }
     Ok(directive)
 }
@@ -3537,14 +3547,23 @@ mod tests {
     }
 
     fn proposal_owner(
-        _context: &wire::HeightContext,
+        context: &wire::HeightContext,
         tag: EventTag,
         lock: Option<(u64, wire::BlockSubject)>,
         decided_subject: Option<wire::BlockSubject>,
     ) -> LocalProposalOwner {
         LocalProposalOwner {
             tag,
-            locked_subject: lock.map(|(_, subject)| subject),
+            locked_body: lock.map(|(view, subject)| {
+                (
+                    wire::ConsensusRound {
+                        context_id: context.id(),
+                        height: context.height,
+                        view,
+                    },
+                    subject,
+                )
+            }),
             decided_subject,
         }
     }
@@ -3622,13 +3641,54 @@ mod tests {
     }
 
     #[test]
-    fn higher_same_subject_lock_keeps_one_local_proposal_owner() {
+    fn higher_same_subject_lock_retires_prior_origin_work() {
         let (context, _) = context();
         let tag = EventTag::new(context.height, 5, Generation::new(15));
-        let subject = proposal_subject(b"higher lock keeps local subject");
+        let subject = proposal_subject(b"higher lock retires old origin");
         let lower = proposal_owner(&context, tag, Some((2, subject)), None);
         let higher = proposal_owner(&context, tag, Some((4, subject)), None);
-        assert_eq!(lower, higher);
+        let mut state = LocalProposalState {
+            attempted: Some(lower),
+            submitted: Some((lower, subject)),
+            pending_events: Some(PendingLocalEvents {
+                owner: lower,
+                subject,
+                events: Vec::new(),
+            }),
+            ..LocalProposalState::default()
+        };
+
+        assert_ne!(lower, higher);
+        state.reconcile(higher);
+
+        assert!(state.attempted.is_none());
+        assert!(state.submitted.is_none());
+        assert!(state.pending_events.is_none());
+    }
+
+    #[test]
+    fn first_same_subject_lock_from_prior_view_retires_unlocked_work() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(16));
+        let subject = proposal_subject(b"old-origin first lock");
+        let unlocked = proposal_owner(&context, tag, None, None);
+        let locked = proposal_owner(&context, tag, Some((4, subject)), None);
+        let mut state = LocalProposalState {
+            attempted: Some(unlocked),
+            submitted: Some((unlocked, subject)),
+            pending_events: Some(PendingLocalEvents {
+                owner: unlocked,
+                subject,
+                events: Vec::new(),
+            }),
+            ..LocalProposalState::default()
+        };
+
+        state.reconcile(locked);
+
+        assert!(state.attempted.is_none());
+        assert!(state.submitted.is_none());
+        assert!(state.pending_events.is_none());
     }
 
     #[test]

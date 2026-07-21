@@ -38,12 +38,14 @@ use super::{
     FairV2IngressOwnershipEvidence,
     v2::{
         AdapterEffect, AdapterError, AuthenticatedConsensusMessage, BodyPipelineCompletionEvidence,
-        DecisionLocalProposalDisposition, DeferredAdmissionOrdinalSource, DeferredPriority,
-        DeferredServiceEvidence, SumeragiV2Adapter, classify_decided_local_proposal,
-        proposal_is_safe_for_lock,
+        DecisionLocalProposalDisposition, DeferredAdmissionOrdinalSource, DeferredServiceEvidence,
+        SumeragiV2Adapter, classify_decided_local_proposal, proposal_is_safe_for_lock,
     },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
 };
+
+#[cfg(test)]
+use super::v2::DeferredPriority;
 
 const RETRANSMIT_DIVISOR: u32 = 5;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
@@ -348,14 +350,27 @@ pub(crate) struct RuntimeCommandIdentity {
 /// A Commit-certificate discovery response is authenticated as its outer
 /// envelope and then projects the enclosed CommitQC into reducer ingress.
 /// Direct QC delivery and discovery-response delivery therefore occupy two
-/// independent, fixed slots while sharing one immutable runtime command. Each
-/// slot still carries its own bounded per-source routes and cursors.
+/// independent slots while sharing one immutable runtime command. Each slot
+/// retains a protocol-bounded set of independently admitted fair-ingress
+/// carriers. Identical certificates can legitimately arrive from every voter,
+/// so collapsing the slot to one semantic origin would turn a valid duplicate
+/// into a fail-closed ownership mismatch. The bound is exact: once every slot
+/// is occupied, a new disjoint carrier is rejected rather than summarized
+/// without its source identity.
+const MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM: usize = wire::MAX_VALIDATORS_PER_HEIGHT;
+
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeIngressOwnershipEvidence {
     runtime_bytes: Arc<[u8]>,
-    direct: Option<FairV2IngressOwnershipEvidence>,
-    commit_certificate_response: Option<FairV2IngressOwnershipEvidence>,
+    direct: Vec<FairV2IngressOwnershipEvidence>,
+    commit_certificate_response: Vec<FairV2IngressOwnershipEvidence>,
     projection_hash: iroha_crypto::Hash,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeIngressMergeError {
+    Capacity,
+    Conflict,
 }
 
 impl RuntimeIngressOwnershipEvidence {
@@ -365,7 +380,7 @@ impl RuntimeIngressOwnershipEvidence {
     ) -> Option<Self> {
         let outer = ownership.canonical_v2_message()?;
         let (direct, commit_certificate_response) = if outer == *message {
-            (Some(ownership), None)
+            (vec![ownership], Vec::new())
         } else if matches!(
             (&outer.payload, &message.payload),
             (
@@ -373,7 +388,7 @@ impl RuntimeIngressOwnershipEvidence {
                 wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
             ) if response.certificate == *certificate
         ) {
-            (None, Some(ownership))
+            (Vec::new(), vec![ownership])
         } else {
             return None;
         };
@@ -387,28 +402,25 @@ impl RuntimeIngressOwnershipEvidence {
         evidence.validate_exact().then_some(evidence)
     }
 
-    fn merge_downstream(&mut self, candidate: Self) -> bool {
+    fn merge_downstream(&mut self, candidate: Self) -> Result<(), RuntimeIngressMergeError> {
         if !self.validate_exact()
             || !candidate.validate_exact()
             || self.runtime_bytes != candidate.runtime_bytes
         {
-            return false;
+            return Err(RuntimeIngressMergeError::Conflict);
         }
         let mut merged = self.clone();
-        if !merge_runtime_ingress_slot(&mut merged.direct, candidate.direct)
-            || !merge_runtime_ingress_slot(
-                &mut merged.commit_certificate_response,
-                candidate.commit_certificate_response,
-            )
-        {
-            return false;
-        }
+        merge_runtime_ingress_slot(&mut merged.direct, candidate.direct)?;
+        merge_runtime_ingress_slot(
+            &mut merged.commit_certificate_response,
+            candidate.commit_certificate_response,
+        )?;
         merged.projection_hash = runtime_ingress_ownership_projection_hash(&merged);
         if !merged.validate_exact() {
-            return false;
+            return Err(RuntimeIngressMergeError::Conflict);
         }
         *self = merged;
-        true
+        Ok(())
     }
 
     fn matches_authenticated(&self, authenticated: &AuthenticatedConsensusMessage) -> bool {
@@ -417,7 +429,10 @@ impl RuntimeIngressOwnershipEvidence {
     }
 
     fn validate_exact(&self) -> bool {
-        if self.direct.is_none() && self.commit_certificate_response.is_none() {
+        if (self.direct.is_empty() && self.commit_certificate_response.is_empty())
+            || self.direct.len() > MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM
+            || self.commit_certificate_response.len() > MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM
+        {
             return false;
         }
         let mut runtime_cursor = self.runtime_bytes.as_ref();
@@ -427,31 +442,38 @@ impl RuntimeIngressOwnershipEvidence {
         if !runtime_cursor.is_empty() {
             return false;
         }
-        let direct_exact = self.direct.as_ref().is_none_or(|ownership| {
+        let direct_exact = self.direct.iter().all(|ownership| {
             ownership.validate_exact()
                 && ownership
                     .canonical_v2_message()
                     .is_some_and(|message| message == runtime)
         });
-        let response_exact = self
-            .commit_certificate_response
-            .as_ref()
-            .is_none_or(|ownership| {
-                ownership.validate_exact()
-                    && ownership.canonical_v2_message().is_some_and(|outer| {
-                        matches!(
-                            (&outer.payload, &runtime.payload),
-                            (
-                                wire::ConsensusMessageV2Payload::CommitCertificateResponse(
-                                    response,
-                                ),
-                                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
-                            ) if response.certificate == *certificate
-                        )
-                    })
+        let response_exact = self.commit_certificate_response.iter().all(|ownership| {
+            ownership.validate_exact()
+                && ownership.canonical_v2_message().is_some_and(|outer| {
+                    matches!(
+                        (&outer.payload, &runtime.payload),
+                        (
+                            wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+                                response,
+                            ),
+                            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+                        ) if response.certificate == *certificate
+                    )
+                })
+        });
+        let carriers_are_pairwise_disjoint = [&self.direct, &self.commit_certificate_response]
+            .into_iter()
+            .all(|carriers| {
+                carriers.iter().enumerate().all(|(index, carrier)| {
+                    carriers[index + 1..]
+                        .iter()
+                        .all(|other| !carrier.same_semantic_request(other))
+                })
             });
         direct_exact
             && response_exact
+            && carriers_are_pairwise_disjoint
             && self.projection_hash == runtime_ingress_ownership_projection_hash(self)
     }
 }
@@ -460,9 +482,8 @@ impl PartialEq for RuntimeIngressOwnershipEvidence {
     fn eq(&self, other: &Self) -> bool {
         self.runtime_bytes == other.runtime_bytes
             && self.projection_hash == other.projection_hash
-            && self.direct.is_some() == other.direct.is_some()
-            && self.commit_certificate_response.is_some()
-                == other.commit_certificate_response.is_some()
+            && self.direct.len() == other.direct.len()
+            && self.commit_certificate_response.len() == other.commit_certificate_response.len()
             && self.validate_exact()
             && other.validate_exact()
     }
@@ -471,17 +492,44 @@ impl PartialEq for RuntimeIngressOwnershipEvidence {
 impl Eq for RuntimeIngressOwnershipEvidence {}
 
 fn merge_runtime_ingress_slot(
-    retained: &mut Option<FairV2IngressOwnershipEvidence>,
-    candidate: Option<FairV2IngressOwnershipEvidence>,
-) -> bool {
-    match (retained, candidate) {
-        (Some(retained), Some(candidate)) => retained.merge_downstream(candidate),
-        (slot @ None, Some(candidate)) => {
-            *slot = Some(candidate);
-            true
+    retained: &mut Vec<FairV2IngressOwnershipEvidence>,
+    candidates: Vec<FairV2IngressOwnershipEvidence>,
+) -> Result<(), RuntimeIngressMergeError> {
+    for candidate in candidates {
+        if !candidate.validate_exact() {
+            return Err(RuntimeIngressMergeError::Conflict);
         }
-        (Some(_), None) | (None, None) => true,
+        let mut candidate = Some(candidate);
+        for existing in retained.iter_mut() {
+            if !existing.same_semantic_request(
+                candidate
+                    .as_ref()
+                    .expect("candidate remains present until one merge succeeds"),
+            ) {
+                continue;
+            }
+            let mut merged = existing.clone();
+            if !merged.merge_downstream(
+                candidate
+                    .as_ref()
+                    .expect("candidate remains present until one merge succeeds")
+                    .clone(),
+            ) {
+                return Err(RuntimeIngressMergeError::Conflict);
+            }
+            *existing = merged;
+            candidate = None;
+            break;
+        }
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        if retained.len() == MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM {
+            return Err(RuntimeIngressMergeError::Capacity);
+        }
+        retained.push(candidate);
     }
+    Ok(())
 }
 
 fn runtime_ingress_ownership_projection_hash(
@@ -490,16 +538,16 @@ fn runtime_ingress_ownership_projection_hash(
     let mut projection = Vec::new();
     projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-ingress-owner:v1");
     append_runtime_identity_field(&mut projection, &evidence.runtime_bytes);
-    for carrier in [&evidence.direct, &evidence.commit_certificate_response] {
-        match carrier {
-            None => projection.push(0),
-            Some(carrier) => {
-                projection.push(1);
-                append_runtime_identity_field(
-                    &mut projection,
-                    carrier.process_local_projection_hash().as_ref(),
-                );
-            }
+    for carriers in [&evidence.direct, &evidence.commit_certificate_response] {
+        append_runtime_identity_u64(
+            &mut projection,
+            u64::try_from(carriers.len()).expect("bounded ingress carrier count fits u64"),
+        );
+        for carrier in carriers {
+            append_runtime_identity_field(
+                &mut projection,
+                carrier.process_local_projection_hash().as_ref(),
+            );
         }
     }
     iroha_crypto::Hash::new(projection)
@@ -1914,8 +1962,12 @@ impl BoundedIngress<AdapterCommand> {
             let Some(retained) = queued.ingress_ownership.as_mut() else {
                 return Err(EnqueueError::FailClosed);
             };
-            if !retained.merge_downstream(ingress_ownership) {
-                return Err(EnqueueError::FailClosed);
+            match retained.merge_downstream(ingress_ownership) {
+                Ok(()) => {}
+                Err(RuntimeIngressMergeError::Capacity) => return Err(EnqueueError::Full),
+                Err(RuntimeIngressMergeError::Conflict) => {
+                    return Err(EnqueueError::FailClosed);
+                }
             }
             return Ok(queued.tag);
         }
@@ -2246,7 +2298,7 @@ pub(crate) trait RuntimeDriver {
     /// Effect emitted unchanged to asynchronous adapters.
     type Effect;
     /// Fatal transition error.
-    type Error;
+    type Error: fmt::Display;
 
     /// Current authoritative reducer tag.
     fn current_tag(&self) -> EventTag;
@@ -2418,9 +2470,26 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     schedule: ScheduleState,
     last_scheduler_ownership: Option<RuntimeSchedulerOwnershipEvidence>,
     fail_closed: bool,
+    fail_closed_reason: Option<String>,
 }
 
 impl<D: RuntimeDriver> SerializedV2Runtime<D> {
+    fn latch_fail_closed(&mut self, reason: impl Into<String>) {
+        if self.fail_closed_reason.is_none() {
+            let reason = reason.into();
+            let tag = self.driver.current_tag();
+            iroha_logger::error!(
+                reason = reason.as_str(),
+                height = tag.height(),
+                view = tag.view(),
+                generation = tag.generation().get(),
+                "Sumeragi v2 serialized runtime failed closed"
+            );
+            self.fail_closed_reason = Some(reason);
+        }
+        self.fail_closed = true;
+    }
+
     fn with_driver(
         driver: D,
         started_at: Instant,
@@ -2448,6 +2517,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             schedule: ScheduleState::default(),
             last_scheduler_ownership: None,
             fail_closed: false,
+            fail_closed_reason: None,
         };
         runtime.observe_effects(started_at, &startup_effects);
         Ok((runtime, startup_effects))
@@ -2466,7 +2536,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .ingress
             .enqueue(TaggedCommand::new(tag, class, command, Instant::now()));
         if result == Err(EnqueueError::FailClosed) {
-            self.fail_closed = true;
+            self.latch_fail_closed("runtime ingress exact ownership validation failed");
         }
         result
     }
@@ -2474,18 +2544,16 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn reconcile_deferred_ingress_ownership(
         &mut self,
         handoff: Option<(u128, RuntimeIngressOwnershipEvidence)>,
-    ) -> bool {
+    ) -> Result<(), RuntimeIngressMergeError> {
         let active = self.driver.authenticated_deferred_admission_ordinals();
         let mut retained = self.deferred_ingress_ownership.clone();
         if let Some((ordinal, candidate)) = handoff {
             if !active.contains(&ordinal) || !candidate.validate_exact() {
-                return false;
+                return Err(RuntimeIngressMergeError::Conflict);
             }
             match retained.get_mut(&ordinal) {
                 Some(existing) => {
-                    if !existing.merge_downstream(candidate) {
-                        return false;
-                    }
+                    existing.merge_downstream(candidate)?;
                 }
                 None => {
                     retained.insert(ordinal, candidate);
@@ -2496,18 +2564,21 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if retained.len() != active.len()
             || !active.iter().all(|ordinal| retained.contains_key(ordinal))
         {
-            return false;
+            return Err(RuntimeIngressMergeError::Conflict);
         }
         self.deferred_ingress_ownership = retained;
-        true
+        Ok(())
     }
 
     fn accept_driver_dispatch(
         &mut self,
         dispatch: RuntimeDriverDispatch<D::Effect>,
     ) -> Result<Vec<D::Effect>, RuntimeError<D::Error>> {
-        if !self.reconcile_deferred_ingress_ownership(dispatch.deferred_ingress) {
-            self.fail_closed = true;
+        if self
+            .reconcile_deferred_ingress_ownership(dispatch.deferred_ingress)
+            .is_err()
+        {
+            self.latch_fail_closed("driver dispatch lost deferred ingress ownership");
             return Err(RuntimeError::FailClosed);
         }
         Ok(dispatch.effects)
@@ -2547,7 +2618,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         schedule_after: ScheduleState,
     ) -> Result<(), RuntimeError<D::Error>> {
         if self.last_scheduler_ownership.is_some() {
-            self.fail_closed = true;
+            self.latch_fail_closed("a prior scheduler owner was not consumed");
             return Err(RuntimeError::FailClosed);
         }
         let mut evidence = RuntimeSchedulerOwnershipEvidence {
@@ -2569,7 +2640,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         };
         evidence.projection_hash = runtime_scheduler_projection_hash(&evidence);
         if evidence.validate_exact().is_err() {
-            self.fail_closed = true;
+            self.latch_fail_closed("scheduler ownership evidence failed exact validation");
             return Err(RuntimeError::FailClosed);
         }
         self.last_scheduler_ownership = Some(evidence);
@@ -2594,7 +2665,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err(RuntimeError::FailClosed);
         }
         if self.last_scheduler_ownership.is_some() {
-            self.fail_closed = true;
+            self.latch_fail_closed("live scheduling began with an unconsumed scheduler owner");
             return Err(RuntimeError::FailClosed);
         }
         if !self.clocks_armed {
@@ -2663,7 +2734,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 let (command, candidate) = match self.ingress.pop_next_with_ownership() {
                     Ok(Some(selected)) => selected,
                     Ok(None) | Err(_) => {
-                        self.fail_closed = true;
+                        self.latch_fail_closed(
+                            "FIFO arbitration selected no exact ingress candidate",
+                        );
                         return Err(RuntimeError::FailClosed);
                     }
                 };
@@ -2719,7 +2792,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err(RuntimeError::FailClosed);
         }
         if self.last_scheduler_ownership.is_some() {
-            self.fail_closed = true;
+            self.latch_fail_closed("recovery began with an unconsumed scheduler owner");
             return Err(RuntimeError::FailClosed);
         }
         if self.clocks_armed {
@@ -2741,13 +2814,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let selected = match self.ingress.pop_next_with_ownership() {
             Ok(selected) => selected,
             Err(_) => {
-                self.fail_closed = true;
+                self.latch_fail_closed("recovery ingress ownership validation failed");
                 return Err(RuntimeError::FailClosed);
             }
         };
         let Some((command, candidate)) = selected else {
             if scheduled != ScheduledWork::Idle {
-                self.fail_closed = true;
+                self.latch_fail_closed("recovery arbitration selected work without a candidate");
                 return Err(RuntimeError::FailClosed);
             }
             let queue_after = self.ingress.ownership_projection();
@@ -2764,7 +2837,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Ok(RuntimeStep::Idle);
         };
         if scheduled != ScheduledWork::Fifo {
-            self.fail_closed = true;
+            self.latch_fail_closed("recovery candidate disagreed with FIFO arbitration");
             return Err(RuntimeError::FailClosed);
         }
         let queue_after = self.ingress.ownership_projection();
@@ -2809,23 +2882,23 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             Err(error) => return Err(self.close(error)),
         };
         let Some((effects, evidence)) = dispatch else {
-            self.fail_closed = true;
+            self.latch_fail_closed("serviceable deferred work had no selected owner");
             return Err(RuntimeError::FailClosed);
         };
         if !evidence.belongs_to(self.driver.deferred_admission_ordinal_source())
             || !evidence.adapter_service_is_claimed()
             || !evidence.claim_runtime_handoff_once()
         {
-            self.fail_closed = true;
+            self.latch_fail_closed("deferred service evidence failed ownership handoff");
             return Err(RuntimeError::FailClosed);
         }
         let ingress_ownership = self
             .deferred_ingress_ownership
             .remove(&evidence.admission_ordinal);
         if evidence.is_authenticated_ingress() != ingress_ownership.is_some()
-            || !self.reconcile_deferred_ingress_ownership(None)
+            || self.reconcile_deferred_ingress_ownership(None).is_err()
         {
-            self.fail_closed = true;
+            self.latch_fail_closed("deferred service lost authenticated ingress ownership");
             return Err(RuntimeError::FailClosed);
         }
         self.retain_scheduler_ownership(
@@ -2978,7 +3051,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     }
 
     fn close(&mut self, error: D::Error) -> RuntimeError<D::Error> {
-        self.fail_closed = true;
+        self.latch_fail_closed(format!(
+            "runtime driver rejected a serialized transition: {error}"
+        ));
         RuntimeError::Driver(error)
     }
 }
@@ -3021,7 +3096,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             ExactBodyCompletionOwnership::Vacant => Ok(false),
             ExactBodyCompletionOwnership::Exact => Ok(true),
             ExactBodyCompletionOwnership::Invalid => {
-                self.fail_closed = true;
+                self.latch_fail_closed(
+                    "body completion had conflicting evidence or duplicate serialized owners",
+                );
                 Err(EnqueueError::DuplicateCompletionOwnership)
             }
         }
@@ -3097,6 +3174,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     ) -> Result<
         Option<(
             wire::ConsensusRound,
+            wire::ConsensusRound,
             wire::BlockSubject,
             wire::ExecutionCommitment,
         )>,
@@ -3135,7 +3213,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let ingress_ownership =
             RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, ingress_ownership)
                 .ok_or_else(|| {
-                    self.fail_closed = true;
+                    self.latch_fail_closed(
+                        "network ingress changed its authenticated fair-queue ownership",
+                    );
                     NetworkIngressError::FailClosed
                 })?;
         let default_class = classify_reducer_network_ingress(self.fail_closed, &message.payload)?;
@@ -3165,7 +3245,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let authenticated = match self.driver.authenticate(message) {
             Ok(authenticated) => authenticated,
             Err(AdapterError::FailClosed | AdapterError::ReplayNotComplete) => {
-                self.fail_closed = true;
+                self.latch_fail_closed("network authentication observed a closed adapter");
                 return Err(NetworkIngressError::FailClosed);
             }
             Err(error) => return Err(NetworkIngressError::Authentication(error)),
@@ -3180,15 +3260,25 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             // Authentication does not mutate the adapter or envelope. Any
             // disagreement would invalidate the raw-capacity hint rather than
             // authorizing an unchecked queue insertion.
-            self.fail_closed = true;
+            self.latch_fail_closed(
+                "network authentication changed deferred QC ownership classification",
+            );
             return Err(NetworkIngressError::FailClosed);
         }
         if let Some((owner_tag, admission_ordinal)) = authenticated_deferred_qc_owner {
-            if !self
+            match self
                 .reconcile_deferred_ingress_ownership(Some((admission_ordinal, ingress_ownership)))
             {
-                self.fail_closed = true;
-                return Err(NetworkIngressError::FailClosed);
+                Ok(()) => {}
+                Err(RuntimeIngressMergeError::Capacity) => {
+                    return Err(NetworkIngressError::Backpressure(EnqueueError::Full));
+                }
+                Err(RuntimeIngressMergeError::Conflict) => {
+                    self.latch_fail_closed(
+                        "deferred QC admission lost authenticated ingress ownership",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
             }
             return Ok(owner_tag);
         }
@@ -3217,7 +3307,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         ) {
             Ok(owner) => Ok(owner),
             Err(EnqueueError::FailClosed) => {
-                self.fail_closed = true;
+                self.latch_fail_closed("authenticated ingress exact ownership validation failed");
                 Err(NetworkIngressError::FailClosed)
             }
             Err(error) => Err(NetworkIngressError::Backpressure(error)),
@@ -3333,7 +3423,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         let result = self.ingress.reserve_canonical_body_available(tag, manifest);
         if result == Err(EnqueueError::FailClosed) {
-            self.fail_closed = true;
+            self.latch_fail_closed("body-available reservation ownership validation failed");
         }
         result
     }
@@ -3350,7 +3440,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.ingress.abort_canonical_body_available(reservation);
     }
 
-    /// Transfer one already admitted exact-body completion to a certified later view.
+    /// Transfer one already admitted exact-body completion to a certified later incarnation.
     ///
     /// The completion can be waiting either in runtime ingress or in the adapter's Busy-deferred
     /// completion lane. `rebound` must be the runtime's installed incarnation,
@@ -3368,10 +3458,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         if self.fail_closed {
             return Err("Sumeragi v2 runtime is fail-closed".to_owned());
         }
-        if previous.height() != rebound.height()
-            || previous.view() >= rebound.view()
-            || previous.generation() >= rebound.generation()
-        {
+        if !rebound.strictly_advances(previous) {
             return Err(
                 "Sumeragi v2 body completion rebind did not advance its incarnation".to_owned(),
             );
@@ -3406,7 +3493,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             ingress.saturating_add(deferred)
         };
         if transferred != 1 {
-            self.fail_closed = true;
+            self.latch_fail_closed("body completion rebind changed its serialized owner count");
             return Err(
                 "Sumeragi v2 body completion ownership changed during serialized rebind".to_owned(),
             );
@@ -3415,7 +3502,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         match self.body_available_is_uniquely_owned(rebound, manifest) {
             Ok(true) => {}
             Ok(false) => {
-                self.fail_closed = true;
+                self.latch_fail_closed("body completion rebind left no destination owner");
                 return Err(
                     "Sumeragi v2 body completion rebind did not leave one destination owner"
                         .to_owned(),
@@ -3447,7 +3534,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let deferred = self.driver.retire_deferred_body_available(tag, manifest);
         let total = ingress.saturating_add(deferred);
         if total != 1 {
-            self.fail_closed = true;
+            self.latch_fail_closed("body completion retirement changed its owner count");
             return Err(
                 "Sumeragi v2 body completion ownership changed during serialized retirement"
                     .to_owned(),
@@ -3482,7 +3569,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let expected = match expected.validate_unique() {
             Ok(expected) => expected,
             Err(error) => {
-                self.fail_closed = true;
+                self.latch_fail_closed(
+                    "body pipeline completion retirement found duplicate owners",
+                );
                 return Err(error);
             }
         };
@@ -3501,7 +3590,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                     .deferred_body_pipeline_completion_counts(tag, round, subject),
             );
         if retired != expected || remaining != RetiredBodyPipelineCompletions::default() {
-            self.fail_closed = true;
+            self.latch_fail_closed("body pipeline completion retirement changed ownership");
             return Err(
                 "Sumeragi v2 body pipeline ownership changed during serialized retirement"
                     .to_owned(),
@@ -3516,7 +3605,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// at the decided height is removed from both serialized owners. One exact
     /// current-tag completion remains queued only when its full manifest,
     /// durable receipt, validation receipt, and execution commitment match the
-    /// Decision. Stale exact work is removed for ordinary durable recovery.
+    /// Decision. `decision_round` identifies the selected durable body origin;
+    /// it may precede the CommitQC round. Stale exact work is removed for
+    /// ordinary durable recovery.
     /// Duplicate or conflicting exact owners fail closed before mutation.
     pub(crate) fn retire_proposal_work_after_decision(
         &mut self,
@@ -3543,14 +3634,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 decision_commitment,
             ));
         if expected.conflicting() != 0 {
-            self.fail_closed = true;
+            self.latch_fail_closed("decided local proposal evidence conflicted with Decision");
             return Err(
                 "Sumeragi v2 decided local proposal evidence conflicts with the durable Decision"
                     .to_owned(),
             );
         }
         if expected.total() > 1 {
-            self.fail_closed = true;
+            self.latch_fail_closed("decided local proposal had duplicate serialized owners");
             return Err(
                 "Sumeragi v2 decided local proposal completion has duplicate serialized owners"
                     .to_owned(),
@@ -3568,8 +3659,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             decision_subject,
             decision_commitment,
         );
-        if !self.reconcile_deferred_ingress_ownership(None) {
-            self.fail_closed = true;
+        if self.reconcile_deferred_ingress_ownership(None).is_err() {
+            self.latch_fail_closed(
+                "decided proposal retirement lost authenticated ingress ownership",
+            );
             return Err(
                 "Sumeragi v2 deferred proposal retirement lost authenticated ingress ownership"
                     .to_owned(),
@@ -3594,7 +3687,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             || remaining.retainable() != expected.retainable()
             || remaining.total() != expected.retainable()
         {
-            self.fail_closed = true;
+            self.latch_fail_closed("decided proposal retirement changed ownership");
             return Err(
                 "Sumeragi v2 decided local proposal ownership changed during serialized retirement"
                     .to_owned(),
@@ -3626,8 +3719,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let deferred = self
             .driver
             .retire_deferred_unsafe_proposals_for_lock(locked_round, locked_subject);
-        if !self.reconcile_deferred_ingress_ownership(None) {
-            self.fail_closed = true;
+        if self.reconcile_deferred_ingress_ownership(None).is_err() {
+            self.latch_fail_closed(
+                "unsafe proposal retirement lost authenticated ingress ownership",
+            );
             return Err(
                 "Sumeragi v2 unsafe-proposal retirement lost authenticated ingress ownership"
                     .to_owned(),
@@ -3718,7 +3813,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let admitted_at = Instant::now();
         for (tag, round, subject) in failures.iter().copied() {
             if !keys.insert((round, subject)) {
-                self.fail_closed = true;
+                self.latch_fail_closed("validation failure batch contained duplicate body owners");
                 return Err(EnqueueError::DuplicateCompletionOwnership);
             }
             let evidence = BodyPipelineCompletionEvidence::ValidationFailed { round, subject };
@@ -3734,7 +3829,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         let result = self.ingress.enqueue_completion_batch(commands);
         if result == Err(EnqueueError::FailClosed) {
-            self.fail_closed = true;
+            self.latch_fail_closed("validation failure batch ownership validation failed");
         }
         result
     }
@@ -3813,6 +3908,7 @@ mod tests {
     use crate::sumeragi::v2_core::Generation;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::peer::PeerId;
+    use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteTestFixture};
     use tempfile::TempDir;
 
     use super::*;
@@ -4170,6 +4266,7 @@ mod tests {
         let signers = vec![0, 1, 2];
         let preimage = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -4191,6 +4288,7 @@ mod tests {
         let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
         wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -4228,13 +4326,17 @@ mod tests {
         rebound: EventTag,
         manifest: &wire::PayloadManifest,
     ) {
+        assert_eq!(runtime.round_tag(), previous);
         runtime.observe_effects(
             Instant::now(),
             &[AdapterEffect::EnterView {
                 tag: rebound,
                 certificate: wire::TimeoutCertificate {
                     round: wire::ConsensusRound {
-                        view: previous.view(),
+                        view: rebound
+                            .view()
+                            .checked_sub(1)
+                            .expect("test EnterView target has a predecessor"),
                         ..manifest.round
                     },
                     groups: vec![wire::TimeoutVoteGroup {
@@ -4247,6 +4349,49 @@ mod tests {
             }],
         );
         assert_eq!(runtime.round_tag(), rebound);
+    }
+
+    #[test]
+    fn body_available_rebind_accepts_same_view_higher_generation() {
+        let directory = TempDir::new().expect("temporary same-view rebind directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let initial = runtime.round_tag();
+        let view_one = EventTag::new(
+            initial.height(),
+            1,
+            Generation::new(initial.generation().get() + 1),
+        );
+        let manifest = runtime_manifest(&context, 0x8A);
+        observe_enter_view_for_test(&mut runtime, initial, view_one, &manifest);
+
+        runtime
+            .enqueue_body_available(view_one, manifest.clone())
+            .expect("enqueue the unique old-generation owner");
+        let rebound = EventTag::new(
+            view_one.height(),
+            view_one.view(),
+            Generation::new(view_one.generation().get() + 1),
+        );
+        observe_enter_view_for_test(&mut runtime, view_one, rebound, &manifest);
+
+        assert!(
+            runtime
+                .rebind_body_available(view_one, rebound, &manifest)
+                .expect("same-view generation supersession transfers the exact owner")
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(matches!(
+            runtime.ingress.commands.front(),
+            Some(TaggedCommand {
+                tag,
+                command: AdapterCommand::BodyAvailable {
+                    manifest: queued_manifest,
+                },
+                ..
+            }) if *tag == rebound && queued_manifest == &manifest
+        ));
+        assert!(!runtime.fail_closed);
     }
 
     fn authenticated_network_runtime(
@@ -4304,6 +4449,39 @@ mod tests {
         .expect("valid authenticated network runtime")
         .0;
         (runtime, context, keys)
+    }
+
+    fn fair_network_ownership(
+        message: &wire::ConsensusMessageV2,
+        sender: PeerId,
+    ) -> FairV2IngressOwnershipEvidence {
+        let mut admitted =
+            super::super::fair_v2_ingress_admit_for_test(super::super::InboundBlockMessage::new(
+                super::super::message::BlockMessage::V2(message.clone()),
+                Some(sender),
+            ));
+        admitted
+            .take_ingress_ownership()
+            .expect("real test fair ingress produces exact source ownership")
+    }
+
+    fn fair_network_ownership_with_route(
+        message: &wire::ConsensusMessageV2,
+        semantic_origin: PeerId,
+        authenticated_via: PeerId,
+        route: NetworkReplyRoute,
+    ) -> FairV2IngressOwnershipEvidence {
+        let inbound = super::super::InboundBlockMessage::try_from_transport_with_reply_route(
+            super::super::message::BlockMessage::V2(message.clone()),
+            semantic_origin,
+            authenticated_via,
+            route,
+        )
+        .expect("test reply route binds the semantic origin and authenticated source");
+        let mut admitted = super::super::fair_v2_ingress_admit_for_test(inbound);
+        admitted
+            .take_ingress_ownership()
+            .expect("real test fair ingress produces exact routed ownership")
     }
 
     fn runtime(
@@ -5184,13 +5362,23 @@ mod tests {
             runtime.step(periodic_at),
             Err(RuntimeError::FailClosed)
         ));
+        assert_eq!(
+            runtime.fail_closed_reason.as_deref(),
+            Some("live scheduling began with an unconsumed scheduler owner")
+        );
+        runtime.latch_fail_closed("a later generic failure");
+        assert_eq!(
+            runtime.fail_closed_reason.as_deref(),
+            Some("live scheduling began with an unconsumed scheduler owner"),
+            "fail-closed diagnostics retain the first invariant violation"
+        );
         let retained = runtime
             .last_scheduler_ownership()
             .expect("failed re-entry preserves the first unconsumed carrier");
         assert_eq!(retained.selected, RuntimeSelectedOwnerKind::Idle);
         assert_eq!(retained.projection_hash, first_projection_hash);
 
-        let mut runtime = runtime(
+        let mut runtime = self::runtime(
             FakeDriver::new(owner_tag),
             start,
             RuntimeQueueConfig::new(6, 2, 1),
@@ -5558,6 +5746,7 @@ mod tests {
         );
         let payload = wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -5604,6 +5793,200 @@ mod tests {
     }
 
     #[test]
+    fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() {
+        let directory = TempDir::new().expect("temporary multi-source QC directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let certificate = signed_runtime_quorum_certificate(&context, &keys, 0xC7);
+        let message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+        );
+        let first_source = PeerId::new(keys[0].public_key().clone());
+        let second_source = PeerId::new(keys[1].public_key().clone());
+
+        assert_eq!(
+            runtime
+                .enqueue_network_with_ingress_ownership(
+                    message.clone(),
+                    fair_network_ownership(&message, first_source),
+                )
+                .expect("the first authenticated carrier owns the runtime command"),
+            owner_tag
+        );
+        assert_eq!(
+            runtime
+                .enqueue_network_with_ingress_ownership(
+                    message.clone(),
+                    fair_network_ownership(&message, second_source),
+                )
+                .expect("an exact QC from another source coalesces"),
+            owner_tag
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+
+        let retained = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("the queued QC retains fair-ingress ownership");
+        assert!(retained.validate_exact());
+        assert_eq!(retained.direct.len(), 2);
+        assert!(retained.commit_certificate_response.is_empty());
+        assert_ne!(
+            retained.direct[0].process_local_projection_hash(),
+            retained.direct[1].process_local_projection_hash(),
+            "route-free carrier projections must retain their distinct source identities"
+        );
+
+        let mut source_substituted = retained.clone();
+        let substituted_source = PeerId::from(KeyPair::random().public_key().clone());
+        source_substituted.direct[0].first.wire_key.origin = Some(substituted_source.clone());
+        source_substituted.direct[0].first.semantic_origin = Some(substituted_source.clone());
+        source_substituted.direct[0].first.authenticated_via = Some(substituted_source.clone());
+        source_substituted.direct[0].first.authenticated_source =
+            super::super::FairV2IngressSource::Validator(substituted_source.clone());
+        source_substituted.direct[0].first.semantic_owner_source =
+            super::super::FairV2IngressSource::Validator(substituted_source.clone());
+        source_substituted.direct[0].latest.wire_key.origin = Some(substituted_source.clone());
+        source_substituted.direct[0].latest.semantic_origin = Some(substituted_source.clone());
+        source_substituted.direct[0].latest.authenticated_via = Some(substituted_source.clone());
+        source_substituted.direct[0].latest.authenticated_source =
+            super::super::FairV2IngressSource::Validator(substituted_source.clone());
+        source_substituted.direct[0].latest.semantic_owner_source =
+            super::super::FairV2IngressSource::Validator(substituted_source);
+        assert!(source_substituted.direct[0].validate_exact());
+        assert!(
+            !source_substituted.validate_exact(),
+            "the retained runtime projection must reject an otherwise exact source substitution"
+        );
+
+        let mut reordered = retained.clone();
+        reordered.direct.reverse();
+        assert!(
+            !reordered.validate_exact(),
+            "the retained runtime projection must reject carrier-order mutation"
+        );
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically() {
+        let directory = TempDir::new().expect("temporary conflicting route directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let certificate = signed_runtime_quorum_certificate(&context, &keys, 0xC8);
+        let message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+        );
+        let source = PeerId::new(keys[0].public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(source.clone());
+        let first_route = routes.mint(source.clone());
+        let conflicting_route = routes
+            .forge_equal_ordinal_different_tenure(&first_route, source.clone(), source.clone())
+            .expect("fixture owns the conflicting route authority");
+
+        runtime
+            .enqueue_network_with_ingress_ownership(
+                message.clone(),
+                fair_network_ownership_with_route(
+                    &message,
+                    source.clone(),
+                    source.clone(),
+                    first_route,
+                ),
+            )
+            .expect("the first exact route owns the authenticated QC");
+        let retained_before = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("the queued QC retains its first route")
+            .clone();
+
+        assert!(matches!(
+            runtime.enqueue_network_with_ingress_ownership(
+                message.clone(),
+                fair_network_ownership_with_route(
+                    &message,
+                    source.clone(),
+                    source,
+                    conflicting_route,
+                ),
+            ),
+            Err(NetworkIngressError::FailClosed)
+        ));
+        let retained_after = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("failed merge preserves the first exact route");
+        assert_eq!(retained_after, &retained_before);
+        assert_eq!(retained_after.direct.len(), 1);
+        assert_eq!(
+            runtime.fail_closed_reason.as_deref(),
+            Some("authenticated ingress exact ownership validation failed")
+        );
+    }
+
+    #[test]
+    fn runtime_ingress_carrier_capacity_returns_backpressure_atomically() {
+        let directory = TempDir::new().expect("temporary carrier-capacity directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let certificate = signed_runtime_quorum_certificate(&context, &keys, 0xC9);
+        let message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+        );
+        let carrier = || {
+            let source = PeerId::from(KeyPair::random().public_key().clone());
+            fair_network_ownership(&message, source)
+        };
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), carrier())
+            .expect("the first disjoint carrier owns the authenticated QC");
+        for _ in 1..MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM {
+            let candidate = RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, carrier())
+                .expect("independent fair-ingress carrier is exact");
+            runtime
+                .ingress
+                .commands
+                .front_mut()
+                .and_then(|queued| queued.ingress_ownership.as_mut())
+                .expect("the queued QC retains its carrier set")
+                .merge_downstream(candidate)
+                .expect("every protocol-bounded carrier remains exact");
+        }
+        let retained = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("the queued QC retains the full carrier set");
+        assert_eq!(retained.direct.len(), MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM);
+        let retained_before = retained.clone();
+        let excess_carrier = carrier();
+
+        assert!(matches!(
+            runtime.enqueue_network_with_ingress_ownership(message, excess_carrier),
+            Err(NetworkIngressError::Backpressure(EnqueueError::Full))
+        ));
+        let retained_after = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("backpressure preserves the full exact carrier set");
+        assert_eq!(retained_after, &retained_before);
+        assert!(retained_after.validate_exact());
+        assert!(!runtime.fail_closed);
+        assert!(runtime.fail_closed_reason.is_none());
+    }
+
+    #[test]
     fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
         let round = wire::ConsensusRound {
             context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
@@ -5620,6 +6003,7 @@ mod tests {
         let payload = |signature| {
             wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
                 round,
+                proposal_round: round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
                 execution_commitment: wire::ExecutionCommitment::without_topups(
@@ -5956,6 +6340,13 @@ mod tests {
             RuntimeStep::Advanced(effects) => effects,
             RuntimeStep::Idle => panic!("proposal dispatch unexpectedly idle"),
         };
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("proposal dispatch publishes exact scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::Fifo
+        );
         let (source_tag, manifest) = match proposal_effects.as_slice() {
             [
                 AdapterEffect::FetchBody {
@@ -5975,6 +6366,13 @@ mod tests {
             RuntimeStep::Advanced(ref effects)
                 if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
         ));
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("body reconstruction publishes exact scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::Fifo
+        );
         let durable = DurableBodyReceipt::for_test(
             context.id(),
             manifest.round,
@@ -5994,6 +6392,13 @@ mod tests {
             RuntimeStep::Advanced(ref effects)
                 if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
         ));
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("durable-store completion publishes exact scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::Fifo
+        );
         runtime
             .enqueue_validation_succeeded(
                 source_tag,
@@ -6007,6 +6412,13 @@ mod tests {
             RuntimeStep::Advanced(ref effects)
                 if matches!(effects.as_slice(), [AdapterEffect::Sign { .. }])
         ));
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("validation completion publishes exact scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::Fifo
+        );
 
         let rebound = EventTag::new(
             source_tag.height(),
@@ -6070,9 +6482,27 @@ mod tests {
                 .rebind_body_available(source_tag, rebound, &manifest)
                 .expect("an idempotent retry finds no remaining source owner")
         );
+        let same_view_rebound = EventTag::new(
+            rebound.height(),
+            rebound.view(),
+            Generation::new(rebound.generation().get() + 1),
+        );
+        observe_enter_view_for_test(&mut runtime, rebound, same_view_rebound, &manifest);
         assert!(
             runtime
-                .retire_body_available(rebound, &manifest)
+                .rebind_body_available(rebound, same_view_rebound, &manifest)
+                .expect("same-view generation supersession transfers the Busy-deferred owner")
+        );
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_body_pipeline_completion_ownership(same_view_rebound, &evidence),
+            (1, 1),
+            "same-view rebinding leaves exactly one Busy-deferred destination"
+        );
+        assert!(
+            runtime
+                .retire_body_available(same_view_rebound, &manifest)
                 .expect("the unique destination owner remains retireable")
         );
     }
@@ -7318,6 +7748,7 @@ mod tests {
         assert_eq!(runtime.queued_commands(), 1);
         let decision = wire::QuorumCertificate {
             round: manifest.round,
+            proposal_round: manifest.round,
             phase: wire::GlobalPhase::Commit,
             subject: manifest.subject,
             execution_commitment: commitment,
@@ -7490,6 +7921,7 @@ mod tests {
         let validated = ValidatedBodyReceipt::for_test(durable);
         let mut vote = wire::Vote {
             round: manifest.round,
+            proposal_round: manifest.round,
             phase: wire::GlobalPhase::Prepare,
             subject: manifest.subject,
             execution_commitment: validated.execution_commitment(),
@@ -7660,6 +8092,7 @@ mod tests {
         };
         let certificate = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment: wire::ExecutionCommitment::without_topups(
@@ -7764,7 +8197,10 @@ mod tests {
             timeout.effects()
         );
         runtime
-            .enqueue_network(exact_message.clone())
+            .enqueue_network_with_ingress_ownership(
+                exact_message.clone(),
+                fair_network_ownership(&exact_message, PeerId::new(keys[0].public_key().clone())),
+            )
             .expect("enqueue the authenticated CommitQC before the fence is observed");
         assert!(matches!(
             runtime
@@ -7819,8 +8255,27 @@ mod tests {
         let queued_before = runtime.queued_commands();
         assert_eq!(
             runtime
-                .enqueue_network(exact_message)
-                .expect("an authenticated exact QC coalesces with adapter ownership"),
+                .enqueue_network_with_ingress_ownership(
+                    exact_message.clone(),
+                    fair_network_ownership(
+                        &exact_message,
+                        PeerId::new(keys[1].public_key().clone()),
+                    ),
+                )
+                .expect("an exact QC from another source coalesces with adapter ownership"),
+            owner_tag
+        );
+        let exact_response = response(exact_certificate.clone());
+        assert_eq!(
+            runtime
+                .enqueue_network_with_ingress_ownership(
+                    exact_message.clone(),
+                    fair_network_ownership(
+                        &exact_response,
+                        PeerId::new(keys[2].public_key().clone()),
+                    ),
+                )
+                .expect("the authenticated discovery response coalesces with adapter ownership"),
             owner_tag
         );
         assert_eq!(
@@ -7835,6 +8290,55 @@ mod tests {
             Some(owner_tag),
             "request completion leaves the sole Busy-deferred owner intact"
         );
+        let retained = runtime
+            .deferred_ingress_ownership
+            .values()
+            .next()
+            .expect("the Busy-deferred QC retains its ingress carriers");
+        assert!(retained.validate_exact());
+        assert_eq!(retained.direct.len(), 2);
+        assert_eq!(retained.commit_certificate_response.len(), 1);
+        assert!(!runtime.fail_closed);
+
+        for _ in 2..MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM {
+            let source = PeerId::from(KeyPair::random().public_key().clone());
+            let candidate = RuntimeIngressOwnershipEvidence::from_fair_ingress(
+                &exact_message,
+                fair_network_ownership(&exact_message, source),
+            )
+            .expect("independent Busy-deferred carrier is exact");
+            runtime
+                .deferred_ingress_ownership
+                .values_mut()
+                .next()
+                .expect("the Busy-deferred QC retains its ingress carriers")
+                .merge_downstream(candidate)
+                .expect("every protocol-bounded Busy-deferred carrier remains exact");
+        }
+        let deferred_owner_before = runtime
+            .deferred_ingress_ownership
+            .values()
+            .next()
+            .expect("the Busy-deferred carrier set is full")
+            .clone();
+        let excess_source = PeerId::from(KeyPair::random().public_key().clone());
+        assert!(matches!(
+            runtime.enqueue_network_with_ingress_ownership(
+                exact_message.clone(),
+                fair_network_ownership(&exact_message, excess_source),
+            ),
+            Err(NetworkIngressError::Backpressure(EnqueueError::Full))
+        ));
+        assert_eq!(
+            runtime
+                .deferred_ingress_ownership
+                .values()
+                .next()
+                .expect("backpressure preserves the full Busy-deferred carrier set"),
+            &deferred_owner_before
+        );
+        assert!(!runtime.fail_closed);
+        assert!(runtime.fail_closed_reason.is_none());
         assert!(matches!(
             runtime.enqueue_network(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::QuorumCertificate(distinct_certificate),
@@ -7975,6 +8479,7 @@ mod tests {
         );
         let vote = wire::ConsensusMessageV2Payload::Vote(wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
             execution_commitment,
@@ -8000,6 +8505,7 @@ mod tests {
         };
         let certificate = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -8118,14 +8624,32 @@ mod tests {
             FakeCommand::record(9),
         )
         .unwrap();
-        let _ = runtime.step(start + Duration::from_secs(2));
+        runtime
+            .step(start + Duration::from_secs(2))
+            .expect("the due retransmit owns the first turn");
         assert_eq!(runtime.driver.retransmits, vec![current]);
         assert!(runtime.driver.delivered.is_empty());
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("the retransmit publishes scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::PeriodicTimer
+        );
 
         // Even though the clock remains retransmit-due, the admitted
         // completion is owed this slot and retains its original tag.
-        let _ = runtime.step(start + Duration::from_secs(4));
+        runtime
+            .step(start + Duration::from_secs(4))
+            .expect("the owed completion owns the next turn");
         assert_eq!(runtime.driver.delivered, vec![(stale, 9)]);
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("the completion publishes scheduler ownership")
+                .selected,
+            RuntimeSelectedOwnerKind::Fifo
+        );
     }
 
     #[test]
@@ -8284,7 +8808,16 @@ mod tests {
             runtime.step(start),
             Err(RuntimeError::Driver(FakeError))
         ));
+        assert_eq!(
+            runtime.fail_closed_reason.as_deref(),
+            Some("runtime driver rejected a serialized transition: fake driver failure")
+        );
         assert!(matches!(runtime.step(start), Err(RuntimeError::FailClosed)));
+        assert_eq!(
+            runtime.fail_closed_reason.as_deref(),
+            Some("runtime driver rejected a serialized transition: fake driver failure"),
+            "the generic closed guard cannot replace the driver root cause"
+        );
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::AccountId,
     asset::{
@@ -33,15 +33,17 @@ use iroha_data_model::{
     offline::{
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1,
-        KagemushaOnlineHardwareAssertionV1, KagemushaRecursiveSpendBranchClaimV2,
-        KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
-        KagemushaRecursiveSpendTopUpAnchorV4, KagemushaRequestAuthorizationV2,
-        OFFLINE_REJECTION_REASON_PREFIX, OfflineAndroidAppAttestationPolicy,
-        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
-        OfflineDeviceAttestationTrustedRoot, OfflineIosAppAttestationPolicy,
+        KagemushaOnlineHardwareAssertionV1, KagemushaRecipientPaymentRequestV2,
+        KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
+        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTopUpAnchorV4,
+        KagemushaRequestAuthorizationV2, OFFLINE_REJECTION_REASON_PREFIX,
+        OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
+        OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
+        OfflineIosAppAttestationPolicy,
     },
     proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyRecord},
     query::error::FindError,
+    transaction::SignedTransaction,
     zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -117,6 +119,25 @@ pub struct KagemushaAuthenticatedArtifactSetReadinessV4 {
     pub max_proof_bytes: u32,
     /// Authoritative fixed scale of the asset bound to the release.
     pub asset_scale: u32,
+}
+
+/// Exact on-chain registration admission selected for one signed receiver request.
+///
+/// This key-material-free projection is returned to Torii only after the request
+/// signature, current governed policy, device identity, asset scope, P-256 key,
+/// registration expiry, canonical storage key, and admission provenance all match.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaRecipientRegistrationResolutionV1 {
+    /// Canonical registration admitted by consensus.
+    pub registration: OfflineDeviceAttestationRegistration,
+    /// SHA-256 hash of the canonical registration archive.
+    pub registration_hash: [u8; 32],
+    /// Governed policy hash recorded when the registration was admitted.
+    pub admission_policy_hash: [u8; 32],
+    /// Height of the block that admitted the registration.
+    pub admission_height: u64,
+    /// Canonical signed transaction that admitted the registration.
+    pub admission_transaction_hash: HashOf<SignedTransaction>,
 }
 
 /// Chain-derived V4 recursive readiness selected from one committed snapshot.
@@ -3058,9 +3079,11 @@ pub mod isi {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-    struct KagemushaOnlineRegistrationStateV2 {
+    struct KagemushaOnlineRegistrationStateV3 {
         version: u16,
         admission_policy_hash: [u8; 32],
+        admission_height: u64,
+        admission_transaction_hash: HashOf<SignedTransaction>,
         registration: OfflineDeviceAttestationRegistration,
         lifecycle: KagemushaOnlineHardwareAssertionLifecycleV1,
     }
@@ -3117,6 +3140,181 @@ pub mod isi {
             })
     }
 
+    fn current_offline_device_attestation_policy_from_world(
+        world: &impl WorldReadOnly,
+        evaluated_at_ms: u64,
+    ) -> Result<(OfflineDeviceAttestationPolicy, [u8; 32]), String> {
+        let archive = world
+            .smart_contract_state()
+            .get(&*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY)
+            .ok_or_else(|| {
+                "the governed offline device-attestation policy is not installed".to_owned()
+            })?;
+        let policy: OfflineDeviceAttestationPolicy =
+            norito::decode_from_bytes(archive).map_err(|error| {
+                format!("the governed device-attestation policy is corrupt: {error}")
+            })?;
+        if norito::to_bytes(&policy).map_err(|error| error.to_string())? != *archive {
+            return Err("the governed device-attestation policy is non-canonical".to_owned());
+        }
+        validate_offline_attestation_policy(&policy, evaluated_at_ms).map_err(|error| {
+            format!("the governed device-attestation policy is invalid: {error}")
+        })?;
+        let policy_hash =
+            canonical_offline_device_attestation_policy_hash(&policy).map_err(|error| {
+                format!("the governed device-attestation policy cannot be hashed: {error}")
+            })?;
+        Ok((policy, policy_hash))
+    }
+
+    /// Resolve the unique active on-chain registration for one signed receiver request.
+    ///
+    /// The lookup scans only canonical Kagemusha registration records and fails
+    /// closed on corrupt state, policy rotation, expiry, provenance gaps, or an
+    /// ambiguous exact tuple. The caller supplies the committed evaluation
+    /// height/time from one immutable state snapshot.
+    pub fn resolve_kagemusha_recipient_registration_v1(
+        world: &impl WorldReadOnly,
+        request: &KagemushaRecipientPaymentRequestV2,
+        evaluated_height: u64,
+        evaluated_at_ms: u64,
+    ) -> Result<KagemushaRecipientRegistrationResolutionV1, String> {
+        if evaluated_height == 0 || evaluated_at_ms == 0 {
+            return Err("receiver-lineage evaluation must bind a committed block".to_owned());
+        }
+        request
+            .validate_at(evaluated_at_ms)
+            .map_err(|error| format!("the recipient payment request is invalid: {error}"))?;
+        let (policy, current_policy_hash) =
+            current_offline_device_attestation_policy_from_world(world, evaluated_at_ms)?;
+
+        let mut exact = None;
+        let mut tuple_seen = false;
+        let mut current_policy_seen = false;
+        let mut unexpired_seen = false;
+        for (state_key, archive) in world.smart_contract_state().iter() {
+            let state_key = state_key.to_string();
+            let Some(key_hash_hex) =
+                state_key.strip_prefix(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
+            else {
+                continue;
+            };
+            if key_hash_hex.len() != 64
+                || !key_hash_hex
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(format!(
+                    "Kagemusha registration state key `{state_key}` is non-canonical"
+                ));
+            }
+            let state: KagemushaOnlineRegistrationStateV3 = norito::decode_from_bytes(archive)
+                .map_err(|error| {
+                    format!("Kagemusha registration state `{state_key}` is corrupt: {error}")
+                })?;
+            if norito::to_bytes(&state).map_err(|error| error.to_string())? != *archive {
+                return Err(format!(
+                    "Kagemusha registration state `{state_key}` is non-canonical"
+                ));
+            }
+            let registration_hash = canonical_registration_hash(&state.registration)
+                .map(|hash| exact_hash_bytes(&hash))
+                .map_err(|error| {
+                    format!("Kagemusha registration state `{state_key}` cannot be hashed: {error}")
+                })?;
+            if state.version != 3
+                || hex::encode(registration_hash) != key_hash_hex
+                || state.admission_height == 0
+                || state.admission_height > evaluated_height
+                || state
+                    .admission_transaction_hash
+                    .as_ref()
+                    .iter()
+                    .all(|byte| *byte == 0)
+            {
+                return Err(format!(
+                    "Kagemusha registration state `{state_key}` has invalid admission provenance"
+                ));
+            }
+
+            let registration = &state.registration;
+            if registration.account_id != request.recipient
+                || registration.device_id != request.receiver_device_id
+                || registration.asset_definition_id.as_ref() != Some(&request.asset)
+                || registration.public_key != request.receiver_public_key
+            {
+                continue;
+            }
+            tuple_seen = true;
+            if state.admission_policy_hash != current_policy_hash {
+                continue;
+            }
+            current_policy_seen = true;
+            if registration.expires_at_ms < request.expires_at_ms
+                || registration.expires_at_ms <= evaluated_at_ms
+            {
+                continue;
+            }
+            unexpired_seen = true;
+            validate_offline_attestation_platform_profile(registration).map_err(|error| {
+                format!("the selected registration profile is invalid: {error}")
+            })?;
+            validate_offline_attestation_optional_metadata(registration).map_err(|error| {
+                format!("the selected registration metadata is invalid: {error}")
+            })?;
+            match registration.platform.as_str() {
+                OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
+                    let (package_name, signing_digest) = android_attestation_metadata(registration)
+                        .map_err(|error| {
+                            format!("the selected Android registration is invalid: {error}")
+                        })?;
+                    ensure_android_app_allowed_by_policy(&policy, &package_name, &signing_digest)
+                        .map_err(|error| {
+                        format!("the selected Android registration is no longer governed: {error}")
+                    })?;
+                }
+                OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST => {
+                    let (team_id, bundle_id, environment) = ios_attestation_metadata(registration)
+                        .map_err(|error| {
+                            format!("the selected iOS registration is invalid: {error}")
+                        })?;
+                    ensure_ios_app_allowed_by_policy(&policy, &team_id, &bundle_id, &environment)
+                        .map_err(|error| {
+                        format!("the selected iOS registration is no longer governed: {error}")
+                    })?;
+                }
+                _ => return Err("the selected registration platform is unsupported".to_owned()),
+            }
+            if exact.is_some() {
+                return Err(
+                    "multiple active registrations match the recipient account, device, asset, and P-256 key"
+                        .to_owned(),
+                );
+            }
+            exact = Some(KagemushaRecipientRegistrationResolutionV1 {
+                registration: registration.clone(),
+                registration_hash,
+                admission_policy_hash: state.admission_policy_hash,
+                admission_height: state.admission_height,
+                admission_transaction_hash: state.admission_transaction_hash,
+            });
+        }
+        exact.ok_or_else(|| {
+            if !tuple_seen {
+                "no on-chain registration matches the recipient account, device, asset, and P-256 key"
+                    .to_owned()
+            } else if !current_policy_seen {
+                "the matching registration was admitted under a superseded attestation policy; the device must register again"
+                    .to_owned()
+            } else if !unexpired_seen {
+                "the matching registration is expired or does not cover the signed request lifetime"
+                    .to_owned()
+            } else {
+                "no active receiver registration is available".to_owned()
+            }
+        })
+    }
+
     fn exact_hash_bytes(hash: &Hash) -> [u8; 32] {
         *hash.as_ref()
     }
@@ -3163,7 +3361,7 @@ pub mod isi {
                     "Kagemusha hardware authorization references an unknown registration hash",
                 )
             })?;
-        let mut state: KagemushaOnlineRegistrationStateV2 =
+        let mut state: KagemushaOnlineRegistrationStateV3 =
             norito::decode_from_bytes(&previous_archive).map_err(|err| {
                 labeled_invariant(
                     "invalid_attestation",
@@ -3177,7 +3375,8 @@ pub mod isi {
             )
         })?;
         let registration_hash = canonical_registration_hash(&state.registration)?;
-        if state.version != 2
+        if state.version != 3
+            || state.admission_height == 0
             || canonical_archive != previous_archive
             || exact_hash_bytes(&registration_hash) != authorization.registration_hash
         {
@@ -5968,6 +6167,15 @@ pub mod isi {
                     authority,
                     state_transaction,
                 )?;
+            let admission_height = state_transaction.block_height();
+            let admission_transaction_hash = state_transaction
+                .current_tx_hash
+                .ok_or_else(|| {
+                    labeled_invariant(
+                        "invalid_attestation",
+                        "current signed transaction hash is unavailable for device-registration provenance",
+                    )
+                })?;
             let registration_key = kagemusha_device_registration_key(&registration_hash);
             let challenge_key = kagemusha_attestation_challenge_key(&registration.challenge_hash);
             let report_key =
@@ -6008,6 +6216,56 @@ pub mod isi {
                 .into());
             }
 
+            for (existing_key, existing_archive) in
+                state_transaction.world.smart_contract_state.iter()
+            {
+                if !existing_key
+                    .to_string()
+                    .starts_with(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
+                {
+                    continue;
+                }
+                let existing: KagemushaOnlineRegistrationStateV3 =
+                    norito::decode_from_bytes(existing_archive).map_err(|error| {
+                        labeled_invariant(
+                            "invalid_attestation",
+                            format!(
+                                "failed to decode existing Kagemusha registration state: {error}"
+                            ),
+                        )
+                    })?;
+                if existing.version != 3
+                    || norito::to_bytes(&existing).map_err(|error| {
+                        labeled_invariant(
+                            "invalid_attestation",
+                            format!(
+                                "failed to re-encode existing Kagemusha registration state: {error}"
+                            ),
+                        )
+                    })? != *existing_archive
+                {
+                    return Err(labeled_invariant(
+                        "invalid_attestation",
+                        "existing Kagemusha registration state is non-canonical",
+                    )
+                    .into());
+                }
+                let other = &existing.registration;
+                if existing.admission_policy_hash == admission_policy_hash
+                    && other.account_id == registration.account_id
+                    && other.device_id == registration.device_id
+                    && other.asset_definition_id == registration.asset_definition_id
+                    && other.public_key == registration.public_key
+                    && other.expires_at_ms > state_transaction.block_unix_timestamp_ms()
+                {
+                    return Err(labeled_invariant(
+                        "duplicate_attestation",
+                        "an active registration already owns this account, device, asset, and P-256 key under the current policy",
+                    )
+                    .into());
+                }
+            }
+
             let lifecycle = match registration.platform.as_str() {
                 OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
                     KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintUnused
@@ -6027,9 +6285,11 @@ pub mod isi {
                 }
             };
             let registration_state_archive =
-                norito::to_bytes(&KagemushaOnlineRegistrationStateV2 {
-                    version: 2,
+                norito::to_bytes(&KagemushaOnlineRegistrationStateV3 {
+                    version: 3,
                     admission_policy_hash,
+                    admission_height,
+                    admission_transaction_hash,
                     registration,
                     lifecycle,
                 })
@@ -7779,10 +8039,14 @@ pub mod isi {
                 .expect("canonical registration hash");
             let state_key = kagemusha_online_registration_state_key(&registration_hash)
                 .expect("canonical registration state key");
-            let state = KagemushaOnlineRegistrationStateV2 {
-                version: 2,
+            let state = KagemushaOnlineRegistrationStateV3 {
+                version: 3,
                 admission_policy_hash: canonical_offline_device_attestation_policy_hash(&policy)
                     .expect("canonical policy hash"),
+                admission_height: state_transaction.block_height(),
+                admission_transaction_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"test-device-registration-transaction",
+                )),
                 registration,
                 lifecycle: KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintUnused,
             };
@@ -7827,7 +8091,7 @@ pub mod isi {
 
             commit_kagemusha_online_hardware_assertion(plan, &mut state_transaction)
                 .expect("successful transaction atomically consumes the assertion");
-            let consumed: KagemushaOnlineRegistrationStateV2 = norito::decode_from_bytes(
+            let consumed: KagemushaOnlineRegistrationStateV3 = norito::decode_from_bytes(
                 state_transaction
                     .world
                     .smart_contract_state

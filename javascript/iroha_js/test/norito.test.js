@@ -3,12 +3,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { blake2b } from "@noble/hashes/blake2.js";
+import { sha256 } from "@noble/hashes/sha2";
 import {
+  noritoDecodeBlockProofs,
   noritoEncodeInstruction,
   noritoDecodeInstruction,
   noritoEncodeMultisigProposeRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigContractCallApproveRequest,
+  verifyBlockMerkleProof,
+  verifyBlockProofs,
 } from "../src/norito.js";
 import {
   makeNativeTest,
@@ -63,6 +68,138 @@ function testCrc64Ecma(payload) {
   }
   return BigInt.asUintN(64, crc ^ mask);
 }
+
+function compactLength(value) {
+  const bytes = [];
+  let remaining = value;
+  do {
+    const byte = remaining & 0x7f;
+    remaining >>>= 7;
+    bytes.push(remaining === 0 ? byte : byte | 0x80);
+  } while (remaining !== 0);
+  return Buffer.from(bytes);
+}
+
+function proofField(payload) {
+  return Buffer.concat([compactLength(payload.length), payload]);
+}
+
+function proofStruct(...fields) {
+  return Buffer.concat(fields.map(proofField));
+}
+
+function proofU64(value) {
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64LE(BigInt(value));
+  return bytes;
+}
+
+function proofU32(value) {
+  const bytes = Buffer.alloc(4);
+  bytes.writeUInt32LE(value);
+  return bytes;
+}
+
+function proofVec(values) {
+  return Buffer.concat([proofU64(values.length), ...values.map(proofField)]);
+}
+
+function proofOption(value) {
+  return value === null ? Buffer.of(0) : Buffer.concat([Buffer.of(1), proofField(value)]);
+}
+
+function blockProofFixture() {
+  const leaf = Buffer.alloc(32, 0x20);
+  leaf[31] |= 1;
+  const merkleProof = proofStruct(proofU32(0), proofVec([]));
+  const receipt = proofStruct(leaf, merkleProof);
+  const payload = proofStruct(
+    proofU64(7),
+    leaf,
+    leaf,
+    receipt,
+    proofOption(null),
+    proofOption(null),
+    proofU64(0),
+  );
+  const schemaHash = Buffer.from(
+    sha256(Buffer.from(
+      "norito:v1:type-name\0iroha_data_model::block::proofs::BlockProofs",
+      "utf8",
+    )).subarray(0, 16),
+  );
+  const header = Buffer.concat([
+    Buffer.from("NRT0", "ascii"),
+    Buffer.of(0, 0),
+    schemaHash,
+    Buffer.of(0),
+    proofU64(payload.length),
+    proofU64(testCrc64Ecma(payload)),
+    Buffer.of(0x02),
+  ]);
+  return Buffer.concat([header, payload]);
+}
+
+test("Norito BlockProofs decoder binds the exact schema and verifies a canonical receipt", () => {
+  const fixture = blockProofFixture();
+  const decoded = noritoDecodeBlockProofs(fixture);
+
+  assert.equal(decoded.block_height, "7");
+  assert.equal(decoded.entry_hash, decoded.entry_root);
+  assert.equal(decoded.entry_proof.leaf, decoded.entry_hash);
+  assert.deepEqual(decoded.entry_proof.proof, { leaf_index: 0, audit_path: [] });
+  assert.equal(decoded.result_root, null);
+  assert.equal(decoded.result_proof, null);
+  assert.deepEqual(decoded.fastpq_transcripts, {});
+  assert.deepEqual(verifyBlockProofs(decoded), {
+    valid: true,
+    entry_hash_matches: true,
+    entry_proof_valid: true,
+    result_pair_consistent: true,
+    result_proof_valid: null,
+  });
+
+  const corrupted = Buffer.from(fixture);
+  corrupted[corrupted.length - 1] ^= 1;
+  assert.throws(() => noritoDecodeBlockProofs(corrupted), /CRC64 mismatch/u);
+});
+
+test("block proof verification rejects direction, root, and result-pair mismatches", () => {
+  const left = Buffer.alloc(32, 0x40);
+  const right = Buffer.alloc(32, 0x60);
+  left[31] |= 1;
+  right[31] |= 1;
+  const root = Buffer.from(blake2b(Buffer.concat([left, right]), { dkLen: 32 }));
+  root[31] |= 1;
+
+  assert.equal(
+    verifyBlockMerkleProof(
+      left.toString("hex"),
+      { leaf_index: 0, audit_path: [right.toString("hex")] },
+      root.toString("hex"),
+    ),
+    true,
+  );
+  assert.equal(
+    verifyBlockMerkleProof(
+      left.toString("hex"),
+      { leaf_index: 1, audit_path: [right.toString("hex")] },
+      root.toString("hex"),
+    ),
+    false,
+  );
+
+  const decoded = noritoDecodeBlockProofs(blockProofFixture());
+  const mismatchedResult = {
+    ...decoded,
+    result_root: decoded.entry_root,
+    result_proof: null,
+  };
+  const verification = verifyBlockProofs(mismatchedResult);
+  assert.equal(verification.valid, false);
+  assert.equal(verification.result_pair_consistent, false);
+  assert.equal(verification.result_proof_valid, false);
+});
 
 function rewriteNestedInstructionFrameCrcs(buffer) {
   const outerPayloadLength = Number(buffer.readBigUInt64LE(23));

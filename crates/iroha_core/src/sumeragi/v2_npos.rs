@@ -1415,6 +1415,13 @@ mod tests {
                 height: parent_height,
                 view: 0,
             },
+            proposal_round: wire::ConsensusRound {
+                context_id: wire::HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
+                    Hash::new(b"parent-context"),
+                )),
+                height: parent_height,
+                view: 0,
+            },
             phase: wire::GlobalPhase::Commit,
             subject: wire::BlockSubject {
                 parent_block_hash: None,

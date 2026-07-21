@@ -984,6 +984,7 @@ mod tests {
                 subject: self.manifest.subject,
                 certificate: wire::QuorumCertificate {
                     round: self.manifest.round,
+                    proposal_round: self.manifest.round,
                     phase: wire::GlobalPhase::Prepare,
                     subject: self.manifest.subject,
                     execution_commitment: wire::ExecutionCommitment::without_topups(
@@ -1160,6 +1161,60 @@ mod tests {
                 "bad aggregate".to_owned()
             ))
         );
+    }
+
+    #[test]
+    fn later_commit_qc_authenticates_the_exact_locked_body_origin() {
+        let fixture = Fixture::new();
+        let mut request = fixture.signed_request();
+        request.certificate.phase = wire::GlobalPhase::Commit;
+        request.certificate.round.view = request
+            .round
+            .view
+            .checked_add(2)
+            .expect("fixture finality view increment");
+        request.signature = Signature::new(
+            fixture.observer.private_key(),
+            &request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+
+        let authenticated = fixture
+            .authenticate_request(request.clone())
+            .expect("later CommitQC authorizes its exact earlier body origin");
+        let mut tracker = OutstandingCertifiedBodyRequests::new(1).expect("one request slot");
+        tracker
+            .register(authenticated)
+            .expect("register historical-origin request");
+        let response = fixture.signed_response(&request, 0);
+        let _authenticated = tracker
+            .authenticate_response(
+                &fixture.context,
+                response,
+                &Fixture::peer(&fixture.validators[0]),
+            )
+            .expect("authenticate exact historical-origin response");
+
+        let mut body_after_finality = request;
+        body_after_finality.round.view = body_after_finality
+            .certificate
+            .round
+            .view
+            .checked_add(1)
+            .expect("fixture body view increment");
+        body_after_finality.signature = Signature::new(
+            fixture.observer.private_key(),
+            &body_after_finality.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        assert!(matches!(
+            fixture.authenticate_request(body_after_finality),
+            Err(V2TransportError::Wire(
+                wire::ValidationError::CertifiedBodyCertificateMismatch
+            ))
+        ));
     }
 
     #[test]

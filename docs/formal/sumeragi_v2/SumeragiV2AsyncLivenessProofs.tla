@@ -887,11 +887,13 @@ THEOREM ItemDeliveryDedupIsConsumerScoped ==
 BY DEF ItemInScheduledDelivery
 
 (***************************************************************************
-Installing a TC changes the consumer view before the old candidate value can
-be dispatched.  Its immutable class remains whatever admission recorded, but
-the old value immediately loses dedup authority; a retransmitted exact locked
-Commit can therefore be reconstructed under the new consumer epoch and its
-new progress classification.
+Installing a TC changes the consumer generation before the old candidate value
+can be dispatched.  An ordinary install also advances the view; a strict
+same-round high-QC upgrade deliberately leaves the view unchanged.  In both
+cases the immutable class remains whatever admission recorded, but the old
+value immediately loses dedup authority; a retransmitted exact locked Commit
+can therefore be reconstructed under the new consumer epoch and its new
+progress classification.
 ***************************************************************************)
 THEOREM PersistInstallStalesCurrentNodeCandidate ==
   \A command, candidate:
@@ -917,9 +919,13 @@ PROOF
              /\ command.view = request.tc.view
              /\ PersistInstallTC(request)
       BY <1>1 DEF ExecutePersistInstall
-    <2>2. /\ request.tc.view >= nodeView[request.node]
-           /\ nodeView' =
-                [nodeView EXCEPT ![request.node] = request.tc.view + 1]
+    <2>2. /\ nodeView' =
+                [nodeView EXCEPT ![request.node] =
+                   IF StrictSameRoundTcUpgrade(request.node, request.tc)
+                   THEN @ ELSE request.tc.view + 1]
+           /\ generation' =
+                [generation EXCEPT ![request.node] =
+                   IF @ < MaxGeneration THEN @ + 1 ELSE @]
       BY <2>1 DEF PersistInstallTC
     <2>3. /\ request \in InstallTcWalSet
            /\ request.node \in ValidatorIds
@@ -933,21 +939,31 @@ PROOF
     <2>4. /\ candidate.node = request.node
            /\ candidate.consumerView = nodeView[request.node]
       BY <1>1, <2>1 DEF CandidateConsumerCurrent
-    <2>5. nodeView'[request.node] = request.tc.view + 1
-      BY <2>2, <2>3, Isa
-    <2>6. candidate.consumerView <= request.tc.view
-      BY <2>2, <2>4
-    <2>7. request.tc.view < request.tc.view + 1
-      BY <2>3, SMT
-    <2>8a. candidate.consumerView < request.tc.view + 1
-      BY <2>6, <2>7, SMT
-    <2>8b. nodeView'[candidate.node] = request.tc.view + 1
-      BY <2>4, <2>5
-    <2>8. candidate.consumerView < nodeView'[candidate.node]
-      BY <2>8a, <2>8b
-    <2>9. candidate.consumerView # nodeView'[candidate.node]
-      BY <2>8
-    <2> QED BY <2>9
+    <2>5. CASE StrictSameRoundTcUpgrade(request.node, request.tc)
+      <3>1. /\ generation[request.node] < MaxGeneration
+             /\ candidate.consumerGeneration = generation[request.node]
+        BY <1>1, <2>1, <2>4, <2>5
+           DEF StrictSameRoundTcUpgrade, CandidateConsumerCurrent
+      <3>2. generation'[request.node] = generation[request.node] + 1
+        BY <2>2, <2>3, <3>1, Isa
+      <3>3. candidate.consumerGeneration # generation'[candidate.node]
+        BY <2>4, <3>1, <3>2, SMT
+      <3> QED BY <3>3
+    <2>6. CASE ~StrictSameRoundTcUpgrade(request.node, request.tc)
+      <3>1. request.tc.view >= nodeView[request.node]
+        BY <2>1, <2>6 DEF PersistInstallTC
+      <3>2. nodeView'[request.node] = request.tc.view + 1
+        BY <2>2, <2>3, <2>6, Isa
+      <3>3. candidate.consumerView <= request.tc.view
+        BY <2>4, <3>1
+      <3>4. request.tc.view < request.tc.view + 1
+        BY <2>3, SMT
+      <3>5. nodeView'[candidate.node] = request.tc.view + 1
+        BY <2>4, <3>2
+      <3>6. candidate.consumerView # nodeView'[candidate.node]
+        BY <3>3, <3>4, <3>5, SMT
+      <3> QED BY <3>6
+    <2> QED BY <2>5, <2>6
   <1> QED BY <1>1
 
 THEOREM RestartCandidateIsTyped ==
@@ -36336,35 +36352,40 @@ PROOF
     <2>1c. /\ request.node \in ValidatorIds
             /\ request.tc.view \in Views
       BY <2>1b DEF InstallTcWalSet, TcRecordSet
-    <2>1d. /\ request.tc.view >= nodeView[request.node]
-            /\ nodeView' =
-                 [nodeView EXCEPT
-                    ![request.node] = request.tc.view + 1]
+    <2>1d. nodeView' =
+              [nodeView EXCEPT ![request.node] =
+                 IF StrictSameRoundTcUpgrade(request.node, request.tc)
+                 THEN @ ELSE request.tc.view + 1]
       BY <1>1 DEF PersistInstallTC
     <2>1e. Views \subseteq Nat
       BY <1>1, ModelViewsAreNaturals DEF TypeInvariant
     <2>2. /\ request.node \in ValidatorIds
            /\ request.tc.view \in Views
-           /\ request.tc.view >= nodeView[request.node]
            /\ nodeView' =
-                [nodeView EXCEPT
-                   ![request.node] = request.tc.view + 1]
+                [nodeView EXCEPT ![request.node] =
+                   IF StrictSameRoundTcUpgrade(request.node, request.tc)
+                   THEN @ ELSE request.tc.view + 1]
       BY <2>1c, <2>1d
     <2>3. ASSUME NEW node \in ValidatorIds
            PROVE nodeView'[node] >= nodeView[node]
       <3>1. CASE node = request.node
-        <4>1. nodeView'[node] = request.tc.view + 1
-          BY <2>1a, <2>2, <3>1, Isa
-        <4>2a. nodeView[node] \in Views
-          BY <2>1a, <2>3, FunctionValueHasCodomain
-        <4>2. /\ request.tc.view \in Nat
-               /\ nodeView[node] \in Nat
-          BY <2>2, <2>1e, <4>2a
-        <4>3a. nodeView[node] <= request.tc.view
-          BY <2>2, <3>1
-        <4>3. nodeView[node] <= request.tc.view + 1
-          BY <4>2, <4>3a, NaturalBoundBelowSuccessor
-        <4> QED BY <4>1, <4>3
+        <4>1. CASE StrictSameRoundTcUpgrade(request.node, request.tc)
+          <5>1. nodeView'[node] = nodeView[node]
+            BY <2>1a, <2>2, <3>1, <4>1, Isa
+          <5> QED BY <5>1
+        <4>2. CASE ~StrictSameRoundTcUpgrade(request.node, request.tc)
+          <5>1. /\ request.tc.view >= nodeView[request.node]
+                 /\ nodeView'[node] = request.tc.view + 1
+            BY <1>1, <2>1a, <2>2, <3>1, <4>2, Isa
+               DEF PersistInstallTC
+          <5>2. /\ request.tc.view \in Nat
+                 /\ nodeView[node] \in Nat
+            BY <2>1a, <2>1e, <2>2, <2>3, <3>1,
+               FunctionValueHasCodomain
+          <5>3. nodeView[node] <= request.tc.view + 1
+            BY <5>1, <5>2, NaturalBoundBelowSuccessor
+          <5> QED BY <5>1, <5>3
+        <4> QED BY <4>1, <4>2
       <3>2. CASE node # request.node
         <4>1. nodeView'[node] = nodeView[node]
           BY <2>1a, <2>2, <2>3, <3>2, Isa
@@ -41003,7 +41024,7 @@ PROOF
              HistoricalLockedCommitRecoveryWitness,
              HistoricalLockedPrepareForCommit,
              InstalledTcSelectsPrepareFor,
-             NoHigherConflictingPrepareKnown, CandidateScheduled,
+             NoHigherPrepareOriginKnown, CandidateScheduled,
              AsyncAllVars
     <2>3. DurableDecisionProgressWitness'
       BY <1>1,
@@ -46835,8 +46856,7 @@ THEOREM ProgressWitnessProductionRefinementObligation ==
 
 THEOREM ProgressWitnessObligation ==
   \A initialContext:
-    AsyncProgressWitnessAndHistoricalRecoveryProperty(
-      AsyncSpecAt(initialContext))
+    AsyncProgressWitnessAndHistoricalRecoveryProperty(AsyncSpecAt(initialContext))
 
 (***************************************************************************
 Historical locked-body recovery remains two deliberately separate debts without

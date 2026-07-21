@@ -672,14 +672,16 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         block_hash: block_header.hash(),
         payload_hash: exact_fixture_proposal_wire_hash(block),
     };
+    let round = ConsensusRound {
+        context_id: context.id(),
+        height,
+        // The finality artifact duplicates the finalized header's
+        // view-change index and must bind it exactly.
+        view: block_header.view_change_index(),
+    };
     let mut commit_qc = QuorumCertificate {
-        round: ConsensusRound {
-            context_id: context.id(),
-            height,
-            // The finality artifact duplicates the finalized header's
-            // view-change index and must bind it exactly.
-            view: block_header.view_change_index(),
-        },
+        round,
+        proposal_round: round,
         phase: GlobalPhase::Commit,
         subject,
         execution_commitment: ExecutionCommitment::without_topups(

@@ -37,8 +37,10 @@ the solver are therefore part of the proof TCB. The scanned production reducer
 and proof modules contain no `assume`, `admit`, external body, or external
 specification escape hatch.
 
-The primitive source-link kernel was checked with the official pinned macOS
-arm64 release:
+The following primitive source-link receipt was produced with the official
+pinned macOS arm64 release. It predates the current proposal-origin changes and
+was not rerun for this source, so its counts are historical evidence only and
+must not be cited as discharge of the changed obligations:
 
 ```text
 $ scripts/verify_sumeragi_v2.sh  # official pinned release already in PATH
@@ -51,24 +53,26 @@ Evidence for the source-link edit itself uses the isolated harness because
 
 ```text
 bash scripts/formal/run_sumeragi_v2_harness.sh --unit
-  105 unit/reducer/WAL/refinement tests passed
+  118 unit/reducer/WAL/refinement tests passed
 bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay
   8 model-trace replay tests passed
 bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
   9 deterministic network simulations passed
+bash scripts/formal/run_sumeragi_v2_harness.sh --chaos-100k
+  50,000 permissioned + 50,000 NPoS heights passed
+  400,000 validator finalizations; 0 failures; 91.29 seconds
 bash scripts/formal/run_sumeragi_v2_harness.sh \
   cargo clippy --locked --offline -p iroha_sumeragi_core --lib -- -D warnings
   passed
-PATH=<pinned-verus> CARGO_TARGET_DIR=/tmp/codex-wal-exact-verus-target \
-  scripts/verify_sumeragi_v2.sh
-  1690 dependency obligations and 126 root obligations verified, 0 errors
 ```
 
-The successful run discharges the abstract reducer/WAL obligations, the
-primitive-to-derived-fact kernel, and the production commit-gate obligations.
-It does not turn unverified `std` collection code, cryptography, or adapter
-contracts into verified code; the remaining boundary is listed explicitly
-below.
+The current Rust runs exercise the source-shared reducer/WAL/refinement logic,
+model replay, all nine named fast-network scenarios, and the deterministic
+chaos schedule. They are not a Verus discharge. A fresh pinned run is required
+before the changed primitive-to-derived-fact or production commit-gate
+obligations can be marked verified. Unverified `std` collection code,
+cryptography, and adapter contracts remain outside Verus in any case; the
+remaining boundary is listed explicitly below.
 
 ## TLC trace replay against production
 
@@ -180,6 +184,11 @@ schema-v2 harness run on 2026-07-17 completed all 100,000 heights in 57.52
 seconds and matched every pinned counter. The source-attested wrapper correctly
 refuses a dirty worktree, so the final checkout-manifest-bound rerun remains
 required after these changes are in a signed clean commit.
+A 2026-07-21 run against the current proposal-origin source completed the
+50,000-height permissioned prefix and 50,000-height unequal-power NPoS prefix,
+400,000 validator finalizations, and zero failures in 91.29 seconds. This is a
+mutable-working-tree harness result, not a source-sealed release receipt or a
+Verus proof.
 
 ## Current refinement model
 
@@ -188,6 +197,23 @@ for the production WAL and reducer rather than independent protocol examples.
 `crates/iroha_sumeragi_core/src/effective_lock_verus_proofs.rs` isolates the
 solver queries for exact-body ownership, retirement accounting, and runtime
 service selection while instantiating the same production macros.
+
+The current source projection separates the reducer lifecycle owner from two
+wire identities. `proposal_round` is the immutable proposal/body/header origin;
+Vote/QC `round` is the Prepare or Commit certification round. Prepare requires
+the two to be equal. Commit permits a later certification view in the same
+context and height. Body recovery, header association, validation, and
+application bind the proposal origin. Later-view Commit recovery re-signs that
+origin in the active finality round, selects only the newest durable Commit
+intent for `(proposal_round, subject)`, and retires older same-origin pools
+after the replacement WAL acknowledgement. A locked value is committed
+directly; equal bytes at a new proposal origin are not admitted.
+
+Pending-WAL and boundary capability projections bind the primary proposal
+origin separately from the lifecycle owner and bind the auxiliary proposal
+origin of any embedded certificate. Begin, acknowledgement, requested effect,
+and reconstructed grant must match both. Revision 3 has no legacy decoder or
+missing-origin inference.
 
 The production timer/FIFO arbiter in
 `crates/iroha_core/src/sumeragi/v2_core/scheduler.rs` is also source linked.
@@ -342,10 +368,10 @@ timeout pools, locally formed certificates, retained outbound controls,
 signature FIFO/in-flight slot, and replay-resume flag. The gate enforces:
 
 - at most two active vote pools and `2 * validator_count` entries: current
-  Prepare plus either current Commit or the exact historical locked Commit.
-  Every Commit requires the exact active durable lock; acknowledging a newer
-  `LockAndCommit` applies that lock, prunes the historical pool, and only then
-  releases its current Commit signature;
+  Prepare plus the latest durable Commit finality pool for the exact locked
+  proposal origin. Every Commit requires that origin and subject;
+  acknowledging a later-finality `LockAndCommit` prunes all older same-origin
+  Commit pools and only then releases its signature;
 - at most one timeout pool and `validator_count` timeout entries;
 - at most two locally formed QCs, one locally formed TC, and seven retained
   outbound control classes;
@@ -368,6 +394,16 @@ lock exists. Retained outbound Commit control serves peers, but is not a
 sufficient local progress witness because broadcast excludes the sender. These
 source-linked reducer constraints preserve the fixed-width cardinality gate;
 they do not by themselves promote the still-incomplete TLAPS liveness ledger.
+
+The source-shared locked-Commit progress kernel additionally models validation
+finishing after a TC-promoted lock's active finality view has durably timed
+out. It accepts the exact current durable timeout as a recovery witness only
+for that historical lock; this does not authorize `LockAndCommit` or signing
+in the closed view. The next installed TC restarts exact-origin recovery in an
+open finality view. Stale, wrong-signer, volatile-only, and non-exact timeout
+projections are rejected by executable mutation tests, and the same expression
+is instantiated by the Verus theorem
+`locked_commit_progress_witness_is_valid`.
 
 ## Encoded proof obligations
 
@@ -418,7 +454,7 @@ The module contains transition-by-transition proof functions for:
 | Exact one-shot state/effect relation | Encoded in the production gate | `ACTION_RESUME_AFTER_REPLAY` checks false-to-true, unchanged durable state, and the exact Sign/Fetch/empty effect class |
 | Abstract reducer refinement | Encoded | `ReducerPathProjection::ResumeAfterReplay` preserves WAL, application, and effect fences |
 | Named TLA+ action map | Encoded and spelling-gated | Proposal/vote/timeout resumption maps to the existing `ResumeProposal`, `ResumeVote`, and `ResumeTimeout` actions; decided replay maps to `FetchBody` |
-| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 126 root obligations verified with zero errors |
+| Pinned Verus discharge of the changed obligations | **Pending rerun** | The historical 1690-dependency/126-root receipt predates the proposal-origin source changes; the current source contract expects 1690 dependency and 127 root obligations |
 
 ## Exact production commit gate
 
@@ -428,7 +464,8 @@ the Verus module by macros; the verifier does not check a separately copied
 reference implementation. The normal Rust build instantiates those expressions
 in `refinement::accepts`, while
 `crates/iroha_sumeragi_core/src/verus_proofs.rs` instantiates the same
-expressions in the verified functions.
+expressions in Verus proof functions. Their discharge for the current source is
+pending the fresh pinned run noted above.
 
 `Reducer::step` now performs the real transition on a private clone and invokes
 the gate before replacing caller-visible state. Successful, ignored, and error
@@ -441,12 +478,14 @@ Decision body-pipeline effect (FetchBody, StoreBody, ValidateBody, or Apply)
 fill eight slots; a ninth fails closed. Every active slot
 contains its exact vector position and two fixed-width primitive capability
 keys: one requested by the concrete effect and one independently reconstructed
-from the event and candidate state. The verified kernel computes authorization
+from the event and candidate state. The shared proof kernel computes
+authorization
 by comparing every key field; callers no longer supply `authorized=true`.
 Invariant truth, state equality, tag matching, busy-fence state, action class,
 WAL class, continuation class, and boundary exactness are likewise derived
 inside the kernel from concrete state identities, event primitives, violation
-counts, and requested/granted boundary keys. The verified relation proves:
+counts, and requested/granted boundary keys. When discharged, the relation
+proves:
 
 - every active effect slot has identical nonempty requested and granted
   capability identities (the collection-extraction caveat below remains);
@@ -486,12 +525,14 @@ keys from the exact predecessor event and candidate work state. These checks
 execute unconditionally in production; they are not debug assertions. The
 ordinary Rust collection lookups that produce those concrete primitives are
 not themselves verified, which remains gap 1 below, but no authorization or
-action-exactness boolean crosses the verified kernel boundary.
+action-exactness boolean crosses the shared proof-kernel boundary.
 
-The pinned verifier discharged all 126 root obligations with zero errors on a
-clean target. The verification script rejects `assume`, `admit`, unreviewed
-trusted bodies, and external function specifications in the package-local
-reducer and proof modules throughout this crate. It also rejects reintroduction
+An earlier pinned verifier run discharged 126 root obligations with zero errors
+on its clean historical target. It predates the proposal-origin changes and was
+not rerun for the current 127-root source. The verification script rejects `assume`,
+`admit`, unreviewed trusted bodies, and external function specifications in the
+package-local reducer and proof modules throughout this crate. It also rejects
+reintroduction
 of compressed `TimeoutIntent` validity/high-QC-match predicates and requires
 the primitive-guard proof. It checks that every mapped TLA+ action name still
 exists in both `SumeragiV2Core.tla` and the Verus mapping; this prevents name
@@ -531,7 +572,8 @@ The following gaps are exact and intentional; each must be closed before the
 production reducer can be described as deductively verified:
 
 1. **Projection extraction and the inner reducer body.** The caller-visible
-   production commit decision is now the exact Verus-checked primitive kernel,
+   production commit decision is now the exact shared primitive kernel targeted
+   by Verus,
    and every `Reducer::step` exit invokes it. Direct `Reducer` and
    `DurableState` identities are compared by the kernel; effect and boundary
    authorization is derived from independently requested and reconstructed
@@ -555,15 +597,17 @@ production reducer can be described as deductively verified:
    Closing this residual source-level gap requires Verus-compatible reducer
    collections or verified projection functions over reviewed external type
    specifications; neither is claimed here.
-2. **Continuous pinned verification.** The source-link change passed the pinned
-   workflow locally. The PR and nightly formal jobs invoke
+2. **Continuous pinned verification.** The checked-in pinned receipt predates
+   the current proposal-origin source-link changes; a fresh local pinned run
+   has not been recorded. The PR and nightly formal jobs invoke
    `scripts/verify_sumeragi_v2.sh` and retain its output with the other formal
    artifacts. Those jobs must succeed before their output is release evidence.
    Any syntax or solver failure must be fixed without weakening a guard or
    invariant.
 3. **Volatile reducer contents.** Cardinalities, fixed protocol bounds, exact
    full-state stale/busy stuttering, durable-signature capacity, and the
-   persisted-TC reset are now in the executable/verified gate. Exact key/value correspondence for
+   persisted-TC reset are now in the executable/Verus gate. Exact key/value
+   correspondence for
    candidate selection, body-work states, vote signatures, known/pending QCs,
    retained retransmission payloads, and signature FIFO order is still
    ordinary Rust and is not deductively verified. Replay resumption no longer
@@ -613,7 +657,9 @@ production reducer can be described as deductively verified:
    simulation/integration evidence. The exact three-class cycle and immutable
    body-owner rebind theorem do not by themselves discharge this gap.
 
-Until all six items are discharged, the successful current run proves the
-listed abstract obligations and the exact production commit-gate relation. It
-does not prove every line of the inner reducer, the fact-extraction functions,
-the cryptographic/filesystem trusted contracts, or the protocol liveness theorem.
+Until all six items are discharged, the current Rust harness results establish
+only the tested executable behavior. The historical pinned receipt proves only
+the sources it hashed; it does not prove the changed proposal-origin
+commit-gate relation, every line of the inner reducer, the fact-extraction
+functions, the cryptographic/filesystem trusted contracts, or the protocol
+liveness theorem.

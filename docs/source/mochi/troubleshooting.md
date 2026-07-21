@@ -14,7 +14,7 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
 1. Capture the workspace root and sandbox root that MOCHI is using. The default
    layout is `<workspace>/.mochi/sandbox/<profile-slug>`; custom workspace and
    data-root overrides appear in the UI title bar and via
-   `cargo run -p mochi-ui -- sandbox serve --workspace-root ...`.
+   `cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve --workspace-root ...`.
    When you use `scripts/mochi_local_sandbox.sh`, the helper also uses
    `<workspace>/.mochi/build-target` as its default Cargo target dir unless
    `MOCHI_CARGO_TARGET_DIR` overrides it.
@@ -77,7 +77,7 @@ If the UI reports “failed to spawn process” or “permission denied”, poin
 at known-good binaries:
 
 ```bash
-cargo run -p mochi-ui -- \
+cargo run -p mochi-ui --features gui --bin mochi -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -101,7 +101,7 @@ process is already listening on the default range (8080/1337). Relaunch MOCHI
 with explicit bases:
 
 ```bash
-cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui --features gui --bin mochi -- --torii-start 12000 --p2p-start 19000
 ```
 
 The builder will fan out sequential ports from those bases, so reserve a range

@@ -247,9 +247,12 @@ impl CertifiedMergeSidecarChunkAdmission {
         let chunk_cursor_before = usize::try_from(chunk.chunk_index).map_err(|_| {
             MergeSidecarError::FlushIdentityMismatch("chunk index is not representable")
         })?;
-        let chunk_cursor_after = chunk_cursor_before.checked_add(1).ok_or(
-            MergeSidecarError::FlushIdentityMismatch("chunk cursor overflowed"),
-        )?;
+        let chunk_cursor_after =
+            chunk_cursor_before
+                .checked_add(1)
+                .ok_or(MergeSidecarError::FlushIdentityMismatch(
+                    "chunk cursor overflowed",
+                ))?;
         let chunk_count = usize::try_from(chunk.chunk_count).map_err(|_| {
             MergeSidecarError::FlushIdentityMismatch("chunk count is not representable")
         })?;
@@ -315,12 +318,8 @@ impl CertifiedMergeSidecarChunkAdmission {
 
     /// Whether `ack_identity` is the exact actor completion queued here.
     #[must_use]
-    pub(crate) fn matches_ack_identity(
-        &self,
-        ack_identity: &NetworkReplyFlushIdentity,
-    ) -> bool {
-        self.flush_identity
-            .same_delivery_occurrence(ack_identity)
+    pub(crate) fn matches_ack_identity(&self, ack_identity: &NetworkReplyFlushIdentity) -> bool {
+        self.flush_identity.same_delivery_occurrence(ack_identity)
             && self.projection_matches_identity(ack_identity)
     }
 
@@ -2172,9 +2171,12 @@ impl MergeSidecarTransport {
         let chunk_index = usize::try_from(projection.chunk_index).map_err(|_| {
             MergeSidecarError::FlushIdentityMismatch("chunk index is not representable")
         })?;
-        let expected_chunk_cursor_after = chunk_index.checked_add(1).ok_or(
-            MergeSidecarError::FlushIdentityMismatch("chunk cursor overflowed"),
-        )?;
+        let expected_chunk_cursor_after =
+            chunk_index
+                .checked_add(1)
+                .ok_or(MergeSidecarError::FlushIdentityMismatch(
+                    "chunk cursor overflowed",
+                ))?;
         let start = chunk_index
             .checked_mul(MAX_CERTIFIED_MERGE_CHUNK_BYTES)
             .ok_or(MergeSidecarError::FlushIdentityMismatch(
@@ -3549,12 +3551,7 @@ mod tests {
                 .expect("source A starts exact shared materialization")
         );
         server
-            .enqueue_response(
-                request.clone(),
-                Some(route_a.clone()),
-                vec![0xA6; len],
-                now,
-            )
+            .enqueue_response(request.clone(), Some(route_a.clone()), vec![0xA6; len], now)
             .expect("materialize one shared two-chunk response");
         assert!(
             !server

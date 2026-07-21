@@ -5,6 +5,13 @@ plugins {
 }
 
 val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0")
+val irohaKotlinSdkVersion =
+    providers
+        .gradleProperty("irohaKotlinSdkVersion")
+        .orElse(providers.gradleProperty("irohaSdkVersion"))
+        .orElse(sdkVersion)
+
+extra["irohaKotlinSdkVersionProvider"] = irohaKotlinSdkVersion
 
 allprojects {
     group = "org.hyperledger.iroha"

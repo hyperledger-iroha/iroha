@@ -5102,6 +5102,7 @@ mod network_relay_tests {
         BlockMessage::V2(consensus_v2::ConsensusMessageV2::new(
             consensus_v2::ConsensusMessageV2Payload::Vote(consensus_v2::Vote {
                 round: sample_v2_round(5, 7),
+                proposal_round: sample_v2_round(5, 7),
                 phase: consensus_v2::GlobalPhase::Prepare,
                 subject: sample_v2_subject(),
                 execution_commitment: consensus_v2::ExecutionCommitment::without_topups(

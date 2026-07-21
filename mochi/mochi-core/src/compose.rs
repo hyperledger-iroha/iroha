@@ -1702,7 +1702,7 @@ mod tests {
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let invocation = iroha_data_model::transaction::ContractInvocation {
+        let invocation = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: contract_address.clone(),
             expected_code_hash: iroha_crypto::Hash::prehashed([0x42; 32]),
             entrypoint: "apply".to_owned(),

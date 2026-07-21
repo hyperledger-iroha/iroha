@@ -11,6 +11,7 @@ import pytest
 from iroha_python.client import (
     SumeragiStatusSnapshot,
     SumeragiV2BodyState,
+    SumeragiV2ExecutionCommitment,
     SumeragiV2GlobalPhase,
     SumeragiV2StatusPhase,
     ToriiClient,
@@ -55,6 +56,11 @@ def _execution_commitment(seed: int = 0x51) -> dict[str, object]:
 def _prepare_qc(view: int = 3) -> dict[str, object]:
     return {
         "round": {
+            "context_id": [_canonical_hash(0x14)],
+            "height": 15,
+            "view": view,
+        },
+        "proposal_round": {
             "context_id": [_canonical_hash(0x14)],
             "height": 15,
             "view": view,
@@ -109,6 +115,11 @@ def _healthy_status() -> dict[str, object]:
                     "height": 14,
                     "view": 1,
                 },
+                "proposal_round": {
+                    "context_id": [_canonical_hash(0x22)],
+                    "height": 14,
+                    "view": 1,
+                },
                 "phase": {"phase": "commit", "details": None},
                 "subject": copy.deepcopy(committed_subject),
                 "execution_commitment": _execution_commitment(0x61),
@@ -124,7 +135,24 @@ def _healthy_status() -> dict[str, object]:
             "prepare_quorums": [],
             "commit_quorums": [],
             "timeout_quorums": [],
-            "outbound_intents": [],
+            "outbound_intents": [
+                {
+                    "kind": {"kind": "commit_vote", "details": None},
+                    "round": {
+                        "context_id": [_canonical_hash(0x14)],
+                        "height": 15,
+                        "view": 4,
+                    },
+                    "proposal_round": {
+                        "context_id": [_canonical_hash(0x14)],
+                        "height": 15,
+                        "view": 3,
+                    },
+                    "subject": _subject(),
+                    "execution_commitment": _execution_commitment(),
+                    "stage": {"stage": "sent", "details": None},
+                }
+            ],
             "work": {
                 "candidate": {"stage": "idle", "details": None},
                 "body_recovery": {"stage": "idle", "details": None},
@@ -197,14 +225,41 @@ def test_status_parses_authoritative_reducer_state() -> None:
     assert status.locked_prepare_qc is not None
     assert status.locked_prepare_qc.phase is SumeragiV2GlobalPhase.PREPARE
     assert status.locked_prepare_qc.round.view == 3
+    assert status.locked_prepare_qc.proposal_round.view == 3
+    expected_execution_commitment = SumeragiV2ExecutionCommitment.from_payload(
+        _execution_commitment(), "expected_execution_commitment"
+    )
+    assert (
+        status.locked_prepare_qc.execution_commitment
+        == expected_execution_commitment
+    )
     assert status.last_timeout_certificate is not None
     assert status.last_timeout_certificate.certificate_hash == _canonical_hash(0x21)
+    assert status.last_timeout_certificate.highest_prepare_qc is not None
+    assert (
+        status.last_timeout_certificate.highest_prepare_qc.execution_commitment
+        == expected_execution_commitment
+    )
     assert status.pending_persistence_id == 17
     assert status.last_committed_subject is not None
     assert status.last_committed_subject.block_hash == _canonical_hash(0x42)
     assert status.height_context.validator_count == 4
     assert status.last_commit_qc is not None
     assert status.last_commit_qc.signed_power == 3
+    assert (
+        status.last_commit_qc.certificate.execution_commitment.parent_state_root
+        == _canonical_hash(0x61)
+    )
+    assert len(status.liveness.outbound_intents) == 1
+    outbound_intent = status.liveness.outbound_intents[0]
+    assert outbound_intent.round.view == 4
+    assert outbound_intent.proposal_round is not None
+    assert outbound_intent.proposal_round.view == 3
+    assert outbound_intent.execution_commitment is not None
+    assert (
+        outbound_intent.execution_commitment.executed_block_wire_hash
+        == _canonical_hash(0x54)
+    )
     assert status.safety_halt.active is False
     assert status.lane_payload_ownerships == []
     assert status.committed_lane_blocks == []
@@ -213,8 +268,32 @@ def test_status_parses_authoritative_reducer_state() -> None:
     assert status.operator.tx_queue.queued_transactions == 3
 
 
+def test_qc_reference_preserves_execution_commitment() -> None:
+    payload = _prepare_qc()
+    execution_commitment = payload["execution_commitment"]
+    assert isinstance(execution_commitment, dict)
+    execution_commitment["topup_anchor_root"] = _canonical_hash(0x55)
+    execution_commitment["topup_anchor_count"] = 2
+
+    qc = client_module.SumeragiV2QuorumCertificateRef.from_payload(
+        payload, "test_qc"
+    )
+
+    assert qc.execution_commitment == SumeragiV2ExecutionCommitment(
+        parent_state_root=_canonical_hash(0x51),
+        post_state_root=_canonical_hash(0x52),
+        ordinary_writes_root=_canonical_hash(0x53),
+        topup_anchor_root=_canonical_hash(0x55),
+        topup_anchor_count=2,
+        executed_block_wire_hash=_canonical_hash(0x54),
+    )
+
+
 def test_status_allows_genesis_without_optional_certificates() -> None:
     payload = _healthy_status()
+    liveness = payload["liveness"]
+    assert isinstance(liveness, dict)
+    liveness["outbound_intents"] = []
     payload.update(
         {
             "height": 0,
@@ -386,6 +465,16 @@ def test_retained_rbc_store_telemetry_models_parse_snapshot() -> None:
         (
             lambda payload: payload["last_commit_qc"].update(signed_power=2),
             "does not satisfy its frozen dual quorum",
+        ),
+        (
+            lambda payload: payload["locked_prepare_qc"].pop("proposal_round"),
+            "proposal_round",
+        ),
+        (
+            lambda payload: payload["locked_prepare_qc"].pop(
+                "execution_commitment"
+            ),
+            "execution_commitment",
         ),
         (
             lambda payload: payload["operator"]["tx_queue"].update(

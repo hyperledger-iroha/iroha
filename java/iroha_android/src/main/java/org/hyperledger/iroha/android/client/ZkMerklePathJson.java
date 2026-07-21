@@ -39,6 +39,9 @@ final class ZkMerklePathJson {
       paths.add(parseEntry(path, "paths[" + i + "]"));
     }
     return new ZkMerklePathResponse(
+        ZkRootsJson.jsonUnsignedLong(
+            map.get("evaluated_block_height"), "evaluated_block_height"),
+        jsonString(map.get("evaluated_block_hash"), "evaluated_block_hash"),
         jsonString(map.get("root"), "root"),
         jsonInt(map.get("frontier_len"), "frontier_len"),
         jsonInt(map.get("tree_depth"), "tree_depth"),

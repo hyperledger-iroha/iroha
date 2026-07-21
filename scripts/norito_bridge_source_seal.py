@@ -132,6 +132,7 @@ def seal_inputs(root: pathlib.Path) -> list[str]:
 
 
 def listed_files(root: pathlib.Path, inputs: Iterable[str]) -> list[str]:
+    input_set = set(inputs)
     output = run(
         root,
         [
@@ -143,7 +144,24 @@ def listed_files(root: pathlib.Path, inputs: Iterable[str]) -> list[str]:
             *inputs,
         ],
     )
-    return sorted(set(output.decode("utf-8").splitlines()))
+    listed = set(output.decode("utf-8").splitlines())
+
+    # Some workspace-wide build inputs are intentionally ignored by repository
+    # policy (notably the root Cargo.lock). They still affect the bridge binary,
+    # so an explicit ROOT_INPUT must be sealed even when `git ls-files -co
+    # --exclude-standard` omits it. Do not recursively include arbitrary ignored
+    # files below directory inputs: build outputs and local corpora remain outside
+    # the production source seal unless named explicitly above.
+    for relative in ROOT_INPUTS:
+        if relative not in input_set:
+            continue
+        path = root / relative
+        if path.is_symlink():
+            raise RuntimeError(f"explicit source-seal input is symlinked: {relative}")
+        if path.is_file():
+            listed.add(relative)
+
+    return sorted(listed)
 
 
 def fingerprint(root: pathlib.Path, inputs: list[str]) -> str:

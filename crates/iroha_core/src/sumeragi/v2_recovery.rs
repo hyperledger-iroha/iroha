@@ -1601,6 +1601,7 @@ mod tests {
             .expect("canonical executed block wire");
         let unsigned_vote = wire::Vote {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment: exact_execution_commitment,
@@ -1619,6 +1620,7 @@ mod tests {
         let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let commit_qc = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment: exact_execution_commitment,

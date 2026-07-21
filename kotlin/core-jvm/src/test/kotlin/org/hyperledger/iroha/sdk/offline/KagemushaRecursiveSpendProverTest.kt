@@ -950,7 +950,7 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.appendSpendV4(
                 append,
                 KagemushaRecursiveSpendProver.decodeRecipientPaymentRequest(
-                    archive("KagemushaRecipientPaymentRequestV2"),
+                    archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"),
                 ),
                 0,
             )
@@ -986,7 +986,7 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.restoreInitBranchV4(init, opening, 0)
         }
         val payment = KagemushaRecursiveSpendProver.decodePeerPayment(
-            archive("KagemushaRecursiveSpendPeerPaymentV4"),
+            archive("iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4"),
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.restorePeerPaymentBranchV4(payment, opening, 0)
@@ -1253,19 +1253,21 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun canonicalPeerCodecsAreTypedAndDefensive() {
-        val requestArchive = archive("KagemushaRecipientPaymentRequestV2")
+        val requestArchive = archive(
+            "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
+        )
         val request = KagemushaRecursiveSpendProver.decodeRecipientPaymentRequest(requestArchive)
         requestArchive[requestArchive.lastIndex] = 0
         assertEquals(0x51, request.noritoEncoded().last().toInt() and 0xff)
 
         assertTrue(
             KagemushaRecursiveSpendProver.decodePeerPayment(
-                archive("KagemushaRecursiveSpendPeerPaymentV4"),
+                archive("iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4"),
             ).noritoEncoded().size > NoritoHeader.HEADER_LENGTH,
         )
         assertTrue(
             KagemushaRecursiveSpendProver.decodeReceiverAcknowledgement(
-                archive("KagemushaReceiverAcknowledgementV2"),
+                archive("iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2"),
             ).noritoEncoded().size > NoritoHeader.HEADER_LENGTH,
         )
         assertTrue(
@@ -1275,13 +1277,15 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.decodePeerPayment(
-                archive("KagemushaRecipientPaymentRequestV2"),
+                archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"),
             )
         }
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.decodePeerPayment(byteArrayOf(1, 2, 3))
         }
-        val corrupted = archive("KagemushaRecursiveSpendPeerPaymentV4")
+        val corrupted = archive(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4",
+        )
         corrupted[corrupted.lastIndex] = 0
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.decodePeerPayment(corrupted)
@@ -1291,13 +1295,13 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun peerTransportGoldenVectorsAreExact() {
         val request = KagemushaPeerPayload.decode(
-            archive("KagemushaRecipientPaymentRequestV2"),
+            archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"),
             KagemushaPeerPayloadKind.RECEIVE_REQUEST,
         )
         val text = KagemushaPeerTextCodec.encode(request)
 
         assertEquals(
-            "PKK2R.TlJUMAAA27ZYXi51qDW87RkAOqt6zQABAAAAAAAAAN6BMN0_Z661AlE",
+            "PKK2R.TlJUMAAAE2-AZVN4JnUypxEZ9G5vCgABAAAAAAAAAN6BMN0_Z661AgAAAAAAAAAAUQ",
             text,
         )
         assertEquals(
@@ -1317,7 +1321,7 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun qrNfcAndNearbyGoldenVectorsAreExact() {
         val request = KagemushaPeerPayload.decode(
-            archive("KagemushaRecipientPaymentRequestV2"),
+            archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"),
             KagemushaPeerPayloadKind.RECEIVE_REQUEST,
         )
         val frames = KagemushaQrStreamCodec.encode(
@@ -1326,9 +1330,9 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertEquals(
             listOf(
-                "PKKQ1.S1EBALu6J7gkvW_mKvRoE04Tc9IAAAABAC4BAQQAAQAAAQABAAAAKbu6J7gkvW_mKvRoE04Tc9L3Ile8Baahf0wb7ZGckATmMK4Faw",
-                "PKKQ1.S1EBAbu6J7gkvW_mKvRoE04Tc9IAAAABAClOUlQwAADbtlheLnWoNbztGQA6q3rNAAEAAAAAAAAA3oEw3T9nrrUCUZiX9lk",
-                "PKKQ1.S1EBAru6J7gkvW_mKvRoE04Tc9IAAAABAQBOUlQwAADbtlheLnWoNbztGQA6q3rNAAEAAAAAAAAA3oEw3T9nrrUCUQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4vsCHg",
+                "PKKQ1.S1EBAJ9UjpnKuy-JNddeTUuZxs8AAAABAC4BAQQAAQAAAQABAAAAMZ9UjpnKuy-JNddeTUuZxs_S31egUt70_UP06en4wRpstXHZdQ",
+                "PKKQ1.S1EBAZ9UjpnKuy-JNddeTUuZxs8AAAABADFOUlQwAAATb4BlU3gmdTKnERn0bm8KAAEAAAAAAAAA3oEw3T9nrrUCAAAAAAAAAABRW8j1XA",
+                "PKKQ1.S1EBAp9UjpnKuy-JNddeTUuZxs8AAAABAQBOUlQwAAATb4BlU3gmdTKnERn0bm8KAAEAAAAAAAAA3oEw3T9nrrUCAAAAAAAAAABRAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA010SmQ",
             ),
             frames,
         )
@@ -1345,11 +1349,11 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaNfcProtocol.SAFE_CHUNK_BYTES,
         )
         assertEquals(
-            "8020040026040100000029bbba27b824bd6fe62af468134e1373d2f72257bc05a6a17f4c1bed919c9004e6",
+            "80200400260401000000319f548e99cabb2f8935d75e4d4b99c6cfd2df57a052def4fd43f4e9e9f8c11a6c",
             commands[0].toHex(),
         )
         assertEquals(
-            "802104002d000000004e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb50251",
+            "8021040035000000004e5254300000136f80655378267532a71119f46e6f0a000100000000000000de8130dd3f67aeb502000000000000000051",
             commands[1].toHex(),
         )
         assertEquals("8022040000", commands[2].toHex())
@@ -1368,7 +1372,7 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaNearbyPairingChallenge(KagemushaNearbyPairingSymbol.STARS),
         )
         assertEquals(
-            "{\"contentType\":\"text/vnd.pk.kagemusha-v2.receive-request\",\"kind\":\"receive_request\",\"pairingChallenge\":\"nearby_pairing_stars\",\"payload\":\"UEtLMlIuVGxKVU1BQUEyN1pZWGk1MXFEVzg3UmtBT3F0NnpRQUJBQUFBQUFBQUFONkJNTjBfWjY2MUFsRQ\"}",
+            "{\"contentType\":\"text/vnd.pk.kagemusha-v2.receive-request\",\"kind\":\"receive_request\",\"pairingChallenge\":\"nearby_pairing_stars\",\"payload\":\"UEtLMlIuVGxKVU1BQUFFMi1BWlZONEpuVXlweEVaOUc1dkNnQUJBQUFBQUFBQUFONkJNTjBfWjY2MUFnQUFBQUFBQUFBQVVR\"}",
             nearby.toString(Charsets.UTF_8),
         )
         assertEquals(
@@ -1621,7 +1625,13 @@ class KagemushaRecursiveSpendProverTest {
             NoritoHeader.COMPACT_LEN,
             NoritoHeader.COMPRESSION_NONE,
         )
-        return header.encode() + payload
+        val padding = when (schema) {
+            "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" ->
+                ByteArray(8)
+            else -> byteArrayOf()
+        }
+        return header.encode() + padding + payload
     }
 
     private fun ByteArray.toHex(): String =

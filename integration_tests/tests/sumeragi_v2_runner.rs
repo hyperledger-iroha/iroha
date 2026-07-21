@@ -22,8 +22,8 @@ use iroha::{
                 HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2BodyState,
                 SumeragiV2CommitQcStatus, SumeragiV2HeightContextStatus, SumeragiV2IgnoreReason,
                 SumeragiV2LivenessBlocker, SumeragiV2LivenessStatus, SumeragiV2OutboundIntentKind,
-                SumeragiV2Status, SumeragiV2VoteQuorumStatus, TimeoutCertificateRef,
-                ValidatorIndex,
+                SumeragiV2OutboundIntentStage, SumeragiV2Status, SumeragiV2VoteQuorumStatus,
+                TimeoutCertificateRef, ValidatorIndex,
             },
         },
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
@@ -138,6 +138,7 @@ fn is_minimal_exact_prepare_quorum(
     expected: &QuorumCertificateRef,
 ) -> bool {
     quorum.round == expected.round
+        && quorum.proposal_round == expected.proposal_round
         && quorum.subject == expected.subject
         && quorum.execution_commitment == expected.execution_commitment
         && quorum.min_signers == height_context.quorum.min_signers
@@ -160,6 +161,7 @@ fn validate_minimal_exact_prepare_quorum(
         .iter()
         .filter(|quorum| {
             quorum.round == expected.round
+                && quorum.proposal_round == expected.proposal_round
                 && quorum.subject == expected.subject
                 && quorum.execution_commitment == expected.execution_commitment
         })
@@ -192,6 +194,11 @@ fn validate_commit_qc_dual_quorum(
     ensure!(
         snapshot.last_committed_height >= minimum_committed_height
             && certificate.certificate.round.height == snapshot.last_committed_height
+            && certificate.certificate.proposal_round.context_id
+                == certificate.certificate.round.context_id
+            && certificate.certificate.proposal_round.height
+                == certificate.certificate.round.height
+            && certificate.certificate.proposal_round.view <= certificate.certificate.round.view
             && certificate.certificate.phase == GlobalPhase::Commit,
         "validator {} retained the wrong durable CommitQC: {certificate:?}",
         snapshot.peer,
@@ -231,11 +238,16 @@ fn validate_commit_qc_dual_quorum(
 fn locked_commit_has_exact_progress_witness(
     liveness: &SumeragiV2LivenessStatus,
     locked: &QuorumCertificateRef,
+    current_height: u64,
+    current_view: u64,
     last_committed_height: u64,
     last_commit_qc: Option<&SumeragiV2CommitQcStatus>,
 ) -> bool {
     let exact_pool = liveness.commit_quorums.iter().any(|quorum| {
-        quorum.round == locked.round
+        quorum.round.context_id == locked.proposal_round.context_id
+            && quorum.round.height == locked.proposal_round.height
+            && quorum.round.view >= locked.proposal_round.view
+            && quorum.proposal_round == locked.proposal_round
             && quorum.subject == locked.subject
             && quorum.execution_commitment == locked.execution_commitment
             && quorum.signer_count > 0
@@ -245,19 +257,37 @@ fn locked_commit_has_exact_progress_witness(
         matches!(
             intent.kind,
             SumeragiV2OutboundIntentKind::CommitVote | SumeragiV2OutboundIntentKind::CommitQc
-        ) && intent.round == locked.round
+        ) && intent.round.context_id == locked.proposal_round.context_id
+            && intent.round.height == locked.proposal_round.height
+            && intent.round.view >= locked.proposal_round.view
+            && intent.proposal_round == Some(locked.proposal_round)
             && intent.subject == Some(locked.subject)
             && intent.execution_commitment == Some(locked.execution_commitment)
     });
-    let exact_decision = last_committed_height == locked.round.height
+    let exact_timeout = current_height == locked.proposal_round.height
+        && current_view > locked.proposal_round.view
+        && liveness.outbound_intents.iter().any(|intent| {
+            intent.kind == SumeragiV2OutboundIntentKind::TimeoutVote
+                && intent.round.context_id == locked.proposal_round.context_id
+                && intent.round.height == current_height
+                && intent.round.view == current_view
+                && intent.proposal_round.is_none()
+                && intent.subject.is_none()
+                && intent.execution_commitment.is_none()
+                && intent.stage != SumeragiV2OutboundIntentStage::PendingPersistence
+        });
+    let exact_decision = last_committed_height == locked.proposal_round.height
         && last_commit_qc.is_some_and(|certificate| {
             certificate.certificate.phase == GlobalPhase::Commit
-                && certificate.certificate.round == locked.round
+                && certificate.certificate.round.context_id == locked.proposal_round.context_id
+                && certificate.certificate.round.height == locked.proposal_round.height
+                && certificate.certificate.round.view >= locked.proposal_round.view
+                && certificate.certificate.proposal_round == locked.proposal_round
                 && certificate.certificate.subject == locked.subject
                 && certificate.certificate.execution_commitment == locked.execution_commitment
         });
 
-    exact_pool || exact_outbound || exact_decision
+    exact_pool || exact_outbound || exact_timeout || exact_decision
 }
 
 fn validate_locked_commit_progress_witness(
@@ -277,6 +307,8 @@ fn validate_locked_commit_progress_witness(
         locked_commit_has_exact_progress_witness(
             &snapshot.liveness,
             locked,
+            snapshot.height,
+            snapshot.view,
             snapshot.last_committed_height,
             snapshot.last_commit_qc.as_ref(),
         ),
@@ -291,6 +323,7 @@ fn validate_locked_commit_progress_witness(
             matches!(
                 blocker,
                 SumeragiV2LivenessBlocker::CommitQuorumMissing
+                    | SumeragiV2LivenessBlocker::TimeoutCertificateMissing
                     | SumeragiV2LivenessBlocker::SchedulerStarvation
                     | SumeragiV2LivenessBlocker::LocalControlPending
             ),
@@ -826,6 +859,11 @@ mod prepare_qc_split_tests {
                     height: HEIGHT,
                     view,
                 },
+                proposal_round: ConsensusRound {
+                    context_id: HeightContextId(hash_of::<HeightContext>(0x10)),
+                    height: HEIGHT,
+                    view,
+                },
                 phase: GlobalPhase::Prepare,
                 subject: BlockSubject {
                     parent_block_hash: Some(hash_of::<BlockHeader>(0x20)),
@@ -864,6 +902,7 @@ mod prepare_qc_split_tests {
     fn quorum(reference: QuorumCertificateRef) -> SumeragiV2VoteQuorumStatus {
         SumeragiV2VoteQuorumStatus {
             round: reference.round,
+            proposal_round: reference.proposal_round,
             subject: reference.subject,
             execution_commitment: reference.execution_commitment,
             signer_count: 3,
@@ -896,7 +935,9 @@ mod prepare_qc_split_tests {
             held,
             release_pending: Vec::new(),
             in_flight: None,
+            in_flight_bytes: 0,
             delivered: Vec::new(),
+            retired: Vec::new(),
             dropped: 0,
             overflowed: 0,
             rejected_commands: 0,
@@ -1070,7 +1111,7 @@ mod prepare_qc_split_tests {
             held_prepare_vote(3, peer_ids[1].clone(), 1, first_vote),
             held_prepare_vote(4, peer_ids[2].clone(), 2, second_vote),
         ];
-        let ack = ack(held);
+        let held_ack = ack(held);
         let allowed = peer_ids
             .iter()
             .cloned()
@@ -1078,13 +1119,13 @@ mod prepare_qc_split_tests {
             .map(|(index, peer)| (peer, ValidatorIndex::try_from(index).expect("small roster")))
             .collect::<BTreeMap<_, _>>();
         assert_eq!(
-            held_prepare_vote_subject(&ack, HEIGHT, FIRST_VIEW, &allowed, None, 2)
+            held_prepare_vote_subject(&held_ack, HEIGHT, FIRST_VIEW, &allowed, None, 2)
                 .map(|selection| selection.sequences),
             Some(vec![1, 3]),
         );
         assert_eq!(
             held_prepare_vote_subject(
-                &ack,
+                &held_ack,
                 HEIGHT,
                 FIRST_VIEW,
                 &allowed,
@@ -1096,7 +1137,7 @@ mod prepare_qc_split_tests {
         );
         assert!(
             held_prepare_vote_subject(
-                &ack,
+                &held_ack,
                 HEIGHT,
                 FIRST_VIEW,
                 &allowed,
@@ -1284,6 +1325,8 @@ mod prepare_qc_split_tests {
         assert!(!locked_commit_has_exact_progress_witness(
             &empty,
             &locked,
+            HEIGHT,
+            SECOND_VIEW,
             HEIGHT - 1,
             None,
         ));
@@ -1291,6 +1334,7 @@ mod prepare_qc_split_tests {
         let outbound = |kind, reference: QuorumCertificateRef| SumeragiV2OutboundIntentStatus {
             kind,
             round: reference.round,
+            proposal_round: Some(reference.proposal_round),
             subject: Some(reference.subject),
             execution_commitment: Some(reference.execution_commitment),
             stage: SumeragiV2OutboundIntentStage::Sent,
@@ -1302,6 +1346,8 @@ mod prepare_qc_split_tests {
         assert!(!locked_commit_has_exact_progress_witness(
             &wrong_kind,
             &locked,
+            HEIGHT,
+            SECOND_VIEW,
             HEIGHT - 1,
             None,
         ));
@@ -1314,6 +1360,21 @@ mod prepare_qc_split_tests {
         assert!(!locked_commit_has_exact_progress_witness(
             &wrong_round,
             &locked,
+            HEIGHT,
+            SECOND_VIEW,
+            HEIGHT - 1,
+            None,
+        ));
+
+        let mut wrong_origin = outbound(SumeragiV2OutboundIntentKind::CommitVote, locked);
+        wrong_origin.proposal_round = Some(snapshot(SECOND_VIEW, 0x40, 0x50).reference.round);
+        let mut wrong_origin_status = empty.clone();
+        wrong_origin_status.outbound_intents.push(wrong_origin);
+        assert!(!locked_commit_has_exact_progress_witness(
+            &wrong_origin_status,
+            &locked,
+            HEIGHT,
+            SECOND_VIEW,
             HEIGHT - 1,
             None,
         ));
@@ -1326,6 +1387,8 @@ mod prepare_qc_split_tests {
         assert!(!locked_commit_has_exact_progress_witness(
             &wrong_subject,
             &locked,
+            HEIGHT,
+            SECOND_VIEW,
             HEIGHT - 1,
             None,
         ));
@@ -1338,6 +1401,8 @@ mod prepare_qc_split_tests {
         assert!(!locked_commit_has_exact_progress_witness(
             &empty_pool,
             &locked,
+            HEIGHT,
+            SECOND_VIEW,
             HEIGHT - 1,
             None,
         ));
@@ -1353,6 +1418,7 @@ mod prepare_qc_split_tests {
             .push(SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::CommitVote,
                 round: locked.round,
+                proposal_round: Some(locked.proposal_round),
                 subject: Some(locked.subject),
                 execution_commitment: Some(locked.execution_commitment),
                 stage: SumeragiV2OutboundIntentStage::PendingSignature,
@@ -1360,6 +1426,8 @@ mod prepare_qc_split_tests {
         assert!(locked_commit_has_exact_progress_witness(
             &outbound,
             &locked,
+            HEIGHT,
+            SECOND_VIEW,
             HEIGHT - 1,
             None,
         ));
@@ -1372,6 +1440,62 @@ mod prepare_qc_split_tests {
         assert!(locked_commit_has_exact_progress_witness(
             &pooled,
             &locked,
+            HEIGHT,
+            SECOND_VIEW,
+            HEIGHT - 1,
+            None,
+        ));
+
+        let mut later_finality = outbound.clone();
+        later_finality.outbound_intents[0].round.view = SECOND_VIEW;
+        assert!(locked_commit_has_exact_progress_witness(
+            &later_finality,
+            &locked,
+            HEIGHT,
+            SECOND_VIEW,
+            HEIGHT - 1,
+            None,
+        ));
+
+        let exact_timeout = SumeragiV2OutboundIntentStatus {
+            kind: SumeragiV2OutboundIntentKind::TimeoutVote,
+            round: ConsensusRound {
+                context_id: locked.round.context_id,
+                height: HEIGHT,
+                view: SECOND_VIEW,
+            },
+            proposal_round: None,
+            subject: None,
+            execution_commitment: None,
+            stage: SumeragiV2OutboundIntentStage::Sent,
+        };
+        let mut timed_out = SumeragiV2LivenessStatus::default();
+        timed_out.outbound_intents.push(exact_timeout.clone());
+        assert!(locked_commit_has_exact_progress_witness(
+            &timed_out,
+            &locked,
+            HEIGHT,
+            SECOND_VIEW,
+            HEIGHT - 1,
+            None,
+        ));
+        timed_out.outbound_intents[0].stage = SumeragiV2OutboundIntentStage::PendingPersistence;
+        assert!(!locked_commit_has_exact_progress_witness(
+            &timed_out,
+            &locked,
+            HEIGHT,
+            SECOND_VIEW,
+            HEIGHT - 1,
+            None,
+        ));
+        timed_out.outbound_intents[0] = exact_timeout;
+        timed_out.outbound_intents[0].round.context_id =
+            HeightContextId(hash_of::<HeightContext>(0x11));
+        assert!(!locked_commit_has_exact_progress_witness(
+            &timed_out,
+            &locked,
+            HEIGHT,
+            SECOND_VIEW,
             HEIGHT - 1,
             None,
         ));
@@ -1391,11 +1515,15 @@ mod prepare_qc_split_tests {
             &SumeragiV2LivenessStatus::default(),
             &locked,
             HEIGHT,
+            SECOND_VIEW,
+            HEIGHT,
             Some(&decision),
         ));
         assert!(!locked_commit_has_exact_progress_witness(
             &SumeragiV2LivenessStatus::default(),
             &locked,
+            HEIGHT,
+            SECOND_VIEW,
             HEIGHT - 1,
             Some(&decision),
         ));
@@ -2460,7 +2588,6 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
             "locked-body PrepareQC split regression requires four voting validators"
         );
         let peer_ids = peers.iter().map(NetworkPeer::id).collect::<Vec<_>>();
-        let validator_by_peer = validator_indices_by_peer(&peers)?;
         let expected_rules = peers
             .iter()
             .enumerate()
@@ -4258,6 +4385,7 @@ fn validate_exact_prepare_signers_against_frozen_context(
         .iter()
         .filter(|quorum| {
             quorum.round == expected.round
+                && quorum.proposal_round == expected.proposal_round
                 && quorum.subject == expected.subject
                 && quorum.execution_commitment == expected.execution_commitment
         })

@@ -1666,6 +1666,11 @@ class _MockState:
                         "height": 9,
                         "view": 1,
                     },
+                    "proposal_round": {
+                        "context_id": [_canonical_hash(0x41)],
+                        "height": 9,
+                        "view": 1,
+                    },
                     "phase": {"phase": "commit", "details": None},
                     "subject": subject,
                     "execution_commitment": {

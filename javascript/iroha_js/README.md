@@ -535,6 +535,71 @@ If Torii sits behind nginx or another reverse proxy, `/v1/connect/ws` must
 forward websocket upgrade headers (`Connection: Upgrade`, `Upgrade: websocket`)
 to the upstream node or browser Connect joins will fail with `400 Bad Request`.
 
+To authenticate Torii canonical JSON requests with the wallet-approved account,
+request the `sign_raw` method explicitly and scope it to the fixed canonical
+request domain. The wallet is the permission enforcement boundary: it should
+reject raw-sign prompts when this method/resource pair was not granted.
+
+```js
+import {
+  TORII_CANONICAL_REQUEST_DOMAIN_TAG,
+  createConnectAppSession,
+  createConnectCanonicalRequestAuth,
+} from "@iroha/iroha-js/connect-browser";
+import { ToriiBrowserClient } from "@iroha/iroha-js/torii-browser";
+
+const appSession = createConnectAppSession({
+  baseUrl: "https://taira.sora.org",
+  preview,
+  session,
+  appMeta: { name: "My dApp", url: window.location.origin },
+  permissions: {
+    methods: ["sign_raw"],
+    resources: [TORII_CANONICAL_REQUEST_DOMAIN_TAG],
+  },
+});
+const canonicalAuth = await createConnectCanonicalRequestAuth(appSession);
+const torii = new ToriiBrowserClient("https://taira.sora.org");
+const multisigSpec = await torii.getMultisigSpec(
+  { multisigAccountId: canonicalAuth.authAccountId },
+  canonicalAuth,
+);
+```
+
+The same browser client exposes the ledger evidence routes without converting
+their proof payload into an untyped JSON transport. `getLedgerBlockProof()`
+requires Torii's canonical `application/x-norito` response, validates and
+decodes the exact `BlockProofs` schema, and returns data that can be checked
+locally:
+
+```js
+import {
+  ToriiBrowserClient,
+  verifyBlockProofs,
+} from "@iroha/iroha-js/browser";
+
+const torii = new ToriiBrowserClient("https://taira.sora.org");
+const proofs = await torii.getLedgerBlockProof(blockHeight, transactionHash);
+const verification = verifyBlockProofs(proofs);
+
+if (!verification.valid) throw new Error("invalid transaction Merkle evidence");
+```
+
+This verifies the entry and optional execution-result Merkle paths only. State
+roots and commit QCs returned by `getLedgerStateRoot()` and
+`getLedgerStateProof()` remain node-provided evidence until an official
+browser QC/BLS verifier is available.
+
+`createConnectCanonicalRequestAuth()` passes the exact canonical request
+message (including its timestamp and nonce) to `signRaw()` under
+`iroha:torii:canonical-request:v1`, binds `authAccountId` to the approved
+identity, and verifies the returned Ed25519 signature locally. The domain tag
+is wallet policy/prompt context and is not prepended to the signed bytes.
+Private keys never enter the dApp, and `signTransaction()` must not be used as
+a substitute for signing canonical request bytes. A session permits only one
+transaction or raw signature request in flight at a time; concurrent calls
+reject with `ConnectSignRequestError` code `REQUEST_IN_FLIGHT`.
+
 You can also use namespaced exports when you prefer grouped imports:
 
 ```js
@@ -3582,7 +3647,8 @@ console.log("filtered definitions", defs.items);
 const perms = await torii.listAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   limit: 5,
 });
-console.log("direct permissions", perms.items.map((item) => item.name));
+console.log("effective permissions", perms.items.map((item) => item.name));
+// The endpoint includes both direct grants and grants inherited from assigned roles.
 for await (const perm of torii.iterateAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   pageSize: 2,
 })) {

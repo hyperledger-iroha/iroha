@@ -1721,12 +1721,14 @@ mod tests {
                 b"v2-safety-topic-context",
             )),
         );
+        let round = wire::ConsensusRound {
+            context_id,
+            height: 7,
+            view: 2,
+        };
         let vote = wire::Vote {
-            round: wire::ConsensusRound {
-                context_id,
-                height: 7,
-                view: 2,
-            },
+            round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject: wire::BlockSubject {
                 parent_block_hash: None,

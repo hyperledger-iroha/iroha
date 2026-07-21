@@ -30,7 +30,15 @@ final class ZkRootsJson {
       }
       rootStrings.add(string);
     }
-    return new ZkRootsResponse(latestString, rootStrings, jsonInt(map.get("height"), "height"));
+    final Object evaluatedBlockHash = map.get("evaluated_block_hash");
+    if (!(evaluatedBlockHash instanceof String blockHash)) {
+      throw new IllegalArgumentException("evaluated_block_hash must be a string");
+    }
+    return new ZkRootsResponse(
+        latestString,
+        rootStrings,
+        jsonUnsignedLong(map.get("evaluated_block_height"), "evaluated_block_height"),
+        blockHash);
   }
 
   private static int jsonInt(final Object value, final String field) {
@@ -53,5 +61,26 @@ final class ZkRootsJson {
       throw new IllegalArgumentException(field + " is outside u32-compatible Int range");
     }
     return (int) parsed;
+  }
+
+  static long jsonUnsignedLong(final Object value, final String field) {
+    final long parsed;
+    if (value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long) {
+      parsed = ((Number) value).longValue();
+    } else if (value instanceof BigInteger bigInteger) {
+      if (bigInteger.signum() < 0 || bigInteger.compareTo(BigInteger.valueOf(Long.MAX_VALUE)) > 0) {
+        throw new IllegalArgumentException(field + " is outside the supported uint64 range");
+      }
+      parsed = bigInteger.longValue();
+    } else {
+      throw new IllegalArgumentException(field + " must be a JSON integer");
+    }
+    if (parsed < 0) {
+      throw new IllegalArgumentException(field + " is outside the supported uint64 range");
+    }
+    return parsed;
   }
 }

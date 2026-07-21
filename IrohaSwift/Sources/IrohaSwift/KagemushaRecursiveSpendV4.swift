@@ -785,6 +785,89 @@ public struct KagemushaRecursiveSpendRedemptionChangePreparationV4:
     }
 }
 
+/// Secret-bearing local request for ordinary peer-split change preparation.
+struct KagemushaRecursiveSpendPeerSplitChangePrepareRequestV4: Equatable, Sendable {
+    let version: UInt16
+    let bundles: [KagemushaRecursiveSpendBundleV4]
+    let inputOpenings: [KagemushaNoteOpening]
+    let recipientRequest: KagemushaRecipientPaymentRequest
+    let changeAmount: KagemushaScaledAmount
+    let operationID: Data
+    let entropy: Data
+
+    init(
+        inputs: [KagemushaRecursiveSpendSpendableBranchV4],
+        recipientRequest: KagemushaRecipientPaymentRequest,
+        changeAmount: KagemushaScaledAmount,
+        operationID: Data,
+        entropy: Data
+    ) throws {
+        guard (1...KagemushaRecursiveSpend.maximumInputsPerTransition).contains(inputs.count) else {
+            throw KagemushaRecursiveSpendError.invalidField("peerSplitChangeV4.inputs")
+        }
+        try KagemushaRecursiveSpend.requireNonzeroFixed32(
+            operationID,
+            field: "peerSplitChangeV4.operationID"
+        )
+        try KagemushaRecursiveSpend.requireNonzeroFixed32(
+            entropy,
+            field: "peerSplitChangeV4.entropy"
+        )
+        guard operationID != entropy else {
+            throw KagemushaRecursiveSpendError.invalidField("peerSplitChangeV4.entropy")
+        }
+        version = KagemushaRecursiveSpend.wireVersionV4
+        bundles = inputs.map(\.bundle)
+        inputOpenings = inputs.map(\.opening)
+        self.recipientRequest = recipientRequest
+        self.changeAmount = changeAmount
+        self.operationID = Data(operationID)
+        self.entropy = Data(entropy)
+    }
+}
+
+/// Owned native-derived sender change for an ordinary peer split.
+public struct KagemushaRecursiveSpendPeerSplitChangePreparationV4: Equatable, Sendable {
+    public let opening: KagemushaNoteOpening
+    public let output: KagemushaSpendableNoteDescriptor
+    public let amount: KagemushaScaledAmount
+
+    init(
+        opening: KagemushaNoteOpening,
+        output: KagemushaSpendableNoteDescriptor,
+        inputOpenings: [KagemushaNoteOpening],
+        inputSummaries: [KagemushaRecursiveSpendBundleSummaryV4],
+        recipientRequest: KagemushaRecipientPaymentRequest,
+        changeAmount: KagemushaScaledAmount
+    ) throws {
+        let total = try KagemushaScaledAmount.sum(inputSummaries.map(\.amount))
+        let conserved = try recipientRequest.payload.amount.adding(changeAmount)
+        guard total == conserved,
+              output.chainID == recipientRequest.payload.chainID,
+              output.assetDefinitionID == recipientRequest.payload.assetDefinitionID,
+              output.amount == changeAmount,
+              inputSummaries.allSatisfy({ $0.assetDefinitionID == output.assetDefinitionID }),
+              !inputSummaries.contains(where: {
+                  $0.noteCommitment == output.noteCommitment
+                      || $0.spendNullifier == output.spendNullifier
+              }),
+              output.noteCommitment != recipientRequest.payload.recipientOutput.noteCommitment,
+              output.spendNullifier != recipientRequest.payload.recipientOutput.spendNullifier,
+              !inputOpenings.contains(where: {
+                  $0.spendKey == opening.spendKey || $0.rho == opening.rho
+              }),
+              opening.rho != opening.diversifier,
+              opening.diversifier == ConfidentialOwnerTag.defaultDiversifier() else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "peerSplitChangePrepareResultV4.binding"
+            )
+        }
+        self.opening = opening
+        self.output = output
+        amount = changeAmount
+    }
+}
+
 /// Secret-bearing ABI-21 append input. It encodes the flat V4 bridge carrier,
 /// not a version wrapper around the frozen request.
 public struct KagemushaRecursiveSpendAppendLocalRequestV4: Equatable, Sendable {
@@ -1268,7 +1351,7 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    static func initSpendV4(
+    public static func initSpendV4(
         request: KagemushaRecursiveSpendInitLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendInitResultV4 {
@@ -1290,7 +1373,7 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    static func appendSpendV4(
+    public static func appendSpendV4(
         request: KagemushaRecursiveSpendAppendLocalRequestV4,
         signedRecipientRequest: KagemushaVerifiedRecipientPaymentRequest,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
@@ -1316,7 +1399,7 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    static func verifySpendV4(
+    public static func verifySpendV4(
         request: KagemushaRecursiveSpendVerifyLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendVerifyResultV4 {
@@ -1337,7 +1420,7 @@ public extension KagemushaRecursiveSpend {
         }
     }
 
-    static func buildRedeemV4(
+    public static func buildRedeemV4(
         request: KagemushaRecursiveSpendRedeemLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendRedeemBuildResultV4 {
