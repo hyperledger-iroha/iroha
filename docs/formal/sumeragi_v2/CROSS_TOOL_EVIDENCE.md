@@ -26,7 +26,7 @@ The status is release-eligible only when all of the following hold together:
    code-owned production source in its exact ordered inventory;
 6. every prerequisite in the complete transitive dependency closure has
    either `tlaps_proved` or `cross_tool_proved` status; and
-7. each named TLA+ production premise contains its exact ordered `4 + 6 + 6`
+7. each named TLA+ production premise contains its exact ordered `4 + 7 + 6`
    constants, with every mapped constant required to equal `TRUE`; and
 8. the cross-tool document exactly matches the source-bound canonical ledger
    and its digest, TLAPS evidence digest, Verus evidence digest, tool
@@ -82,7 +82,7 @@ Verus source:
 Its dependency closure includes
 `effective-lock-body-acquisition-model`.
 
-### Durable progress witness (6 claims)
+### Durable progress witness (7 claims)
 
 Ledger obligation: `progress-witness-production-refinement`.
 
@@ -97,6 +97,7 @@ Verus source: `crates/iroha_sumeragi_core/src/verus_proofs.rs`.
 | `ProductionDecisionTraceRefinesRecoveryWitness` | `production_decision_trace_refines_recovery_witness` |
 | `ProductionSchedulerTraceRefinesProtectedOwnership` | `production_scheduler_trace_refines_protected_ownership` |
 | `ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership` | `production_ingress_identity_and_class_trace_refines_protected_ownership` |
+| `ProductionTwoStageRelayRetryTraceRefinesSourceFairness` | `production_two_stage_relay_retry_trace_refines_source_fairness` |
 | `ProductionReliableFlushTraceRefinesOutboundOwnership` | `production_reliable_flush_trace_refines_outbound_ownership` |
 | `ProductionApplicationTraceRefinesDecisionCompletion` | `production_application_trace_refines_decision_completion` |
 
@@ -118,10 +119,15 @@ Verus source: `crates/iroha_sumeragi_core/src/verus_proofs.rs`.
 | --- | --- |
 | `ProductionAppliedSuccessorTraceRefinesIndexedActivation` | `production_applied_successor_trace_refines_indexed_activation` |
 | `ProductionRecoveredSuccessorTraceRefinesIndexedActivation` | `production_recovered_successor_trace_refines_indexed_activation` |
-| `ProductionStartupFailureRefinesFailClosedActivation` | `production_startup_failure_refines_fail_closed_activation` |
+| `ProductionStartupFailureAndRestartRefinesIndexedLifecycle` | `production_startup_failure_and_restart_refines_indexed_lifecycle` |
 | `ProductionHistoricalCertificateTraceRefinesIndexedAsync` | `production_historical_certificate_trace_refines_indexed_async` |
 | `ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync` | `production_historical_body_pipeline_trace_refines_indexed_async` |
-| `ProductionTerminalApplicationExcludesActivation` | `production_terminal_application_excludes_activation` |
+| `ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal` | `production_terminal_application_without_successor_activation_refines_indexed_terminal` |
+
+The sixth claim is the authenticated Apply-boundary separation: the exact
+receipt, finality artifact, context, block, and durable predecessor agree while
+no successor activation is pending. It has no production `MaxHeight` input;
+`MaxHeight` remains only a finite-horizon proof projection.
 
 Its dependency closure includes the epoch-boundary proof, durable decision
 recovery, and successor-activation starvation freedom.
@@ -182,7 +188,7 @@ source-manifest-bound release evidence set. The current boundary is:
 The pinned `--no-cheating --rlimit 60` run verifies 1,690 dependency and 126
 root obligations with zero errors after splitting the largest EnterView query.
 The effective-lock four have the reviewed signatures and production call-path
-closure; the remaining 12 claims do not. In addition, the progress-witness
+closure; the remaining 13 claims do not. In addition, the progress-witness
 target still depends on the unproved async progress-ownership invariant, and
 the successor target still depends on unproved successor starvation freedom.
 Because no ledger entry is yet `cross_tool_proved`, the dormant release

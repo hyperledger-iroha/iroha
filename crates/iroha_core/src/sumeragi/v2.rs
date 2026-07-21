@@ -322,6 +322,8 @@ impl VerifiedHeightContext {
             || parent_receipt.height() != parent_artifact.height
             || parent_receipt.context_id() != parent_artifact.context_id()
             || parent_receipt.block_hash() != parent_artifact.block_hash
+            || parent_receipt.subject() != parent_artifact.subject
+            || parent_receipt.certificate() != parent_artifact.commit_qc.as_ref()
             || parent_receipt.artifact_hash() != HashOf::new(parent_artifact)
         {
             return Err(AdapterError::ParentContextMismatch);
@@ -561,6 +563,13 @@ impl AuthenticatedConsensusMessage {
         &self.0.payload
     }
 
+    /// Borrow the complete authenticated envelope for exact process-local
+    /// ownership association. The private constructor remains the only way to
+    /// mint this token.
+    pub(crate) const fn wire_envelope(&self) -> &wire::ConsensusMessageV2 {
+        &self.0
+    }
+
     /// Return whether two authenticated tokens contain the exact same
     /// deterministic wire envelope.
     ///
@@ -698,6 +707,7 @@ struct DeferredInput {
     priority: DeferredPriority,
     protected_progress: bool,
     admission: Option<IngressAdmission>,
+    authenticated_wire_identity: Option<Arc<[u8]>>,
     admitted_at: Instant,
     eligible_skips: u64,
 }
@@ -713,6 +723,7 @@ impl PartialEq for DeferredInput {
             && self.retag_authenticated_ingress == other.retag_authenticated_ingress
             && self.priority == other.priority
             && self.protected_progress == other.protected_progress
+            && self.authenticated_wire_identity == other.authenticated_wire_identity
     }
 }
 
@@ -754,15 +765,15 @@ impl DeferredAdmissionOrdinalSource {
             .state
             .lock()
             .map_err(|_| AdapterError::DeferredAdmissionOrdinalSourceUnavailable)?;
-        // Reserve a successor before returning the current ordinal. `u128::MAX`
+        // Reserve the next ordinal before returning the current one. `u128::MAX`
         // is never issued, so every successful capability has a distinct
-        // representable successor and exhaustion cannot wrap to a stale owner.
-        let successor = state
+        // representable next value and exhaustion cannot wrap to a stale owner.
+        let next = state
             .next
             .checked_add(1)
             .ok_or(AdapterError::DeferredAdmissionOrdinalExhausted)?;
         let ordinal = state.next;
-        state.next = successor;
+        state.next = next;
         Ok(DeferredAdmissionCapability {
             ordinal,
             source_identity: Arc::clone(&self.identity),
@@ -938,7 +949,7 @@ impl DeferredEventKind {
             Self::BodyStored => 9,
             Self::ValidationCompleted => 10,
             Self::Persisted => 11,
-            Self::PersistenceFailed => 12,
+            Self::PersistenceFailed => reducer::EVENT_PERSISTENCE_FAILED,
             Self::Signed => 13,
             Self::ApplicationCompleted => 14,
             Self::ResumeAfterReplay => 15,
@@ -1037,6 +1048,7 @@ pub(crate) struct DeferredServiceEvidence {
     completion_evidence: Option<BodyPipelineCompletionEvidence>,
     original_admission: Option<IngressAdmission>,
     effective_admission: Option<IngressAdmission>,
+    authenticated_wire_identity: Option<Arc<[u8]>>,
     admission_capability: DeferredAdmissionCapability,
 }
 
@@ -1096,6 +1108,7 @@ impl DeferredServiceEvidence {
             completion_evidence: None,
             original_admission: None,
             effective_admission: None,
+            authenticated_wire_identity: None,
             admission_capability,
         };
         evidence.projection_hash = deferred_service_projection_hash(&evidence);
@@ -1122,6 +1135,38 @@ impl DeferredServiceEvidence {
                 != Some(self.queue_lengths_after.for_priority(self.priority))
         {
             return false;
+        }
+        if self.is_authenticated_ingress() != self.authenticated_wire_identity.is_some() {
+            return false;
+        }
+        if let Some(identity) = &self.authenticated_wire_identity {
+            let mut cursor = identity.as_ref();
+            let Ok(message) = wire::ConsensusMessageV2::decode(&mut cursor) else {
+                return false;
+            };
+            if !cursor.is_empty()
+                || !matches!(
+                    (&message.payload, self.event_kind),
+                    (
+                        wire::ConsensusMessageV2Payload::Proposal(_),
+                        DeferredEventKind::ProposalReceived
+                    ) | (
+                        wire::ConsensusMessageV2Payload::Vote(_),
+                        DeferredEventKind::VoteReceived
+                    ) | (
+                        wire::ConsensusMessageV2Payload::QuorumCertificate(_),
+                        DeferredEventKind::QuorumCertificateReceived
+                    ) | (
+                        wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                        DeferredEventKind::TimeoutVoteReceived
+                    ) | (
+                        wire::ConsensusMessageV2Payload::TimeoutCertificate(_),
+                        DeferredEventKind::TimeoutCertificateReceived
+                    )
+                )
+            {
+                return false;
+            }
         }
         for priority in [
             DeferredPriority::Completion,
@@ -1203,6 +1248,16 @@ impl DeferredServiceEvidence {
             self.retag,
             DeferredRetagRelation::AuthenticatedIngress { .. }
         )
+    }
+
+    /// Whether this token retains the exact canonical authenticated envelope
+    /// carried by the serialized runtime owner.
+    pub(crate) fn matches_authenticated_runtime_bytes(&self, canonical_bytes: &[u8]) -> bool {
+        self.validate_exact()
+            && self
+                .authenticated_wire_identity
+                .as_deref()
+                .is_some_and(|identity| identity == canonical_bytes)
     }
 
     #[cfg(test)]
@@ -1619,6 +1674,13 @@ fn deferred_service_projection_hash(evidence: &DeferredServiceEvidence) -> Hash 
     );
     append_deferred_projection_admission(&mut projection, evidence.original_admission);
     append_deferred_projection_admission(&mut projection, evidence.effective_admission);
+    match &evidence.authenticated_wire_identity {
+        None => projection.push(0),
+        Some(identity) => {
+            projection.push(1);
+            append_deferred_projection_field(&mut projection, identity);
+        }
+    }
     Hash::new(projection)
 }
 
@@ -2475,41 +2537,30 @@ impl SumeragiV2Adapter {
         self.wire_ingress_may_use_progress(message.payload())
     }
 
-    /// Return the tag of an exact Commit/Prepare QC already owned by the
-    /// adapter's Busy-deferred progress lane.
-    ///
-    /// This comparison is intentionally exact, including canonical signer
-    /// order and aggregate signature. Runtime admission may use the result as
-    /// a capacity hint, but it must independently authenticate the arriving
-    /// envelope before coalescing it with this owner.
-    pub(crate) fn deferred_quorum_certificate_owner_tag(
-        &self,
-        candidate: &wire::QuorumCertificate,
-    ) -> Option<reducer::EventTag> {
-        self.deferred_quorum_certificate_owner(candidate)
-            .map(|(tag, _)| tag)
-    }
-
-    /// Return the tag and actor-global admission ordinal of an exact
-    /// Commit/Prepare QC already owned by the Busy-deferred progress lane.
+    /// Return the tag and actor-global admission ordinal of an exact canonical
+    /// authenticated envelope already owned by a Busy-deferred lane.
     ///
     /// The ordinal is an opaque process-local association key. It lets the
     /// serialized runtime merge later authenticated-source routes into the
     /// exact deferred occurrence without exposing or reconstructing the
-    /// adapter's reducer event.
-    pub(crate) fn deferred_quorum_certificate_owner(
+    /// adapter's reducer event. This raw-byte comparison is only a capacity
+    /// hint; runtime admission repeats it after authenticating the candidate.
+    pub(crate) fn deferred_authenticated_message_owner(
         &self,
-        candidate: &wire::QuorumCertificate,
+        candidate: &wire::ConsensusMessageV2,
     ) -> Option<(reducer::EventTag, u128)> {
-        self.deferred_progress_inputs.iter().find_map(|input| {
-            let reducer::Event::QuorumCertificateReceived { tag, certificate } = &input.event
-            else {
-                return None;
-            };
-            self.registry
-                .reducer_qc_matches_wire(certificate, candidate)
-                .then_some((*tag, input.admission_ordinal))
-        })
+        let encoded = candidate.encode();
+        self.deferred_completions
+            .iter()
+            .chain(&self.deferred_progress_inputs)
+            .chain(&self.deferred_inputs)
+            .find_map(|input| {
+                input
+                    .authenticated_wire_identity
+                    .as_deref()
+                    .is_some_and(|owned| owned == encoded.as_slice())
+                    .then_some((deferred_event_tag(&input.event), input.admission_ordinal))
+            })
     }
 
     /// Exact actor-global ordinals currently retained by authenticated
@@ -3038,13 +3089,15 @@ impl SumeragiV2Adapter {
     ) -> Result<AdapterOutcome, AdapterError> {
         self.ensure_ingress()?;
         message.validate_version()?;
+        let authenticated_wire_identity = Arc::<[u8]>::from(message.encode());
         let (outcome, admission) = self.admit_authenticated_payload(&message.payload)?;
         if let Some(outcome) = outcome {
             self.record_disposition(outcome.disposition());
             self.publish_status()?;
             return Ok(outcome);
         }
-        let result = self.receive_admitted_payload(message.payload, admission);
+        let result =
+            self.receive_admitted_payload(message.payload, admission, authenticated_wire_identity);
         if result.is_err()
             && let Some(admission) = admission
             && admission.inserted_equivocation
@@ -3062,6 +3115,7 @@ impl SumeragiV2Adapter {
         &mut self,
         payload: wire::ConsensusMessageV2Payload,
         admission: Option<IngressAdmission>,
+        authenticated_wire_identity: Arc<[u8]>,
     ) -> Result<AdapterOutcome, AdapterError> {
         // Conversion is intentionally staged. A malformed value or a subject
         // collision must not leave attacker-controlled registry entries behind.
@@ -3078,6 +3132,7 @@ impl SumeragiV2Adapter {
                     reducer::Event::ProposalReceived { tag, proposal },
                     Some((round, subject)),
                     admission,
+                    authenticated_wire_identity,
                 );
             }
             wire::ConsensusMessageV2Payload::Vote(vote) => {
@@ -3087,6 +3142,7 @@ impl SumeragiV2Adapter {
                     reducer::Event::VoteReceived { tag, vote },
                     None,
                     admission,
+                    authenticated_wire_identity,
                 );
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
@@ -3097,6 +3153,7 @@ impl SumeragiV2Adapter {
                     reducer::Event::QuorumCertificateReceived { tag, certificate },
                     active_subject,
                     admission,
+                    authenticated_wire_identity,
                 );
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
@@ -3106,6 +3163,7 @@ impl SumeragiV2Adapter {
                     reducer::Event::TimeoutVoteReceived { tag, vote },
                     None,
                     admission,
+                    authenticated_wire_identity,
                 );
             }
             wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
@@ -3115,6 +3173,7 @@ impl SumeragiV2Adapter {
                     reducer::Event::TimeoutCertificateReceived { tag, certificate },
                     None,
                     admission,
+                    authenticated_wire_identity,
                 );
             }
             wire::ConsensusMessageV2Payload::PayloadManifest(_)
@@ -3134,13 +3193,18 @@ impl SumeragiV2Adapter {
         event: reducer::Event,
         active_subject: Option<(reducer::Round, reducer::Subject)>,
         admission: Option<IngressAdmission>,
+        authenticated_wire_identity: Arc<[u8]>,
     ) -> Result<AdapterOutcome, AdapterError> {
         let previous_registry = core::mem::replace(&mut self.registry, registry);
         let previous_active_subject = self.active_subject;
         if let Some(active_subject) = active_subject {
             self.active_subject = Some(active_subject);
         }
-        let result = self.step_authenticated_ingress_with_ownership(event, admission);
+        let result = self.step_authenticated_ingress_with_ownership(
+            event,
+            admission,
+            Some(authenticated_wire_identity),
+        );
         if result.is_err() {
             // A reducer failure after conversion may have partially consumed an
             // authenticated transition. Keep its registry expansion aligned
@@ -3685,6 +3749,7 @@ impl SumeragiV2Adapter {
             priority: DeferredPriority::Completion,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: None,
             admitted_at: Instant::now(),
             eligible_skips: 0,
         });
@@ -3698,6 +3763,12 @@ impl SumeragiV2Adapter {
         tag: reducer::EventTag,
         proposal: &wire::Proposal,
     ) -> Result<(), AdapterError> {
+        let authenticated_wire_identity = Arc::<[u8]>::from(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+                proposal.clone(),
+            ))
+            .encode(),
+        );
         let proposal = self
             .registry
             .proposal_to_core(proposal, &self.wire_context)?;
@@ -3715,6 +3786,7 @@ impl SumeragiV2Adapter {
             priority: DeferredPriority::Normal,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: Some(authenticated_wire_identity),
             admitted_at: Instant::now(),
             eligible_skips: 0,
         });
@@ -3810,6 +3882,7 @@ impl SumeragiV2Adapter {
             priority: DeferredPriority::Completion,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: None,
             admitted_at: Instant::now(),
             eligible_skips: 0,
         });
@@ -4674,7 +4747,7 @@ impl SumeragiV2Adapter {
             | reducer::Event::QuorumCertificateReceived { .. }
             | reducer::Event::TimeoutCertificateReceived { .. } => DeferredPriority::Normal,
         };
-        self.step_with_defer_policy(event, false, priority, None, completion_evidence)
+        self.step_with_defer_policy(event, false, priority, None, completion_evidence, None)
             .map(|result| result.outcome)
     }
 
@@ -4684,7 +4757,7 @@ impl SumeragiV2Adapter {
         event: reducer::Event,
         admission: Option<IngressAdmission>,
     ) -> Result<AdapterOutcome, AdapterError> {
-        self.step_authenticated_ingress_with_ownership(event, admission)
+        self.step_authenticated_ingress_with_ownership(event, admission, None)
             .map(|result| result.outcome)
     }
 
@@ -4692,6 +4765,7 @@ impl SumeragiV2Adapter {
         &mut self,
         event: reducer::Event,
         admission: Option<IngressAdmission>,
+        authenticated_wire_identity: Option<Arc<[u8]>>,
     ) -> Result<DeferPolicyOutcome, AdapterError> {
         let priority = if matches!(
             &event,
@@ -4704,7 +4778,14 @@ impl SumeragiV2Adapter {
         } else {
             DeferredPriority::Normal
         };
-        self.step_with_defer_policy(event, true, priority, admission, None)
+        self.step_with_defer_policy(
+            event,
+            true,
+            priority,
+            admission,
+            None,
+            authenticated_wire_identity,
+        )
     }
 
     fn step_with_defer_policy(
@@ -4714,6 +4795,7 @@ impl SumeragiV2Adapter {
         priority: DeferredPriority,
         admission: Option<IngressAdmission>,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
+        authenticated_wire_identity: Option<Arc<[u8]>>,
     ) -> Result<DeferPolicyOutcome, AdapterError> {
         self.ensure_ingress()?;
         let queued = event.clone();
@@ -4728,6 +4810,7 @@ impl SumeragiV2Adapter {
                 priority,
                 admission,
                 completion_evidence,
+                authenticated_wire_identity,
             )?;
             if deferred_admission_ordinal.is_some()
                 && let Some(admission) = admission
@@ -4991,7 +5074,11 @@ impl SumeragiV2Adapter {
         priority: DeferredPriority,
         admission: Option<IngressAdmission>,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
+        authenticated_wire_identity: Option<Arc<[u8]>>,
     ) -> Result<Option<u128>, AdapterError> {
+        if retag_authenticated_ingress && authenticated_wire_identity.is_none() {
+            return Err(AdapterError::RuntimeIngressOwnershipViolation);
+        }
         let protected_progress =
             admission.is_some_and(|admission| admission.locked_commit_progress);
         let mut input = DeferredInput {
@@ -5003,6 +5090,7 @@ impl SumeragiV2Adapter {
             priority,
             protected_progress,
             admission,
+            authenticated_wire_identity,
             admitted_at: Instant::now(),
             eligible_skips: 0,
         };
@@ -5151,6 +5239,7 @@ impl SumeragiV2Adapter {
             || !selection
                 .evidence
                 .belongs_to(&self.deferred_admission_ordinals)
+            || !self.deferred_authenticated_event_matches_wire(&selection.evidence)
             || !selection
                 .evidence
                 .admission_capability
@@ -5179,6 +5268,37 @@ impl SumeragiV2Adapter {
         self.publish_status()?;
         self.log_body_progress(&observed_event, disposition, effects.len());
         Ok(Some((effects, selection.evidence)))
+    }
+
+    fn deferred_authenticated_event_matches_wire(
+        &self,
+        evidence: &DeferredServiceEvidence,
+    ) -> bool {
+        let Some(identity) = evidence.authenticated_wire_identity.as_deref() else {
+            return !evidence.is_authenticated_ingress();
+        };
+        let message = match &evidence.original_event {
+            reducer::Event::ProposalReceived { proposal, .. } => {
+                reducer::ConsensusMessageV2::Proposal(proposal.clone())
+            }
+            reducer::Event::VoteReceived { vote, .. } => {
+                reducer::ConsensusMessageV2::Vote(vote.clone())
+            }
+            reducer::Event::QuorumCertificateReceived { certificate, .. } => {
+                reducer::ConsensusMessageV2::QuorumCertificate(certificate.clone())
+            }
+            reducer::Event::TimeoutVoteReceived { vote, .. } => {
+                reducer::ConsensusMessageV2::TimeoutVote(vote.clone())
+            }
+            reducer::Event::TimeoutCertificateReceived { certificate, .. } => {
+                reducer::ConsensusMessageV2::TimeoutCertificate(certificate.clone())
+            }
+            _ => return false,
+        };
+        let mut registry = self.registry.clone();
+        registry
+            .message_to_wire(message, self.aggregator.as_ref())
+            .is_ok_and(|message| message.encode().as_slice() == identity)
     }
 
     /// Fail closed when the deferred-service predicate and reducer Busy
@@ -5274,6 +5394,7 @@ impl SumeragiV2Adapter {
                 completion_evidence: input.completion_evidence.clone(),
                 original_admission,
                 effective_admission: input.admission,
+                authenticated_wire_identity: input.authenticated_wire_identity.clone(),
                 admission_capability: input.admission_capability.clone(),
             };
             evidence.projection_hash = deferred_service_projection_hash(&evidence);
@@ -6061,41 +6182,6 @@ impl WireRegistry {
         self.certificates
             .insert(certificate.reference(), wire.clone());
         Ok(wire)
-    }
-
-    /// Return whether a reducer QC retains this exact authenticated wire QC.
-    ///
-    /// Network QCs store the aggregate signature as the same opaque token on
-    /// every reducer signature share. Comparing that token as well as the
-    /// canonical signer order prevents a different certificate for the same
-    /// round, phase, and subject from borrowing an existing deferred owner.
-    fn reducer_qc_matches_wire(
-        &self,
-        queued: &reducer::QuorumCertificate,
-        candidate: &wire::QuorumCertificate,
-    ) -> bool {
-        if self.round_to_wire(queued.round()) != candidate.round
-            || Self::phase_to_wire(queued.phase()) != candidate.phase
-            || !self
-                .subject(queued.subject())
-                .is_ok_and(|subject| subject == candidate.subject)
-            || !self
-                .execution_commitment(queued.round(), queued.subject())
-                .is_ok_and(|commitment| commitment == candidate.execution_commitment)
-            || queued.signatures().len() != candidate.signers.len()
-        {
-            return false;
-        }
-        let aggregate = aggregate_token(&candidate.aggregate_signature);
-        queued
-            .signatures()
-            .iter()
-            .zip(&candidate.signers)
-            .all(|(share, signer)| {
-                self.validator_index(share.signer())
-                    .is_ok_and(|index| index == *signer)
-                    && share.signature() == &aggregate
-            })
     }
 
     fn timeout_vote_to_core(
@@ -7695,6 +7781,10 @@ mod tests {
         }))
     }
 
+    fn authenticated_wire_identity(payload: wire::ConsensusMessageV2Payload) -> Arc<[u8]> {
+        Arc::from(wire::ConsensusMessageV2::new(payload).encode())
+    }
+
     fn durable_body_receipt(
         adapter: &SumeragiV2Adapter,
         round: wire::ConsensusRound,
@@ -8551,20 +8641,23 @@ mod tests {
         let round = canonical_manifest.round;
 
         let mut conflicting = proposal(&context, proposer, subject);
-        let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) =
-            &mut conflicting.payload
-        else {
-            panic!("fixture is a proposal")
+        let conflicting_proposal = {
+            let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) =
+                &mut conflicting.payload
+            else {
+                panic!("fixture is a proposal")
+            };
+            conflicting_proposal.manifest = wire::PayloadManifest::derive(
+                &context,
+                conflicting_proposal.round,
+                conflicting_proposal.subject,
+                5,
+                &[b"other".to_vec()],
+            )
+            .expect("structurally valid alternate manifest");
+            conflicting_proposal.clone()
         };
-        conflicting_proposal.manifest = wire::PayloadManifest::derive(
-            &context,
-            conflicting_proposal.round,
-            conflicting_proposal.subject,
-            5,
-            &[b"other".to_vec()],
-        )
-        .expect("structurally valid alternate manifest");
-        let conflicting_proposal = conflicting_proposal.clone();
+        let conflicting_wire_identity = Arc::<[u8]>::from(conflicting.encode());
         let deferred = adapter
             .registry
             .proposal_to_core(&conflicting_proposal, &context)
@@ -8582,6 +8675,7 @@ mod tests {
             priority: DeferredPriority::Normal,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: Some(conflicting_wire_identity),
             admitted_at: Instant::now(),
             eligible_skips: 0,
         });
@@ -11953,9 +12047,9 @@ mod tests {
             )
         };
         let (mut first, first_startup) =
-            open(&first_directory, source.clone()).expect("open first adapter tenure");
+            open(&first_directory, source.clone()).expect("open first adapter instance");
         let (mut second, second_startup) =
-            open(&second_directory, source.clone()).expect("open second adapter tenure");
+            open(&second_directory, source.clone()).expect("open second adapter instance");
         assert!(first_startup.is_empty());
         assert!(second_startup.is_empty());
         let first_context = first.wire_context.clone();
@@ -11974,20 +12068,20 @@ mod tests {
         let second_tag = second.current_tag();
         first
             .defer_body_available_for_test(first_tag, &first_proposal.manifest)
-            .expect("first tenure admits owner zero");
+            .expect("first adapter instance admits owner zero");
         second
             .defer_body_available_for_test(second_tag, &second_proposal.manifest)
-            .expect("second tenure advances the same actor source");
+            .expect("second adapter instance advances the same actor source");
 
         let first_owner = first
             .pop_deferred_next()
-            .expect("first tenure rank remains valid")
-            .expect("first tenure returns exact owner")
+            .expect("first adapter instance rank remains valid")
+            .expect("first adapter instance returns exact owner")
             .evidence;
         let second_owner = second
             .pop_deferred_next()
-            .expect("second tenure rank remains valid")
-            .expect("second tenure returns exact owner")
+            .expect("second adapter instance rank remains valid")
+            .expect("second adapter instance returns exact owner")
             .evidence;
         assert_eq!(first_owner.admission_ordinal, 0);
         assert_eq!(second_owner.admission_ordinal, 1);
@@ -12080,6 +12174,12 @@ mod tests {
         else {
             unreachable!("proposal fixture")
         };
+        let authenticated_wire_identity = Arc::<[u8]>::from(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+                proposal.clone(),
+            ))
+            .encode(),
+        );
         let proposal = adapter
             .registry
             .proposal_to_core(&proposal, &context)
@@ -12105,6 +12205,7 @@ mod tests {
             priority: DeferredPriority::Normal,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: Some(authenticated_wire_identity),
             admitted_at: Instant::now(),
             eligible_skips: 0,
         });
@@ -12129,6 +12230,74 @@ mod tests {
                 .evidence
                 .matches_effective_event(&selection.input.event)
         );
+        assert!(adapter.deferred_authenticated_event_matches_wire(&selection.evidence));
+    }
+
+    #[test]
+    fn authenticated_deferred_service_rejects_same_kind_envelope_swap_before_reducer() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let context = adapter.wire_context.clone();
+        let wire::ConsensusMessageV2Payload::Proposal(first) =
+            proposal(&context, context.leader(0), subject(0xD7)).payload
+        else {
+            unreachable!("proposal fixture")
+        };
+        let wire::ConsensusMessageV2Payload::Proposal(other) =
+            proposal(&context, context.leader(0), subject(0xD8)).payload
+        else {
+            unreachable!("proposal fixture")
+        };
+        let first = adapter
+            .registry
+            .proposal_to_core(&first, &context)
+            .expect("convert retained authenticated proposal");
+        let event = reducer::Event::ProposalReceived {
+            tag: adapter.current_tag(),
+            proposal: first,
+        };
+
+        assert!(matches!(
+            adapter.enqueue_deferred(
+                event.clone(),
+                true,
+                DeferredPriority::Normal,
+                None,
+                None,
+                None,
+            ),
+            Err(AdapterError::RuntimeIngressOwnershipViolation)
+        ));
+        assert!(adapter.deferred_inputs.is_empty());
+
+        let admission_capability = adapter
+            .mint_deferred_admission_ordinal()
+            .expect("mint exact deferred owner");
+        adapter.deferred_inputs.push_back(DeferredInput {
+            admission_ordinal: admission_capability.ordinal,
+            admission_capability,
+            event,
+            completion_evidence: None,
+            retag_authenticated_ingress: true,
+            priority: DeferredPriority::Normal,
+            protected_progress: false,
+            admission: None,
+            authenticated_wire_identity: Some(authenticated_wire_identity(
+                wire::ConsensusMessageV2Payload::Proposal(other),
+            )),
+            admitted_at: Instant::now(),
+            eligible_skips: 0,
+        });
+        adapter.next_deferred_priority = DeferredPriority::Normal;
+        let durable_before = adapter.reducer.durable_state().clone();
+
+        assert!(matches!(
+            adapter.drain_deferred_with_evidence(),
+            Err(AdapterError::DeferredServiceOwnershipViolation)
+        ));
+        assert_eq!(adapter.reducer.durable_state(), &durable_before);
+        assert!(adapter.fail_closed);
     }
 
     #[test]
@@ -12154,6 +12323,7 @@ mod tests {
             priority: DeferredPriority::Completion,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: None,
             admitted_at: Instant::now(),
             eligible_skips: 0,
         };
@@ -12214,6 +12384,7 @@ mod tests {
                 priority: DeferredPriority::Completion,
                 protected_progress: false,
                 admission: None,
+                authenticated_wire_identity: None,
                 admitted_at: Instant::now(),
                 eligible_skips: 0,
             });
@@ -12230,7 +12401,7 @@ mod tests {
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
         let tag = adapter.current_tag();
-        let input = |priority| DeferredInput {
+        let input = |priority: DeferredPriority| DeferredInput {
             admission_ordinal: priority.code().into(),
             admission_capability: DeferredAdmissionCapability::for_test(priority.code().into()),
             event: reducer::Event::TimeoutElapsed { tag },
@@ -12239,6 +12410,7 @@ mod tests {
             priority,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: None,
             admitted_at: Instant::now(),
             eligible_skips: 0,
         };
@@ -12290,6 +12462,7 @@ mod tests {
             priority,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: None,
             admitted_at: Instant::now(),
             eligible_skips,
         };
@@ -12314,7 +12487,7 @@ mod tests {
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
         let tag = adapter.current_tag();
-        let input = |priority| DeferredInput {
+        let input = |priority: DeferredPriority| DeferredInput {
             admission_ordinal: priority.code().into(),
             admission_capability: DeferredAdmissionCapability::for_test(priority.code().into()),
             event: reducer::Event::TimeoutElapsed { tag },
@@ -12323,6 +12496,7 @@ mod tests {
             priority,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: None,
             admitted_at: Instant::now(),
             eligible_skips: 0,
         };
@@ -12381,7 +12555,7 @@ mod tests {
             current.view(),
             current.generation(),
         );
-        let input = |priority| DeferredInput {
+        let input = |priority: DeferredPriority| DeferredInput {
             admission_ordinal: priority.code().into(),
             admission_capability: DeferredAdmissionCapability::for_test(priority.code().into()),
             event: reducer::Event::TimeoutElapsed { tag: stale },
@@ -12390,6 +12564,7 @@ mod tests {
             priority,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: None,
             admitted_at: Instant::now(),
             eligible_skips: 0,
         };
@@ -12489,6 +12664,9 @@ mod tests {
             qc(wire::GlobalPhase::Commit, 0xE1),
         ];
         for (ordinal, certificate) in deferred_qcs.into_iter().enumerate() {
+            let certificate_wire_identity = authenticated_wire_identity(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone()),
+            );
             let certificate = adapter
                 .registry
                 .qc_to_core(&certificate, &adapter.wire_context)
@@ -12508,6 +12686,7 @@ mod tests {
                 priority: DeferredPriority::Progress,
                 protected_progress: false,
                 admission: None,
+                authenticated_wire_identity: Some(certificate_wire_identity),
                 admitted_at: Instant::now(),
                 eligible_skips: 0,
             });
@@ -12520,6 +12699,9 @@ mod tests {
                 aggregate_signature: vec![0xE2; 96],
             }],
         };
+        let deferred_timeout_wire_identity = authenticated_wire_identity(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(deferred_timeout.clone()),
+        );
         let deferred_timeout = adapter
             .registry
             .tc_to_core(&deferred_timeout, &adapter.wire_context)
@@ -12536,6 +12718,7 @@ mod tests {
             priority: DeferredPriority::Progress,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: Some(deferred_timeout_wire_identity),
             admitted_at: Instant::now(),
             eligible_skips: 0,
         });
@@ -12664,7 +12847,7 @@ mod tests {
         let mut fillers = VecDeque::with_capacity(roster_len);
         for signer in 0..roster_len {
             let signer = u32::try_from(signer).expect("fixture signer fits u32");
-            let filler_vote = wire::Vote {
+            let wire_filler_vote = wire::Vote {
                 round: wire_round,
                 phase: wire::GlobalPhase::Commit,
                 subject: locked_subject,
@@ -12672,9 +12855,12 @@ mod tests {
                 signer,
                 signature: vec![0xE7 ^ u8::try_from(signer).expect("fixture signer fits u8")],
             };
+            let filler_wire_identity = authenticated_wire_identity(
+                wire::ConsensusMessageV2Payload::Vote(wire_filler_vote.clone()),
+            );
             let filler_vote = adapter
                 .registry
-                .vote_to_core(&filler_vote, &adapter.wire_context)
+                .vote_to_core(&wire_filler_vote, &adapter.wire_context)
                 .expect("convert locked-vote capacity fixture");
             fillers.push_back(DeferredInput {
                 admission_ordinal: u128::from(signer).saturating_add(1),
@@ -12690,6 +12876,7 @@ mod tests {
                 priority: DeferredPriority::Progress,
                 protected_progress: true,
                 admission: None,
+                authenticated_wire_identity: Some(filler_wire_identity),
                 admitted_at: Instant::now(),
                 eligible_skips: 0,
             });
@@ -12804,6 +12991,9 @@ mod tests {
                 signer,
                 signature: vec![marker],
             };
+            let vote_wire_identity = authenticated_wire_identity(
+                wire::ConsensusMessageV2Payload::Vote(wire_vote.clone()),
+            );
             let vote = adapter
                 .registry
                 .vote_to_core(&wire_vote, &adapter.wire_context)
@@ -12827,20 +13017,24 @@ mod tests {
                         DeferredPriority::Progress,
                         Some(admission),
                         None,
+                        Some(vote_wire_identity),
                     )
                     .expect("admit one locked Commit owner per frozen validator")
                     .is_some()
             );
 
-            let timeout = wire::TimeoutVote {
+            let wire_timeout = wire::TimeoutVote {
                 round: wire_round,
                 highest_prepare_qc: None,
                 signer,
                 signature: vec![marker ^ 0x0F],
             };
+            let timeout_wire_identity = authenticated_wire_identity(
+                wire::ConsensusMessageV2Payload::TimeoutVote(wire_timeout.clone()),
+            );
             let timeout = adapter
                 .registry
-                .timeout_vote_to_core(&timeout, &adapter.wire_context)
+                .timeout_vote_to_core(&wire_timeout, &adapter.wire_context)
                 .expect("convert TimeoutVote capacity fixture");
             assert!(
                 adapter
@@ -12850,13 +13044,14 @@ mod tests {
                         DeferredPriority::Progress,
                         None,
                         None,
+                        Some(timeout_wire_identity),
                     )
                     .expect("admit one TimeoutVote owner per frozen validator")
                     .is_some()
             );
             if signer == 0 {
                 let retained = adapter.deferred_progress_inputs.clone();
-                let distinct_same_signer = wire::TimeoutVote {
+                let wire_distinct_same_signer = wire::TimeoutVote {
                     round: wire::ConsensusRound {
                         view: wire_round.view + 1,
                         ..wire_round
@@ -12865,9 +13060,12 @@ mod tests {
                     signer,
                     signature: vec![marker ^ 0xF0],
                 };
+                let distinct_wire_identity = authenticated_wire_identity(
+                    wire::ConsensusMessageV2Payload::TimeoutVote(wire_distinct_same_signer.clone()),
+                );
                 let distinct_same_signer = adapter
                     .registry
-                    .timeout_vote_to_core(&distinct_same_signer, &adapter.wire_context)
+                    .timeout_vote_to_core(&wire_distinct_same_signer, &adapter.wire_context)
                     .expect("convert distinct same-signer TimeoutVote fixture");
                 let distinct_same_signer = reducer::Event::TimeoutVoteReceived {
                     tag,
@@ -12881,6 +13079,7 @@ mod tests {
                             DeferredPriority::Progress,
                             None,
                             None,
+                            Some(Arc::clone(&distinct_wire_identity)),
                         )
                         .expect("same signer cannot consume a second TimeoutVote slot")
                         .is_none(),
@@ -12911,10 +13110,11 @@ mod tests {
                             DeferredPriority::Progress,
                             None,
                             None,
-                    )
-                    .expect("same signer retries after its prior owner is serviced")
-                    .is_some()
-            );
+                            Some(distinct_wire_identity),
+                        )
+                        .expect("same signer retries after its prior owner is serviced")
+                        .is_some()
+                );
             }
         }
 
@@ -12930,6 +13130,9 @@ mod tests {
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![marker; 96],
             };
+            let certificate_wire_identity = authenticated_wire_identity(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone()),
+            );
             let certificate = adapter
                 .registry
                 .qc_to_core(&certificate, &adapter.wire_context)
@@ -12942,6 +13145,7 @@ mod tests {
                         DeferredPriority::Progress,
                         None,
                         None,
+                        Some(certificate_wire_identity),
                     )
                     .expect("admit the independent QC class owner")
                     .is_some()
@@ -12955,6 +13159,9 @@ mod tests {
                 aggregate_signature: vec![0xB2; 96],
             }],
         };
+        let timeout_certificate_wire_identity = authenticated_wire_identity(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate.clone()),
+        );
         let timeout_certificate = adapter
             .registry
             .tc_to_core(&timeout_certificate, &adapter.wire_context)
@@ -12970,6 +13177,7 @@ mod tests {
                     DeferredPriority::Progress,
                     None,
                     None,
+                    Some(timeout_certificate_wire_identity),
                 )
                 .expect("admit the independent TC class owner")
                 .is_some()
@@ -13008,6 +13216,9 @@ mod tests {
             signer: 0,
             signature: vec![0xBF],
         };
+        let overflow_wire_identity = authenticated_wire_identity(
+            wire::ConsensusMessageV2Payload::TimeoutVote(overflow.clone()),
+        );
         let overflow = adapter
             .registry
             .timeout_vote_to_core(&overflow, &adapter.wire_context)
@@ -13023,6 +13234,7 @@ mod tests {
                     DeferredPriority::Progress,
                     None,
                     None,
+                    Some(overflow_wire_identity),
                 )
                 .expect("a full TimeoutVote partition rejects without displacement")
                 .is_none()
@@ -13040,7 +13252,7 @@ mod tests {
             height: adapter.wire_context.height,
             view: 0,
         };
-        let timeout = wire::TimeoutCertificate {
+        let wire_timeout = wire::TimeoutCertificate {
             round: wire_round,
             groups: vec![wire::TimeoutVoteGroup {
                 highest_prepare_qc: None,
@@ -13048,9 +13260,12 @@ mod tests {
                 aggregate_signature: vec![0xCA; 96],
             }],
         };
+        let timeout_wire_identity = authenticated_wire_identity(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire_timeout.clone()),
+        );
         let timeout = adapter
             .registry
-            .tc_to_core(&timeout, &adapter.wire_context)
+            .tc_to_core(&wire_timeout, &adapter.wire_context)
             .expect("convert certificate lane fixture");
         let tag = adapter.current_tag();
         let certificate_input = DeferredInput {
@@ -13065,6 +13280,7 @@ mod tests {
             priority: DeferredPriority::Progress,
             protected_progress: false,
             admission: None,
+            authenticated_wire_identity: Some(timeout_wire_identity),
             admitted_at: Instant::now(),
             eligible_skips: 0,
         };
@@ -13078,14 +13294,36 @@ mod tests {
                 .all(|input| progress_rank(&input.event) > 0)
         );
         let admitted_before = adapter.deferred_progress_inputs.clone();
+        let wire_overflow_certificate = wire::TimeoutCertificate {
+            round: wire::ConsensusRound {
+                view: wire_round.view + 1,
+                ..wire_round
+            },
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xCB; 96],
+            }],
+        };
+        let overflow_certificate_wire_identity = authenticated_wire_identity(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire_overflow_certificate.clone()),
+        );
+        let overflow_certificate = adapter
+            .registry
+            .tc_to_core(&wire_overflow_certificate, &adapter.wire_context)
+            .expect("convert distinct certificate overflow fixture");
         assert!(
             adapter
                 .enqueue_deferred(
-                    certificate_input.event.clone(),
-                    false,
+                    reducer::Event::TimeoutCertificateReceived {
+                        tag,
+                        certificate: overflow_certificate,
+                    },
+                    true,
                     DeferredPriority::Progress,
                     None,
                     None,
+                    Some(overflow_certificate_wire_identity),
                 )
                 .expect("ordinary certificate overflow is rejected before admission")
                 .is_none()
@@ -13105,6 +13343,8 @@ mod tests {
             signer: 1,
             signature: vec![0xDA],
         };
+        let vote_wire_identity =
+            authenticated_wire_identity(wire::ConsensusMessageV2Payload::Vote(wire_vote.clone()));
         let vote = adapter
             .registry
             .vote_to_core(&wire_vote, &adapter.wire_context)
@@ -13131,6 +13371,7 @@ mod tests {
                     DeferredPriority::Progress,
                     Some(admission),
                     None,
+                    Some(vote_wire_identity),
                 )
                 .expect("protected ownership uses its reserved locked-vote capacity")
                 .is_some()
@@ -14192,6 +14433,7 @@ mod tests {
                     priority: DeferredPriority::Completion,
                     protected_progress: false,
                     admission: None,
+                    authenticated_wire_identity: None,
                     admitted_at: Instant::now(),
                     eligible_skips: 0,
                 });

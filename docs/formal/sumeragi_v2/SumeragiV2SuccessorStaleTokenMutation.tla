@@ -11,10 +11,10 @@ buggy Begin omits both guards.  Its single transition exposes Running, makes
 the stale token credential-ready, and reaches the pipeline CASE fallback at
 distance zero, violating the projected protocol invariant at depth one.
 
-The repaired Begin is disabled in that state.  FailClosed remains enabled,
-removes the stale artifacts, records durable failure history, and strictly
-decreases the rank from 19 to 9.  The two configurations below deliberately
-separate the red buggy witness from the green fixed/fail-closed corridor.
+The repaired Begin is disabled in that state. An Applied startup failure is
+also disabled until the visible status is Running; failure may not atomically
+rewrite a Queued owner into recovered state. The two configurations below
+separate the red buggy witness from the green fixed/lifecycle corridor.
 ***************************************************************************)
 
 VARIABLES
@@ -71,8 +71,7 @@ SuccessorActivationCredentialReady ==
   /\ ~activationFailurePresent
 
 SuccessorActivationPipelineDistance ==
-  CASE activationStatus = "Queued"
-         -> IF activationFailureHistoryPresent THEN 9 ELSE 10
+  CASE activationStatus = "Queued" -> 10
   [] /\ activationStatus = "Running"
      /\ ~SuccessorActivationCredentialReady
          -> 9
@@ -101,9 +100,7 @@ SuccessorActivationPipelineDistance ==
   [] OTHER -> 0
 
 SuccessorActivationRank ==
-  IF ~activationFailureHistoryPresent
-  THEN 9 + SuccessorActivationPipelineDistance
-  ELSE SuccessorActivationPipelineDistance
+  SuccessorActivationPipelineDistance
 
 MutationTypeInvariant ==
   /\ activationStatus \in {"Queued", "Running"}
@@ -113,21 +110,21 @@ MutationTypeInvariant ==
   /\ activationTokens \subseteq {AppliedSuccessorActivationToken}
   /\ activationFailurePresent \in BOOLEAN
   /\ activationFailureHistoryPresent \in BOOLEAN
-  /\ lastTransition \in {"Initial", "BuggyBegin", "FixedBegin", "FailClosed"}
-  /\ previousRank \in 0..19
+  /\ lastTransition
+       \in {"Initial", "BuggyBegin", "FixedBegin", "AppliedFailure"}
+  /\ previousRank \in 0..10
 
 (***************************************************************************
 This is the rank-bearing projection of SuccessorActivationProtocolInvariant:
 pending shape-valid owners must not enter the pipeline CASE fallback, and
-durable failure history owns a Queued/Running state with Absent predecessor
-ownership.  Keeping OTHER at zero is intentional: malformed states fail
+currently latched failure owns a visible Running state until restart. Keeping
+OTHER at zero is intentional: malformed states fail
 closed instead of receiving an artificial progress rank.
 ***************************************************************************)
 SuccessorActivationProtocolInvariantProjection ==
   /\ MutationTypeInvariant
   /\ ExactDurableParentApplicationWitness
-  /\ (activationFailureHistoryPresent
-         => predecessorOwnership = "Absent")
+  /\ (activationFailurePresent => activationStatus = "Running")
   /\ SuccessorActivationPipelineDistance \in 1..10
 
 StaleAppliedTokenState ==
@@ -141,7 +138,7 @@ StaleAppliedTokenState ==
 StaleAppliedTokenInit ==
   /\ StaleAppliedTokenState
   /\ lastTransition = "Initial"
-  /\ previousRank = 19
+  /\ previousRank = 10
 
 (***************************************************************************
 Mutation only: this is the pre-repair Begin relation.  It intentionally omits
@@ -175,18 +172,17 @@ FixedBeginSuccessorActivation ==
                   activationFailurePresent,
                   activationFailureHistoryPresent>>
 
-MutationFailClosedSuccessorStartup ==
-  /\ activationStatus \in {"Queued", "Running"}
+MutationLatchAppliedSuccessorStartupFailure ==
+  /\ activationStatus = "Running"
   /\ predecessorOwnership = "Published"
-  /\ ~activationFailureHistoryPresent
-  /\ activationStatus' = "Queued"
-  /\ predecessorOwnership' = "Absent"
+  /\ ~activationFailurePresent
   /\ activationPrerequisites' = {}
   /\ activationTokens' = {}
   /\ activationFailurePresent' = TRUE
   /\ activationFailureHistoryPresent' = TRUE
-  /\ lastTransition' = "FailClosed"
+  /\ lastTransition' = "AppliedFailure"
   /\ previousRank' = SuccessorActivationRank
+  /\ UNCHANGED <<activationStatus, predecessorOwnership>>
 
 StaleBuggyBeginIsEnabled ==
   StaleAppliedTokenState => ENABLED BuggyBeginSuccessorActivation
@@ -194,16 +190,17 @@ StaleBuggyBeginIsEnabled ==
 StaleFixedBeginIsDisabled ==
   StaleAppliedTokenState => ~ENABLED FixedBeginSuccessorActivation
 
-StaleFailClosedIsEnabled ==
-  StaleAppliedTokenState => ENABLED MutationFailClosedSuccessorStartup
+StaleAppliedFailureIsDisabled ==
+  StaleAppliedTokenState
+    => ~ENABLED MutationLatchAppliedSuccessorStartupFailure
 
 BuggyBeginViolationWitness ==
   lastTransition = "BuggyBegin"
     => ~SuccessorActivationProtocolInvariantProjection
 
-FailClosedStrictlyDecreasesRankWitness ==
-  lastTransition = "FailClosed"
-    => SuccessorActivationRank < previousRank
+AppliedFailurePreservesRunningWitness ==
+  lastTransition = "AppliedFailure"
+    => activationStatus = "Running"
 
 BugMutationNext == BuggyBeginSuccessorActivation
 
@@ -212,7 +209,7 @@ BugMutationSpec ==
 
 FixedMutationNext ==
   \/ FixedBeginSuccessorActivation
-  \/ MutationFailClosedSuccessorStartup
+  \/ MutationLatchAppliedSuccessorStartupFailure
 
 FixedMutationSpec ==
   StaleAppliedTokenInit /\ [][FixedMutationNext]_MutationVars

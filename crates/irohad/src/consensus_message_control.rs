@@ -199,26 +199,31 @@ struct HeldDescriptor {
     size_bytes: usize,
 }
 
-pub(crate) struct HeldMessage<R = NetworkReplyRoute> {
+pub(crate) struct HeldMessage<R = NetworkReplyRoute, O = ()> {
     pub(crate) sequence: u64,
     pub(crate) peer: Peer,
     pub(crate) authenticated_via: PeerId,
     pub(crate) message: NetworkMessage,
     pub(crate) size_bytes: usize,
     pub(crate) reply_route: Option<R>,
+    /// Exact local-only ownership retained with the controlled occurrence.
+    pub(crate) ownership: Option<O>,
 }
 
-struct HeldEntry<R> {
+struct HeldEntry<R, O> {
     descriptor: HeldDescriptor,
     peer: Peer,
     authenticated_via: PeerId,
     message: NetworkMessage,
     reply_route: Option<R>,
+    ownership: Option<O>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Admission {
     Pass,
+    /// The controller atomically retained the complete local occurrence.
+    Held,
     Consumed,
 }
 
@@ -233,13 +238,13 @@ pub(crate) enum ReleaseOutcome {
     Failed,
 }
 
-struct State<R = NetworkReplyRoute> {
+struct State<R = NetworkReplyRoute, O = ()> {
     revision: u64,
     command_digest: Option<Hash>,
     last_seen_digest: Option<Hash>,
     rules: Vec<Rule>,
     queue_capacity: usize,
-    held: BTreeMap<u64, HeldEntry<R>>,
+    held: BTreeMap<u64, HeldEntry<R, O>>,
     held_bytes: usize,
     release_pending: VecDeque<u64>,
     in_flight: Option<u64>,
@@ -256,7 +261,7 @@ struct State<R = NetworkReplyRoute> {
     drain_fence: Option<u64>,
 }
 
-impl<R> Default for State<R> {
+impl<R, O> Default for State<R, O> {
     fn default() -> Self {
         Self {
             revision: 0,
@@ -292,14 +297,14 @@ struct RootIdentity {
 }
 
 /// Feature-only controller shared by relay workers and its file watcher.
-pub(crate) struct Controller<R = NetworkReplyRoute> {
+pub(crate) struct Controller<R = NetworkReplyRoute, O = ()> {
     root: PathBuf,
     root_identity: RootIdentity,
-    state: Mutex<State<R>>,
+    state: Mutex<State<R, O>>,
     ack_publish: Mutex<()>,
 }
 
-impl Controller<NetworkReplyRoute> {
+impl<O> Controller<NetworkReplyRoute, O> {
     /// Open and pin the explicitly configured private control directory.
     pub(crate) fn from_env() -> Result<Option<Self>, ControlError> {
         let Some(raw) = env::var_os(CONTROL_DIR_ENV) else {
@@ -338,7 +343,7 @@ impl Controller<NetworkReplyRoute> {
     }
 }
 
-impl<R> Controller<R> {
+impl<R, O> Controller<R, O> {
     /// Construct an isolated controller for daemon boundary tests.
     #[cfg(test)]
     pub(crate) fn for_tests() -> (tempfile::TempDir, Self) {
@@ -440,12 +445,52 @@ impl<R> Controller<R> {
         size_bytes: usize,
         reply_route: Option<R>,
     ) -> Result<(Admission, Option<(Peer, NetworkMessage, usize, Option<R>)>), ControlError> {
+        self.admit_with_reply_route_and_ownership(
+            peer,
+            authenticated_via,
+            message,
+            size_bytes,
+            reply_route,
+            None,
+        )
+        .map(|(admission, message)| {
+            (
+                admission,
+                message.map(|(peer, message, size_bytes, reply_route, ownership)| {
+                    debug_assert!(ownership.is_none());
+                    (peer, message, size_bytes, reply_route)
+                }),
+            )
+        })
+    }
+
+    /// Apply one rule while atomically retaining reply authority and ownership.
+    ///
+    /// `ownership` is an opaque process-local token. A held occurrence stores it
+    /// in the same map entry as its semantic payload and exact reply route, then
+    /// returns it only from [`Self::next_release`]. This avoids a side-map race
+    /// or a release-time reacquisition window.
+    pub(crate) fn admit_with_reply_route_and_ownership(
+        &self,
+        peer: Peer,
+        authenticated_via: &PeerId,
+        message: NetworkMessage,
+        size_bytes: usize,
+        reply_route: Option<R>,
+        ownership: Option<O>,
+    ) -> Result<
+        (
+            Admission,
+            Option<(Peer, NetworkMessage, usize, Option<R>, Option<O>)>,
+        ),
+        ControlError,
+    > {
         let meta = match message_meta(&peer, authenticated_via, &message) {
             Ok(Some(meta)) => meta,
             Ok(None) => {
                 return Ok((
                     Admission::Pass,
-                    Some((peer, message, size_bytes, reply_route)),
+                    Some((peer, message, size_bytes, reply_route, ownership)),
                 ));
             }
             Err(error) => {
@@ -474,12 +519,18 @@ impl<R> Controller<R> {
         } else {
             return Ok((
                 Admission::Pass,
-                Some((peer, message, size_bytes, reply_route)),
+                Some((peer, message, size_bytes, reply_route, ownership)),
             ));
         };
         match action {
             Action::Drop => {
                 state.dropped = state.dropped.saturating_add(1);
+                drop(state);
+                self.publish_ack()?;
+                return Ok((
+                    Admission::Consumed,
+                    Some((peer, message, size_bytes, reply_route, ownership)),
+                ));
             }
             Action::Hold => {
                 if !hold_capacity_available(&state, size_bytes) {
@@ -510,6 +561,7 @@ impl<R> Controller<R> {
                             authenticated_via: authenticated_via.clone(),
                             message,
                             reply_route,
+                            ownership,
                         },
                     );
                     state.held_bytes = state
@@ -524,11 +576,11 @@ impl<R> Controller<R> {
         }
         drop(state);
         self.publish_ack()?;
-        Ok((Admission::Consumed, None))
+        Ok((Admission::Held, None))
     }
 
     /// Take the next prevalidated release entry in exact ingress order.
-    pub(crate) fn next_release(&self) -> Result<Option<HeldMessage<R>>, ControlError> {
+    pub(crate) fn next_release(&self) -> Result<Option<HeldMessage<R, O>>, ControlError> {
         let mut state = self.state.lock().expect("message control state poisoned");
         if state.fatal || state.in_flight.is_some() {
             return Ok(None);
@@ -555,6 +607,7 @@ impl<R> Controller<R> {
             message: entry.message,
             size_bytes: entry.descriptor.size_bytes,
             reply_route: entry.reply_route,
+            ownership: entry.ownership,
         }))
     }
 
@@ -615,7 +668,7 @@ impl<R> Controller<R> {
     }
 }
 
-fn hold_capacity_available<R>(state: &State<R>, incoming_bytes: usize) -> bool {
+fn hold_capacity_available<R, O>(state: &State<R, O>, incoming_bytes: usize) -> bool {
     state
         .held
         .len()
@@ -628,14 +681,14 @@ fn hold_capacity_available<R>(state: &State<R>, incoming_bytes: usize) -> bool {
             .is_some_and(|bytes| bytes <= MAX_HELD_BYTES)
 }
 
-fn fail_hold_overflow<R>(state: &mut State<R>) {
+fn fail_hold_overflow<R, O>(state: &mut State<R, O>) {
     state.overflowed = state.overflowed.saturating_add(1);
     state.fatal = true;
     state.last_error = Some("hold_queue_overflow".to_owned());
 }
 
-fn apply_command<R>(
-    state: &mut State<R>,
+fn apply_command<R, O>(
+    state: &mut State<R, O>,
     command: Command,
     digest: Hash,
 ) -> Result<(), ControlError> {
@@ -681,7 +734,7 @@ fn apply_command<R>(
 
 /// Activate post-drain rules at the same linearization point that observes all
 /// retained and in-flight messages successfully delivered or retired.
-fn finish_drain_if_empty<R>(state: &mut State<R>) {
+fn finish_drain_if_empty<R, O>(state: &mut State<R, O>) {
     if state.held.is_empty()
         && state.release_pending.is_empty()
         && state.in_flight.is_none()
@@ -904,7 +957,7 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>, ControlError> {
         .map_err(|_| ControlError::JsonEncode)
 }
 
-fn ack_value<R>(state: &State<R>) -> Result<Value, ControlError> {
+fn ack_value<R, O>(state: &State<R, O>) -> Result<Value, ControlError> {
     let held = state
         .held
         .values()
@@ -1593,6 +1646,8 @@ impl std::error::Error for ControlError {}
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use iroha_core::sumeragi::message::{BlockMessage, BlockMessageWire};
     use iroha_crypto::{Algorithm, KeyPair};
@@ -1689,7 +1744,7 @@ mod tests {
     }
 
     fn chunk_message(marker: u8) -> NetworkMessage {
-        NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(BlockMessage::V2(
+        NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(BlockMessage::V2(
             ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
                 manifest_hash: HashOf::<PayloadManifest>::from_untyped_unchecked(Hash::new(&[
                     marker,
@@ -2096,7 +2151,7 @@ mod tests {
                 .admit(sender.clone(), &authenticated_via, chunk_message(1), 101,)
                 .expect("seed retained chunk")
                 .0,
-            Admission::Consumed
+            Admission::Held
         );
         {
             let mut state = controller.state.lock().expect("control state");
@@ -2160,7 +2215,7 @@ mod tests {
                             )
                             .expect("admit racing chunk")
                             .0,
-                        Admission::Consumed
+                        Admission::Held
                     );
                 });
             }
@@ -2212,7 +2267,7 @@ mod tests {
                 101,
             )
             .expect("relay-authenticated message must remain controllable");
-        assert_eq!(result.0, Admission::Consumed);
+        assert_eq!(result.0, Admission::Held);
         let state = controller.state.lock().expect("control state");
         assert!(!state.fatal);
         let held = state.held.get(&1).expect("relayed message is retained");

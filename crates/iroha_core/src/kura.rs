@@ -13194,10 +13194,39 @@ impl Kura {
         Ok(())
     }
 
-    fn ensure_replay_metadata_allows_top_replacement(&self, height: u64) -> Result<()> {
-        if self.wsv_checkpoint(height)?.is_some() || self.commit_manifest(height)?.is_some() {
+    fn ensure_replay_metadata_allows_top_replacement_while_sidecars_locked(
+        &self,
+        blocks_dir: &Path,
+        height: u64,
+    ) -> Result<()> {
+        // The caller holds `sidecar_lock` across this preflight (and, for the
+        // final check, canonical marker publication). Read the two sidecars
+        // directly: the public accessors acquire the same non-reentrant mutex.
+        self.ensure_prune_recovery_not_required()?;
+        let checkpoint_path = Self::wsv_checkpoint_path_for(blocks_dir, height);
+        if let Some(checkpoint) = Self::decode_wsv_checkpoint_at(&checkpoint_path)? {
+            if checkpoint.height != height {
+                return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                    "WSV checkpoint height mismatch: expected {height}, got {}",
+                    checkpoint.height
+                ))));
+            }
+            self.ensure_durable_block_at_height(height, checkpoint.block_hash)?;
             return Err(Error::CommittedBlockReplacementForbidden { height });
         }
+
+        let manifest_path = Self::commit_manifest_path_for(blocks_dir, height);
+        if let Some(manifest) = Self::decode_commit_manifest_at(&manifest_path)? {
+            if manifest.height != height {
+                return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                    "commit manifest height mismatch: expected {height}, got {}",
+                    manifest.height
+                ))));
+            }
+            self.ensure_durable_block_at_height(height, manifest.block_hash)?;
+            return Err(Error::CommittedBlockReplacementForbidden { height });
+        }
+
         Ok(())
     }
 
@@ -17071,7 +17100,10 @@ impl Kura {
         // second check below is held through marker publication to close concurrent writers.
         {
             let _replay_metadata_guard = self.sidecar_lock.lock();
-            self.ensure_replay_metadata_allows_top_replacement(height)?;
+            self.ensure_replay_metadata_allows_top_replacement_while_sidecars_locked(
+                &blocks_dir,
+                height,
+            )?;
         }
 
         self.invalidate_pending_budget_cache();
@@ -17084,7 +17116,10 @@ impl Kura {
         )?;
 
         let replay_metadata_guard = self.sidecar_lock.lock();
-        self.ensure_replay_metadata_allows_top_replacement(height)?;
+        self.ensure_replay_metadata_allows_top_replacement_while_sidecars_locked(
+            &blocks_dir,
+            height,
+        )?;
         let write_guard = self.lock_block_store_for_write();
         let mut data = self.block_data.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -45625,8 +45660,8 @@ mod tests {
             eviction_required_replicas:
                 iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
-        let (mut kura, _) =
-            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let lane_config = RuntimeLaneConfig::default();
+        let (mut kura, _) = Kura::new(&kura_cfg, &lane_config).expect("initialize kura");
 
         let make_block = |message: &str| -> SignedBlock {
             let tx = TransactionBuilder::new(
@@ -45646,8 +45681,27 @@ mod tests {
 
         let small_block = make_block("short");
         let large_block = make_block(&"x".repeat(4096));
-        let small_bytes = Kura::block_required_bytes(&small_block).expect("small bytes");
-        let large_bytes = Kura::block_required_bytes(&large_block).expect("large bytes");
+        let ownership = small_block
+            .execution_context()
+            .and_then(|context| context.lane_payload_ownerships.first())
+            .expect("test block carries default lane ownership");
+        assert_eq!(
+            large_block
+                .execution_context()
+                .and_then(|context| context.lane_payload_ownerships.first())
+                .map(|candidate| candidate.lane_incarnation),
+            Some(ownership.lane_incarnation),
+            "replacement uses the same default lane incarnation"
+        );
+        let lane_entry = lane_config
+            .entry(ownership.lane_id)
+            .expect("default lane is configured");
+        kura.install_lane_incarnation_marker_for_test(lane_entry, ownership.lane_incarnation, 0)
+            .expect("install default lane marker");
+        let small_bytes =
+            Kura::block_required_bytes_for_budget(&small_block, u64::MAX).expect("small bytes");
+        let large_bytes =
+            Kura::block_required_bytes_for_budget(&large_block, u64::MAX).expect("large bytes");
         assert!(
             large_bytes > small_bytes,
             "expected large block to be larger"
@@ -45668,7 +45722,7 @@ mod tests {
         kura.store_block(small_block).expect("store small block");
 
         assert!(
-            large_bytes > limit,
+            used.saturating_add(large_bytes) > limit,
             "expected replacement block to exceed budget"
         );
         let err = kura
@@ -51796,6 +51850,9 @@ mod tests {
         let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
             b"kura-lane-artifact-entrypoint",
         ));
+        block.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::new(entrypoint_hash, lane_id, dataspace_id),
+        ])));
         let ownership = sample_lane_payload_ownership_for_kura(
             &block,
             lane_id,
@@ -56454,6 +56511,9 @@ mod tests {
         let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
             b"kura-lane-artifact-replacement-entrypoint",
         ));
+        replacement.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::new(entrypoint_hash, lane_id, lane_entry.dataspace_id),
+        ])));
         let replacement_ownership = sample_lane_payload_ownership_for_kura(
             &replacement,
             lane_id,
@@ -64695,6 +64755,105 @@ mod tests {
         );
         assert!(!kura.canonical_association_stage_path().exists());
         assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn replace_top_block_replay_metadata_preflight_fails_closed_without_mutation() {
+        #[derive(Clone, Copy)]
+        enum ReplayMetadataCase {
+            ManifestOnly,
+            CorruptCheckpoint,
+            CorruptManifest,
+        }
+
+        for case in [
+            ReplayMetadataCase::ManifestOnly,
+            ReplayMetadataCase::CorruptCheckpoint,
+            ReplayMetadataCase::CorruptManifest,
+        ] {
+            let kura = Kura::blank_kura_for_testing();
+            let block = DummyBlocks::new().next();
+            let original_hash = block.hash();
+            kura.store_block(Arc::clone(&block)).expect("store block");
+
+            let protected_path = match case {
+                ReplayMetadataCase::ManifestOnly => {
+                    let manifest = CommitManifest::new(
+                        1,
+                        original_hash,
+                        None,
+                        None,
+                        Hash::new(b"manifest-only checkpoint hash"),
+                        None,
+                    );
+                    kura.store_commit_manifest(manifest)
+                        .expect("store manifest without a WSV checkpoint");
+                    assert!(
+                        !kura.wsv_checkpoint_path(1).exists(),
+                        "manifest-only publication must exercise the manifest preflight branch"
+                    );
+                    kura.commit_manifest_path(1)
+                }
+                ReplayMetadataCase::CorruptCheckpoint => {
+                    let path = kura.wsv_checkpoint_path(1);
+                    fs::create_dir_all(path.parent().expect("checkpoint parent"))
+                        .expect("create checkpoint directory");
+                    fs::write(&path, b"malformed WSV checkpoint").expect("corrupt checkpoint");
+                    path
+                }
+                ReplayMetadataCase::CorruptManifest => {
+                    let path = kura.commit_manifest_path(1);
+                    fs::create_dir_all(path.parent().expect("manifest parent"))
+                        .expect("create manifest directory");
+                    fs::write(&path, b"malformed commit manifest").expect("corrupt manifest");
+                    path
+                }
+            };
+            let protected_bytes = fs::read(&protected_path).expect("read protected sidecar");
+            kura.pending_budget_bytes.store(73, Ordering::Release);
+            kura.pending_budget_bytes_valid
+                .store(true, Ordering::Release);
+
+            let replacement: SignedBlock = ValidBlock::new_dummy_and_modify_header(
+                checked_keypair().private_key(),
+                |header| {
+                    header.set_height(nonzero!(1_u64));
+                    header.set_prev_block_hash(None);
+                    header.set_view_change_index(header.view_change_index().saturating_add(1));
+                },
+            )
+            .into();
+            assert_ne!(replacement.hash(), original_hash);
+
+            let error = kura
+                .replace_top_block(replacement)
+                .expect_err("replay metadata must forbid top replacement");
+            match case {
+                ReplayMetadataCase::ManifestOnly => assert!(matches!(
+                    error,
+                    Error::CommittedBlockReplacementForbidden { height: 1 }
+                )),
+                ReplayMetadataCase::CorruptCheckpoint | ReplayMetadataCase::CorruptManifest => {
+                    assert!(matches!(error, Error::NoritoFrame(_)))
+                }
+            }
+            assert_eq!(
+                kura.get_durable_block_hash(nonzero!(1_usize)),
+                Some(original_hash)
+            );
+            assert_eq!(
+                kura.get_block(nonzero!(1_usize)).as_deref(),
+                Some(block.as_ref())
+            );
+            assert_eq!(
+                fs::read(&protected_path).expect("reread protected sidecar"),
+                protected_bytes
+            );
+            assert!(!kura.canonical_association_stage_path().exists());
+            assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+            assert!(kura.pending_budget_bytes_valid.load(Ordering::Acquire));
+            assert_eq!(kura.pending_budget_bytes.load(Ordering::Acquire), 73);
+        }
     }
 
     #[test]

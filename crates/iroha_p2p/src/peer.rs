@@ -1,7 +1,7 @@
 //! Tokio actor Peer
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     net::SocketAddr,
     sync::{
         Arc, Mutex, Weak,
@@ -1708,22 +1708,41 @@ impl SharedByteLease {
     }
 }
 
+/// Shared PeerId-count geometry for every authenticated source owner.
+///
+/// Credit owners plus inbound and outbound progress-reserve owners use one
+/// weak registry and one actor-installed protected projection. This prevents
+/// three individually bounded maps from admitting three disjoint sets of `N`
+/// identities.
+#[derive(Clone, Debug)]
+pub(crate) struct AuthenticatedSourceGeometry {
+    max_sources: usize,
+    registry: Arc<Mutex<AuthenticatedSourceOwnerRegistry>>,
+}
+
+#[derive(Debug, Default)]
+struct AuthenticatedSourceOwnerRegistry {
+    credit_owners: HashMap<PeerId, Weak<AuthenticatedSourceCreditOwner>>,
+    inbound_progress_owners: HashMap<PeerId, Weak<SharedByteBudget>>,
+    outbound_progress_owners: HashMap<PeerId, Weak<SharedByteBudget>>,
+    protected_sources: Option<HashSet<PeerId>>,
+}
+
 /// Process-wide byte owners for reliable connected-peer outbound traffic.
 ///
 /// Ordinary high traffic shares one `H` owner and low traffic shares one `L`
 /// owner. Each authenticated peer gets exactly one `R` progress reserve, reused
-/// by duplicate/replacement sessions through a weak registry. A post lease is
+/// by duplicate sessions through the shared source geometry. A post lease is
 /// retained while the message is encoded, encrypted, queued, batched, and
 /// written. The configured connection cap therefore bounds the process by
 /// `H + L + N * R` without letting a non-reader consume another peer's
-/// reconstruction/application path.
+/// application path.
 #[derive(Clone, Debug)]
 pub(crate) struct OutboundPostByteBudgets {
     high: Arc<SharedByteBudget>,
     low: Arc<SharedByteBudget>,
     progress_reserve_bytes_per_peer: usize,
-    max_peer_reserves: usize,
-    progress_by_peer: Arc<Mutex<HashMap<PeerId, Weak<SharedByteBudget>>>>,
+    source_geometry: AuthenticatedSourceGeometry,
 }
 
 #[derive(Clone, Debug)]
@@ -1759,41 +1778,40 @@ impl OutboundPostByteBudgets {
         progress_reserve_bytes_per_peer: usize,
         max_peer_reserves: usize,
     ) -> Option<Self> {
+        Self::new_with_source_geometry(
+            high_max_bytes,
+            low_max_bytes,
+            progress_reserve_bytes_per_peer,
+            AuthenticatedSourceGeometry::new(max_peer_reserves),
+        )
+    }
+
+    pub(crate) fn new_with_source_geometry(
+        high_max_bytes: usize,
+        low_max_bytes: usize,
+        progress_reserve_bytes_per_peer: usize,
+        source_geometry: AuthenticatedSourceGeometry,
+    ) -> Option<Self> {
         progress_reserve_bytes_per_peer
-            .checked_mul(max_peer_reserves)
+            .checked_mul(source_geometry.max_sources)
             .and_then(|reserve| reserve.checked_add(high_max_bytes))
             .and_then(|high| high.checked_add(low_max_bytes))?;
         Some(Self {
             high: SharedByteBudget::new(high_max_bytes, 0)?,
             low: SharedByteBudget::new(low_max_bytes, 0)?,
             progress_reserve_bytes_per_peer,
-            max_peer_reserves,
-            progress_by_peer: Arc::new(Mutex::new(HashMap::new())),
+            source_geometry,
         })
     }
 
     fn high(&self, peer_id: &PeerId) -> Option<OutboundHighByteBudget> {
         if self.progress_reserve_bytes_per_peer == 0 {
+            self.source_geometry.admit_ownerless_source(peer_id)?;
             return Some(OutboundHighByteBudget::shared_only(Arc::clone(&self.high)));
         }
-        let peer_reserve = {
-            let mut by_peer = self
-                .progress_by_peer
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            by_peer.retain(|_, budget| budget.strong_count() != 0);
-            if let Some(existing) = by_peer.get(peer_id).and_then(Weak::upgrade) {
-                existing
-            } else {
-                if by_peer.len() >= self.max_peer_reserves {
-                    return None;
-                }
-                let reserve = SharedByteBudget::new(self.progress_reserve_bytes_per_peer, 0)
-                    .expect("non-zero per-peer progress reserve cannot overflow");
-                by_peer.insert(peer_id.clone(), Arc::downgrade(&reserve));
-                reserve
-            }
-        };
+        let peer_reserve = self
+            .source_geometry
+            .outbound_progress_owner(peer_id, self.progress_reserve_bytes_per_peer)?;
         Some(OutboundHighByteBudget {
             shared: Arc::clone(&self.high),
             peer_reserve: Some(peer_reserve),
@@ -1810,14 +1828,7 @@ impl OutboundPostByteBudgets {
 
     #[cfg(test)]
     fn retained_high_total(&self) -> usize {
-        let reserves = self
-            .progress_by_peer
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values()
-            .filter_map(Weak::upgrade)
-            .map(|budget| budget.retained_total())
-            .sum::<usize>();
+        let reserves = self.source_geometry.retained_outbound_progress_bytes();
         self.high
             .retained_total()
             .checked_add(reserves)
@@ -1888,14 +1899,7 @@ pub(crate) struct InboundFrameByteBudgets {
     high: Arc<SharedByteBudget>,
     low: Arc<SharedByteBudget>,
     progress_reserve_bytes_per_peer: usize,
-    max_peer_reserves: usize,
-    progress_by_peer: Arc<Mutex<HashMap<PeerId, Weak<SharedByteBudget>>>>,
-    /// PeerId-keyed count owners retained by admitted downstream messages.
-    ///
-    /// A weak registry prevents disconnected identities with no remaining
-    /// work from accumulating, while the strong owner carried by every source
-    /// permit makes replacement connections reuse the exact same lane shares.
-    source_credits_by_peer: Arc<Mutex<HashMap<PeerId, Weak<AuthenticatedSourceCreditOwner>>>>,
+    source_geometry: AuthenticatedSourceGeometry,
 }
 
 #[derive(Debug)]
@@ -1918,6 +1922,178 @@ impl AuthenticatedSourceCreditOwner {
             high: Arc::new(Semaphore::new(per_lane_capacity)),
             low: Arc::new(Semaphore::new(per_lane_capacity)),
         }
+    }
+}
+
+impl AuthenticatedSourceOwnerRegistry {
+    fn prune(&mut self) {
+        self.credit_owners
+            .retain(|_, owner| owner.strong_count() != 0);
+        self.inbound_progress_owners
+            .retain(|_, owner| owner.strong_count() != 0);
+        self.outbound_progress_owners
+            .retain(|_, owner| owner.strong_count() != 0);
+    }
+
+    fn live_and_protected_sources(&self) -> Option<HashSet<PeerId>> {
+        let mut sources = self.protected_sources.clone()?;
+        sources.extend(self.credit_owners.keys().cloned());
+        sources.extend(self.inbound_progress_owners.keys().cloned());
+        sources.extend(self.outbound_progress_owners.keys().cloned());
+        Some(sources)
+    }
+}
+
+impl AuthenticatedSourceGeometry {
+    pub(crate) fn new(max_sources: usize) -> Self {
+        Self {
+            max_sources,
+            registry: Arc::new(Mutex::new(AuthenticatedSourceOwnerRegistry::default())),
+        }
+    }
+
+    fn admit_ownerless_source(&self, peer_id: &PeerId) -> Option<()> {
+        let mut registry = self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.prune();
+        let mut required = registry.live_and_protected_sources()?;
+        required.insert(peer_id.clone());
+        (required.len() <= self.max_sources).then_some(())
+    }
+
+    fn credit_owner(
+        &self,
+        peer_id: &PeerId,
+        per_lane_capacity: usize,
+    ) -> Option<Arc<AuthenticatedSourceCreditOwner>> {
+        if per_lane_capacity == 0 {
+            return None;
+        }
+        let mut registry = self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.prune();
+        if let Some(owner) = registry.credit_owners.get(peer_id).and_then(Weak::upgrade) {
+            return (owner.per_lane_capacity == per_lane_capacity).then_some(owner);
+        }
+        let mut required = registry.live_and_protected_sources()?;
+        required.insert(peer_id.clone());
+        if required.len() > self.max_sources {
+            return None;
+        }
+        let owner = Arc::new(AuthenticatedSourceCreditOwner::new(per_lane_capacity));
+        registry
+            .credit_owners
+            .insert(peer_id.clone(), Arc::downgrade(&owner));
+        Some(owner)
+    }
+
+    fn inbound_progress_owner(
+        &self,
+        peer_id: &PeerId,
+        bytes: usize,
+    ) -> Option<Arc<SharedByteBudget>> {
+        let mut registry = self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.prune();
+        if let Some(owner) = registry
+            .inbound_progress_owners
+            .get(peer_id)
+            .and_then(Weak::upgrade)
+        {
+            return Some(owner);
+        }
+        let mut required = registry.live_and_protected_sources()?;
+        required.insert(peer_id.clone());
+        if required.len() > self.max_sources {
+            return None;
+        }
+        let owner = SharedByteBudget::new(bytes, 0)
+            .expect("non-zero inbound per-source progress reserve cannot overflow");
+        registry
+            .inbound_progress_owners
+            .insert(peer_id.clone(), Arc::downgrade(&owner));
+        Some(owner)
+    }
+
+    fn outbound_progress_owner(
+        &self,
+        peer_id: &PeerId,
+        bytes: usize,
+    ) -> Option<Arc<SharedByteBudget>> {
+        let mut registry = self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.prune();
+        if let Some(owner) = registry
+            .outbound_progress_owners
+            .get(peer_id)
+            .and_then(Weak::upgrade)
+        {
+            return Some(owner);
+        }
+        let mut required = registry.live_and_protected_sources()?;
+        required.insert(peer_id.clone());
+        if required.len() > self.max_sources {
+            return None;
+        }
+        let owner = SharedByteBudget::new(bytes, 0)
+            .expect("non-zero outbound per-source progress reserve cannot overflow");
+        registry
+            .outbound_progress_owners
+            .insert(peer_id.clone(), Arc::downgrade(&owner));
+        Some(owner)
+    }
+
+    fn install_protected_sources(&self, protected_sources: HashSet<PeerId>) -> bool {
+        if protected_sources.len() > self.max_sources {
+            return false;
+        }
+        self.registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .protected_sources = Some(protected_sources);
+        true
+    }
+
+    fn protected_sources(&self) -> Option<HashSet<PeerId>> {
+        self.registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .protected_sources
+            .clone()
+    }
+
+    fn protected_source_geometry_fits(&self) -> bool {
+        let mut registry = self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.prune();
+        registry
+            .live_and_protected_sources()
+            .is_some_and(|sources| sources.len() <= self.max_sources)
+    }
+
+    #[cfg(test)]
+    fn retained_outbound_progress_bytes(&self) -> usize {
+        let mut registry = self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.prune();
+        registry
+            .outbound_progress_owners
+            .values()
+            .filter_map(Weak::upgrade)
+            .map(|budget| budget.retained_total())
+            .sum()
     }
 }
 
@@ -1979,28 +2155,59 @@ impl InboundFrameByteBudgets {
         progress_reserve_bytes_per_peer: usize,
         max_peer_reserves: usize,
     ) -> Option<Self> {
+        Self::new_with_source_geometry(
+            high_max_bytes,
+            low_max_bytes,
+            progress_reserve_bytes_per_peer,
+            AuthenticatedSourceGeometry::new(max_peer_reserves),
+        )
+    }
+
+    pub(crate) fn new_with_source_geometry(
+        high_max_bytes: usize,
+        low_max_bytes: usize,
+        progress_reserve_bytes_per_peer: usize,
+        source_geometry: AuthenticatedSourceGeometry,
+    ) -> Option<Self> {
         progress_reserve_bytes_per_peer
-            .checked_mul(max_peer_reserves)
+            .checked_mul(source_geometry.max_sources)
             .and_then(|reserve| reserve.checked_add(high_max_bytes))
             .and_then(|high| high.checked_add(low_max_bytes))?;
         Some(Self {
             high: SharedByteBudget::new(high_max_bytes, 0)?,
             low: SharedByteBudget::new(low_max_bytes, 0)?,
             progress_reserve_bytes_per_peer,
-            max_peer_reserves,
-            progress_by_peer: Arc::new(Mutex::new(HashMap::new())),
-            source_credits_by_peer: Arc::new(Mutex::new(HashMap::new())),
+            source_geometry,
         })
+    }
+
+    /// Install the complete protected authenticated-source projection.
+    ///
+    /// This changes only the virtual reservation set; live owner identity and
+    /// permits are untouched. An unrepresentable projection is rejected and
+    /// leaves the last installed authority intact.
+    pub(crate) fn install_protected_sources(&self, protected_sources: HashSet<PeerId>) -> bool {
+        self.source_geometry
+            .install_protected_sources(protected_sources)
+    }
+
+    /// Return the actor-installed protected source projection, if initialized.
+    pub(crate) fn protected_sources(&self) -> Option<HashSet<PeerId>> {
+        self.source_geometry.protected_sources()
+    }
+
+    /// Return whether every live owner and installed protected identity fits.
+    pub(crate) fn protected_source_geometry_fits(&self) -> bool {
+        self.source_geometry.protected_source_geometry_fits()
     }
 
     /// Return the one count-credit owner for an authenticated peer identity.
     ///
-    /// Replacement connection generations reuse a live owner. Every acquired
-    /// permit retains that owner, so a message already handed to a subscriber
-    /// or application prevents a reconnect from minting another lane share.
-    /// The registry is weak and bounded by the same authenticated-peer geometry
-    /// as the byte reserves, so dead identities are reclaimed and identity
-    /// churn cannot create an unbounded owner map.
+    /// Existing owners are reused before any cardinality check. For a new
+    /// identity `x`, admission is exactly
+    /// `|live owners ∪ protected sources ∪ {x}| <= max_peer_reserves`.
+    /// The registry remains fail-closed until the actor installs its first
+    /// protected projection.
     pub(crate) fn source_credits(
         &self,
         peer_id: &PeerId,
@@ -2009,51 +2216,20 @@ impl InboundFrameByteBudgets {
         if per_lane_capacity == 0 {
             return None;
         }
-        let owner = {
-            let mut by_peer = self
-                .source_credits_by_peer
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            by_peer.retain(|_, owner| owner.strong_count() != 0);
-            if let Some(owner) = by_peer.get(peer_id).and_then(Weak::upgrade) {
-                if owner.per_lane_capacity != per_lane_capacity {
-                    return None;
-                }
-                owner
-            } else {
-                if by_peer.len() >= self.max_peer_reserves {
-                    return None;
-                }
-                let owner = Arc::new(AuthenticatedSourceCreditOwner::new(per_lane_capacity));
-                by_peer.insert(peer_id.clone(), Arc::downgrade(&owner));
-                owner
-            }
-        };
+        let owner = self
+            .source_geometry
+            .credit_owner(peer_id, per_lane_capacity)?;
         Some(message::AuthenticatedSourceCredits::from_owner(owner))
     }
 
     fn high(&self, peer_id: &PeerId) -> Option<InboundSourceByteBudget> {
         if self.progress_reserve_bytes_per_peer == 0 {
+            self.source_geometry.admit_ownerless_source(peer_id)?;
             return Some(InboundSourceByteBudget::shared_only(Arc::clone(&self.high)));
         }
-        let peer_reserve = {
-            let mut by_peer = self
-                .progress_by_peer
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            by_peer.retain(|_, budget| budget.strong_count() != 0);
-            if let Some(existing) = by_peer.get(peer_id).and_then(Weak::upgrade) {
-                existing
-            } else {
-                if by_peer.len() >= self.max_peer_reserves {
-                    return None;
-                }
-                let budget = SharedByteBudget::new(self.progress_reserve_bytes_per_peer, 0)
-                    .expect("zero-reserve per-peer source geometry cannot overflow");
-                by_peer.insert(peer_id.clone(), Arc::downgrade(&budget));
-                budget
-            }
-        };
+        let peer_reserve = self
+            .source_geometry
+            .inbound_progress_owner(peer_id, self.progress_reserve_bytes_per_peer)?;
         Some(InboundSourceByteBudget {
             shared: Arc::clone(&self.high),
             peer_reserve: Some(peer_reserve),
@@ -2553,6 +2729,7 @@ mod shared_byte_budget_tests {
     #[test]
     fn duplicate_sessions_share_one_authenticated_peer_reserve() {
         let budgets = InboundFrameByteBudgets::new(1, 1, 2, 2).expect("valid source geometry");
+        assert!(budgets.install_protected_sources(HashSet::new()));
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         let first = budgets.high(&peer_id).expect("first peer reserve");
         let second = budgets.high(&peer_id).expect("duplicate peer reserve");
@@ -2586,6 +2763,7 @@ mod shared_byte_budget_tests {
     #[test]
     fn authenticated_peer_reserve_registry_fails_closed_at_its_bound() {
         let budgets = InboundFrameByteBudgets::new(1, 1, 2, 1).expect("valid source geometry");
+        assert!(budgets.install_protected_sources(HashSet::new()));
         let first_peer = PeerId::from(KeyPair::random().public_key().clone());
         let second_peer = PeerId::from(KeyPair::random().public_key().clone());
         let first = budgets.high(&first_peer).expect("first reserve");
@@ -2608,6 +2786,7 @@ mod shared_byte_budget_tests {
     #[test]
     fn authenticated_source_count_registry_bounds_identity_churn_and_capacity_drift() {
         let budgets = InboundFrameByteBudgets::new(1, 1, 1, 1).expect("valid source geometry");
+        assert!(budgets.install_protected_sources(HashSet::new()));
         let first_peer = PeerId::from(KeyPair::random().public_key().clone());
         let second_peer = PeerId::from(KeyPair::random().public_key().clone());
         let first = budgets
@@ -2653,6 +2832,144 @@ mod shared_byte_budget_tests {
     }
 
     #[test]
+    fn pending_protected_sources_reserve_released_owner_slots_from_identity_churn() {
+        let budgets = InboundFrameByteBudgets::new(1, 1, 1, 1).expect("valid source geometry");
+        let old_source = PeerId::from(KeyPair::random().public_key().clone());
+        let desired_source = PeerId::from(KeyPair::random().public_key().clone());
+        let observer = PeerId::from(KeyPair::random().public_key().clone());
+        assert!(budgets.install_protected_sources(HashSet::new()));
+        let old_owner = budgets
+            .source_credits(&old_source, 1)
+            .expect("old source owns the sole live slot");
+
+        assert!(budgets.install_protected_sources(HashSet::from([desired_source.clone()])));
+        assert!(
+            !budgets.protected_source_geometry_fits(),
+            "the desired projection waits for the obsolete live owner"
+        );
+        assert!(
+            budgets.source_credits(&old_source, 1).is_some(),
+            "an existing owner reconnect is reused before cardinality checks"
+        );
+        assert!(budgets.source_credits(&desired_source, 1).is_none());
+        assert!(
+            budgets.source_credits(&observer, 1).is_none(),
+            "observer churn cannot steal the virtually reserved slot"
+        );
+
+        drop(old_owner);
+        assert!(budgets.protected_source_geometry_fits());
+        assert!(budgets.source_credits(&desired_source, 1).is_some());
+    }
+
+    #[test]
+    fn impossible_protected_projection_preserves_last_valid_authority() {
+        let budgets = InboundFrameByteBudgets::new(1, 1, 1, 1).expect("valid source geometry");
+        let protected = PeerId::from(KeyPair::random().public_key().clone());
+        let overflow = PeerId::from(KeyPair::random().public_key().clone());
+        let observer = PeerId::from(KeyPair::random().public_key().clone());
+        assert!(budgets.install_protected_sources(HashSet::from([protected.clone()])));
+        assert!(!budgets.install_protected_sources(HashSet::from([protected.clone(), overflow,])));
+        assert!(
+            budgets.source_credits(&observer, 1).is_none(),
+            "a rejected projection cannot erase the prior reservation"
+        );
+        assert!(budgets.source_credits(&protected, 1).is_some());
+    }
+
+    #[test]
+    fn authenticated_source_byte_reserves_fail_closed_until_authority_is_installed() {
+        let geometry = AuthenticatedSourceGeometry::new(1);
+        let inbound = InboundFrameByteBudgets::new_with_source_geometry(1, 1, 1, geometry.clone())
+            .expect("valid inbound source geometry");
+        let outbound = OutboundPostByteBudgets::new_with_source_geometry(1, 1, 1, geometry.clone())
+            .expect("valid outbound source geometry");
+        let observer = PeerId::from(KeyPair::random().public_key().clone());
+
+        assert!(inbound.high(&observer).is_none());
+        assert!(outbound.high(&observer).is_none());
+        assert!(inbound.source_credits(&observer, 1).is_none());
+
+        assert!(geometry.install_protected_sources(HashSet::new()));
+        assert!(inbound.high(&observer).is_some());
+        assert!(outbound.high(&observer).is_some());
+        assert!(inbound.source_credits(&observer, 1).is_some());
+    }
+
+    #[test]
+    fn inbound_only_obsolete_lease_defers_protected_source_until_drain() {
+        let geometry = AuthenticatedSourceGeometry::new(1);
+        let inbound = InboundFrameByteBudgets::new_with_source_geometry(1, 1, 2, geometry.clone())
+            .expect("valid inbound source geometry");
+        let old_source = PeerId::from(KeyPair::random().public_key().clone());
+        let desired_source = PeerId::from(KeyPair::random().public_key().clone());
+        assert!(geometry.install_protected_sources(HashSet::new()));
+        let old_budget = inbound.high(&old_source).expect("old inbound owner");
+        let old_lease = old_budget
+            .try_reserve(2)
+            .expect("retain only the old source's inbound progress reserve");
+        drop(old_budget);
+
+        assert!(geometry.install_protected_sources(HashSet::from([desired_source.clone()])));
+        assert!(!geometry.protected_source_geometry_fits());
+        assert!(inbound.high(&desired_source).is_none());
+        assert!(inbound.source_credits(&desired_source, 1).is_none());
+
+        drop(old_lease);
+        assert!(geometry.protected_source_geometry_fits());
+        assert!(inbound.high(&desired_source).is_some());
+    }
+
+    #[test]
+    fn outbound_only_obsolete_lease_defers_protected_source_until_drain() {
+        let geometry = AuthenticatedSourceGeometry::new(1);
+        let outbound = OutboundPostByteBudgets::new_with_source_geometry(1, 1, 2, geometry.clone())
+            .expect("valid outbound source geometry");
+        let old_source = PeerId::from(KeyPair::random().public_key().clone());
+        let desired_source = PeerId::from(KeyPair::random().public_key().clone());
+        assert!(geometry.install_protected_sources(HashSet::new()));
+        let old_budget = outbound.high(&old_source).expect("old outbound owner");
+        let old_lease = old_budget
+            .try_reserve(2, true)
+            .expect("retain only the old source's outbound progress reserve");
+        drop(old_budget);
+
+        assert!(geometry.install_protected_sources(HashSet::from([desired_source.clone()])));
+        assert!(!geometry.protected_source_geometry_fits());
+        assert!(outbound.high(&desired_source).is_none());
+
+        drop(old_lease);
+        assert!(geometry.protected_source_geometry_fits());
+        assert!(outbound.high(&desired_source).is_some());
+    }
+
+    #[test]
+    fn shared_source_geometry_counts_all_owner_kinds_by_unique_peer_id() {
+        let geometry = AuthenticatedSourceGeometry::new(1);
+        let inbound = InboundFrameByteBudgets::new_with_source_geometry(1, 1, 1, geometry.clone())
+            .expect("valid inbound source geometry");
+        let outbound = OutboundPostByteBudgets::new_with_source_geometry(1, 1, 1, geometry.clone())
+            .expect("valid outbound source geometry");
+        let first = PeerId::from(KeyPair::random().public_key().clone());
+        let second = PeerId::from(KeyPair::random().public_key().clone());
+        assert!(geometry.install_protected_sources(HashSet::new()));
+
+        let inbound_first = inbound.high(&first).expect("first inbound owner");
+        let outbound_first = outbound
+            .high(&first)
+            .expect("same source may own an outbound reserve");
+        let credits_first = inbound
+            .source_credits(&first, 1)
+            .expect("same source may own lane credits");
+        assert!(inbound.high(&second).is_none());
+        assert!(outbound.high(&second).is_none());
+        assert!(inbound.source_credits(&second, 1).is_none());
+
+        drop((inbound_first, outbound_first, credits_first));
+        assert!(inbound.high(&second).is_some());
+    }
+
+    #[test]
     fn inbound_source_registry_geometry_overflow_fails_closed() {
         assert!(InboundFrameByteBudgets::new(0, 0, usize::MAX, 2).is_none());
         assert!(InboundFrameByteBudgets::new(usize::MAX, 1, 0, 0).is_none());
@@ -2662,6 +2979,11 @@ mod shared_byte_budget_tests {
     fn outbound_duplicate_sessions_share_one_peer_reserve_without_blocking_another_peer() {
         let budgets =
             OutboundPostByteBudgets::new(1, 1, 2, 2).expect("valid connected-outbound geometry");
+        assert!(
+            budgets
+                .source_geometry
+                .install_protected_sources(HashSet::new())
+        );
         let first_peer = PeerId::from(KeyPair::random().public_key().clone());
         let other_peer = PeerId::from(KeyPair::random().public_key().clone());
         let first = budgets.high(&first_peer).expect("first peer reserve");
@@ -2702,6 +3024,11 @@ mod shared_byte_budget_tests {
 
         let budgets = OutboundPostByteBudgets::new(1, 1, 1, 1)
             .expect("valid one-peer connected-outbound geometry");
+        assert!(
+            budgets
+                .source_geometry
+                .install_protected_sources(HashSet::new())
+        );
         let first_peer = PeerId::from(KeyPair::random().public_key().clone());
         let second_peer = PeerId::from(KeyPair::random().public_key().clone());
         let first = budgets.high(&first_peer).expect("first reserve");
@@ -3071,7 +3398,7 @@ pub mod handles {
     /// Peer actor handle.
     pub struct PeerHandle<T: Pload> {
         pub(super) senders: TopicSenders<T>,
-        /// Explicit cancellation for this exact authenticated connection generation.
+        /// Explicit cancellation for this exact authenticated transport tenure.
         ///
         /// Merely dropping the handle still lets the peer actor drain already-admitted
         /// frames.  Network lifecycle transitions call [`Self::request_termination`]
@@ -3087,7 +3414,7 @@ pub mod handles {
     }
 
     impl<T: Pload> PeerHandle<T> {
-        /// Request prompt teardown of this exact connection generation.
+        /// Request prompt teardown of this exact transport tenure.
         pub(crate) fn request_termination(&self) {
             self.termination_sender.send_replace(true);
         }
@@ -4158,7 +4485,7 @@ mod run {
             // Each worker therefore drains a finite, byte- and source-credit-
             // bounded generation queue into the network actor before exiting.
             // Aborting here would discard authenticated reliable progress that
-            // was already admitted from the old connection generation.
+            // was already admitted from the old transport tenure.
             for worker in self.0.drain(..) {
                 let _ = worker.await;
             }
@@ -8541,6 +8868,56 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
+        async fn consensus_lane_and_v2_topics_share_authenticated_high_source_credit() {
+            let (safety, _safety_rx) = mpsc::channel(1);
+            let (high, _high_rx) = mpsc::channel(1);
+            let (low, _low_rx) = mpsc::channel(1);
+            let senders = PeerMessageSenders {
+                safety,
+                high,
+                low,
+                dispatch_budgets: InboundDispatchByteBudgets::default(),
+                source_credits: AuthenticatedSourceCredits::new(1),
+                topic_frame_caps: crate::network::TopicFrameCaps::uniform(1),
+            };
+            let peer = Peer::new(
+                "127.0.0.1:17455".parse().expect("peer address"),
+                KeyPair::random().public_key().clone(),
+            );
+            let mut v2 = PeerMessage::new(peer.clone(), Dummy, 1);
+            assert!(matches!(
+                senders
+                    .transfer_before_send(&mut v2, Topic::Consensus, Priority::High, false)
+                    .await,
+                InboundDispatchAdmission::Admitted
+            ));
+
+            for topic in [Topic::ConsensusPayload, Topic::ConsensusChunk] {
+                let mut lane = PeerMessage::new(peer.clone(), Dummy, 1);
+                assert!(matches!(
+                    senders
+                        .transfer_before_send(&mut lane, topic, Priority::High, false)
+                        .await,
+                    InboundDispatchAdmission::ByteBudgetFull
+                ));
+            }
+
+            drop(v2);
+            let mut lane = PeerMessage::new(peer, Dummy, 1);
+            assert!(matches!(
+                senders
+                    .transfer_before_send(
+                        &mut lane,
+                        Topic::ConsensusPayload,
+                        Priority::High,
+                        false,
+                    )
+                    .await,
+                InboundDispatchAdmission::Admitted
+            ));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
         async fn dispatch_worker_shutdown_drains_reliable_old_generation_to_actor() {
             let source_budget = SharedByteBudget::new(1, 0).expect("source owner");
             let source_lease = source_budget.try_reserve(1, false).expect("source lease");
@@ -9050,6 +9427,13 @@ mod run {
             budgets: &OutboundPostByteBudgets,
             peer_id: &PeerId,
         ) -> (handles::PeerHandle<T>, TestOutboundReceivers<T>) {
+            if budgets.source_geometry.protected_sources().is_none() {
+                assert!(
+                    budgets
+                        .source_geometry
+                        .install_protected_sources(HashSet::new())
+                );
+            }
             let (hi_consensus_safety_tx, hi_consensus_safety) = post_channel::channel(capacity);
             let (hi_consensus_tx, hi_consensus) = post_channel::channel(capacity);
             let (hi_consensus_payload_tx, hi_consensus_payload) = post_channel::channel(capacity);
@@ -13027,6 +13411,7 @@ mod run {
             let wire = encrypted_frame(&plaintext, key_byte);
             let budgets = InboundFrameByteBudgets::new(wire.len(), 1, wire.len(), 1)
                 .expect("valid source geometry");
+            assert!(budgets.install_protected_sources(HashSet::new()));
             let shared_ordinary = budgets
                 .high
                 .try_reserve(wire.len(), false)
@@ -16538,12 +16923,12 @@ pub mod message {
 
     /// Fair count ownership for one authenticated transport source.
     ///
-    /// One instance is shared by every live or draining connection generation
+    /// One instance is shared by every live or draining authenticated tenure
     /// for the same authenticated [`PeerId`]. The byte budgets remain
     /// authoritative for memory; these semaphores additionally prevent one
     /// identity's many small frames or rapid reconnects from monopolizing
     /// aggregate queue count.
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub(crate) struct AuthenticatedSourceCredits {
         owner: Arc<AuthenticatedSourceCreditOwner>,
     }
@@ -16552,12 +16937,12 @@ pub mod message {
     pub(super) struct AuthenticatedSourceCreditGuard {
         _permit: OwnedSemaphorePermit,
         /// Retaining the aggregate owner is what lets the PeerId-keyed weak
-        /// registry find and reuse it after a transport generation exits.
+        /// registry find and reuse it after a transport tenure exits.
         _owner: Option<AuthenticatedSourceCredits>,
     }
 
     impl AuthenticatedSourceCredits {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         pub(crate) fn new(per_lane_capacity: usize) -> Self {
             Self {
                 owner: Arc::new(AuthenticatedSourceCreditOwner::new(per_lane_capacity)),
@@ -16692,7 +17077,7 @@ pub mod message {
         /// this identity. It is therefore the stable key for source-isolated
         /// queue, byte, and rate ownership.
         authenticated_via: PeerId,
-        /// Exact authenticated connection generation that delivered the frame.
+        /// Exact authenticated transport tenure that delivered the frame.
         /// Synthetic producers leave this unset.
         pub(crate) connection_id: Option<ConnectionId>,
         /// Exact authenticated return route minted by the network actor after
@@ -16787,7 +17172,7 @@ pub mod message {
             &self.authenticated_via
         }
 
-        /// Return the authenticated connection generation, when this message
+        /// Return the authenticated transport tenure, when this message
         /// came from a live peer transport rather than a synthetic producer.
         pub(crate) const fn connection_id(&self) -> Option<ConnectionId> {
             self.connection_id
@@ -16813,13 +17198,17 @@ pub mod message {
         ///
         /// # Errors
         ///
-        /// Returns the route unchanged when it belongs to another semantic origin
-        /// or its authenticated connection tenure is no longer active.
+        /// Returns the route unchanged when this message already owns a reply
+        /// capability, the candidate belongs to another semantic origin, or its
+        /// authenticated connection tenure is no longer active.
         pub fn reattach_reply_route(
             &mut self,
             route: crate::network::NetworkReplyRoute,
         ) -> Result<(), crate::network::NetworkReplyRoute> {
-            if route.semantic_target() != self.peer.id() || !route.is_active() {
+            if self.reply_route.is_some()
+                || route.semantic_target() != self.peer.id()
+                || !route.is_active()
+            {
                 return Err(route);
             }
             self.authenticated_via = route.authenticated_via().clone();

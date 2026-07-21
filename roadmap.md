@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-20
+Last updated: 2026-07-21
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -25263,9 +25263,30 @@ later deliveries, and reconnects cannot replay a completed source while a
 sibling progresses. An incomplete parked cursor now also survives the former
 server-gate TTL after shared byte/session budget is released; only terminal
 no-outbound tombstones age out. Both focused TTL-boundary regressions passed
-1/1, and the complete current sidecar module passed 50/50. The source-bound
-inventory is 378 tests
-across 24 modules and 47 pre-network legs. Outstanding release work for this
+1/1, and the complete sidecar module at that checkpoint passed 50/50. The
+route capability now also carries an immutable minting-tenure binding, so
+bounded retired-source tombstone churn cannot admit an equal-ordinal capability
+from another tenure. Centralized normal-exit/`Drop` teardown retires every
+actor-owned route and cancels only that actor's waiters. The current
+source-bound inventory is 465 tests across 30 modules and 53 pre-network
+legs. Mechanical reconciliation adds 16 non-ignored Kura, successor/refinement,
+CommitQC-admission, recovery, runner, watchdog, P2P-geometry, and daemon-genesis
+tests; the lane-relay saturation test is a rename in place, not a fifth module
+test. A subsequent adversarial sidecar regression proves a same-tenure route
+refresh cannot re-emit an in-flight chunk before its writer flush. Three worker
+regressions additionally retain pending and flushed-but-unapplied ownership,
+preserve a terminal zero-reservation route beside live siblings, and reactivate
+an unflushed current item on reconnect only after capacity becomes available.
+The subsequent source-authority, immutable-sidecar, runner-race,
+daemon-corridor, shared-byte-budget, cached-Arc admission, and executable-refinement closure adds 22
+exact regressions and moves two peer tests to their actual owning module.
+The former terminal-reconnect test is renamed to require this current-item
+retry after a writer closes without `Flushed`. It retains
+the exact runner route bridges and missing-route rejections for
+durable lane certificates and certified sidecar chunks, plus the four-gate,
+two-session, 16-MiB per-source sidecar cap and same-hub overflow isolation
+tests. The added authenticated-source limit regression is not covered by that
+historical 50/50 receipt. Outstanding release work for this
 slice is to execute those complete source-sealed suites, add a
 four-validator signed-observer slow-reader flood during view change/body
 recovery, discharge the remaining formal obligations, and run the sealed
@@ -25484,8 +25505,8 @@ regression saturates certified-request, Normal, and Progress ownership while
 preserving the Completion reserve, then uses durable reducer retransmission to
 reconstruct the blocked Fetch after the exact authenticated response with a
 still-live matching logical request registration releases capacity. The gate
-pins 378 required tests
-across 24 modules, including exact composite
+  pins 465 required tests
+across 30 modules, including exact composite
 replay-FIFO ordering, its source-linked refinement projection, and
 recovery-derived successor identity plus sequential historical CommitQC/body
 catch-up. Post-decision regressions reject new durable timeout and TC formation
@@ -25633,7 +25654,7 @@ deferred-owner replacement mutation now pins scheduler-wide exact-envelope
 coalescing. The proof ledger still reports `machine_checked_completion: false`.
 Strict proof completion therefore remains pending, and post-GST height liveness
 remains a conditional target and paper argument rather than a machine-checked
-completion. The PR gate inventories 378 production-liveness tests across 24
+completion. The PR gate inventories 465 production-liveness tests across 30
 Rust modules before network startup. Exact regressions cover
 completion coalescing, conflicting evidence, production Busy transfer,
 transactional cross-queue retirement/duplicate rejection,
@@ -25690,8 +25711,8 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 47 pre-network legs and their exact
-378-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+original HEAD/tree/`Cargo.lock`, all 53 pre-network legs and their exact
+465-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -25740,6 +25761,15 @@ transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
 The 54-entry ledger contains 33 `tlaps_proved`, 14 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
 remains false. Outstanding release work:
+
+The async deadlock decomposition now scopes local runner-service debt to the
+exact active responsive and historical-recovery owners. Keep that deadline as
+per-validator ghost bookkeeping for the existing `runtime-after-gst` trusted
+contract. The source-bound serialized loop, bounded service turns, watchdog
+poll, and finite idle waits are necessary structural evidence, but they must
+not be promoted into a proof of host scheduling or operation latency. The
+sealed release/soak evidence must still demonstrate that operator-provided
+runtime premise on the final signed source.
 
 - mechanize the complete typed applied-height handoff rather than promoting its
   source tests to a liveness proof. Production independently rereads exact Kura
@@ -25830,11 +25860,11 @@ remains false. Outstanding release work:
   conflation, replay retention or loss, stale execution, Prepare authority, and
   non-singleton replay. Bounded TLC and source binding still do not discharge
   `ProgressWitnessProductionRefinementObligation`;
-- discharge the eight remaining concrete asynchronous obligations for the
+- discharge the nine remaining concrete asynchronous obligations for the
   production effective-lock body-acquisition refinement, progress-witness
   preservation, post-GST deadlock freedom, protected service-rank decrease,
-  post-GST starvation freedom, timeout-view progress, responsive-leader
-  rotation, and application
+  post-GST starvation freedom, timeout-view progress, locked-body reproposal,
+  responsive-leader rotation, and application
   liveness. Rotation must reach a view in which the responsive honest scheduled
   leader itself is active (or decide first), and application must be proved per
   responsive validator without waiting for every peer to decide. The aggregate
@@ -25846,7 +25876,13 @@ remains false. Outstanding release work:
   already `tlaps_proved`; the latter is strict-green at 1,143/1,143
   obligations. Runner preservation and async type closure are now
   `tlaps_proved`; deadlock freedom consumes that type closure, and starvation
-  still waits for service-rank progress.
+  still waits for service-rank progress. The local-proposal action now enforces
+  the exact nonempty `LocalProposalJustification` high subject, and a focused
+  inductive theorem plus source-fidelity mutations bind that guard through WAL
+  TC-high lock promotion, adapter projection, exact runner submission, and
+  fresh-candidate rejection. Keep the temporal obligation open until a stable
+  available lock is proved to commit in its old round, be reproposed unchanged,
+  or be legitimately decided/superseded;
   Progress witnesses additionally wait for async type and generation-scoped
   delivery; timeout-view progress waits for progress witnesses and starvation;
   rotating-leader progress waits for effective-lock body acquisition,
@@ -25911,17 +25947,38 @@ remains false. Outstanding release work:
   ownership/fairness regressions—are offset by removal of the obsolete adapter
   cursor alias and two superseded broadcast-residual tests, raising that
   inventory by a net 34 to 298. The bounded per-source route and writer-flush
-  completion adds 83 exact regressions and retires three obsolete target,
-  generation, or phantom-runner names, yielding a current total of 378. The
-  rollover slice covers historical Kura CommitQC, body,
+  completion added 82 exact regressions and retired two obsolete target or
+  broadcast-residual names, yielding 378. The subsequent ownership-carrier
+  closure added 28 exact adapter, effects, runtime, ingress, sidecar, lane-work,
+  worker, P2P, and daemon regressions, yielding 406. The geometry closure added
+  14 exact ingress, sidecar, adapter, effects, runtime, worker, P2P, and
+  `iroha_config` regressions without retiring a name, yielding the historical
+  420-test checkpoint across 26 modules. The route-lifecycle closure added
+  three exact P2P regressions without retiring a name, yielding the historical
+  423-test checkpoint across the same 26 modules. They bind delivery ordinals
+  to their minting tenure
+  through bounded tombstone churn, reject second-route overwrite at local
+  rehydration, and isolate actor-exit/`Drop` cancellation to that actor's routes
+  and waiters. The current reconciliation adds 16 non-ignored Kura,
+  refinement, effects, recovery, runner, watchdog, P2P geometry, and daemon
+  genesis tests plus three owning modules, yielding 439 tests across 29
+  modules. It also replaces the obsolete lane-relay saturation name in place,
+  with no count increase for that module. The subsequent in-flight sidecar
+  refresh regression raises that inventory to 440 tests without adding a
+  module or leg. Three worker regressions then produce the historical
+  443-test checkpoint by pinning pending/unapplied writer-flush deduplication,
+  mixed-source terminal-route history, and capacity-checked reconnect
+  reactivation. The subsequent 21-test source-authority and shared-payload
+  closure plus cached-Arc admission yields the current 465-test, 30-module, 53-leg inventory. The rollover slice covers historical Kura
+  CommitQC, body,
   and lane-certificate rereads; current global V2; lane proof/supersession; Native
   AMX, merge-share, certified-sidecar, and untyped fail-closed boundaries. The
   network slice pins identical-retry coalescing and exact per-target FIFO
   ownership for distinct/cross-kind collisions. The four
   integration names run as one module-filtered leg, while the complete
-  pre-network corridor now has 47 legs. Fresh full
+  pre-network corridor now has 53 legs. Fresh full
   discovery/serial execution and the clean source-sealed rerun remain pending
-  for all 378 names. The 24-module pre-network
+  for all 465 names. The 30-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

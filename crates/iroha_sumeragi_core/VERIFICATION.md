@@ -43,7 +43,7 @@ arm64 release:
 ```text
 $ scripts/verify_sumeragi_v2.sh  # official pinned release already in PATH
 verification results:: 1690 verified, 0 errors  # pinned vstd dependency
-verification results:: 126 verified, 0 errors   # iroha_sumeragi_core root obligations
+verification results:: 157 verified, 0 errors   # iroha_sumeragi_core root obligations
 ```
 
 Evidence for the source-link edit itself uses the isolated harness because
@@ -51,7 +51,7 @@ Evidence for the source-link edit itself uses the isolated harness because
 
 ```text
 bash scripts/formal/run_sumeragi_v2_harness.sh --unit
-  105 unit/reducer/WAL/refinement tests passed
+  115 unit/reducer/WAL/refinement tests passed
 bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay
   8 model-trace replay tests passed
 bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
@@ -61,7 +61,7 @@ bash scripts/formal/run_sumeragi_v2_harness.sh \
   passed
 PATH=<pinned-verus> CARGO_TARGET_DIR=/tmp/codex-wal-exact-verus-target \
   scripts/verify_sumeragi_v2.sh
-  1690 dependency obligations and 126 root obligations verified, 0 errors
+  1690 dependency obligations and 157 root obligations verified, 0 errors
 ```
 
 The successful run discharges the abstract reducer/WAL obligations, the
@@ -418,7 +418,7 @@ The module contains transition-by-transition proof functions for:
 | Exact one-shot state/effect relation | Encoded in the production gate | `ACTION_RESUME_AFTER_REPLAY` checks false-to-true, unchanged durable state, and the exact Sign/Fetch/empty effect class |
 | Abstract reducer refinement | Encoded | `ReducerPathProjection::ResumeAfterReplay` preserves WAL, application, and effect fences |
 | Named TLA+ action map | Encoded and spelling-gated | Proposal/vote/timeout resumption maps to the existing `ResumeProposal`, `ResumeVote`, and `ResumeTimeout` actions; decided replay maps to `FetchBody` |
-| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 126 root obligations verified with zero errors |
+| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 157 root obligations verified with zero errors |
 
 ## Exact production commit gate
 
@@ -488,7 +488,7 @@ ordinary Rust collection lookups that produce those concrete primitives are
 not themselves verified, which remains gap 1 below, but no authorization or
 action-exactness boolean crosses the verified kernel boundary.
 
-The pinned verifier discharged all 126 root obligations with zero errors on a
+The pinned verifier discharged all 157 root obligations with zero errors on a
 clean target. The verification script rejects `assume`, `admit`, unreviewed
 trusted bodies, and external function specifications in the package-local
 reducer and proof modules throughout this crate. It also rejects reintroduction
@@ -496,6 +496,16 @@ of compressed `TimeoutIntent` validity/high-QC-match predicates and requires
 the primitive-guard proof. It checks that every mapped TLA+ action name still
 exists in both `SumeragiV2Core.tla` and the Verus mapping; this prevents name
 drift but does not prove the independently parsed operator bodies equivalent.
+
+The cross-tool successor inventory additionally includes
+`production_terminal_application_without_successor_activation_refines_indexed_terminal`.
+Its shared production/Verus kernel binds the exact height context, application
+receipt, finality artifact, block identity, and authenticated durable
+predecessor while requiring that no successor activation is pending. The live
+runner invokes that kernel immediately after predecessor authentication and
+before `PendingSuccessorConstruction::begin`. This is an Apply-boundary
+separation result, not a production `MaxHeight` rule; the projection deliberately
+contains no finite-horizon input.
 
 ## Production WAL byte mapping
 

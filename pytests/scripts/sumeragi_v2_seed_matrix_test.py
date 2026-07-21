@@ -232,6 +232,32 @@ def _key_values(path: Path) -> dict[str, str]:
     )
 
 
+def _expected_seed_command(
+    source_manifest: str,
+    scenario: str,
+    seed: str,
+    run_index: int,
+) -> str:
+    return (
+        f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={source_manifest} "
+        "IROHA_TEST_REQUIRE_NETWORK=1 "
+        "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
+        "IROHA_TEST_SKIP_BUILD=0 "
+        "IROHA_TEST_ALLOW_REENTRANT_BUILD=1 "
+        "IROHA_TEST_BUILD_TIMEOUT_MS=3600 "
+        "IROHA_TEST_PROCESS_TIMEOUT_MS=300 "
+        "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300 "
+        f"IROHA_TEST_NETWORK_BASE_SEED={seed} "
+        "TEST_NETWORK_TMP_DIR=${SEED_MATRIX_EVIDENCE_DIRECTORY}/"
+        f"localnets/run-{run_index:03d} "
+        "IROHA_TEST_NETWORK_KEEP_DIRS=1 "
+        "cargo test --locked -p integration_tests --test "
+        "sumeragi_v2_runner_isolated "
+        f"sumeragi_v2_runner::{scenario} -- --exact --nocapture "
+        "--test-threads=1"
+    )
+
+
 def _wait_for_path(path: Path, timeout_seconds: float = 10.0) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -316,16 +342,13 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
         )
         assert "running 1 test" in output.read_text(encoding="utf-8")
         assert row["run_log_sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
-        assert row["seed"] in row["command"]
-        assert "IROHA_TEST_REQUIRE_NETWORK=1" in row["command"]
-        assert "IROHA_TEST_NETWORK_START_ATTEMPTS=1" in row["command"]
-        assert "IROHA_TEST_SKIP_BUILD=0" in row["command"]
-        assert "IROHA_TEST_ALLOW_REENTRANT_BUILD=1" in row["command"]
-        assert f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={source_manifest}" in row["command"]
-        assert "IROHA_TEST_BUILD_TIMEOUT_MS=3600" in row["command"]
-        assert "IROHA_TEST_PROCESS_TIMEOUT_MS=300" in row["command"]
-        assert "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300" in row["command"]
-        assert "--exact --nocapture --test-threads=1" in row["command"]
+        assert row["command"] == _expected_seed_command(
+            source_manifest,
+            row["scenario"],
+            row["seed"],
+            index,
+        )
+        assert str(invocation) not in row["command"]
         assert (" --ignored" in row["command"]) == (
             row["scenario"] in IGNORED_SCENARIOS
         )
@@ -442,6 +465,16 @@ def test_mocked_seed_matrix_release_profile_uses_32_seeds_per_scenario(
     assert len(summary_rows) == 160
     assert {row["profile"] for row in summary_rows} == {"release"}
     assert {row["result"] for row in summary_rows} == {"passed"}
+    assert all(
+        row["command"]
+        == _expected_seed_command(
+            SOURCE_MANIFEST,
+            row["scenario"],
+            row["seed"],
+            index,
+        )
+        for index, row in enumerate(summary_rows)
+    )
     for scenario_index, scenario in enumerate(SCENARIOS):
         scenario_rows = summary_rows[
             scenario_index * 32 : (scenario_index + 1) * 32

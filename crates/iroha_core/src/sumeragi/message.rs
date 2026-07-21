@@ -1229,7 +1229,7 @@ mod tests {
         )
         .expect("decode archival block message fixture")
         .0;
-        let network = crate::NetworkMessage::SumeragiBlock(Box::new(wire));
+        let network = crate::NetworkMessage::SumeragiBlock(Arc::new(wire));
         assert!(
             norito_core::to_bytes(&network).is_err(),
             "decode-only global v1 message must not cross the live network encoder"
@@ -1242,7 +1242,7 @@ mod tests {
     ) -> crate::NetworkMessage {
         let wire = BlockMessageWire::try_preencoded(Arc::new(message))
             .expect("live block message must pre-encode canonically");
-        let network = crate::NetworkMessage::SumeragiBlock(Box::new(wire));
+        let network = crate::NetworkMessage::SumeragiBlock(Arc::new(wire));
         let bytes = norito_core::to_bytes(&network).expect("encode live network message");
         decode_from_bytes(&bytes).expect("decode live network message")
     }

@@ -228,13 +228,6 @@
       "status": "tlaps_proved"
     },
     {
-      "id": "progress-witness-production-refinement",
-      "requirement": "The production reducer, durable WAL sources, effect executor, scheduler queues, body-recovery workers, application completion, successor activation, unified V2/lane-local ingress, and reliable outbound transport refine the exact abstract progress-owner identities and transitions: every durable Commit intent and Decision carrier maps to one current production owner or terminal state; reset and admission lifetimes agree; lane-local and V2 classes share the modeled count/byte owner without conflating semantic origin with the authenticated resource-owning hop; every reliable occurrence retains its exact source, target or remaining broadcast cursor, bytes, and attempt identity through actor, encode, frame, batch, write, and flush stages until the matching flush acknowledgement; scheduler service ranks preserve production FIFO/capacity semantics; and application completion reconstructs the next-height activation witness. Together with the separately reviewed effective-lock production refinement, this exact trace relation derives the historical locked-body production refinement. Source-fidelity checks and adversarial mutation matrices constrain this mapping but do not prove it",
-      "module": "SumeragiV2AsyncLivenessProofs",
-      "symbol": "ProgressWitnessProductionRefinementObligation",
-      "status": "specified_unproved"
-    },
-    {
       "id": "progress-witness-preservation",
       "requirement": "Every active durable locked Commit intent retains a concrete signing, retransmission, receipt, certificate, decision, or exact node-and-generation crash/replay authority until WAL reconstruction; every durable decision retains an exact body-recovery, validation, application, completion, or exact node-and-generation Decision-recovery witness; every exact historical locked Prepare source retains either its post-validation Commit witness, exact active certified request, or a current-consumer FetchBody, RequestCertifiedBody, FetchCertifiedBody, StoreBody, or ValidateBody candidate; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness; and locked-Commit signer, TimeoutVote signer, PrepareQC, CommitQC, and TC deferred owners remain unique within their exact two-times-validator-count-plus-three partition. Commit crash authority discharges only the durable Commit carrier, and Decision recovery authority retires only into an exact current-consumer FetchBody owner",
       "module": "SumeragiV2AsyncLivenessProofs",
@@ -242,10 +235,10 @@
       "status": "specified_unproved"
     },
     {
-      "id": "post-gst-deadlock-freedom",
-      "requirement": "Every reachable undecided post-GST state enables an AsyncNext step that grows current-height protocol evidence, strictly decreases a concrete deadline debt, or decreases/exits a protected candidate or Serve-occurrence service rank; a bare clock, runner, or view-change step is insufficient",
+      "id": "progress-witness-production-refinement",
+      "requirement": "The production reducer, durable WAL sources, effect executor, scheduler queues, body-recovery workers, application completion, successor activation, unified V2/lane-local ingress, and reliable outbound transport refine the exact abstract progress-owner identities and transitions: every durable Commit intent and Decision carrier maps to one current production owner or terminal state; reset and admission lifetimes agree; lane-local and V2 classes share the modeled count/byte owner without conflating semantic origin with the authenticated resource-owning hop; every reliable occurrence retains its exact source, target or remaining broadcast cursor, bytes, and attempt identity through actor, encode, frame, batch, write, and flush stages until the matching flush acknowledgement; scheduler service ranks preserve production FIFO/capacity semantics; and application completion reconstructs the next-height activation witness. Together with the separately reviewed effective-lock production refinement, this exact trace relation derives the historical locked-body production refinement. Source-fidelity checks and adversarial mutation matrices constrain this mapping but do not prove it",
       "module": "SumeragiV2AsyncLivenessProofs",
-      "symbol": "DeadlockFreedomObligation",
+      "symbol": "ProgressWitnessProductionRefinementObligation",
       "status": "specified_unproved"
     },
     {
@@ -274,6 +267,13 @@
       "requirement": "Every scheduler-owned completion, progress, or canonical constructor-shaped Normal proposal/Prepare candidate is eventually serviced or decreases its well-founded deferred, runtime-queue, ready-completion, IO, outstanding-work, causal, or reliable-transport rank; the Stage-6 causal rank uses a doubled causal FIFO position plus the local-source distance so removal of an earlier head strictly dominates a possible cursor reset; authenticated TimeoutVote owns a signer-keyed Progress slot, and every accepted CertifiedRequest or CommitCertificateRequest recovery Serve occurrence owns a fresh nonce and decreasing FIFO position; reachable delivery ownership originates at authenticated ingress, resource lanes are keyed by authenticated via rather than relay-controlled semantic origin, unified lane-local/V2 classification preserves the frozen admitted class after view movement, and reliable actor/writer ownership cannot retire before the exact flush acknowledgement. Source-bound Verus sequence theorems preserve continuation-before-tail order and, conditional on faithful identities plus a complete prior-owner set, retain every fresh emitted identity exactly once in stable tail order. The bounded FIFO/cursor and inverted-owner/order mutations are regression evidence only: the production effect-to-TLA identity/owner mapping, Completion causal-capacity descent, reliable actor-to-flush rank, and the full temporal obligation remain unproved",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedServiceRankProgressObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "post-gst-deadlock-freedom",
+      "requirement": "Every reachable undecided post-GST state enables a concrete AsyncNext step that grows current-height protocol evidence; strictly decreases deadline debt; decreases/exits a protected candidate or Serve-occurrence rank; or strictly decreases named terminating local work: Stage-2 Busy or deferred-handoff rank, Stage-3/4/6 auxiliary or capacity rank, exact-recipient runner-prefix or runtime-invocation debt, completion I/O depth, ingress depth, outstanding transport cardinality, or the node-service gate. The overdue-packet branch must follow the packet's authenticated recipient/source through exact duplicate coalescing, fresh admission, recipient-local runner work, applied-node historical draining, or the blocking Serve I/O FIFO; an unrelated runner, bare clock, idle/rearm, or view-change step is insufficient",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "DeadlockFreedomObligation",
       "status": "specified_unproved"
     },
     {
@@ -313,7 +313,7 @@
     },
     {
       "id": "successor-activation-starvation-freedom",
-      "requirement": "Every responsive validator's Queued or Running successor activation has an exact durable parent witness, an enabled progress action, and a rank in the minimal finite 0..19 carrier; the one permitted fail-closed reset crosses the pre-failure +9 offset, every later startup action strictly decreases the local distance or publishes/supersedes the successor, no chain step orphans pending responsive activation or increases its rank, and weak fairness eventually reaches publication or legitimate later-height supersession; no progress claim is made for validators outside Responsive",
+      "requirement": "Every responsive validator's Queued or Running successor activation has an exact durable parent witness, an enabled progress action, and a rank in the finite 0..21 lifecycle carrier: Published predecessor ownership occupies the 12..21 tier and recovered/absent ownership occupies 1..10. A clean exact-complete-tip restart strictly descends from the Published tier into the absent-owner attempt, snapshot-bootstrap authority cannot authenticate that recovery, and failed resets occur only before the explicit eventual failure-free suffix. Within that suffix every fair progress action strictly decreases rank or publishes/supersedes the successor, no chain step orphans pending activation or raises its rank, and well-founded rank convergence plus suffix lifting yields starvation freedom. The candidate TLAPS proof remains specified_unproved until strict verification succeeds; no progress claim is made for validators outside Responsive",
       "module": "SumeragiV2SuccessorActivationRefinementProofs",
       "symbol": "SuccessorActivationStarvationFreedomObligation",
       "status": "specified_unproved"
@@ -335,7 +335,7 @@
     {
       "id": "height-liveness",
       "requirement": "Every joined post-GST context eventually applies at the terminal MaxHeight, or advances every responsive validator into a successor context when nonterminal",
-      "module": "SumeragiV2ChainEpochRefinement",
+      "module": "SumeragiV2ChainLivenessProofs",
       "symbol": "HeightLivenessObligation",
       "status": "specified_unproved"
     },
@@ -376,7 +376,7 @@
     },
     {
       "id": "runtime-after-gst",
-      "requirement": "After GST the monotonic clock advances, the serialized run loop is invoked, and admitted local fsync, signature, reconstruction, validation, and application work terminates within the declared service bounds",
+      "requirement": "After GST, each non-crashing responsive validator participating in the active-height or exact historical-recovery corridor has an advancing local monotonic clock, its serialized height runner is invoked within the declared service bound after every finite wait, and its admitted local fsync, signature, reconstruction, validation, and application work terminates within declared service bounds",
       "module": "trusted-boundary",
       "symbol": "post-gst-runtime-service",
       "status": "trusted_contract"

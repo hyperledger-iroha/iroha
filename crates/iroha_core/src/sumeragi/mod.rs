@@ -632,6 +632,10 @@ pub use v2_context::{
     GenesisV2Bootstrap, V2GenesisBootstrapError, freeze_staged_genesis_v2,
     signed_genesis_voting_peers, staged_genesis_nexus_amx_context_hash,
 };
+pub use v2_core::{
+    ProductionTwoStageRelayRetryTraceProjection,
+    production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
+};
 pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
 #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
@@ -1204,6 +1208,21 @@ impl FairV2IngressOwnershipEvidence {
         true
     }
 
+    /// Whether two validated carriers name the same canonical semantic
+    /// request rather than merely sharing identical wire bytes.
+    ///
+    /// Distinct semantic origins are independent requests. Alternate
+    /// authenticated delivery sources for one origin retain the same wire key
+    /// and may merge their per-source routes.
+    pub(crate) fn same_semantic_request(&self, other: &Self) -> bool {
+        self.validate_exact()
+            && other.validate_exact()
+            && self.first.wire_key == other.first.wire_key
+            && self.first.message_kind == other.first.message_kind
+            && self.first.class == other.first.class
+            && self.first.encoded_bytes == other.first.encoded_bytes
+    }
+
     /// Whether this carrier was derived from the exact normalized message now
     /// crossing a downstream ownership seam.
     pub(crate) fn matches_message(&self, message: &BlockMessage) -> bool {
@@ -1216,10 +1235,10 @@ impl FairV2IngressOwnershipEvidence {
             && Some(self.first.message_kind) == FairV2IngressMessageKind::classify(message)
     }
 
-    /// Whether an authenticated runtime command retained the exact canonical
-    /// v2 bytes admitted by this fair-ingress owner.
-    pub(crate) fn matches_runtime_v2_bytes(&self, canonical_bytes: &[u8]) -> bool {
-        self.first.message_kind.is_v2() && self.first.encoded_bytes.as_ref() == canonical_bytes
+    /// Whether the carrier's semantic request origin is the independently
+    /// retained inbound sender.
+    pub(crate) fn matches_semantic_origin(&self, origin: Option<&PeerId>) -> bool {
+        self.validate_exact() && self.first.semantic_origin.as_ref() == origin
     }
 
     /// Decode the exact canonical v2 envelope retained by this ownership
@@ -1246,8 +1265,42 @@ impl FairV2IngressOwnershipEvidence {
     pub(crate) fn process_local_projection_hash(&self) -> CryptoHash {
         use std::hash::{Hash as _, Hasher as _};
 
+        fn append_peer(projection: &mut Vec<u8>, peer: Option<&PeerId>) {
+            match peer {
+                None => projection.push(0),
+                Some(peer) => {
+                    projection.push(1);
+                    let encoded = peer.encode();
+                    projection.extend_from_slice(
+                        &u64::try_from(encoded.len())
+                            .expect("peer identity length fits u64")
+                            .to_le_bytes(),
+                    );
+                    projection.extend_from_slice(&encoded);
+                }
+            }
+        }
+
+        fn append_source(projection: &mut Vec<u8>, source: &FairV2IngressSource) {
+            match source {
+                FairV2IngressSource::Untrusted => projection.push(0),
+                FairV2IngressSource::Validator(peer) => {
+                    projection.push(1);
+                    append_peer(projection, Some(peer));
+                }
+            }
+        }
+
         let mut projection = Vec::new();
-        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v1");
+        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v2");
+        append_peer(&mut projection, self.first.semantic_origin.as_ref());
+        append_peer(&mut projection, self.first.authenticated_via.as_ref());
+        append_source(&mut projection, &self.first.authenticated_source);
+        append_source(&mut projection, &self.first.semantic_owner_source);
+        append_peer(&mut projection, self.latest.semantic_origin.as_ref());
+        append_peer(&mut projection, self.latest.authenticated_via.as_ref());
+        append_source(&mut projection, &self.latest.authenticated_source);
+        append_source(&mut projection, &self.latest.semantic_owner_source);
         projection.extend_from_slice(&self.admission_count.to_le_bytes());
         projection.extend_from_slice(&self.occurrence_count.to_le_bytes());
         for count in self.action_counts {
@@ -1297,6 +1350,7 @@ impl FairV2IngressOwnershipEvidence {
     }
 
     /// Current bounded route set after every admitted downstream merge.
+    #[cfg(test)]
     pub(crate) const fn current_reply_routes(&self) -> Option<&NetworkReplyRoutes> {
         self.current_routes.as_ref()
     }
@@ -1316,6 +1370,7 @@ impl FairV2IngressOwnershipEvidence {
     }
 
     /// Most recent ownership action retained by this queued semantic owner.
+    #[cfg(test)]
     pub(crate) const fn latest_action(&self) -> FairV2IngressOwnershipAction {
         self.latest.action
     }
@@ -1331,7 +1386,7 @@ impl FairV2IngressOwnershipEvidence {
         let Some(attempt) = self
             .attempts
             .iter_mut()
-            .find(|attempt| attempt.route.same_source(route))
+            .find(|attempt| attempt.route.same_delivery(route))
         else {
             return false;
         };
@@ -2365,7 +2420,7 @@ pub(crate) struct FairV2Ingress {
 }
 
 impl FairV2Ingress {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn new(
         capacity: usize,
         byte_capacity: usize,
@@ -2660,7 +2715,7 @@ impl FairV2Ingress {
     /// Queued messages belong to the preceding immutable height and are
     /// discarded while the public ingress gate is closed. The caller may open
     /// the queue only after context and safety-WAL recovery complete.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn configure_roster(
         &self,
         roster: impl IntoIterator<Item = PeerId>,
@@ -3554,6 +3609,15 @@ impl FairV2Ingress {
 #[cfg(test)]
 pub(crate) fn fair_v2_ingress_admit_for_test(inbound: InboundBlockMessage) -> InboundBlockMessage {
     let roster = inbound.via().cloned().into_iter().collect::<Vec<_>>();
+    fair_v2_ingress_admit_with_roster_for_test(inbound, roster)
+}
+
+/// Admit one test envelope with an explicit frozen semantic validator roster.
+#[cfg(test)]
+pub(crate) fn fair_v2_ingress_admit_with_roster_for_test(
+    inbound: InboundBlockMessage,
+    roster: Vec<PeerId>,
+) -> InboundBlockMessage {
     let ingress = FairV2Ingress::new(
         64,
         128 * 1024 * 1024,
@@ -3816,7 +3880,7 @@ impl SumeragiHandle {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn test_sumeragi_handle(
     block_capacity: usize,
 ) -> (
@@ -3850,6 +3914,43 @@ fn test_sumeragi_handle(
         ConsensusOutputGuard::isolated(),
     );
     (handle, block, lane_relay_rx)
+}
+
+/// Feature-gated real ingress owner used by dependent-crate liveness tests.
+///
+/// The harness exposes only ordinary public ingress attempts and one exact
+/// dequeue operation; production queue internals remain private.
+#[cfg(feature = "iroha-core-tests")]
+pub struct SumeragiIngressTestHarness {
+    handle: SumeragiHandle,
+    block: Arc<FairV2Ingress>,
+    _lane_relay: mpsc::Receiver<LaneRelayMessage>,
+}
+
+#[cfg(feature = "iroha-core-tests")]
+impl SumeragiIngressTestHarness {
+    /// Construct an open bounded ingress with an empty validator roster.
+    #[must_use]
+    pub fn new(block_capacity: usize) -> Self {
+        let (handle, block, lane_relay) = test_sumeragi_handle(block_capacity);
+        Self {
+            handle,
+            block,
+            _lane_relay: lane_relay,
+        }
+    }
+
+    /// Clone the genuine production ingress handle.
+    #[must_use]
+    pub fn handle(&self) -> SumeragiHandle {
+        self.handle.clone()
+    }
+
+    /// Remove one exact block occurrence and release its bounded inner owner.
+    #[must_use]
+    pub fn pop_block(&self) -> Option<InboundBlockMessage> {
+        self.block.try_recv_if(|_| true)
+    }
 }
 
 /// Spawn configuration for the authoritative serialized Sumeragi v2 worker.
@@ -5531,6 +5632,37 @@ mod authoritative_runtime_gate_tests {
                 .expect("fair admission attached exact ownership evidence");
             assert!(evidence.advance_reply_cursors(&route_a, 7, 11));
             assert!(!evidence.advance_reply_cursors(&route_a, 6, 11));
+            let unowned_later_delivery = routes
+                .redeliver(&route_a)
+                .expect("mint a same-target delivery owned by another canonical request");
+            assert!(unowned_later_delivery.same_source(&route_a));
+            assert!(unowned_later_delivery.same_request_authority(&route_a));
+            assert!(!unowned_later_delivery.same_delivery(&route_a));
+            assert!(
+                !evidence.advance_reply_cursors(&unowned_later_delivery, 8, 12),
+                "a later capability not installed in this request cannot advance its cursor"
+            );
+            let foreign_origin = PeerId::from(KeyPair::random().public_key().clone());
+            let retargeted_same_hub = routes.mint_via(foreign_origin, source_a.clone());
+            assert!(retargeted_same_hub.same_source(&route_a));
+            assert!(!retargeted_same_hub.same_request_authority(&route_a));
+            assert!(
+                !evidence.advance_reply_cursors(&retargeted_same_hub, 8, 12),
+                "a same-hub capability for another relayed origin cannot advance this request"
+            );
+            let source_a_attempt = evidence
+                .attempts
+                .iter()
+                .find(|attempt| attempt.route.same_source(&route_a))
+                .expect("source A retains its original request authority");
+            assert_eq!(
+                (
+                    source_a_attempt.message_cursor,
+                    source_a_attempt.chunk_cursor
+                ),
+                (7, 11),
+                "retargeted rejection cannot regress or advance the retained cursor"
+            );
             assert!(evidence.validate_exact());
         }
 
@@ -5584,47 +5716,47 @@ mod authoritative_runtime_gate_tests {
         assert_eq!(source_b_attempt.message_cursor, 0);
         assert_eq!(source_b_attempt.chunk_cursor, 0);
 
-        let rejected = |mutated: super::FairV2IngressOwnershipEvidence| {
-            assert!(!mutated.validate_exact());
+        let rejected = |label: &str, mutated: super::FairV2IngressOwnershipEvidence| {
+            assert!(!mutated.validate_exact(), "accepted mutated {label}");
         };
 
         let mut mutated = evidence.clone();
         mutated.latest.wire_key.hash = CryptoHash::new(b"mutated semantic hash");
-        rejected(mutated);
+        rejected("semantic hash", mutated);
 
         let mut mutated = evidence.clone();
         mutated.latest.semantic_origin = None;
-        rejected(mutated);
+        rejected("semantic origin", mutated);
 
         let mut mutated = evidence.clone();
         mutated.latest.authenticated_via = None;
-        rejected(mutated);
+        rejected("authenticated delivery peer", mutated);
 
         let mut mutated = evidence.clone();
         mutated.latest.authenticated_source = super::FairV2IngressSource::Untrusted;
-        rejected(mutated);
+        rejected("authenticated source", mutated);
 
         let mut mutated = evidence.clone();
-        mutated.latest.message_kind = super::FairV2IngressMessageKind::V2Vote;
-        rejected(mutated);
+        mutated.latest.message_kind = super::FairV2IngressMessageKind::V2Proposal;
+        rejected("message kind", mutated);
 
         let mut mutated = evidence.clone();
         mutated.latest.class = super::FairV2IngressClass::Progress;
-        rejected(mutated);
+        rejected("message class", mutated);
 
         let mut mutated = evidence.clone();
         mutated.latest.encoded_bytes = Arc::<[u8]>::from(vec![0xFF]);
-        rejected(mutated);
+        rejected("canonical bytes", mutated);
 
         let mut mutated = evidence.clone();
         mutated.latest.resource_after.global_len =
             mutated.latest.resource_after.global_len.saturating_add(1);
-        rejected(mutated);
+        rejected("global length", mutated);
 
         let mut mutated = evidence.clone();
         mutated.latest.resource_after.source_bytes =
             mutated.latest.resource_after.source_bytes.saturating_add(1);
-        rejected(mutated);
+        rejected("source bytes", mutated);
 
         let mut mutated = evidence.clone();
         mutated.latest.resource_after.timeout_vote_byte_reserve = mutated
@@ -5632,7 +5764,7 @@ mod authoritative_runtime_gate_tests {
             .resource_after
             .timeout_vote_byte_reserve
             .saturating_add(1);
-        rejected(mutated);
+        rejected("timeout reserve", mutated);
 
         let mut mutated = evidence.clone();
         mutated.latest.resource_after.message_capacity = mutated
@@ -5640,25 +5772,67 @@ mod authoritative_runtime_gate_tests {
             .resource_after
             .message_capacity
             .saturating_add(1);
-        rejected(mutated);
+        rejected("message capacity", mutated);
 
         let mut mutated = evidence.clone();
         mutated.latest.route_capacity = mutated
             .latest
             .route_capacity
             .and_then(|capacity| capacity.checked_add(1));
-        rejected(mutated);
+        rejected("route capacity", mutated);
 
         let mut mutated = evidence.clone();
         mutated.action_counts[super::FairV2IngressOwnershipAction::ExactDuplicate.index()] += 1;
-        rejected(mutated);
+        rejected("action count", mutated);
 
         let mut mutated = evidence;
         mutated.attempts[0].message_cursor = mutated.attempts[0].message_cursor.saturating_add(1);
-        rejected(mutated);
+        rejected("attempt cursor", mutated);
 
         assert!(delivered.take_ingress_ownership().is_some());
         assert!(delivered.ingress_ownership().is_none());
+    }
+
+    #[test]
+    fn fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
+        let authenticated_via = validator_peers(1).pop().expect("validator fixture");
+        let origin_a = PeerId::from(KeyPair::random().public_key().clone());
+        let origin_b = PeerId::from(KeyPair::random().public_key().clone());
+        let request = v2_auxiliary_prepare(0);
+        ingress.close();
+        ingress
+            .configure_roster([authenticated_via.clone()])
+            .expect("validator plus untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        for origin in [origin_a, origin_b] {
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::from_transport(
+                    request.clone(),
+                    origin,
+                    authenticated_via.clone(),
+                )),
+                Ok(super::FairV2IngressPushDisposition::Enqueued)
+            ));
+        }
+
+        let first = ingress
+            .try_recv()
+            .and_then(|inbound| inbound.ingress_ownership().cloned())
+            .expect("first exact ownership carrier");
+        let second = ingress
+            .try_recv()
+            .and_then(|inbound| inbound.ingress_ownership().cloned())
+            .expect("second exact ownership carrier");
+        assert!(first.validate_exact());
+        assert!(second.validate_exact());
+        assert!(!first.same_semantic_request(&second));
+        assert_ne!(
+            first.process_local_projection_hash(),
+            second.process_local_projection_hash(),
+            "process-local scheduler projections must bind semantic origin"
+        );
     }
 
     #[test]
@@ -6025,7 +6199,7 @@ mod authoritative_runtime_gate_tests {
             "maximal-roster proposal must dominate other safety/control envelopes"
         );
         let maximal_peer = maximal_roster.first().expect("non-empty maximal roster");
-        let network_message = crate::NetworkMessage::SumeragiBlock(Box::new(
+        let network_message = crate::NetworkMessage::SumeragiBlock(Arc::new(
             super::message::BlockMessageWire::new(proposal),
         ));
         assert_eq!(
@@ -6167,7 +6341,7 @@ mod authoritative_runtime_gate_tests {
         let required = super::fair_v2_ingress_required_transport_completion_bytes(layout);
         assert_eq!(encoded_v2_len(&response), required);
         let validator = validator_peers(1).pop().expect("validator fixture");
-        let network_response = crate::NetworkMessage::SumeragiBlock(Box::new(
+        let network_response = crate::NetworkMessage::SumeragiBlock(Arc::new(
             super::message::BlockMessageWire::new(response.clone()),
         ));
         assert_eq!(
@@ -6973,7 +7147,7 @@ mod authoritative_runtime_gate_tests {
         assert!(ingress.try_recv_if_at(captured_at, |_| true).is_none());
         ingress
             .try_push_at(
-                InboundBlockMessage::new(BlockMessage::invalid_wire_sentinel(), None),
+                InboundBlockMessage::new(v2_auxiliary_prepare(0), None),
                 captured_at + Duration::from_secs(5),
             )
             .expect("enqueue after an empty-queue scan");
@@ -6997,7 +7171,7 @@ mod authoritative_runtime_gate_tests {
 
         ingress
             .try_push_at(
-                InboundBlockMessage::new(BlockMessage::invalid_wire_sentinel(), None),
+                InboundBlockMessage::new(v2_auxiliary_prepare(1), None),
                 captured_at + Duration::from_secs(10),
             )
             .expect("enqueue a fresh ownership interval");

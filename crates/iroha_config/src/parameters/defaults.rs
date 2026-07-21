@@ -3210,6 +3210,18 @@ pub mod sumeragi {
     pub const QUEUE_READY_BODY_CAPACITY: NonZeroUsize = nonzero!(128_usize);
     /// Smallest reducer FIFO admitting normal, progress, and completion regions.
     pub const MIN_RUNTIME_COMMAND_CAPACITY: usize = 8;
+    /// Divisor used to reserve trusted completion slots from the reducer command FIFO.
+    pub const V2_RUNTIME_COMPLETION_RESERVE_DIVISOR: usize = 4;
+    /// Maximum effects one serialized reducer input can emit.
+    ///
+    /// This is shared with the executable refinement gate so configuration
+    /// validation reserves the exact same producer batch used by production.
+    pub const V2_MAX_EFFECTS_PER_STEP: usize = 8;
+    /// Number of independently reserved exact-output progress classes.
+    ///
+    /// Safety, lane-progress, and bulk-progress each require one ownership
+    /// unit for every source in a maximum fanout.
+    pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;
     /// Ready-body byte budget relative to the per-body bound.
     pub const READY_BODY_BYTE_MULTIPLIER: u64 = 2;
 

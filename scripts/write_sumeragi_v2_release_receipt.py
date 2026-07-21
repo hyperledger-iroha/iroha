@@ -207,12 +207,12 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 406
+_PRODUCTION_TEST_COUNT = 465
 _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
         "kura::tests",
-        12,
+        13,
     ),
     (
         "production-kura-lane-geometry",
@@ -227,29 +227,29 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        25,
+        26,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 26),
+    ("production-merge-sidecar", "merge_sidecar::tests", 30),
     ("production-v2-core", "sumeragi::v2_core::tests", 15),
-    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
+    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 8),
     (
         "production-v2-core-source-link",
         "sumeragi::v2_core::reducer::source_link_tests",
         3,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 38),
+    ("production-v2-adapter", "sumeragi::v2::tests", 39),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 54),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 57),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 28),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 31),
-    ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 22),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 49),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 34),
+    ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 25),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 53),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
-        18,
+        19,
     ),
     (
         "production-v2-integration-runner",
@@ -259,12 +259,27 @@ _PRODUCTION_MODULES = (
     (
         "production-p2p-peer-reliable-flush",
         "peer::run::tests",
-        9,
+        7,
+    ),
+    (
+        "production-p2p-shared-source-byte-geometry",
+        "peer::shared_byte_budget_tests",
+        8,
     ),
     (
         "production-p2p-network-reliable-actor",
         "network::tests",
-        45,
+        56,
+    ),
+    (
+        "production-p2p-source-memory-geometry",
+        "network::inbound_source_memory_bound_tests",
+        1,
+    ),
+    (
+        "production-p2p-waiter-rank-geometry",
+        "network::handle_update_tests",
+        1,
     ),
     (
         "production-irohad-consensus-message-control",
@@ -279,7 +294,22 @@ _PRODUCTION_MODULES = (
     (
         "production-irohad-authenticated-via",
         "tests::relay_fairness",
+        5,
+    ),
+    (
+        "production-irohad-genesis-reply-geometry",
+        "genesis_bootstrap::tests",
+        4,
+    ),
+    (
+        "production-config-v2-exact-output-geometry",
+        "parameters::actual::tests",
         1,
+    ),
+    (
+        "production-config-v2-exact-output-root-parse",
+        "parameters::user::duration_clamp_tests",
+        3,
     ),
 )
 _PRODUCTION_INTEGRATION_MODULE = "sumeragi_v2_runner::prepare_qc_split_tests"
@@ -351,6 +381,8 @@ def _canonical_production_tests(repo_root: Path) -> list[str]:
                     "consensus_message_control::tests::",
                     "network_relay_tests::",
                     "tests::relay_fairness::",
+                    "genesis_bootstrap::tests::",
+                    "parameters::",
                 )
             )
             for test in tests
@@ -370,18 +402,26 @@ def _production_module_command(module: str) -> str:
             "sumeragi_v2_runner_isolated "
             f"{_PRODUCTION_INTEGRATION_MODULE} -- --test-threads=1"
         )
-    if module in {"peer::run::tests", "network::tests"}:
+    if module in {
+        "peer::run::tests",
+        "network::tests",
+        "network::inbound_source_memory_bound_tests",
+        "network::handle_update_tests",
+    }:
         return f"cargo test --locked -p iroha_p2p --lib {module} -- --test-threads=1"
     if module in {
         "consensus_message_control::tests",
         "network_relay_tests",
         "tests::relay_fairness",
+        "genesis_bootstrap::tests",
     }:
         return (
             "cargo test --locked -p irohad --bin irohad "
             "--features test-network-message-control "
             f"{module} -- --test-threads=1"
         )
+    if module.startswith("parameters::"):
+        return f"cargo test --locked -p iroha_config --lib {module} -- --test-threads=1"
     return f"cargo test --locked -p iroha_core --lib {module} -- --test-threads=1"
 
 
@@ -550,7 +590,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                828,
+                1044,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
@@ -3605,6 +3645,24 @@ def _seed_run_logs(seed_path: Path, summary: Path, manifest: str) -> list[Path]:
         )
         output = f"runs/run-{index:03d}.log"
         localnet = f"localnets/run-{index:03d}"
+        expected_command = (
+            f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={manifest} "
+            "IROHA_TEST_REQUIRE_NETWORK=1 "
+            "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
+            "IROHA_TEST_SKIP_BUILD=0 "
+            "IROHA_TEST_ALLOW_REENTRANT_BUILD=1 "
+            "IROHA_TEST_BUILD_TIMEOUT_MS=3600 "
+            "IROHA_TEST_PROCESS_TIMEOUT_MS=300 "
+            "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300 "
+            f"IROHA_TEST_NETWORK_BASE_SEED={expected_seed} "
+            "TEST_NETWORK_TMP_DIR=${SEED_MATRIX_EVIDENCE_DIRECTORY}/"
+            f"{localnet} "
+            "IROHA_TEST_NETWORK_KEEP_DIRS=1 "
+            "cargo test --locked -p integration_tests --test "
+            "sumeragi_v2_runner_isolated "
+            f"sumeragi_v2_runner::{scenario} -- --exact --nocapture "
+            "--test-threads=1"
+        )
         if (
             row.get("profile") != "release"
             or row.get("source_manifest_sha256") != manifest
@@ -3615,7 +3673,7 @@ def _seed_run_logs(seed_path: Path, summary: Path, manifest: str) -> list[Path]:
             or row.get("tee_status") != "0"
             or row.get("output") != output
             or row.get("localnet") != localnet
-            or not row.get("command")
+            or row.get("command") != expected_command
         ):
             raise ReceiptError(f"seed summary row {index} is not the exact release run")
         digest = row.get("run_log_sha256")

@@ -44,7 +44,7 @@ def configure_fixture(module, monkeypatch, tmp_path: Path):
             (
                 module.begin_marker(NONCE, MANIFEST),
                 "verification results:: 1690 verified, 0 errors",
-                "verification results:: 126 verified, 0 errors",
+                "verification results:: 157 verified, 0 errors",
                 module.success_marker(NONCE, MANIFEST),
             )
         )
@@ -195,12 +195,12 @@ def test_archived_log_override_retains_canonical_evidence_name(
     (
         (
             "verification results:: 1690 verified, 0 errors",
-            "verification results:: 126 verified, 0 errors",
+            "verification results:: 157 verified, 0 errors",
         ),
         (
             "BEGIN",
             "verification results:: 1690 verified, 0 errors",
-            "verification results:: 126 verified, 0 errors",
+            "verification results:: 157 verified, 0 errors",
             "SUCCESS",
             "SUCCESS",
         ),
@@ -213,7 +213,7 @@ def test_archived_log_override_retains_canonical_evidence_name(
         (
             "BEGIN",
             "verification results:: 1690 verified, 1 errors",
-            "verification results:: 126 verified, 0 errors",
+            "verification results:: 157 verified, 0 errors",
             "SUCCESS",
         ),
         (
@@ -224,7 +224,7 @@ def test_archived_log_override_retains_canonical_evidence_name(
         ),
         (
             "BEGIN",
-            "verification results:: 126 verified, 0 errors",
+            "verification results:: 157 verified, 0 errors",
             "verification results:: 1690 verified, 0 errors",
             "SUCCESS",
         ),

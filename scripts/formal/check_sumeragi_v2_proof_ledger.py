@@ -386,6 +386,7 @@ class CrossToolClaimContract:
     verified_kernel_parameters: str | None = None
     verified_kernel_body: str | None = None
     verified_kernel_const: bool = True
+    verified_kernel_public: bool = False
     verified_kernel_shared_macro_sha256: tuple[tuple[str, str], ...] = ()
     theorem_kernel_projection: str | None = None
     theorem_projection_builder: str | None = None
@@ -423,11 +424,13 @@ _DURABLE_INTENT_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ReplayPlanSlotProjection", "fb6183dfedfa450507e2246225a3cc0406c75f7e69bdfeaac13e704d11a7c5a0", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ReplayPlanProjection", "b4ca658003484dc3e313ef39c261535805a2760573cf7ad0bc26da0bda397c9f", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SubjectProjection", "ec3c03b7de6c0273a1bd5a97d6548c0dd0fdb25922953ceadd0bf964d5d7aea4", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "EVENT_PERSISTENCE_FAILED", "6a22b9eb79c972e27a9144237b7e954bbcb5115bc506141f4c351d6ed92412af", "const"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "pending_projection", "7befc4ef727cb9762744e2f4a0b73bf5f9cc6bd747461abb9f0818cc6a4e8c7b", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_for_pending", "4fe215694a779d8427a824fda9103d1ad5ce9d52ba4dc050db63b3fa9b928a4c", brace_context=(("impl", "Reducer"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_claim", "09580b6e22e7434e6fb7627bc00719509613cd5f65eae3d6268014832e2e19e6", brace_context=(("impl", "Reducer"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_grant", "7b0e7dfdc7b309d13a00ac9054279a284f52ba2868189c2551abd05ac4f81821", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_claim", "2be2c4e14a098fd2334fdbe96fa4b8044461d8d94b7f2a6a3f820274fc5d293e", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_grant", "1e263db662a7b2e1f7bbdead0f4bb3026e6fbd5174cde1c11ba254036a3dc7ff", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "transition_projection", "c4182b5c9d9a8f7dd0957adfed61256a25fb20192d32f1a9d8a4f869ad1142cb", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "event_kind", "dda92f84e6994e7ae557198f8346fbe75ce0c3e424442bd760789465e525d282", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionTagProjection", "cedf388a1d75dd88d021cad5f9e1d32148bf6490f155ae5ab8da4b6277e9e3f8", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionPendingProjection", "07017f432e219f2e87a9dcc9a52bc3fe1170e6bb0597a74a3799ff3b11d65319", "struct", (("verus", "!"),)),
@@ -465,11 +468,11 @@ _DECISION_IDENTITY_SOURCE_ITEM_SEALS = _DECISION_IDENTITY_CONSTANT_SOURCE_ITEM_S
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionDecisionIdentityProjection", "47c1b7b777b1363b1e711750530a670ebeeee7afe1166a841921e6af1e4e2e80", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionQuorumCertificateIdentityProjection", "7dcc65d36334e60d6f913e48672b53c5286cf3582eeb9c2f419bfbd7e6ae6737", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionDurableBodyIdentityProjection", "323488a9f69eb7ecd88214191fb6357dd7bf9c352f4c608618598f5a5b6ef947", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_identity_is_canonical_body", "ce431670642959f84a254edf3083b94b1c52c81882775ef437a0f430ec84c3fc", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_identity_is_canonical_body", "34a7f78794eb27fe346379efc558a21df646f27d4a8675f2c7084dec76fd503e", "macro"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_identity_equal_body", "bff7f86b8d140922e520030f6a95b41cc610a4cc60cc1ce0d31a30fa49698f02", "macro"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_quorum_certificate_is_canonical_body", "ba53e5ed996a6a73d16ca2b12ef98e0c0b1995ccb8d8ee059e60838fb67c0977", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_quorum_certificate_is_canonical_body", "13e873f589ff5fff16e10b1f538d2e77b2325baa41993197c465a6fb64f76fad", "macro"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_quorum_certificate_equal_body", "7c2af1e0691ae79d0cb43237ce1b30cf391e2392cb6fe1534a91c40bdf671a0f", "macro"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_durable_body_is_canonical_body", "b0f1095294209a6ba7c76d17729c545f663c1dd797c6cf8ef73ca6e9d51b6dc2", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_durable_body_is_canonical_body", "93396afe2b19d8e66fd3c577b80a51dbd21629dc2107b4b0ca6708f442167fee", "macro"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_durable_body_equal_body", "c9c7e3991cf8a23b285f83186a39bfbec4896ec81420db1042e11277c8d57be0", "macro"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionDecisionIdentityProjection", "99e974dbbcb158dd63869a82e84fb53b1c6ee8372906c390446226ee05ebbd09", "struct", (("verus", "!"),)),
@@ -480,12 +483,12 @@ _DECISION_IDENTITY_SOURCE_ITEM_SEALS = _DECISION_IDENTITY_CONSTANT_SOURCE_ITEM_S
 
 _DECISION_RECOVERY_SOURCE_ITEM_SEALS = _DECISION_IDENTITY_SOURCE_ITEM_SEALS + (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionDecisionRecoveryTraceProjection", "27be9b0c154c774d1f4076aad91d110c5802e42d83c1c4e5c363efc45aaf822d", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_recovery_trace_body", "61cf247e3aa7dd82e1209fb8dc7c4d4be59391da4ac7d43653a7e6157da436a0", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_decision_recovery_trace_body", "3b79ffa45f3b74ea2bfee5706c4af948d071ab11ff5c88f1d34b8c914ee8d962", "macro"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionDecisionRecoveryTraceProjection", "da8b7bb44412a9d8d6ab9dfecc7d29cf12a3ceaf4ac6a8be6137cba737e4711f", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "PendingKuraApply", "ae72d12b11f78a26b9604a5a97f5b0c354517eb5fb7d4e5c4537a83fee9979c8", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "PendingKuraApplyRecoveryEvidence", "4b78bb581ff0551c959d57dfc0d20b630c931f59bce962e082ff2e08cc90f22b", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "canonical_typed_identity", "c23d82dc5bb245bf7be77d50d89071ca077a5739817f03bc3503b21c31cbbdcf"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "canonical_hash_identity", "305b2b34743122db5ea790b91c59d77b56d22f9a22c607da54ee7b6a40701437"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "canonical_hash_identity", "4fd1019eace5b02f4e4ddc295066775995f4154b84c46029e47d0536f91764b6"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "recovery_decision_projection", "45a9f145367fcb48ba4b7534b657f8389c219bf73ffffd02db7912625cae6392"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "recovery_certificate_projection", "f757e341b8e778e85272f87c5d61473ecbf25d2cd1294c512e85974be6b08125"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "recovery_body_projection", "bd2d387d7a9ff306b662e4dc4292591a5b10c42002848cb370ae9bfb42122534"),
@@ -511,18 +514,18 @@ _RELIABLE_FLUSH_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS = (
 _RELIABLE_FLUSH_SOURCE_ITEM_SEALS = _RELIABLE_FLUSH_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS + (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "CanonicalIdentityProjection", "6988ca07a23b2b0b2f6f97862355cd26b65549402367584c30cc32311fa907b0", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionReliableFlushTraceProjection", "79204acec970333e6b195d176b90fd486fc02fee1f993f86a25de3d0074b1dbf", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_trace_body", "06d8ec2bbdbc0d905a6ef73d62861bfada2691508be37c79a669f973725478c3", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_trace_body", "3c0ebdaa383185d3e5baa7cd9b6935dffeeb7865a66aa72f86d87a914e3ca28c", "macro"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReliableFlushTraceProjection", "0d35b721a2168d5dfa9b7e48f0bcc45f3da54abad43d810153ac8a2d40c40cb2", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkFlushProjection", "1a063575a99e12018746845084a9b8b40fb8712492e38d09d8a951057bd8835e", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkAdmission", "9e395cd6140a967a5bbae35e93898604df5ae825ca9f06d761699145cc0692c9", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_admitted_reply", "bf33f567c1c868c09394b1e84b27753df2fb662bfde5dc4c990964f535689ad3", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_admitted_reply", "ecd3643b8192f5df2031a0b53c05c21db5f1bb4c790322272ab4ebba5c6f4204", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "projection_matches_identity", "3b5917c3c8fca5da6a23a1c52a1a014e95f40f2e89473f09cf10644d7214951d", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_materialized_chunk", "4bf7a78d67cbb8773c56ddec00a2bf58be2e14072982887f348efc4778af810b", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "is_bound_to_attempt", "0505da5db2f2b7c1c7e364c60efebc0550cebad08ecd8c828e832d993225c85f", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "acknowledge_outbound_chunk", "a0e26331028e371aa97a2734e3991a84af78a7287fdb0d8ec5e487db082a51fd", brace_context=(("impl", "MergeSidecarTransport"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_materialized_chunk", "b64569347c573c20061e28b505d85aa2e63f8eaabc7d8351b94d0d79d05ca6e9", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "is_bound_to_attempt", "bc91d3dca2a1cd0d409ae3a00956265c44db98e16fece0312721a30dc7c41d0e", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "acknowledge_outbound_chunk", "146c4f68dfe08584aec35d0f0a1a955472e4de73ff9bc36ea19d00716c68766d", brace_context=(("impl", "MergeSidecarTransport"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_typed_identity", "e0f75753b395d116820035bcfe43ba3759fe8973d38d414b5cdbadd3a1a5db8f"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_hash_identity", "4424ae75d6458a9a46648971e709936b7ccb569459b28d5ba4397c930d41c73a"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_hash_identity", "3a6cc6e2dcb6137ff1722f167fbd5b4828596bce1bf8422e8177d75c24d0f6f3"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_peer_identity", "3a1c9e36eaf39d860738c32f7612b187ef8dc45db64f7cf57622fbc3ca10a944"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_ordinal_halves", "efc05f069320482233885330aa53196e5f5d6382da0b8eb482759e7f7854e52b"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_topic_tag", "06301a9be459ed5c571e4044dcd7f62b5691dba562b940ac9fc64502b1c6e89c"),
@@ -536,17 +539,199 @@ _RELIABLE_FLUSH_SOURCE_ITEM_SEALS = _RELIABLE_FLUSH_IDENTITY_CONSTANT_SOURCE_ITE
 )
 
 
+_TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS = (
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionTwoStageRelayRetryTraceProjection", "05761b9b01a10197e4cf9aec83adc858eccbe6ecf14ec74a99fbb2167da88a3b", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_two_stage_relay_retry_trace_body", "fda81d366704ada4700101cb7ee870acfec2fabe141133ece61c5d9eb1d84ea9", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionTwoStageRelayRetryTraceProjection", "d57f9345ce3300bdbf9676f2d2672c5119d4e75c5eb44b8724d3ae500d1c1ebe", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "inbound_source_credit_capacity", "f842d672d209cbcaefccb037b5699832b4775813eb02af0d8fa3c427ace221eb"),
+    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "reply_route_source_capacity", "118a3c85c1e4faa0dac128e48981d346085cfb0b90110c0123414f8e8bb0a770", brace_context=(("impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic", ",", "K", ":", "Kex", "+", "Sync", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T", ",", "K", ",", "E", ">"),)),
+    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "authenticated_source_credit_capacity", "2c9a309017b0f51e9e3e9a6e3604ce9819c9eb4fed1fb9f004eb653b7354dbaa", brace_context=(("impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic", ",", "K", ":", "Kex", "+", "Sync", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T", ",", "K", ",", "E", ">"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "SumeragiRelayCapacityGeometry", "fd24144fb9fd13a9964e0e74742da6afd2a2537c9447b5dcd756e8f0646288dd", "struct"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "checked", "437cc7139737ea555afc202dcd74399007ec6be43117bbce7dec68a6cc51f4bd", brace_context=(("impl", "SumeragiRelayCapacityGeometry"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "daemon_source_capacity_matches_two_upstream_lanes", "e076da72adb47662a2908743a343731b0668f8061eb4645365ab1cb40e9d0d9b", brace_context=(("impl", "SumeragiRelayCapacityGeometry"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "class_corridor_covers_authenticated_sources", "02d410bef16235ed815cbe067cc5a2f36cb0063d3fa4f03490c6533d168270b5", brace_context=(("impl", "SumeragiRelayCapacityGeometry"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "SumeragiRelaySourceCredits", "9b0dde87c00cf8e524577325581281be0a24b796b32b243abec53980e0cd6c7d", "struct"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "geometry", "b4c2ec9807ac341e0cec136a0febc5ee5f1014d7704bae2753dc2966f773e09a", brace_context=(("impl", "SumeragiRelaySourceCredits"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "semaphore", "548c7a2189bfc9e9b43274a7dc9dd2890a4687a4598a133195fe9cbcea5af435", brace_context=(("impl", "SumeragiRelaySourceCredits"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "HeldSumeragiRelayOwnership", "ca1bf309503b4384b12bca302e2fa926a6f6cba52cfef23282e46286243bce5f", "struct"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "CreditedSumeragiRelayWorkItem", "76c7a64c3f811475a019115ad10930a045550a2c3188806cc6a52ef79ef856ed", "struct"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "SumeragiRelayIngress", "faab37bed32a2d7e27306de0b5ed8cc60114532555153ea4584cdda93b83593e", "struct"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "SumeragiRelayRetention", "8de4f558b1c75000423eadeeaf0fbc66a0fb6987cdd37904196384631a70d2cd", "struct"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "FairRetainedQueue", "9788b700c50fed3e82c7078727325543fed4c01b0b291ee49e69aa782ca236a3", "struct"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "FairRetainedSelectionTrace", "0f305222909a5fa1fa8f3ae523b84bc3f232bfb57b7b76944887b54922c0f098", "struct"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "send", "897eae8bd11a0e121267b60b141acdc36d9c326c41b4516c0f4ffddba539ce83", brace_context=(("impl", "SumeragiRelayIngress"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "send_rehydrated", "d10242d792a48f0778102fd02d6eb3b1843dfb2c099101cddc181b817eadf668", brace_context=(("impl", "SumeragiRelayIngress"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_rehydrated_ownership_matches", "afde041aeed753bb303ec80c00f88f1a920e7da14e182b788f97f8f7e71beaa1"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "rehydrate_held_sumeragi_relay_work", "c70d1d27ef4f639937fdbb8e4c5deb035142532b31c7bcfdb539ab752e36bb16"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "3e2c64c8285e1620c0d5047eff27f4b2472885dbe8352882cef60861d26d8a35", brace_context=(("impl", "NetworkRelayShared"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "push", "d30cc609e125945f143c35d42f513479d7255ed739859859a6a2149aa74abf82", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "pop_if_with_trace", "4041485881b4ba7d2898082b21a228ff77652d520a91bb20cb9475ece8a48b41", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "finish_sumeragi_block_ingress_attempt", "acfcb75628dc5cc0a843059252287d0caaddae96a7575435ced11cd3b84a86fb"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "attempt_sumeragi_relay_work", "c21b27dedd5e620b494684aff5a2845c35c01aba006421c359403d726d089f97"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_source_capacity", "d0bb1db54ebde2668f6f6c52b6dae565c696950422448fbdb994ae9ceb9641ec"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "new_sumeragi_relay_retained_queue", "ed48c8fb78adf6d9cc4750004bf768828d4dca2676d0d58ef76ed272a4e43314"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_source_credits", "142b0e99fd19e9b6ef02821ac06acd5589b1c4644414d99460affcb8ab8cdd59"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_dispatcher_capacity", "5d5c9a68cde0a263c47641d250717da5f186f7b1c3c9437a7d57d05fc0bb581c"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_class_capacity", "6a0f470f2cc7ba50e6893bb586cbd18e99a6ceffa29029279decaf1e692f7d49"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_retain_retry", "d3ee8f2f1434cb71a1eccfd66360d719ab90934bc3506c287e626b94f6d29b40"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_sumeragi_relay_dispatcher", "9b32ca4aac5e1b3aa3351d73552857ebb8a614e3f6ffd881e482172a53b9034d"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_network_relay_worker", "b60f7100692c80656a06f76ff03ac021f37b563555b997b2ed1e3ebd2593d9f7"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "forward_relay_lane", "8aca2344fdba8a6e935e2d852ed79b0c3f4d904560b3a6a52d0428c7990ddceb"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "drive_network_relay_ingress_inner", "fbe68c06eba092f488d4f4f92191b2014fa6923de62d111ffc12319a7cd67bb8"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "run", "d73c6ed0483744469a4c526ed0dd7fd707fe7fd7c66b5d1d3955eb91d36f203b", brace_context=(("impl", "NetworkRelay"),)),
+)
+
+
 _APPLICATION_SOURCE_ITEM_SEALS = _DECISION_IDENTITY_SOURCE_ITEM_SEALS + (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionApplicationTraceProjection", "ba10561de7693c4cb95b972995cdf7985cfdef7cd5180a9dfb7c4ccc7a26b5a7", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_application_trace_body", "8038719c8e9df95e10b8ce25dbe44e15ee810da93b0da0cf0606978689facecf", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_application_trace_body", "4b8e86711232b60e6e1bc02f5b7847ceb279a52813799e0a5a2acd40d182b909", "macro"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionApplicationTraceProjection", "6dc0d8f3b0ca8c9711e36f7bcedf764fca9c4434e806c642749bfdc939234144", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "DurableApplicationEvidence", "d655c1c069aba815deb8aaf05dec7588b65685c444d45c38aa065bc74df4e247", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_typed_identity", "bf0797326a94905ad34fbf1c0a042b0255403ffe70a8892cc760d4f74883401d"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_hash_identity", "96f1f520a6f1184503da85b089ebab78c09e9c636812c7d95508d7561736c7b5"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_hash_identity", "d303c934eb8417c06c608edb365ece4f905d2db7ad925723597dbb302da9d172"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_decision_projection", "982aa9ff5c3c8b65f2feb1196a199dd2b73c812751b625ab3624a2f3b2f5db09"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_certificate_projection", "2e889e4b38a0f374c0684a099fad3affe8a09d543b016377e557292d0e3b0ca2"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_body_projection", "2de15e67317d9b499678fffc13159c125857b15b53d8da365d3dcdb431e55fd3"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_apply.rs", "application_refinement_projection", "ffa355118b4978ab6880c7f32a796172f8762b91c02c475d2a9be6c0cd74609c", brace_context=(("impl", "DurableApplicationEvidence"),)),
+)
+
+
+_SUCCESSOR_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS = (
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_DOMAIN_CONTEXT", "33409c13a220d1d98e9177726db1a182f8a026f4da0e151fa644af901625ae1d", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_DOMAIN_SUBJECT", "b99774a01d151d72ddc81bc7af1e55c1e089e026b71ec802d7bc8541e74a8c62", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_DOMAIN_PAYLOAD", "02f7c3bd232da081ce9fa052ef76a0a5955763f5240520ee9da75bc975cdc774", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_DOMAIN_DURABLE_ARTIFACT", "4cf57514ca8437667f4806c168fe88a442c2c99c0f5011570ba4db704aaab448", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_WIRE_HEIGHT_CONTEXT", "b309f42e9d81116473faca384cce0290b74b664e18f8da39fe12db4e05ec04af", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_WIRE_BLOCK_SUBJECT", "7880c318f8ecd6fee5958c5b29b5dc88a0e734e22f42e7007ec4bf6c199a553d", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_BLOCK_HEADER", "bc5d0961da79b1743e0c3323d9d54abbaba5c8c7e08a28c2401ba8fd301cc4c7", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_CANONICAL_PAYLOAD", "529035c05fd93a4c1fad214a7a291fc20682b4c75ff6feebfa3d257417e1a153", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_QUORUM_CERTIFICATE", "18c59ab0bc525d5e27c838beba73fd242b9758db231e7aadd9ad2ac79b867fc2", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_PAYLOAD_MANIFEST", "9248c610f7161ef44e17ef9b770ffc46593416fd2012fff467621224cfdd673a", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_FINALITY_ARTIFACT", "566709d706a9035416a72b6c5bdff55acfab73dc386708d2cbbd9bb198fdbf02", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD", "1d4fd582252ce375bb72348997971f88caf3785ef272900d72168637adf850f5", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST", "83779f4730c45568e22b7e13fa625168818482e8aeb3319a5581e51e2085d185", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_CONSENSUS_MESSAGE", "f25e9d99528bdd6a6358b66d0a02e68212d4cad65c78cb2c05f8cd94ec70d5de", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "IDENTITY_KIND_CERTIFIED_BODY_REQUEST", "cd606dbb53ebc3457fb5751114407efb9436cae3085a16701e496f7d337ef554", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_AUTHORITY_APPLIED", "b0a29832fd7bd23b0d7afa5736d36f1dc7581a72e088473af4110c9c2bfe0f26", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP", "e37d83f5baaec17cc5617e12f14f7ea6f5c2270103f2714f0be3c36e544ce2ab", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP", "6c2cb1bb1d2a28102ea0a92c6b093bdf1f35ee155bd453ff4deb9014eb61ecbd", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_STAGE_NONE", "c73b27a2712267f30d1cd20a6a292dd35824a3b0ef4a7ad64155867f06e3b651", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_STAGE_QUEUED", "a15a08fc5ec40f4e27bc6d9397042e137650a2ca9dfdde0730262f95b6fffe6f", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_STAGE_RUNNING", "665b557280f70736846a32c60fdbb9a8b4ddfa0678a4a0229feb06538c08f0dd", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_STAGE_COMPLETE", "932bdcc2b84375f727e92014f59e463e6c7fb010659fdd7699f6b44e4d020ce3", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_LIFECYCLE_BEGIN", "447134b62620762580e5fc2653fd6934221a2f3fbe9018c6f52146797b7ed7ed", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_LIFECYCLE_FAIL", "3042dfe5803b0d70c7ebfb4f3d417a5ca412cebe9a22055617c066c2e2f9fe6e", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP", "144caa773050442610f7f43fbe833368a4f15e5fa5f9672ce43753d7ac146f8d", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP", "ee642fd47e827e1cc0a4fdece9163475c66ee3abc9d48ea4d19d12a41571a85e", "const"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "SUCCESSOR_MARKER_ACTIVATED", "6f42d80ed84466bf92fe4c2dbc5e3a765d47f001256dad2de000f9163d1d8a7c", "const"),
+)
+
+_SUCCESSOR_COMMON_SOURCE_ITEM_SEALS = _SUCCESSOR_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS + (
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "CanonicalIdentityProjection", "6988ca07a23b2b0b2f6f97862355cd26b65549402367584c30cc32311fa907b0", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionDurablePredecessorIdentityProjection", "361743754f3beb16f3c983261f0c2564472326da5bf4082f1bb108a7390f8fb6", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionSuccessorSnapshotProjection", "4101c48d7d4dae52dbde7fd92d1038e79ca22ba00e2cc5feb6cb024c34891be0", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionDurablePredecessorIdentityProjection", "8be10fb5a0ea6ddca2fe8c28fa52c10ad4e6fd1d87ca0b2cbc638f73c2d41403", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionSuccessorSnapshotProjection", "e3db3b9321bdb7a1a202112e16f4cb3db6225ffc6de86ad1e1e00a98c1611282", "struct", (("verus", "!"),)),
+)
+
+_SUCCESSOR_TERMINAL_APPLICATION_SOURCE_ITEM_SEALS = _SUCCESSOR_COMMON_SOURCE_ITEM_SEALS + (
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionTerminalApplicationWithoutSuccessorActivationProjection", "7f33dbd27571a808a8331cf9cffce8dc84295ab122518c744831f13f1bd5449f", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionTerminalApplicationWithoutSuccessorActivationProjection", "453c0f2f7f823948209dfcbac254ef213e6ca39048eb965f3a09129aa2d2d937", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "DurableV2PredecessorIdentity", "beecd698ba568e1b7719313ef6c0e4513527c3357b2b0245203d608c35d89b48", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "successor_context_refinement_projection", "b58b4a33cf97312646966c919f688b56bb236c686ab78f10fc64657478821e3b"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "successor_block_refinement_projection", "eb3997d346ef005b73eb0786efbc709bb9ced685598ade9615fe39487b44e929"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "authenticate", "0cc8dbe78393a70abbecde6abe87063dce8948c5cb840d4e39ed5419025741bf", brace_context=(("impl", "DurableV2PredecessorIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "refinement_projection", "48a2b3d658dca723f2595dcd8e7ec29356e06199dd3747d54eb8ad6b3d235677", brace_context=(("impl", "DurableV2PredecessorIdentity"),)),
+)
+
+_SUCCESSOR_APPLIED_SOURCE_ITEM_SEALS = _SUCCESSOR_COMMON_SOURCE_ITEM_SEALS + (
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionSuccessorPredecessorBindingProjection", "4d276153e342565d08b35af2dc2af53a79e19c2a469dfe25068fac80867f3823", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionAppliedSuccessorTraceProjection", "05a61b7fa25c881f9be025ebd782cebb0ec1c8f8b18d95fdc3c811d355f09a74", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionSuccessorPredecessorBindingProjection", "7e0b6a3554f38a7a8467793a11ab9f82427db3100350650310cabbac3d9e5f1a", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionAppliedSuccessorTraceProjection", "9a7ab584116cf8acb0eba39442a72932a7eb807b21741d5be4c3a53c2f551b86", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "DurableV2PredecessorIdentity", "beecd698ba568e1b7719313ef6c0e4513527c3357b2b0245203d608c35d89b48", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "DurableSuccessorActivationAuthority", "42bccef606c5b0dc2fdc88408e2b1ea08183deacae7a64ba5c6fbfacf6db3444", "struct"),
+)
+
+_SUCCESSOR_RECOVERED_SOURCE_ITEM_SEALS = _SUCCESSOR_COMMON_SOURCE_ITEM_SEALS + (
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionRecoveredSuccessorTraceProjection", "fed07c9381bcfdc4859159b474632efd271fcd053b33c7cb0e62c5c1c17f23b4", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionRecoveredSuccessorTraceProjection", "abcb774c1b2caf8d4e4b8ecea97fdf74621bf18ad90be64582f25ca00404816c", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "DurableSuccessorActivationAuthority", "42bccef606c5b0dc2fdc88408e2b1ea08183deacae7a64ba5c6fbfacf6db3444", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_recovery.rs", "SnapshotSuccessorActivationAuthority", "9cc850d963b528903679c143d32c2e21587e30f190ff42fcc1a55a4c96d8a34a", "struct"),
+)
+
+_SUCCESSOR_LIFECYCLE_SOURCE_ITEM_SEALS = _SUCCESSOR_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS + (
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionSuccessorStartupLifecycleProjection", "1846479b24f79643f6c1920d0e81451dfc8b41ed964fe4a99ffe66b3bff73bcb", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionSuccessorStartupLifecycleProjection", "48fa11976c000de7d8dc685a35f96ce34532b9291605e572442f4d87e166dbfd", "struct", (("verus", "!"),)),
+)
+
+_HISTORICAL_CERTIFICATE_SOURCE_ITEM_SEALS = _SUCCESSOR_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS + (
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "CanonicalIdentityProjection", "6988ca07a23b2b0b2f6f97862355cd26b65549402367584c30cc32311fa907b0", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionHistoricalCertificateTraceProjection", "712b2fe8b282fd2eac57c35f50fcfd8b45f9dafcc5b8e78dd868f5d1f1f90e9d", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionHistoricalCertificateTraceProjection", "45b0ab84342eb33d7c22e12f7564e55d9d5a404e9bbd8860b83c45960de282d1", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_block_sync.rs", "DiscoveredCommitCertificate", "e0558b3b785f1354d46a6cddfb050a0ce41f08c149a5414c73501f4cc51b4757", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "CommitCertificateReducerAdmission", "35b1b60416baec13dbb3016053b709b602badd3376aea47f26c75b75195fdd7e", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "refinement_projection", "bc8b920d4b2627246b78c109999be2e6b97470909c4968f3ab03ace352771414", brace_context=(("impl", "CommitCertificateReducerAdmission"),)),
+)
+
+_HISTORICAL_BODY_SOURCE_ITEM_SEALS = _SUCCESSOR_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS + (
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "CanonicalIdentityProjection", "6988ca07a23b2b0b2f6f97862355cd26b65549402367584c30cc32311fa907b0", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionHistoricalBodyPipelineTraceProjection", "2fd6008bed8f678cbd90891c79db7783a5d641f4e8086a1e7e3846376cd4642b", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionHistoricalBodyPipelineTraceProjection", "0a83de2f2abcd66aae01529e6f8b3d187b416c5b7467295b43a6ed16d39a1f9a", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "PendingFetch", "50ace9e19f281c23899dfeb61aefbac861572c406d75752913b02788844e656e", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_effects.rs", "BodyPipelineOwner", "b4921e315128ae81983acbc72055d53f13077652eb5c79e666e17ee61cdf9969", "struct"),
+)
+
+_SUCCESSOR_APPLIED_SHARED_MACROS = (
+    ("refinement_tag_value", "4a515e39765e747333602b0efeccaa20873b7054e9786ce1d022bf0af3973942"),
+    ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
+    ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
+    ("durable_predecessor_is_canonical_body", "2a069095fb4ff28848a8a44a60ec3e61cfc4cb6dd142962349a9facbe426a601"),
+    ("durable_predecessor_equal_body", "b0d856effda808421bd8311b27ea82a6e5b2917973177abe3710b3f98bd9038f"),
+    ("production_successor_snapshot_body", "5d9f972378ab50288168be5ab429b4dcedaa86fcc193a08e67e913ed5691a13b"),
+    ("production_successor_predecessor_binding_body", "3c0492a309ce27f73309380ad0c2ead66c16b7402060fc0c61dfb51262d56943"),
+    ("production_applied_successor_trace_body", "4a86242b872ef685fa80cfa024e5c4a4022546c640ab5eb9cee1b4923b29f1a0"),
+)
+
+_SUCCESSOR_TERMINAL_APPLICATION_SHARED_MACROS = (
+    ("refinement_tag_value", "4a515e39765e747333602b0efeccaa20873b7054e9786ce1d022bf0af3973942"),
+    ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
+    ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
+    ("durable_predecessor_is_canonical_body", "2a069095fb4ff28848a8a44a60ec3e61cfc4cb6dd142962349a9facbe426a601"),
+    ("production_terminal_application_without_successor_activation_body", "2805c2464eee61a440951bfe77bbc34eb6fb2fd850cdebc30ef95e3441558ae4"),
+)
+
+_SUCCESSOR_RECOVERED_SHARED_MACROS = (
+    ("refinement_tag_value", "4a515e39765e747333602b0efeccaa20873b7054e9786ce1d022bf0af3973942"),
+    ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
+    ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
+    ("canonical_identity_is_zero_body", "659e4ab0b79335d08311a07134239aa7338818f507fb721b71c336fc65a52f6d"),
+    ("durable_predecessor_is_canonical_body", "2a069095fb4ff28848a8a44a60ec3e61cfc4cb6dd142962349a9facbe426a601"),
+    ("durable_predecessor_is_zero_body", "08bbec95f27904e084acd9eab948011578e3b3c4a2d3e252f7613120e346fcdf"),
+    ("production_successor_snapshot_body", "5d9f972378ab50288168be5ab429b4dcedaa86fcc193a08e67e913ed5691a13b"),
+    ("production_recovered_successor_trace_body", "1619ba6365b28436ae6f69dcfc74e5d57ee5227a66fd5d27a717c43b7d30a76d"),
+)
+
+_SUCCESSOR_LIFECYCLE_SHARED_MACROS = (
+    ("refinement_tag_value", "4a515e39765e747333602b0efeccaa20873b7054e9786ce1d022bf0af3973942"),
+    ("production_startup_failure_and_restart_trace_body", "5aa2d29e594aef4f585c74cf2c6875f5d7f98f8b04a6fb597657bc62a8d42eb7"),
+)
+
+_HISTORICAL_CERTIFICATE_SHARED_MACROS = (
+    ("refinement_tag_value", "4a515e39765e747333602b0efeccaa20873b7054e9786ce1d022bf0af3973942"),
+    ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
+    ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
+    ("production_historical_certificate_trace_body", "1b004a044c33700c93a06a9684a21559c64c25e5eae42b337866ed0f5cd26b4e"),
+)
+
+_HISTORICAL_BODY_SHARED_MACROS = (
+    ("refinement_tag_value", "4a515e39765e747333602b0efeccaa20873b7054e9786ce1d022bf0af3973942"),
+    ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
+    ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
+    ("production_historical_body_pipeline_trace_body", "82089956e9bc4b50a46c3e8fbcea5b9ef83a43ab5b408eb04fa122f1154eba84"),
 )
 
 
@@ -562,7 +747,7 @@ _EFFECTIVE_LOCK_TRACE_SHARED_MACRO_SHA256 = {
         "deb74517f78d1fa98a63eeec0dc8f5ffb958ee213dd345a147f0a5460bee2ffb"
     ),
     "certificate_identity_is_canonical_body": (
-        "d314e3a82dacd4384fc61815c4cc6d07a2ab4ed7394e295d27c9bd8597e3dcc4"
+        "17d23a7cc1ea1c3ef92612744845897b819823bbb0cb86e0f78762a7fd5a2873"
     ),
     "certificate_identity_equal_body": (
         "868ce2e6bea8294b5486eece5363d634465a5ba51aaca7958544e630e2150577"
@@ -574,7 +759,7 @@ _EFFECTIVE_LOCK_TRACE_SHARED_MACRO_SHA256 = {
         "0c65640619289950154223b88ccb4dadbde5cb4221280ef07795a00403b9a30e"
     ),
     "enter_view_locked_prepare_qc_identity_body": (
-        "b4b96a41a8d45cb11a77183d0da72eb6af6b8eb25c2a63b7b2ab5d34daf1ef57"
+        "fa803e8d9ee4d9919e5b32d5572c7abf048a2a32f3a10651326395d64376d722"
     ),
     "enter_view_projection_gate_body": (
         "debb323b5cec22e29121dbceb94902deef35bd3c2346fdbb106d12dfd4052915"
@@ -625,7 +810,7 @@ _ENTER_VIEW_IDENTITY_SUBSTITUTION_TEST_SHA256 = (
 
 # This inventory is deliberately code-owned rather than evidence-owned.  An
 # evidence writer may record these mappings but may not choose or substitute
-# them.  The 4 + 6 + 6 claim cardinalities are the complete external-constant
+# them. The 4 + 7 + 6 claim cardinalities are the complete external-constant
 # seam currently declared by the two release proof modules.
 CROSS_TOOL_REFINEMENT_CONTRACTS = (
     CrossToolObligationContract(
@@ -661,13 +846,21 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "projection.enter_view.active, "
                     "production_kernel_relation(projection)"
                 ),
-                verus_ensures=(
-                    "production_enter_view_uses_post_install_effective_lock_kernel("
-                    "production_enter_view_effective_lock_trace(projection), "
-                    "projection.enter_view,), "
-                    "production_enter_view_preserves_locked_prepare_qc_identity("
-                    "projection.enter_view)"
-                ),
+                verus_ensures="""
+                    production_enter_view_uses_post_install_effective_lock_kernel(
+                        production_enter_view_effective_lock_trace(projection),
+                        projection.enter_view,
+                    ),
+                    production_enter_view_effective_lock_trace(projection).kind == 1u8,
+                    production_enter_view_effective_lock_trace(projection).protected_after
+                        == production_enter_view_effective_lock_trace(projection).protected_before,
+                    production_enter_view_effective_lock_trace(projection).owner_after
+                        == production_enter_view_effective_lock_trace(projection).owner_before,
+                    projection.enter_view.effect_protected_lock.present
+                        == projection.enter_view.durable_lock_after.present,
+                    projection.enter_view.following_fetch_lock.present
+                        == projection.enter_view.durable_lock_after.present
+                """,
                 verified_kernel=(
                     "production_enter_view_uses_post_install_effective_lock_kernel"
                 ),
@@ -702,7 +895,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
                         ),
                         item="accepts",
-                        projection="trace",
+                        projection="trace, enter_view",
                         required_expression="""
                             if projection.enter_view.active {
                                 let enter_view = projection.enter_view;
@@ -769,11 +962,38 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "production_exact_body_owner_binding(current, incoming) "
                     "== Some(binding)"
                 ),
-                verus_ensures=(
-                    "production_body_ownership_preserves_effective_lock_kernel("
-                    "production_body_ownership_effective_lock_trace("
-                    "current, incoming, binding),)"
-                ),
+                verus_ensures="""
+                    production_body_ownership_preserves_effective_lock_kernel(
+                        production_body_ownership_effective_lock_trace(
+                            current, incoming, binding
+                        ),
+                    ),
+                    production_body_ownership_effective_lock_trace(
+                        current,
+                        incoming,
+                        binding,
+                    ).owner_after == 1u64,
+                    production_body_ownership_effective_lock_trace(
+                        current,
+                        incoming,
+                        binding,
+                    ).protected_after
+                        >= production_body_ownership_effective_lock_trace(
+                            current,
+                            incoming,
+                            binding,
+                        ).protected_before,
+                    production_body_ownership_effective_lock_trace(
+                        current,
+                        incoming,
+                        binding,
+                    ).owner_reused
+                        == (production_body_ownership_effective_lock_trace(
+                            current,
+                            incoming,
+                            binding,
+                        ).owner_before == 1u64)
+                """,
                 verified_kernel=(
                     "production_body_ownership_preserves_effective_lock_kernel"
                 ),
@@ -913,7 +1133,12 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             store_bytes,
                             accounting,
                         ),
-                    )
+                    ),
+                    retained_bytes <= ready_before,
+                    ready_bytes <= ready_before - retained_bytes,
+                    accounting.ready_after == ready_before - retained_bytes - ready_bytes,
+                    store_bytes <= store_before,
+                    accounting.store_after == store_before - store_bytes
                 """,
                 verified_kernel=(
                     "production_body_capacity_retirement_preserves_effective_lock_kernel"
@@ -1104,7 +1329,14 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             normal_ready,
                             selection,
                         ),
-                    )
+                    ),
+                    selection.selected >= 1u8,
+                    selection.selected <= 3u8,
+                    selection.next >= 1u8,
+                    selection.next <= 3u8,
+                    selection.selected == 1u8 ==> completion_ready,
+                    selection.selected == 2u8 ==> progress_ready,
+                    selection.selected == 3u8 ==> normal_ready
                 """,
                 verified_kernel=(
                     "production_body_service_refines_async_fairness_kernel"
@@ -1139,22 +1371,42 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 theorem_projection_builder_item_sha256=(
                     "56ac93d71cbda0dd6a1b584062ec64db7bb5ae6fc9ddfb822aea1f7e6edcb4c4"
                 ),
+                source_item_seals=(
+                    CrossToolSourceItemSeal(
+                        source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                        item="step",
+                        item_token_sha256=(
+                            "d4adbfe9c0520157759192214f1c28ab7dee81e1d3943b1a284c9773f7e7672e"
+                        ),
+                        brace_context=((
+                            "impl", "<", "D", ":", "RuntimeDriver", ">",
+                            "SerializedV2Runtime", "<", "D", ">",
+                        ),),
+                    ),
+                    CrossToolSourceItemSeal(
+                        source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                        item="step_recovery",
+                        item_token_sha256=(
+                            "7c45b832c47fb7ba13cdefa12f9742ca0c735864b8f254effd17daeec3759c64"
+                        ),
+                        brace_context=((
+                            "impl", "<", "D", ":", "RuntimeDriver", ">",
+                            "SerializedV2Runtime", "<", "D", ">",
+                        ),),
+                    ),
+                ),
                 production_call_sites=(
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
-                        item="pop_next",
+                        item="pop_next_with_ownership",
                         brace_context=((
                             "impl", "<", "C", ">", "BoundedIngress", "<", "C", ">",
                         ),),
                         projection="service_trace",
                         required_expression="""
-                            let class_ready = |class| self.commands.iter().any(
-                                |queued| queued.class == class
-                            );
                             let cursor_before = self.next_class.service_code();
-                            let completion_ready = class_ready(CommandClass::Completion);
-                            let progress_ready = class_ready(CommandClass::Progress);
-                            let normal_ready = class_ready(CommandClass::Normal);
+                            let (completion_ready, progress_ready, normal_ready) =
+                                self.class_readiness();
                             let selection = select_bounded_service_class(
                                 cursor_before,
                                 completion_ready,
@@ -1210,6 +1462,15 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
             "ProductionProgressWitnessTraceRefinement "
             "=> ProgressWitnessProductionRefinementObligation"
         ),
+        ledger_declaration_kind="operator",
+        ledger_statement=(
+            "/\\ ProductionProgressWitnessTraceRefinement "
+            "/\\ ProgressWitnessObligation"
+        ),
+        tla_proof=(
+            "BY ProgressWitnessObligation "
+            "DEF ProgressWitnessProductionRefinementObligation"
+        ),
         claims=(
             CrossToolClaimContract(
                 constant="ProductionDurableIntentTraceRefinesProgressWitness",
@@ -1230,7 +1491,14 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_ensures="""
                     production_durable_intent_trace_refines_progress_witness_kernel(
                         production_durable_intent_trace_projection(projection),
-                    )
+                    ),
+                    effect_slots_authorized_body!(projection.effects),
+                    effect_count_body!(
+                        projection.effects,
+                        refinement_tag_value!(EFFECT_PERSIST)
+                    ) <= 1u64,
+                    projection.durable_sequence_after
+                        >= projection.durable_sequence_before
                 """,
                 verified_kernel=(
                     "production_durable_intent_trace_refines_progress_witness_kernel"
@@ -1246,14 +1514,17 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_const=False,
                 verified_kernel_shared_macro_sha256=(
-                    ("production_durable_intent_trace_body", "7a328dc96f4c50743147f3a8fec7607787c6769440701a93ae233738c58c1222"),
-                    ("pending_projection_is_absent_body", "cd83d076187ffdfca2daacbdaaf79519afca5f0854fa3b7ad31112b8be535f0f"),
+                    ("refinement_tag_value", "4a515e39765e747333602b0efeccaa20873b7054e9786ce1d022bf0af3973942"),
+                    ("production_durable_intent_trace_body", "1d9df55a7723557fc4aebebfc637d9c473cbe440c031063ac1edf707f23938aa"),
+                    ("pending_projection_is_absent_body", "ea29ff6f0af93c764fd3d5f1b17e86cd05948763ff5d0fb852664681a47cbdbf"),
                     ("pending_projection_equal_body", "d5835f798a8c88725967ed8fa9cd4610c3228983ad42eacc4e3ca78b2d8a4a83"),
-                    ("pending_projection_matches_boundary_body", "f5345b3cd5bed9f7f1078432802ca8b6589bcaaa0a24bba6b49ebbda1ea2bd34"),
-                    ("persist_slot_matches_boundary_body", "915684c96630b0a7872cade8c76833cb352a411f2e40f352f69d980145ff6e95"),
+                    ("pending_projection_matches_boundary_body", "31d9d6d83a8ee0ac139232065be554f318f9eef817dbf85dede916fd0c0182d9"),
+                    ("pending_round_can_begin_body", "0f582e32bc81d4f4028457d97b8ade155c86cdf0a06bebbcea4f74c36bf12c3d"),
+                    ("pending_round_can_acknowledge_body", "f4e22d93521a33074dbc5e8ce89c47a4bf5756aba20c91a4e3a2a1e58b727cf2"),
+                    ("persist_slot_matches_boundary_body", "cea4f4bcb9318a3e96a8bb01ef101a1281c87b001ecc9e2c0677d269f99cf794"),
                     ("tag_projection_equal_body", "d91ebfd02eabc6ce1b5ba4d26d463aab760936cd64fce0dbadd5f0ce7981fc84"),
-                    ("wal_record_continuation_is_exact_body", "281170db9df6751d661e4efd18feb9e21b7d55c225d89353699f2a3874b0b37b"),
-                    ("event_can_start_wal_record_body", "fe5d4434fe59c406588a0bef55d0bf7071e3a5b436597fe96187b7e845ce31ee"),
+                    ("wal_record_continuation_is_exact_body", "de373bdbfbb8e0583f76c04880d2aac199a931f2d535d780a6826cb5a4c48817"),
+                    ("event_can_start_wal_record_body", "6983161a91809ce521aaf1e28ba1f5e1f33823fca5830b1747c08f444d5d0a6e"),
                     ("effect_count_body", "8146967fdc6f0597745f26a1483812e3b03e84b85a9df79a8dfc22ae04874640"),
                     ("effect_slots_authorized_body", "177751a58769f362d74418ab543f7dc5e86042722773af43cead0a68dfe77278"),
                     ("active_effect_slot_body", "f25929e357210020cbe386bf21bcf934df1dd744cbf4fec08cfaed6d6b2bb8f7"),
@@ -1261,8 +1532,8 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     ("capability_key_equal_body", "012675777291bc60b12c41f2aa682f82ff13a9ebbe77a6bc5ec0d3200e61e903"),
                     ("capability_key_is_none_body", "9095ad5d42ea25676c97d0ad4900a436ba76d38f8fd0c7c52ab091fe07c25e3b"),
                     ("boundary_capability_equal_body", "b5f8e0c84ec514324c398fa194467d2aedb8db5e824fa6941a79fc1ce5d52982"),
-                    ("boundary_capability_is_absent_body", "89491630bf693650469867eff5622859d4d16a10798e807c79f94222f53dca8f"),
-                    ("boundary_identity_is_canonical_body", "68a458d1ad0316198b01a6c11ed188253b200b8fd8c2a1fedca16a04e6adda0b"),
+                    ("boundary_capability_is_absent_body", "c02496c066b2529ef0b491a16373d4b167f67ab7c8a7de1228f9d27b9d52320d"),
+                    ("boundary_identity_is_canonical_body", "3a5a902c2d5b5573a5b77002b139081953b2e48e6c8385409851461f07673534"),
                     ("subject_projection_equal_body", "73088430b897bc3f1fe3a5bc6782527aa1243bb42b312c15392f7870764d287f"),
                     ("replay_plan_slot_well_formed_body", "9cb5c2ed24719ef74148515407d80e08154ebe803b0ce86e2d9be37aaef9a68b"),
                     ("replay_plan_well_formed_body", "7f42d9d48cdf49dbdb1233aa26b52d32c18a25456ea30dc32c969b9de2cc34eb"),
@@ -1294,7 +1565,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         ),
                         item="step",
                         brace_context=(("impl", "Reducer"),),
-                        projection="durable_intent_trace",
+                        projection="durable_intent_trace,",
                         required_expression="""
                             let durable_intent_trace = ProductionDurableIntentTraceProjection {
                                 event_tag: transition.event_tag,
@@ -1317,7 +1588,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                 durable_sequence_after: next.durable.last_id().get(),
                             };
                             if !production_durable_intent_trace_refines_progress_witness_kernel(
-                                durable_intent_trace
+                                durable_intent_trace,
                             ) {
                                 return Err(ReducerError::RefinementViolation);
                             }
@@ -1346,7 +1617,12 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_ensures="""
                     production_decision_trace_refines_recovery_witness_kernel(
                         production_decision_recovery_trace_projection(projection),
-                    )
+                    ),
+                    projection.expected_height > 0u64,
+                    projection.state_height <= projection.expected_height,
+                    projection.expected_height - projection.state_height <= 1u64,
+                    projection.durable_body.height == projection.frozen_height,
+                    projection.stage == 1u8
                 """,
                 verified_kernel=(
                     "production_decision_trace_refines_recovery_witness_kernel"
@@ -1359,6 +1635,10 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_body=(
                     "production_decision_recovery_trace_body!(projection)"
+                ),
+                verified_kernel_shared_macro_sha256=(
+                    ("refinement_tag_value", "4a515e39765e747333602b0efeccaa20873b7054e9786ce1d022bf0af3973942"),
+                    ("production_decision_recovery_trace_body", "3b79ffa45f3b74ea2bfee5706c4af948d071ab11ff5c88f1d34b8c914ee8d962"),
                 ),
                 theorem_kernel_projection=(
                     "production_decision_recovery_trace_projection(projection),"
@@ -1444,7 +1724,14 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_ensures="""
                     production_scheduler_trace_refines_protected_ownership_kernel(
                         production_scheduler_trace_projection(projection),
-                    )
+                    ),
+                    projection.selected <= 3u8,
+                    projection.timeout_due ==> projection.selected == 1u8,
+                    !projection.timeout_due
+                            && !projection.fifo_ready
+                            && !projection.periodic_timer_due
+                        ==> projection.selected == 0u8
+                            && !projection.fifo_owed_after
                 """,
                 verified_kernel=(
                     "production_scheduler_trace_refines_protected_ownership_kernel"
@@ -1537,7 +1824,13 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         production_ingress_identity_and_class_trace_projection(
                             projection
                         ),
-                    )
+                    ),
+                    projection.incoming_height == projection.stored_height,
+                    projection.incoming_view == projection.stored_view,
+                    projection.incoming_generation == projection.stored_generation,
+                    projection.incoming_class == projection.stored_class,
+                    projection.queue_len_after > projection.queue_len_before,
+                    projection.queue_len_after <= projection.queue_capacity
                 """,
                 verified_kernel=(
                     "production_ingress_identity_and_class_trace_refines_protected_ownership_kernel"
@@ -1575,7 +1868,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         brace_context=((
                             "impl", "<", "C", ">", "BoundedIngress", "<", "C", ">",
                         ),),
-                        projection="ingress_trace",
+                        projection="ingress_trace,",
                         required_expression="""
                             let incoming_tag = command.tag;
                             let incoming_class = command.class.service_code();
@@ -1584,39 +1877,331 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                     "bounded runtime ingress length is representable as u64"
                                 );
                             self.commands.push_back(command);
-                            let stored = self.commands.back().expect(
-                                "successful runtime ingress retains the admitted command"
-                            );
+                            let stored = self
+                                .commands
+                                .back()
+                                .expect(
+                                    "successful runtime ingress retains the admitted command"
+                                );
                             let ingress_trace =
                                 ProductionIngressIdentityAndClassTraceProjection {
                                     incoming_height: incoming_tag.height(),
                                     incoming_view: incoming_tag.view(),
-                                    incoming_generation:
-                                        incoming_tag.generation().get(),
+                                    incoming_generation: incoming_tag.generation().get(),
                                     incoming_class,
                                     stored_height: stored.tag.height(),
                                     stored_view: stored.tag.view(),
-                                    stored_generation:
-                                        stored.tag.generation().get(),
+                                    stored_generation: stored.tag.generation().get(),
                                     stored_class: stored.class.service_code(),
                                     queue_len_before,
-                                    queue_len_after: u64::try_from(
-                                        self.commands.len()
-                                    ).expect(
-                                        "bounded runtime ingress length is representable as u64"
-                                    ),
-                                    queue_capacity: u64::try_from(
-                                        self.config.capacity
-                                    ).expect(
-                                        "bounded runtime ingress capacity is representable as u64"
-                                    ),
+                                    queue_len_after: u64::try_from(self.commands.len())
+                                        .expect(
+                                            "bounded runtime ingress length is representable as u64"
+                                        ),
+                                    queue_capacity: u64::try_from(self.config.capacity)
+                                        .expect(
+                                            "bounded runtime ingress capacity is representable as u64"
+                                        ),
                                 };
                             if !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
-                                ingress_trace
+                                ingress_trace,
                             ) {
                                 panic!(
                                     "Sumeragi v2 ingress changed command identity or service class"
                                 );
+                            }
+                        """,
+                    ),
+                    CrossToolProductionCallContract(
+                        source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                        item="enqueue_completion_batch",
+                        brace_context=((
+                            "impl", "<", "C", ">", "BoundedIngress", "<", "C", ">",
+                        ),),
+                        projection="ingress_trace,",
+                        required_expression="""
+                            if commands
+                                .iter()
+                                .any(|command| command.class != CommandClass::Completion)
+                            {
+                                return Err(EnqueueError::FailClosed);
+                            }
+                            if commands.len() > self.remaining_capacity() {
+                                return Err(EnqueueError::Full);
+                            }
+                            let first_ordinal = self
+                                .claim_admission_ordinal_range(commands.len())?;
+                            if let Some(first_ordinal) = first_ordinal {
+                                for (offset, command) in
+                                    commands.iter_mut().enumerate()
+                                {
+                                    let offset = u128::try_from(offset).expect(
+                                        "bounded runtime batch length is representable as u128"
+                                    );
+                                    command.admission_ordinal = Some(
+                                        first_ordinal
+                                            .checked_add(offset)
+                                            .expect(
+                                                "admission ordinal range was preflighted"
+                                            ),
+                                    );
+                                }
+                            }
+                            for command in commands {
+                                let incoming_tag = command.tag;
+                                let incoming_class = command.class.service_code();
+                                let queue_len_before =
+                                    u64::try_from(self.commands.len()).expect(
+                                        "bounded runtime ingress length is representable as u64"
+                                    );
+                                self.commands.push_back(command);
+                                let stored = self
+                                    .commands
+                                    .back()
+                                    .expect(
+                                        "successful runtime batch ingress retains the admitted command"
+                                    );
+                                let ingress_trace =
+                                    ProductionIngressIdentityAndClassTraceProjection {
+                                        incoming_height: incoming_tag.height(),
+                                        incoming_view: incoming_tag.view(),
+                                        incoming_generation:
+                                            incoming_tag.generation().get(),
+                                        incoming_class,
+                                        stored_height: stored.tag.height(),
+                                        stored_view: stored.tag.view(),
+                                        stored_generation:
+                                            stored.tag.generation().get(),
+                                        stored_class: stored.class.service_code(),
+                                        queue_len_before,
+                                        queue_len_after:
+                                            u64::try_from(self.commands.len()).expect(
+                                                "bounded runtime ingress length is representable as u64"
+                                            ),
+                                        queue_capacity:
+                                            u64::try_from(self.config.capacity).expect(
+                                                "bounded runtime ingress capacity is representable as u64"
+                                            ),
+                                    };
+                                if !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+                                    ingress_trace,
+                                ) {
+                                    panic!(
+                                        "Sumeragi v2 batch ingress changed command identity or service class"
+                                    );
+                                }
+                            }
+                        """,
+                    ),
+                    CrossToolProductionCallContract(
+                        source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                        item="commit_canonical_body_available",
+                        brace_context=((
+                            "impl", "BoundedIngress", "<", "AdapterCommand", ">",
+                        ),),
+                        projection="ingress_trace,",
+                        required_expression="""
+                            let mut command = TaggedCommand::new(
+                                reservation.tag(),
+                                CommandClass::Completion,
+                                AdapterCommand::BodyAvailable {
+                                    manifest: reservation.manifest,
+                                },
+                                Instant::now(),
+                            );
+                            command.admission_ordinal = reservation.admission_ordinal;
+                            let incoming_tag = command.tag;
+                            let incoming_class = command.class.service_code();
+                            let queue_len_before = u64::try_from(self.commands.len())
+                                .expect(
+                                    "bounded runtime ingress length is representable as u64"
+                                );
+                            self.commands.push_back(command);
+                            let stored = self
+                                .commands
+                                .back()
+                                .expect(
+                                    "canonical body commit retains the admitted completion"
+                                );
+                            let ingress_trace =
+                                ProductionIngressIdentityAndClassTraceProjection {
+                                    incoming_height: incoming_tag.height(),
+                                    incoming_view: incoming_tag.view(),
+                                    incoming_generation: incoming_tag.generation().get(),
+                                    incoming_class,
+                                    stored_height: stored.tag.height(),
+                                    stored_view: stored.tag.view(),
+                                    stored_generation: stored.tag.generation().get(),
+                                    stored_class: stored.class.service_code(),
+                                    queue_len_before,
+                                    queue_len_after: u64::try_from(self.commands.len())
+                                        .expect(
+                                            "bounded runtime ingress length is representable as u64"
+                                        ),
+                                    queue_capacity: u64::try_from(self.config.capacity)
+                                        .expect(
+                                            "bounded runtime ingress capacity is representable as u64"
+                                        ),
+                                };
+                            if !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+                                ingress_trace,
+                            ) {
+                                panic!(
+                                    "Sumeragi v2 canonical body ingress changed completion identity or class"
+                                );
+                            }
+                        """,
+                    ),
+                ),
+            ),
+            CrossToolClaimContract(
+                constant=(
+                    "ProductionTwoStageRelayRetryTraceRefinesSourceFairness"
+                ),
+                verus_theorem=(
+                    "production_two_stage_relay_retry_trace_refines_source_fairness"
+                ),
+                verus_source=_GENERAL_VERUS_SOURCE,
+                production_sources=(
+                    "crates/irohad/src/main.rs",
+                    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                    "crates/iroha_p2p/src/network.rs",
+                ),
+                verus_parameters=(
+                    "projection: ProductionTwoStageRelayRetryTraceProjection,"
+                ),
+                verus_requires=(
+                    "production_two_stage_relay_retry_trace_body!(projection)"
+                ),
+                verus_ensures="""
+                    production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
+                        production_two_stage_relay_retry_trace_projection(projection),
+                    ),
+                    projection.daemon_source_capacity_matches_two_upstream_lanes,
+                    projection.class_corridor_covers_authenticated_sources,
+                    projection.total_depth_after == projection.total_depth_before,
+                    projection.selected_source_rank_after
+                        == projection.ready_sources_after - 1u64,
+                    projection.selected_item_rank_after
+                        == projection.source_depth_after - 1u64,
+                    projection.source_depth_after <= projection.source_capacity
+                """,
+                verified_kernel=(
+                    "production_two_stage_relay_retry_trace_refines_source_fairness_kernel"
+                ),
+                verified_kernel_source=(
+                    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+                ),
+                verified_kernel_parameters=(
+                    "projection: ProductionTwoStageRelayRetryTraceProjection,"
+                ),
+                verified_kernel_body=(
+                    "production_two_stage_relay_retry_trace_body!(projection)"
+                ),
+                verified_kernel_public=True,
+                verified_kernel_shared_macro_sha256=((
+                    "production_two_stage_relay_retry_trace_body",
+                    "fda81d366704ada4700101cb7ee870acfec2fabe141133ece61c5d9eb1d84ea9",
+                ),),
+                theorem_kernel_projection="""
+                    production_two_stage_relay_retry_trace_projection(projection),
+                """,
+                theorem_projection_builder=(
+                    "production_two_stage_relay_retry_trace_projection"
+                ),
+                theorem_projection_builder_parameters=(
+                    "projection: ProductionTwoStageRelayRetryTraceProjection,"
+                ),
+                theorem_projection_builder_return=(
+                    "ProductionTwoStageRelayRetryTraceProjection"
+                ),
+                theorem_projection_builder_item_sha256=(
+                    "e5fe2d9fe2e38d53d806554e2d8f66c3d83c39ca69ff40afc6262059cbb34ca7"
+                ),
+                source_item_seals=_TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS,
+                production_call_sites=(
+                    CrossToolProductionCallContract(
+                        source="crates/irohad/src/main.rs",
+                        item="sumeragi_relay_retain_retry",
+                        projection="projection",
+                        required_expression="""
+                            let projection = ProductionTwoStageRelayRetryTraceProjection {
+                                daemon_source_capacity_matches_two_upstream_lanes:
+                                    retry_geometry
+                                        .daemon_source_capacity_matches_two_upstream_lanes(),
+                                class_corridor_covers_authenticated_sources:
+                                    retry_geometry
+                                        .class_corridor_covers_authenticated_sources(),
+                                authenticated_source_matches_resource_owner:
+                                    selection.source == retry_source
+                                        && retry_route.is_authenticated_via(
+                                            &selection.source.via
+                                        ),
+                                retry_route_same_delivery:
+                                    selected_item_rank_after.is_some(),
+                                retry_route_active,
+                                selected_eligible: selection.selected_eligible,
+                                ready_sources_before:
+                                    u64::try_from(selection.ready_sources_before)
+                                        .expect(
+                                            "retained ready-source count must fit u64"
+                                        ),
+                                selected_source_rank_before:
+                                    u64::try_from(
+                                        selection.selected_source_rank_before
+                                    )
+                                    .expect("retained source rank must fit u64"),
+                                ready_sources_after:
+                                    u64::try_from(retained.ready.len())
+                                        .expect(
+                                            "retained ready-source count must fit u64"
+                                        ),
+                                selected_source_rank_after:
+                                    selected_source_rank_after
+                                        .and_then(|rank| u64::try_from(rank).ok())
+                                        .unwrap_or(u64::MAX),
+                                source_depth_before:
+                                    u64::try_from(selection.source_depth_before)
+                                        .expect(
+                                            "retained source depth must fit u64"
+                                        ),
+                                selected_item_rank_before:
+                                    u64::try_from(
+                                        selection.selected_item_rank_before
+                                    )
+                                    .expect("retained item rank must fit u64"),
+                                source_depth_after: source_depth_after
+                                    .and_then(|depth| u64::try_from(depth).ok())
+                                    .unwrap_or(u64::MAX),
+                                selected_item_rank_after:
+                                    selected_item_rank_after
+                                        .and_then(|rank| u64::try_from(rank).ok())
+                                        .unwrap_or(u64::MAX),
+                                total_depth_before:
+                                    u64::try_from(selection.total_depth_before)
+                                        .expect(
+                                            "retained total depth must fit u64"
+                                        ),
+                                total_depth_after: u64::try_from(retained.len)
+                                    .expect("retained total depth must fit u64"),
+                                source_capacity:
+                                    u64::try_from(retained.source_capacity)
+                                        .expect(
+                                            "retained source capacity must fit u64"
+                                        ),
+                                total_capacity: u64::try_from(retained.capacity)
+                                    .expect(
+                                        "retained total capacity must fit u64"
+                                    ),
+                            };
+                            if production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
+                                projection
+                            ) {
+                                Ok(())
+                            } else {
+                                Err(
+                                    SumeragiRelayRetryRetentionError::RefinementViolation
+                                )
                             }
                         """,
                     ),
@@ -1645,7 +2230,13 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_ensures="""
                     production_reliable_flush_trace_refines_outbound_ownership_kernel(
                         production_reliable_flush_trace_projection(projection),
-                    )
+                    ),
+                    projection.status >= 1u8,
+                    projection.status <= 3u8,
+                    projection.chunk_count > 0u64,
+                    projection.chunk_index < projection.chunk_count,
+                    projection.chunk_cursor_before == projection.chunk_index,
+                    projection.flushing_after <= projection.capacity
                 """,
                 verified_kernel=(
                     "production_reliable_flush_trace_refines_outbound_ownership_kernel"
@@ -1658,6 +2249,10 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_body=(
                     "production_reliable_flush_trace_body!(projection)"
+                ),
+                verified_kernel_shared_macro_sha256=(
+                    ("refinement_tag_value", "4a515e39765e747333602b0efeccaa20873b7054e9786ce1d022bf0af3973942"),
+                    ("production_reliable_flush_trace_body", "3c0ebdaa383185d3e5baa7cd9b6935dffeeb7865a66aa72f86d87a914e3ca28c"),
                 ),
                 theorem_kernel_projection=(
                     "production_reliable_flush_trace_projection(projection),"
@@ -1728,6 +2323,14 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_ensures="""
                     production_application_trace_refines_decision_completion_kernel(
                         production_application_trace_projection(projection),
+                    ),
+                    projection.context_height > 0u64,
+                    projection.state_height_after == projection.context_height,
+                    projection.artifact_height == projection.context_height,
+                    projection.completion_work_id == projection.task_work_id,
+                    canonical_identity_equal_body!(
+                        projection.artifact_context_id,
+                        projection.context_id
                     )
                 """,
                 verified_kernel=(
@@ -1740,6 +2343,10 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "projection: ProductionApplicationTraceProjection,"
                 ),
                 verified_kernel_body="production_application_trace_body!(projection)",
+                verified_kernel_shared_macro_sha256=(
+                    ("refinement_tag_value", "4a515e39765e747333602b0efeccaa20873b7054e9786ce1d022bf0af3973942"),
+                    ("production_application_trace_body", "4b8e86711232b60e6e1bc02f5b7847ceb279a52813799e0a5a2acd40d182b909"),
+                ),
                 theorem_kernel_projection=(
                     "production_application_trace_projection(projection),"
                 ),
@@ -1797,6 +2404,16 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
             "ProductionSuccessorAndExactRecoveryTraceRefinement => "
             "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
         ),
+        ledger_declaration_kind="operator",
+        ledger_statement=(
+            "/\\ ProductionSuccessorAndExactRecoveryTraceRefinement "
+            "/\\ (IndexedChainSpec => []"
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)"
+        ),
+        tla_proof=(
+            "BY IndexedChainSpecEstablishesSuccessorActivationAndExactHistoricalRecoveryInvariant "
+            "DEF SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
+        ),
         claims=(
             CrossToolClaimContract(
                 constant="ProductionAppliedSuccessorTraceRefinesIndexedActivation",
@@ -1804,7 +2421,71 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_source=_GENERAL_VERUS_SOURCE,
                 production_sources=(
                     "crates/iroha_core/src/sumeragi/status.rs",
+                    "crates/iroha_core/src/sumeragi/v2_recovery.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                ),
+                verus_parameters=(
+                    "projection: ProductionAppliedSuccessorTraceProjection,"
+                ),
+                verus_requires=(
+                    "production_applied_successor_trace_body!(projection)"
+                ),
+                verus_ensures="""
+                    production_applied_successor_trace_refines_indexed_activation_kernel(
+                        production_applied_successor_trace_projection(projection),
+                    ),
+                    projection.predecessor_stage_before
+                        == refinement_tag_value!(SUCCESSOR_STAGE_RUNNING),
+                    projection.predecessor_stage_after
+                        == refinement_tag_value!(SUCCESSOR_STAGE_COMPLETE),
+                    projection.successor.height
+                        == projection.binding.expected_predecessor.height + 1u64,
+                    projection.successor.marker_height == projection.successor.height
+                """,
+                verified_kernel=(
+                    "production_applied_successor_trace_refines_indexed_activation_kernel"
+                ),
+                verified_kernel_source=(
+                    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+                ),
+                verified_kernel_parameters=(
+                    "projection: ProductionAppliedSuccessorTraceProjection,"
+                ),
+                verified_kernel_body=(
+                    "production_applied_successor_trace_body!(projection)"
+                ),
+                verified_kernel_shared_macro_sha256=(
+                    _SUCCESSOR_APPLIED_SHARED_MACROS
+                ),
+                theorem_kernel_projection=(
+                    "production_applied_successor_trace_projection(projection),"
+                ),
+                theorem_projection_builder=(
+                    "production_applied_successor_trace_projection"
+                ),
+                theorem_projection_builder_parameters=(
+                    "projection: ProductionAppliedSuccessorTraceProjection,"
+                ),
+                theorem_projection_builder_return=(
+                    "ProductionAppliedSuccessorTraceProjection"
+                ),
+                theorem_projection_builder_item_sha256=(
+                    "1beed7d15640a11bbb8036fbfdd7950cce576ad24c2d639e99e0894971d74cd1"
+                ),
+                source_item_seals=_SUCCESSOR_APPLIED_SOURCE_ITEM_SEALS,
+                production_call_sites=(
+                    CrossToolProductionCallContract(
+                        source="crates/iroha_core/src/sumeragi/status.rs",
+                        item="activate_v2_successor_height_at",
+                        projection="trace",
+                        required_expression="""
+                            if !production_applied_successor_trace_refines_indexed_activation_kernel(
+                                trace
+                            ) {
+                                return Err(V2SuccessorActivationError::RefinementRejected);
+                            }
+                        """,
+                    ),
                 ),
             ),
             CrossToolClaimContract(
@@ -1818,16 +2499,187 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "crates/iroha_core/src/sumeragi/v2_recovery.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
                 ),
+                verus_parameters=(
+                    "projection: ProductionRecoveredSuccessorTraceProjection,"
+                ),
+                verus_requires=(
+                    "production_recovered_successor_trace_body!(projection)"
+                ),
+                verus_ensures="""
+                    production_recovered_successor_trace_refines_indexed_activation_kernel(
+                        production_recovered_successor_trace_projection(projection),
+                    ),
+                    projection.published_status_height_before == 0u64,
+                    projection.successor.last_committed_height < u64::MAX,
+                    projection.successor.height
+                        == projection.successor.last_committed_height + 1u64,
+                    projection.authority_kind
+                            == refinement_tag_value!(
+                                SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP
+                            )
+                        || projection.authority_kind
+                            == refinement_tag_value!(
+                                SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP
+                            )
+                """,
+                verified_kernel=(
+                    "production_recovered_successor_trace_refines_indexed_activation_kernel"
+                ),
+                verified_kernel_source=(
+                    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+                ),
+                verified_kernel_parameters=(
+                    "projection: ProductionRecoveredSuccessorTraceProjection,"
+                ),
+                verified_kernel_body=(
+                    "production_recovered_successor_trace_body!(projection)"
+                ),
+                verified_kernel_shared_macro_sha256=(
+                    _SUCCESSOR_RECOVERED_SHARED_MACROS
+                ),
+                theorem_kernel_projection=(
+                    "production_recovered_successor_trace_projection(projection),"
+                ),
+                theorem_projection_builder=(
+                    "production_recovered_successor_trace_projection"
+                ),
+                theorem_projection_builder_parameters=(
+                    "projection: ProductionRecoveredSuccessorTraceProjection,"
+                ),
+                theorem_projection_builder_return=(
+                    "ProductionRecoveredSuccessorTraceProjection"
+                ),
+                theorem_projection_builder_item_sha256=(
+                    "60e59c06af0520d9b69ff7abb10209f3a1377a905eed3e67fc08a029258f229d"
+                ),
+                source_item_seals=_SUCCESSOR_RECOVERED_SOURCE_ITEM_SEALS,
+                production_call_sites=(
+                    CrossToolProductionCallContract(
+                        source="crates/iroha_core/src/sumeragi/status.rs",
+                        item="publish_recovered_v2_successor_height_at",
+                        projection="trace",
+                        required_expression="""
+                            if !production_recovered_successor_trace_refines_indexed_activation_kernel(
+                                trace
+                            ) {
+                                if let Some(published) = published {
+                                    return Err(V2SuccessorActivationError::RecoveredStatusAlreadyPublished(
+                                        published.height,
+                                    ));
+                                }
+                                return Err(V2SuccessorActivationError::RefinementRejected);
+                            }
+                        """,
+                    ),
+                ),
             ),
             CrossToolClaimContract(
-                constant="ProductionStartupFailureRefinesFailClosedActivation",
-                verus_theorem="production_startup_failure_refines_fail_closed_activation",
+                constant=(
+                    "ProductionStartupFailureAndRestartRefinesIndexedLifecycle"
+                ),
+                verus_theorem=(
+                    "production_startup_failure_and_restart_refines_indexed_lifecycle"
+                ),
                 verus_source=_GENERAL_VERUS_SOURCE,
                 production_sources=(
                     "crates/iroha_core/src/sumeragi/status.rs",
                     "crates/iroha_core/src/sumeragi/v2_effects.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
                     "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                ),
+                verus_parameters=(
+                    "projection: ProductionSuccessorStartupLifecycleProjection,"
+                ),
+                verus_requires=(
+                    "production_startup_failure_and_restart_trace_body!(projection)"
+                ),
+                verus_ensures="""
+                    production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+                        production_successor_startup_lifecycle_projection(projection),
+                    ),
+                    projection.status_height > 0u64,
+                    projection.published_height_after
+                        == projection.published_height_before,
+                    projection.transition_kind
+                            == refinement_tag_value!(SUCCESSOR_LIFECYCLE_FAIL)
+                        ==> projection.stage_after == projection.stage_before
+                            && projection.restart_required_after,
+                    projection.transition_kind
+                            != refinement_tag_value!(SUCCESSOR_LIFECYCLE_FAIL)
+                        ==> !projection.restart_required_after
+                """,
+                verified_kernel=(
+                    "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel"
+                ),
+                verified_kernel_source=(
+                    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+                ),
+                verified_kernel_parameters=(
+                    "projection: ProductionSuccessorStartupLifecycleProjection,"
+                ),
+                verified_kernel_body=(
+                    "production_startup_failure_and_restart_trace_body!(projection)"
+                ),
+                verified_kernel_shared_macro_sha256=(
+                    _SUCCESSOR_LIFECYCLE_SHARED_MACROS
+                ),
+                theorem_kernel_projection=(
+                    "production_successor_startup_lifecycle_projection(projection),"
+                ),
+                theorem_projection_builder=(
+                    "production_successor_startup_lifecycle_projection"
+                ),
+                theorem_projection_builder_parameters=(
+                    "projection: ProductionSuccessorStartupLifecycleProjection,"
+                ),
+                theorem_projection_builder_return=(
+                    "ProductionSuccessorStartupLifecycleProjection"
+                ),
+                theorem_projection_builder_item_sha256=(
+                    "79c4f19220ed57c22fe661405bd7137c64f4771aaef3bcb2076042c81a7804b2"
+                ),
+                source_item_seals=_SUCCESSOR_LIFECYCLE_SOURCE_ITEM_SEALS,
+                production_call_sites=(
+                    CrossToolProductionCallContract(
+                        source="crates/iroha_core/src/sumeragi/status.rs",
+                        item="begin_v2_successor_activation",
+                        projection="lifecycle",
+                        required_expression="""
+                            if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+                                lifecycle
+                            ) {
+                                return Err(V2SuccessorActivationError::RefinementRejected);
+                            }
+                        """,
+                    ),
+                    CrossToolProductionCallContract(
+                        source="crates/iroha_core/src/sumeragi/status.rs",
+                        item="mark_v2_restart_required",
+                        projection="lifecycle",
+                        required_expression="""
+                            if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+                                lifecycle
+                            ) {
+                                iroha_logger::error!(
+                                    height = status.height,
+                                    "Sumeragi v2 Running successor failure projection was rejected; latching restart-required fail-closed"
+                                );
+                            }
+                        """,
+                    ),
+                    CrossToolProductionCallContract(
+                        source="crates/iroha_core/src/sumeragi/v2_runner.rs",
+                        item="recovered",
+                        brace_context=(("impl", "PendingSuccessorActivation"),),
+                        projection="lifecycle",
+                        required_expression="""
+                            if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+                                lifecycle
+                            ) {
+                                return Err(V2RunnerError::SuccessorRefinementRejected);
+                            }
+                        """,
+                    ),
                 ),
             ),
             CrossToolClaimContract(
@@ -1840,6 +2692,73 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
                     "crates/iroha_core/src/sumeragi/v2_effects.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                ),
+                verus_parameters=(
+                    "projection: ProductionHistoricalCertificateTraceProjection,"
+                ),
+                verus_requires=(
+                    "production_historical_certificate_trace_body!(projection)"
+                ),
+                verus_ensures="""
+                    production_historical_certificate_trace_refines_indexed_async_kernel(
+                        production_historical_certificate_trace_projection(projection),
+                    ),
+                    projection.context_height > 0u64,
+                    projection.certificate_height == projection.context_height,
+                    projection.request_present_before,
+                    !projection.request_present_after,
+                    canonical_identity_equal_body!(
+                        projection.message_hash,
+                        projection.admitted_message_hash
+                    )
+                """,
+                verified_kernel=(
+                    "production_historical_certificate_trace_refines_indexed_async_kernel"
+                ),
+                verified_kernel_source=(
+                    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+                ),
+                verified_kernel_parameters=(
+                    "projection: ProductionHistoricalCertificateTraceProjection,"
+                ),
+                verified_kernel_body=(
+                    "production_historical_certificate_trace_body!(projection)"
+                ),
+                verified_kernel_shared_macro_sha256=(
+                    _HISTORICAL_CERTIFICATE_SHARED_MACROS
+                ),
+                theorem_kernel_projection=(
+                    "production_historical_certificate_trace_projection(projection),"
+                ),
+                theorem_projection_builder=(
+                    "production_historical_certificate_trace_projection"
+                ),
+                theorem_projection_builder_parameters=(
+                    "projection: ProductionHistoricalCertificateTraceProjection,"
+                ),
+                theorem_projection_builder_return=(
+                    "ProductionHistoricalCertificateTraceProjection"
+                ),
+                theorem_projection_builder_item_sha256=(
+                    "9964ce8c6d7e99de1cdec79061d4f5ce8edb58dbd00a94495f35fa61c4a9473a"
+                ),
+                source_item_seals=_HISTORICAL_CERTIFICATE_SOURCE_ITEM_SEALS,
+                production_call_sites=(
+                    CrossToolProductionCallContract(
+                        source="crates/iroha_core/src/sumeragi/v2_block_sync.rs",
+                        item="enqueue_and_complete",
+                        brace_context=(("impl", "V2BlockSyncDiscovery"),),
+                        projection="historical_trace",
+                        required_expression="""
+                            if !production_historical_certificate_trace_refines_indexed_async_kernel(
+                                historical_trace
+                            ) {
+                                return Err(
+                                    CommitCertificateAdmissionError::RefinementRejected
+                                );
+                            }
+                        """,
+                    ),
                 ),
             ),
             CrossToolClaimContract(
@@ -1856,15 +2775,183 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
                     "crates/iroha_core/src/sumeragi/v2_worker.rs",
                 ),
+                verus_parameters=(
+                    "projection: ProductionHistoricalBodyPipelineTraceProjection,"
+                ),
+                verus_requires=(
+                    "production_historical_body_pipeline_trace_body!(projection)"
+                ),
+                verus_ensures="""
+                    production_historical_body_pipeline_trace_refines_indexed_async_kernel(
+                        production_historical_body_pipeline_trace_projection(projection),
+                    ),
+                    projection.owner_present_after,
+                    projection.owner_tag.height == projection.fetch_tag.height,
+                    projection.owner_tag.view == projection.fetch_tag.view,
+                    projection.owner_tag.generation == projection.fetch_tag.generation,
+                    !projection.pending_fetch_present_after,
+                    !projection.request_present_after
+                """,
+                verified_kernel=(
+                    "production_historical_body_pipeline_trace_refines_indexed_async_kernel"
+                ),
+                verified_kernel_source=(
+                    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+                ),
+                verified_kernel_parameters=(
+                    "projection: ProductionHistoricalBodyPipelineTraceProjection,"
+                ),
+                verified_kernel_body=(
+                    "production_historical_body_pipeline_trace_body!(projection)"
+                ),
+                verified_kernel_shared_macro_sha256=(
+                    _HISTORICAL_BODY_SHARED_MACROS
+                ),
+                theorem_kernel_projection=(
+                    "production_historical_body_pipeline_trace_projection(projection),"
+                ),
+                theorem_projection_builder=(
+                    "production_historical_body_pipeline_trace_projection"
+                ),
+                theorem_projection_builder_parameters=(
+                    "projection: ProductionHistoricalBodyPipelineTraceProjection,"
+                ),
+                theorem_projection_builder_return=(
+                    "ProductionHistoricalBodyPipelineTraceProjection"
+                ),
+                theorem_projection_builder_item_sha256=(
+                    "dd77408f8049394320567884ec23eb0ddbe19d6c64aba492b5a25e8442f106e5"
+                ),
+                source_item_seals=_HISTORICAL_BODY_SOURCE_ITEM_SEALS,
+                production_call_sites=(
+                    CrossToolProductionCallContract(
+                        source="crates/iroha_core/src/sumeragi/v2_effects.rs",
+                        item="accept_certified_body_response_inner",
+                        brace_context=((
+                            "impl", "<", "R", ":", "EffectRuntime", ">",
+                            "V2EffectExecutor", "<", "R", ">",
+                        ),),
+                        projection="historical_trace",
+                        required_expression="""
+                            if !production_historical_body_pipeline_trace_refines_indexed_async_kernel(
+                                historical_trace
+                            ) {
+                                return Err(self.fail_closed_transport(
+                                    "certified body admission did not preserve its exact historical pipeline owner",
+                                    services,
+                                ));
+                            }
+                        """,
+                    ),
+                ),
             ),
             CrossToolClaimContract(
-                constant="ProductionTerminalApplicationExcludesActivation",
-                verus_theorem="production_terminal_application_excludes_activation",
+                constant=(
+                    "ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal"
+                ),
+                verus_theorem=(
+                    "production_terminal_application_without_successor_activation_refines_indexed_terminal"
+                ),
                 verus_source=_GENERAL_VERUS_SOURCE,
                 production_sources=(
-                    "crates/iroha_core/src/sumeragi/status.rs",
-                    "crates/iroha_core/src/sumeragi/v2_apply.rs",
+                    "crates/iroha_core/src/sumeragi/v2_recovery.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                ),
+                verus_parameters=(
+                    "projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,"
+                ),
+                verus_requires=(
+                    "production_terminal_application_without_successor_activation_body!(projection)"
+                ),
+                verus_ensures="""
+                    production_terminal_application_without_successor_activation_kernel(
+                        production_terminal_application_without_successor_activation_projection(projection),
+                    ),
+                    projection.context_height > 0u64,
+                    projection.receipt_height == projection.context_height,
+                    projection.artifact_height == projection.context_height,
+                    projection.predecessor.height == projection.context_height,
+                    !projection.pending_successor_activation_present,
+                    canonical_identity_equal_body!(
+                        projection.receipt_context_id,
+                        projection.context_id
+                    ),
+                    canonical_identity_equal_body!(
+                        projection.artifact_context_id,
+                        projection.context_id
+                    )
+                """,
+                verified_kernel=(
+                    "production_terminal_application_without_successor_activation_kernel"
+                ),
+                verified_kernel_source=(
+                    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+                ),
+                verified_kernel_parameters=(
+                    "projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,"
+                ),
+                verified_kernel_body=(
+                    "production_terminal_application_without_successor_activation_body!(projection)"
+                ),
+                verified_kernel_shared_macro_sha256=(
+                    _SUCCESSOR_TERMINAL_APPLICATION_SHARED_MACROS
+                ),
+                theorem_kernel_projection=(
+                    "production_terminal_application_without_successor_activation_projection(projection),"
+                ),
+                theorem_projection_builder=(
+                    "production_terminal_application_without_successor_activation_projection"
+                ),
+                theorem_projection_builder_parameters=(
+                    "projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,"
+                ),
+                theorem_projection_builder_return=(
+                    "ProductionTerminalApplicationWithoutSuccessorActivationProjection"
+                ),
+                theorem_projection_builder_item_sha256=(
+                    "2a68c7a3cec5cc3b865c079701908d5ccdded26cbcd13f13f580b07ad54b4d10"
+                ),
+                source_item_seals=(
+                    _SUCCESSOR_TERMINAL_APPLICATION_SOURCE_ITEM_SEALS
+                ),
+                production_call_sites=(
+                    CrossToolProductionCallContract(
+                        source="crates/iroha_core/src/sumeragi/v2_runner.rs",
+                        item="run_inner",
+                        projection="terminal_application,",
+                        required_expression="""
+                            let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)?;
+                            let artifact_hash = HashOf::new(&artifact);
+                            let terminal_application =
+                                ProductionTerminalApplicationWithoutSuccessorActivationProjection {
+                                    context_id: successor_context_refinement_projection(context.id()),
+                                    context_height: context.height,
+                                    receipt_context_id: successor_context_refinement_projection(receipt.context_id()),
+                                    receipt_height: receipt.height(),
+                                    receipt_block_hash: successor_block_refinement_projection(receipt.block_hash()),
+                                    receipt_artifact_hash: CanonicalIdentityProjection::from_bytes(
+                                        IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                                        IDENTITY_KIND_FINALITY_ARTIFACT,
+                                        *receipt.artifact_hash().as_ref(),
+                                    ),
+                                    artifact_context_id: successor_context_refinement_projection(artifact.context_id()),
+                                    artifact_height: artifact.height,
+                                    artifact_block_hash: successor_block_refinement_projection(artifact.block_hash),
+                                    artifact_hash: CanonicalIdentityProjection::from_bytes(
+                                        IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                                        IDENTITY_KIND_FINALITY_ARTIFACT,
+                                        *artifact_hash.as_ref(),
+                                    ),
+                                    predecessor: predecessor.refinement_projection(),
+                                    pending_successor_activation_present: pending_successor_activation.is_some(),
+                                };
+                            if !production_terminal_application_without_successor_activation_kernel(
+                                terminal_application,
+                            ) {
+                                return Err(V2RunnerError::SuccessorRefinementRejected);
+                            }
+                        """,
+                    ),
                 ),
             ),
         ),
@@ -1891,14 +2978,19 @@ RELEASE_PROOF_MODULES = (
     "SumeragiV2TimeoutWireAuthorization",
     "SumeragiV2ChainEpochRefinement",
     "SumeragiV2SuccessorActivationRefinementProofs",
+    "SumeragiV2ChainLivenessProofs",
     "SumeragiV2TemporalLemmas",
     "SumeragiV2LivenessProofs",
     "SumeragiV2ServiceRankLemmas",
     "SumeragiV2EffectiveLockAcquisitionProofs",
+    "SumeragiV2ReplyRouteOwnershipProofs",
+    "SumeragiV2ReplyRoutePipelineProofs",
+    "SumeragiV2AsyncNetworkReplyRouteProofs",
     "SumeragiV2AsyncFairnessRefinementProofs",
     "SumeragiV2CertifiedRequestHashAuthorityProofs",
     "SumeragiV2DurableDecisionRecoveryProofs",
     "SumeragiV2AsyncLivenessProofs",
+    "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
     "SumeragiTimeoutIngressGuardTest",
 )
 
@@ -2023,17 +3115,13 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2AsyncLivenessProofs",
         "GenerationScopedVoteDeliveryObligation",
     ),
-    "progress-witness-production-refinement": (
-        "SumeragiV2AsyncLivenessProofs",
-        "ProgressWitnessProductionRefinementObligation",
-    ),
     "progress-witness-preservation": (
         "SumeragiV2AsyncLivenessProofs",
         "ProgressWitnessObligation",
     ),
-    "post-gst-deadlock-freedom": (
+    "progress-witness-production-refinement": (
         "SumeragiV2AsyncLivenessProofs",
-        "DeadlockFreedomObligation",
+        "ProgressWitnessProductionRefinementObligation",
     ),
     "protected-service-rank-stage4-ready-causal": (
         "SumeragiV2AsyncLivenessProofs",
@@ -2050,6 +3138,10 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     "protected-service-rank": (
         "SumeragiV2AsyncLivenessProofs",
         "ProtectedServiceRankProgressObligation",
+    ),
+    "post-gst-deadlock-freedom": (
+        "SumeragiV2AsyncLivenessProofs",
+        "DeadlockFreedomObligation",
     ),
     "post-gst-starvation-freedom": (
         "SumeragiV2AsyncLivenessProofs",
@@ -2084,7 +3176,7 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "GenesisHeightSuccessorHandoffObligation",
     ),
     "height-liveness": (
-        "SumeragiV2ChainEpochRefinement",
+        "SumeragiV2ChainLivenessProofs",
         "HeightLivenessObligation",
     ),
     "cryptography": ("trusted-boundary", "cryptography"),
@@ -2126,6 +3218,7 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2ChainEpochProofs",
     "SumeragiV2ChainEpochRefinement",
     "SumeragiV2SuccessorActivationRefinementProofs",
+    "SumeragiV2ChainLivenessProofs",
     "SumeragiV2TemporalLemmas",
     "SumeragiV2LivenessProofs",
     "SumeragiV2ServiceRankLemmas",
@@ -2133,11 +3226,16 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2EffectiveLockAcquisitionProofs",
     "SumeragiV2AsyncNetwork",
     "SumeragiV2ReplyRouteOwnership",
+    "SumeragiV2ReplyRouteOwnershipProofs",
+    "SumeragiV2ReplyRoutePipeline",
+    "SumeragiV2ReplyRoutePipelineProofs",
     "SumeragiV2AsyncNetworkReplyRoutes",
+    "SumeragiV2AsyncNetworkReplyRouteProofs",
     "SumeragiV2AsyncFairnessRefinementProofs",
     "SumeragiV2CertifiedRequestHashAuthorityProofs",
     "SumeragiV2DurableDecisionRecoveryProofs",
     "SumeragiV2AsyncLivenessProofs",
+    "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
     "SumeragiTimeoutIngressGuardTest",
 )
 
@@ -2165,13 +3263,28 @@ REQUIRED_TLC_CONFIG_HEADERS = {
 
 _REPLY_ROUTE_FORMAL_SOURCE_SHA256 = {
     "SumeragiV2ReplyRouteOwnership.tla": (
-        "1d14d64daa54c855bb57eb5d3198656f97a589b655805b0492d8bf442ad1f734"
+        "fdc679c31e67f14b4f43cb6b8a16a7631087d765d84fe04c4a3c56ea55396f3a"
+    ),
+    "SumeragiV2ReplyRouteOwnershipProofs.tla": (
+        "c8288dcf69c4426f4e1ac97739ec9dd339f11ae5dd5931aaaa6db3a9315c85eb"
+    ),
+    "SumeragiV2ReplyRoutePipeline.tla": (
+        "526f734f9ff224284c942bdd737660ead4e64a903d94610c28da47194a6a9268"
+    ),
+    "SumeragiV2ReplyRoutePipelineProofs.tla": (
+        "fe8d8c899697408985c31cac706ee93198803ad096d18c6800deea4c2ac55774"
     ),
     "SumeragiV2AsyncNetworkReplyRoutes.tla": (
-        "4ffbf60c2d281eab7ffca350f2a85eeea9b1517ece2e796c42e49d6b9747d2a5"
+        "915e9bba4471871df43f424029eef86ca45908842cd78e093ec83e81780b53f1"
+    ),
+    "SumeragiV2AsyncNetworkReplyRouteProofs.tla": (
+        "0d5febc62df005522506d29e8006598d8ebbc486aaf0f888f08a873c80c6a08b"
     ),
     "SumeragiV2ReplyRouteOwnershipMutation.tla": (
-        "85d3e2c309b08e0d4a670a3c42e55547526178655436dc72ae95bb85bd84b5d0"
+        "4a401c380397448ec6f8034d2c22d82189504aac8a01f9a2823588e4d3e237f5"
+    ),
+    "SumeragiV2ReplyRoutePipelineMutation.tla": (
+        "5f87d00e7aad9c543b0ce6fdf3d80a88f2fbb9e2e66fb75de383afdf65abbca0"
     ),
     "reply_route_fixed.cfg": (
         "36bff1ec06f4b517ec080a563faf72e32706bf7c656a63fef79e5af503b195cc"
@@ -2181,6 +3294,51 @@ _REPLY_ROUTE_FORMAL_SOURCE_SHA256 = {
     ),
     "reply_route_source_replacement_bug.cfg": (
         "3888e0ccd84c70cd9dc8cb0803d1f41f85585034be5c0e7ddfefd5d85d68fd84"
+    ),
+    "reply_route_target_substitution_bug.cfg": (
+        "9d1b9c6e4925ec059ea2bea9db1e421e5a932d982698072331f983332903bda0"
+    ),
+    "reply_route_ticket_payload_reuse_bug.cfg": (
+        "6d7ee13a9fc9104e3cfa7659e32061e44c0e978f677555f777a7878213bbd7eb"
+    ),
+    "reply_route_reconnect_sibling_ticket_bug.cfg": (
+        "509834a75b68945542d8b9992ddea0b42f65d764fa86d1a165eb5b7b5b055b73"
+    ),
+    "reply_route_retired_ordinal_collision_bug.cfg": (
+        "5d73de48101fdd195d3259225a22f07ecdf2e5d37c503aaf6432dda7d3e23cd4"
+    ),
+    "reply_route_intrinsic_tenure_substitution_bug.cfg": (
+        "6d88a80acb87011388c07379b0a9f62d813a1d8b36fa1bc4c1aac859d2e8018f"
+    ),
+    "reply_route_source_capacity_substitution_bug.cfg": (
+        "953e589ee5838982f683bc44e9d6a9764ddb9633b54d842901cf930544f18097"
+    ),
+    "reply_route_pipeline_fixed.cfg": (
+        "cf061676c290d54b0d65683b426cf812bbcdca5fc88ed095384e2d81dcd2d308"
+    ),
+    "reply_route_pipeline_unfair_attach_bug.cfg": (
+        "98fcbf63fd63e7411e2c66578ef42a7d4acbb23d15b597fb2c49aa17daaf71e2"
+    ),
+    "reply_route_pipeline_fifo_bypass_bug.cfg": (
+        "77ce9ac783e6e88f17852ca111785a7420b870cb79eee7753589ebc0949020e9"
+    ),
+    "reply_route_pipeline_cursor_regression_bug.cfg": (
+        "494649a8ef88926ce046d291122d28bfe635c0abd93ad5e28a6a272db31fa3fa"
+    ),
+    "reply_route_pipeline_ticket_reuse_bug.cfg": (
+        "169bcbdfad9d0bf9f3bea6d3cf6973cec56b8364d698ff5a90240a1ed65f3f62"
+    ),
+    "reply_route_pipeline_premature_reconnect_bug.cfg": (
+        "6f6e0a816212cf1b4b1c4ce4aec4ecc3ec64368412fb76223939916ae9d7114e"
+    ),
+    "reply_route_pipeline_old_flush_double_apply_bug.cfg": (
+        "7a4830d27f15e4036986397fd46e8195fc8cc769a05f8d4c669f405543b28be5"
+    ),
+    "reply_route_pipeline_source_class_writer_fixed.cfg": (
+        "f9bb6f2858b7611039cd3c8c32165b31f2ed3c416506278cb74ad3eab3f1354a"
+    ),
+    "reply_route_pipeline_cross_semantic_close_cycle_bug.cfg": (
+        "951d89813fd017ce79d49ae4053fb5099001a610c7190f9925f0bd771b282571"
     ),
 }
 
@@ -2289,6 +3447,20 @@ ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
     "application-liveness": "ApplicationCompletionProgressProperty",
 }
 
+# Most asynchronous obligations apply one property wrapper directly to the
+# frozen-context specification. Productive deadlock freedom intentionally
+# instantiates the parameterized wrapper with the exact terminating-local-work
+# projection instead; accepting the legacy one-argument wrapper here would
+# disconnect the per-validator runner-service contract from the ledgered
+# theorem.
+ASYNC_LIVENESS_EXACT_STATEMENTS = {
+    "post-gst-deadlock-freedom": (
+        "\\A initialContext: "
+        "DeadlockFreedomWithLocalWorkProperty(AsyncSpecAt(initialContext), "
+        "AsyncTerminatingLocalWorkDecreaseStep)"
+    ),
+}
+
 # These obligations are release-architecture seams, not declarations that may
 # drift between proof modules.  Type closure belongs to the concrete async
 # proof; successor activation, exact-recovery production refinement, genesis
@@ -2359,7 +3531,7 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
         "GenesisHeightSuccessorHandoffObligation",
     ),
     "height-liveness": (
-        "SumeragiV2ChainEpochRefinement",
+        "SumeragiV2ChainLivenessProofs",
         "HeightLivenessObligation",
     ),
 }
@@ -2374,6 +3546,13 @@ PROOF_STATUS_DEPENDENCIES = {
     ),
     "async-type-invariant": ("async-runner-scheduler-preservation",),
     "async-progress-ownership-invariant": ("async-type-invariant",),
+    "progress-witness-preservation": (
+        "async-type-invariant",
+        "generation-scoped-vote-delivery",
+        "post-decision-timeout-exclusion",
+        "decision-recovery-across-restart",
+        "effective-lock-body-acquisition-model",
+    ),
     "progress-witness-production-refinement": (
         "async-type-invariant",
         "async-progress-ownership-invariant",
@@ -2381,18 +3560,13 @@ PROOF_STATUS_DEPENDENCIES = {
         "post-decision-timeout-exclusion",
         "decision-recovery-across-restart",
         "async-fair-action-refinement",
-    ),
-    "progress-witness-preservation": (
-        "async-type-invariant",
-        "generation-scoped-vote-delivery",
-        "post-decision-timeout-exclusion",
-        "decision-recovery-across-restart",
-        "effective-lock-body-acquisition-production-refinement",
-        "progress-witness-production-refinement",
+        "progress-witness-preservation",
     ),
     "post-gst-deadlock-freedom": (
         "async-type-invariant",
         "async-fair-action-refinement",
+        "progress-witness-preservation",
+        "protected-service-rank",
     ),
     "protected-service-rank-stage4-ready-causal": (
         "async-type-invariant",
@@ -2424,6 +3598,7 @@ PROOF_STATUS_DEPENDENCIES = {
     "timeout-view-liveness": (
         "async-fair-action-refinement",
         "progress-witness-preservation",
+        "post-gst-deadlock-freedom",
         "post-gst-starvation-freedom",
     ),
     "locked-body-reproposal-liveness": (
@@ -2457,13 +3632,11 @@ PROOF_STATUS_DEPENDENCIES = {
         "rotating-leader-liveness",
         "application-liveness",
         "successor-activation-starvation-freedom",
-        "successor-activation-exact-recovery-production-refinement",
     ),
     "height-liveness": (
         "rotating-leader-liveness",
         "application-liveness",
         "successor-activation-starvation-freedom",
-        "successor-activation-exact-recovery-production-refinement",
     ),
 }
 
@@ -2799,8 +3972,8 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "ready_to_finish": (
         "039df6143d8b4505489db3c75ab2d3d24c01a30a4da0f0d277d865f44cfa0ffa"
     ),
-    "drain_deferred": (
-        "c2747fff4505193898fb43fd11414c8a0962110f53f76519d6edc432b3e22606"
+    "drain_deferred_with_evidence": (
+        "238059422c1425919c085c3e19c4cdf62438c9881d4fc04972f54069bad485ba"
     ),
     "fail_deferred_service_contract": (
         "b3ca797528869db777b292d74ccba9425cced620e3d56f429ffdeb624b285799"
@@ -2809,13 +3982,13 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "a8f7b1b55265fb84ed1c5e4b7d5c90a526fb5480ea8f572e365a998646bd67b5"
     ),
     "runtime_step": (
-        "b1225686730d10d91afda44c1bbf303b926a9a762766df1c0409767d84e0cf5c"
+        "d4adbfe9c0520157759192214f1c28ab7dee81e1d3943b1a284c9773f7e7672e"
     ),
     "runtime_step_recovery": (
-        "696162758e414d5efc4c7153acfed2576d88afc47863cb5806fe0fbddf5a1939"
+        "7c45b832c47fb7ba13cdefa12f9742ca0c735864b8f254effd17daeec3759c64"
     ),
     "dispatch_one_adapter_deferred": (
-        "f18a91fa7f3a36481f622d6649b32e65960aa91d6053949861296735cf4ebc87"
+        "096320b6e6e6aa4469421ecb41cdfe282fd56cd0ab6f1086bff7b5abab04bd5c"
     ),
     "tc_promoted_historical_commit_is_fsynced_before_sign_and_status": (
         "1a7a40ec9ad7773c8a52ab8ac9e8d19b2a64d86109e4ccb314f19df54ff148c0"
@@ -2823,26 +3996,70 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
 }
 
 # Exact comment/literal-free token digests for the production ownership bridge
-# that lets an authenticated CommitQC response coalesce with its unique
-# adapter-owned Busy-deferred QC instead of claiming a second runtime slot.
-_DEFERRED_QC_OWNERSHIP_RUST_ITEM_SHA256 = {
-    "reducer_qc_matches_wire": (
-        "6a33e438a552c3350b6870c75a583ca66e95bb380c5d60f0b015768793f8ad98"
+# which retains the complete canonical envelope and fair-ingress carrier from
+# authenticated admission through Busy-deferred service.
+_AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
+    "matches_authenticated_runtime_bytes": (
+        "1d5bd7b516504865f7f8f8db0416c7c1d337ba83342cbd66b564b24e46df3870"
     ),
-    "deferred_quorum_certificate_owner_tag": (
-        "0a4829a381f776d10f33e89fabc5f5601bd8306201f86837f2ed7b4b6cb2c399"
+    "deferred_authenticated_message_owner": (
+        "b6698264baedc9f720d99b9d4a9647e3df44ffbfd45c394772ea9030bbce4285"
     ),
-    "check_embedded_quorum_certificate_capacity": (
-        "20468d6661055dc83aa2d40100caa82b5f9e8bed20c8d9fe80237f3da03c1362"
+    "authenticated_deferred_admission_ordinals": (
+        "56e2d8e09f770616ace0c2421e6105c7ee2cf8d7428b4016003b5aa5b71bf271"
     ),
-    "enqueue_network": (
-        "3880b061833d7c2382a7546f40703817106847353395697cb354e0a411264772"
+    "deferred_authenticated_event_matches_wire": (
+        "71cff12249ba75d45cc55f3be85c966fa2f317a3638ce36fa250d399c0f88fd5"
     ),
-    "can_admit_network_message": (
-        "9c02f1659adf7776faa272c51fe41772848aed5347d1fbc6564e528d84ee17df"
+    "runtime_ingress_from_fair_ingress": (
+        "1329a9d8d5821f7a6da67677ef59f3afff2e8a07ecdf338e3398ce9a463356a0"
+    ),
+    "runtime_ingress_validate_exact": (
+        "92b40c4f9e15907e5c134c2284c6d58b4394ad873d8c17b45aebfe6aac599725"
+    ),
+    "runtime_ingress_matches_authenticated": (
+        "e9d5c8bfa0cbdc71f42f9858ee00e73f663c2bed53f573c3e06a9144feaad5f8"
+    ),
+    "runtime_ingress_can_merge_downstream": (
+        "7efc498aa07086b6623a0f0e3a674bbfb01d0684e69962efe8698e491e80da61"
+    ),
+    "runtime_ingress_merge_downstream": (
+        "e6d85417b6707a6f4f20aa8be89561ae5a8cbd7c8dc9b6e9fb1758e0765173e0"
+    ),
+    "runtime_driver_dispatch": (
+        "448b44a0bf0320a261dab4dc71aa0543043cfb499eb2a3435e90247bb4f3f67a"
+    ),
+    "runtime_driver_dispatch_deferred": (
+        "969781b17287465ce249afe5eb563b46a8ffa56fe6a9b8bcfe301154c749f022"
+    ),
+    "reconcile_deferred_ingress_ownership": (
+        "002d7ac60dda98c0d0406d60419aa58fd4caa82966ffac6943792556c08dedbd"
+    ),
+    "accept_driver_dispatch": (
+        "ced35c5e455aba796e0316a074194e6d478253a7fcb91cea13eac0399b488d06"
+    ),
+    "enqueue_network_with_ingress_ownership": (
+        "cbd06d5153bb36601209ac6ea131a43fe7d6d9e9c451f1019344c589d3ebaf5f"
+    ),
+    "can_admit_network_message_with_ingress_ownership": (
+        "f5faf916f195ed39af046bd533d4fcc97dc66cd1979ddf010ca347a2b14454e9"
+    ),
+    "take_last_scheduler_ownership": (
+        "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
     ),
     "commit_certificate_response_coalesces_with_exact_busy_deferred_qc": (
-        "4ce4c0b1e2e60bd018d0ebc163a55aef5e32ba3c4a9763f6435323d4c7fae15e"
+        "d8f2d8606ad6f2057617f27c77fdd513ba22e6bb533f776bd5f949731c815267"
+    ),
+}
+
+# Exact production effect-executor entry points which retain the authenticated
+# ingress carrier and latch a fail-stop restart on malformed ownership.
+_EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256 = {
+    "enqueue_network_with_ingress_ownership": (
+        "9bf3e8ec45247e920681de7f13941d8544df863b73c5a3ac243adcacae0b2587"
+    ),
+    "can_admit_network_message_with_ingress_ownership": (
+        "644421658388af9adb80656b4b0d7b402835187c13d5c32b92e43f41ae5ff10f"
     ),
 }
 
@@ -2859,48 +4076,78 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_TEST_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 406
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 465
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
-    ("production-kura-progress-durability", "kura::tests", 12),
+    ("production-kura-progress-durability", "kura::tests", 13),
     ("production-kura-lane-geometry", "kura::lane_geometry::tests", 8),
     ("production-lane-relay-exact-ownership", "nexus::lane_relay::tests", 4),
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        25,
+        26,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 26),
+    ("production-merge-sidecar", "merge_sidecar::tests", 30),
     ("production-v2-core", "sumeragi::v2_core::tests", 15),
-    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
+    ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 8),
     (
         "production-v2-core-source-link",
         "sumeragi::v2_core::reducer::source_link_tests",
         3,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 38),
+    ("production-v2-adapter", "sumeragi::v2::tests", 39),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 54),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 57),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 28),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 31),
-    ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 22),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 49),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 34),
+    ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 25),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 53),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
-        18,
+        19,
     ),
     ("production-v2-integration-runner", "sumeragi_v2_runner", 4),
-    ("production-p2p-peer-reliable-flush", "peer::run::tests", 9),
-    ("production-p2p-network-reliable-actor", "network::tests", 45),
+    ("production-p2p-peer-reliable-flush", "peer::run::tests", 7),
+    (
+        "production-p2p-shared-source-byte-geometry",
+        "peer::shared_byte_budget_tests",
+        8,
+    ),
+    ("production-p2p-network-reliable-actor", "network::tests", 56),
+    (
+        "production-p2p-source-memory-geometry",
+        "network::inbound_source_memory_bound_tests",
+        1,
+    ),
+    (
+        "production-p2p-waiter-rank-geometry",
+        "network::handle_update_tests",
+        1,
+    ),
     (
         "production-irohad-consensus-message-control",
         "consensus_message_control::tests",
         4,
     ),
     ("production-irohad-network-relay", "network_relay_tests", 2),
-    ("production-irohad-authenticated-via", "tests::relay_fairness", 1),
+    ("production-irohad-authenticated-via", "tests::relay_fairness", 5),
+    (
+        "production-irohad-genesis-reply-geometry",
+        "genesis_bootstrap::tests",
+        4,
+    ),
+    (
+        "production-config-v2-exact-output-geometry",
+        "parameters::actual::tests",
+        1,
+    ),
+    (
+        "production-config-v2-exact-output-root-parse",
+        "parameters::user::duration_clamp_tests",
+        3,
+    ),
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULES = tuple(
     module for _, module, _ in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -2910,7 +4157,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "nexus::lane_relay::tests::actor_backpressure_retains_exact_relay_and_fifo_ticket",
     "nexus::lane_relay::tests::blocked_relay_does_not_starve_a_responsive_relay",
     "nexus::lane_relay::tests::terminal_actor_failures_return_exact_relay_ownership",
-    "nexus::lane_relay::tests::saturated_relay_owner_returns_sixty_fifth_exact_envelope",
+    "nexus::lane_relay::tests::saturated_relay_owner_returns_sixty_fifth_without_actor_ticket",
     "sumeragi::authoritative_runtime_gate_tests::direct_and_synthetic_envelopes_keep_identity_roles_consistent",
     "sumeragi::authoritative_runtime_gate_tests::atomic_lane_certificate_uses_the_shared_progress_owner",
     "sumeragi::authoritative_runtime_gate_tests::oversized_atomic_lane_certificate_is_returned_exactly",
@@ -2925,12 +4172,14 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "merge_sidecar::tests::equal_ordinal_different_tenure_alternate_source_is_rejected_atomically",
     "merge_sidecar::tests::inactive_source_teardown_releases_budget_and_reconnect_resumes_cursor",
     "merge_sidecar::tests::later_delivery_preserves_the_current_source_cursor",
-    "merge_sidecar::tests::late_old_tenure_receipt_cannot_advance_reconnected_attempt",
+    "merge_sidecar::tests::later_delivery_while_chunk_is_in_flight_waits_for_flush_before_next_emit",
+    "merge_sidecar::tests::late_old_exact_item_receipt_completes_reconnected_attempt_once",
     "merge_sidecar::tests::later_delivery_updates_pending_work_without_losing_materialized_output",
     "merge_sidecar::tests::reconnect_during_materialization_keeps_old_authorization_but_emits_new_tenure",
     "merge_sidecar::tests::conflicting_server_request_id_reuse_is_rejected_before_materialization",
     "merge_sidecar::tests::failed_materialization_releases_rate_gate_for_exact_retry",
     "merge_sidecar::tests::response_materialization_requires_and_consumes_its_exact_admission_gate",
+    "merge_sidecar::tests::sidecar_admission_matches_the_cached_arc_without_changing_ownership",
     "merge_sidecar::tests::inactive_reply_route_is_rejected_before_server_gate_admission",
     "merge_sidecar::tests::completed_source_later_and_reconnect_stay_terminal_while_sibling_progresses",
     "merge_sidecar::tests::exact_delivery_retry_rematerializes_after_rate_gate_expiry",
@@ -2963,8 +4212,8 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "peer::run::tests::partial_write_error_closes_ack_without_false_completion",
     "peer::run::tests::coalesced_batch_acknowledges_every_item_only_after_flush",
     "peer::run::tests::maximum_frame_uses_a_bounded_number_of_source_reservations",
-    "peer::run::tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting",
-    "peer::run::tests::authenticated_source_count_registry_bounds_identity_churn_and_capacity_drift",
+    "peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting",
+    "peer::shared_byte_budget_tests::authenticated_source_count_registry_bounds_identity_churn_and_capacity_drift",
     "network::tests::authenticated_source_count_share_is_checked_and_never_zero",
     "network::tests::actor_progress_bypasses_full_deferred_owner_and_waits_for_writer_flush",
     "network::tests::actor_progress_lease_survives_topology_transition",
@@ -2975,7 +4224,10 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "network::tests::actor_broadcast_retry_targets_only_failed_peers",
     "network::tests::reliable_subscriber_is_single_consumer_under_clone_budget_pressure",
     "network::tests::reconnecting_peer_cannot_multiply_retained_source_credits",
-    "tests::relay_fairness::seventeen_and_thousands_of_origins_cannot_multiply_one_authenticated_via",
+    "sumeragi::v2_core::refinement::tests::two_stage_relay_retry_kernel_rejects_source_rotation_eligibility_and_fifo_mutations",
+    "tests::relay_fairness::daemon_source_credit_layers_over_upstream_and_preserves_the_ninth_exact_owner",
+    "tests::relay_fairness::saturated_sumeragi_dispatch_does_not_hold_normal_worker_permits",
+    "tests::relay_fairness::real_inner_ingress_retry_preserves_a_copies_and_bounds_b_service_rank",
     "sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_is_deadline_driven_edge_triggered_and_recovers_on_progress",
     "sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_resets_on_successor_owner_and_status_clear",
     "sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff",
@@ -2992,7 +4244,10 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_worker::tests::actor_backpressure_retains_exact_final_lane_commit_qc_post",
     "sumeragi::v2_worker::tests::actor_backpressure_retains_complete_merge_share_fanout",
     "sumeragi::v2_worker::tests::same_tenure_updates_and_reconnect_preserve_current_item",
-    "sumeragi::v2_worker::tests::completed_sidecar_source_reconnect_stays_terminal_while_sibling_backpressures",
+    "sumeragi::v2_worker::tests::closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures",
+    "sumeragi::v2_worker::tests::closed_sidecar_reconnect_is_capacity_checked_then_retries_current_item",
+    "sumeragi::v2_worker::tests::later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_attempts_progress",
+    "sumeragi::v2_worker::tests::mixed_source_retry_retains_terminal_flush_target_without_resetting_live_siblings",
     "sumeragi::v2_worker::tests::inactive_reply_target_tombstone_rejects_cross_source_equal_ordinal_collision",
     "sumeragi::v2_worker::tests::owned_reply_history_merge_retries_candidate_retirement_after_prune",
     "sumeragi::v2_worker::tests::newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source",
@@ -3021,12 +4276,14 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "network::tests::progress_budget_preserves_fifo_for_three_registered_producers",
     "network::tests::reliable_progress_class_matches_actor_reservations_exactly",
     "network::tests::reply_route_survives_peer_message_clone_mapping_and_split",
+    "network::tests::peer_message_rehydration_rejects_second_reply_route_without_retargeting",
     "network::tests::reply_source_key_groups_relay_origins_and_orders_actor_instances",
     "network::tests::reply_route_source_updates_are_ordinal_monotonic_and_target_scoped",
     "network::tests::dependent_test_fixture_mints_opaque_tenures_and_delivery_ordinals",
     "network::tests::cancelled_newer_hub_cannot_erase_older_independent_route_attempt",
     "network::tests::dependent_fixture_models_bounded_actor_global_multi_hub_ownership",
     "network::tests::reply_route_pruning_retains_equal_ordinal_tenure_tombstone",
+    "network::tests::reply_route_binding_rejects_evicted_tombstone_collision",
     "network::tests::reply_route_set_isolates_sources_preserves_cursors_and_prunes_retired_capacity",
     "network::tests::route_cancelled_between_preflight_and_admission_retires_without_queue_ownership",
     "network::tests::reply_admission_rejects_retargeting_foreign_handles_and_wrong_tickets",
@@ -3051,6 +4308,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "network::tests::requested_topology_is_not_authority_and_closed_fanout_returns_all_targets",
     "network::tests::reliable_delivery_waits_for_its_route_subscriber",
     "network::tests::closed_reliable_subscriber_transfers_actor_pending_backlog_to_replacement",
+    "network::tests::network_actor_drop_retires_routes_and_only_its_waiters",
     "consensus_message_control::tests::controlled_v2_admission_preserves_distinct_relay_identity",
     "network_relay_tests::test_control_hold_release_preserves_live_route_and_retires_canceled_reentry",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors",
@@ -3081,6 +4339,20 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "consensus_message_control::tests::fatal_controller_rejects_an_unchanged_command_poll",
     "consensus_message_control::tests::retired_release_finishes_drain_without_claiming_delivery",
     "network_relay_tests::obsolete_sumeragi_relay_message_completes_as_delivered",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins",
+    "merge_sidecar::tests::authenticated_source_limits_are_fixed_at_four_gates_two_sessions_and_sixteen_mibibytes",
+    "sumeragi::v2::tests::authenticated_deferred_service_rejects_same_kind_envelope_swap_before_reducer",
+    "sumeragi::v2_effects::tests::owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work_nonfatal",
+    "sumeragi::v2_effects::tests::certified_body_response_carrier_swap_fails_closed_before_fetch_mutation",
+    "sumeragi::v2_runtime::tests::runtime_merges_alternate_sources_for_one_semantic_request",
+    "sumeragi::v2_runtime::tests::runtime_keeps_identical_wire_requests_from_distinct_semantic_origins_independent",
+    "sumeragi::v2_runtime::tests::busy_deferred_request_merges_alternate_source_and_services_exact_carrier",
+    "sumeragi::v2_worker::tests::owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors",
+    "network::tests::peer_message_mints_actor_global_delivery_ordinals_across_connection_tenures",
+    "parameters::actual::tests::sumeragi_v2_exact_output_geometry_checks_every_arithmetic_boundary",
+    "parameters::user::duration_clamp_tests::sumeragi_v2_exact_output_geometry_accepts_network_source_boundary",
+    "parameters::user::duration_clamp_tests::sumeragi_v2_exact_output_geometry_accepts_equal_capacity_boundary",
+    "parameters::user::duration_clamp_tests::sumeragi_v2_exact_output_geometry_rejects_unreservable_network_sources",
 )
 
 # The retained executor queue is the concrete FIFO consumer for reducer
@@ -3093,7 +4365,16 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
     "drain_retained_effect_batch": (
         "42c05e167c74dab0182d52f0ca671c500803f26ff70b2f4870fc20f38ae620b3"
     ),
-    "step": "009cdc9058a8577205ea0598d88fb2d1c8257a9de2f7d5a711c280b508bd0e79",
+    "step": "4f67388fcb627e5c5f5926d403e53e0906466d87e8498cd264254c8534761176",
+    "step_pending_tip_recovery": (
+        "2489b7f110f3baa4ec2157895aa967b27359103572187bcb2670581e17580917"
+    ),
+}
+
+_PRODUCTION_EFFECT_SCHEDULER_HANDOFF_ITEM_SHA256 = {
+    "take_scheduler_ownership": (
+        "bccdd7c65959f3921d46373c86d1d6545568a326ddea42379362c7b1970397cf"
+    ),
 }
 
 # Exact comment/literal-free token digests for the production exact-output
@@ -3104,13 +4385,13 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
 # handed to durable reconstruction.
 _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
     "take_attempt": "280b0aa9e71d117bcc46b43b0a64f3e39b3c2b1f1e18afea07b7f5233eb29f45",
-    "mark_admitted": "fcdb40291bc1849d86a88d2f5fd8123f02735cbfa7bdc9ba10e71253067bee9f",
+    "mark_admitted": "cd6c571322ac6503bd759d3baf6ff2b6bc71e73c0a1bb5cc882f44d576980cbb",
     "retain_returned": "602333f3e8b66c1ed5543fe651e9a0ef644e4538713c80ffa460bdaf9064da0a",
     "owns_source": "6a89444dd116f019fabd7ef2465b5ccc9d0b404adbf783dc47d47ad150ebe1b2",
     "target_is_local_head": "a66a280165f7945efa150447183cb391824878b3d002c7cd7d964f60d8a44096",
     "advance_target_cursor": "b16e6854e6b213b04e89a740f8b20f1c00f13ae88e8da38a39faac55ec6b0c26",
     "handoff_applied_height_to_durable_reconstruction": (
-        "64e8f3b4bd350043cfe2544ab5553d8e41f154115ba7614c9ae742c53eb2cff7"
+        "74b8d8b4b267ee62b8a858bf51d32705d3b3bda72a8d956b36407322cf088445"
     ),
     "target_is_global_head": (
         "f71465dbc379cc235d6669a17c7cc6eca1b456acbf5b8b996ab39ebebbac05ee"
@@ -3122,7 +4403,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "0486a89cca14f3479a0ede1f31398fa7d74aa624994a0397f9744cea26b7acc0"
     ),
     "drive_with_budget_ack": (
-        "f7dea333167ba9b5e078c87d2c73d4a16182fac6c4bedd8a6e37cc52477f2548"
+        "18f57aeb600427b1df1d7a47d2fa8b20f1460f79e187f5af6b2d9cc1a6d6ed1b"
     ),
     "drive_bounded_with_ack": (
         "e27d32c7c456c068a538ea7033fa01550e83c1d787f2abb5ebd7808688b9e13f"
@@ -3140,7 +4421,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
 # positive subsequence while inserting an early return, dropping a sibling
 # source, or disconnecting a writer-flush receipt elsewhere in the same item.
 _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
-    "CertifiedMergeSidecarChunkAdmission::new": "f1bd7ef1f89d32805e8123ff058df807eac9e5bf8555c1927942a6a710d1e575",
+    "CertifiedMergeSidecarChunkAdmission::from_admitted_reply": "ecd3643b8192f5df2031a0b53c05c21db5f1bb4c790322272ab4ebba5c6f4204",
     "MergeSidecarTransport::with_reply_source_capacity": "aac782ad057c78637406059b551766b02e8f39780b0626b5c386eeac9a23923e",
     "MergeSidecarTransport::release_unsent_request": "7a6360374a2065e41977fb7849fcf29e058e010b1c550b0f1cd919c07d3b59c4",
     "MergeSidecarTransport::park_authorized_server_request_attempts": "a7f6ad8f3a595fe655f0535b11d2564a2a783d60df1cc6bebeadb704606e96f6",
@@ -3151,17 +4432,17 @@ _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
     "MergeSidecarTransport::server_gate_attempt_count": "e9c80512a68ae8368554aa4e6990a625ca57a5b6c5fb47ecb5b7bf1598a38acb",
     "MergeSidecarTransport::outbound_attempt_count": "d0b5ac92c19eab61d75f4b461c6ecb4a64d6861fd5baf194a52737bf4843879f",
     "MergeSidecarTransport::source_outbound_count": "25ca47023bcc6f6a370eb7bcdb37da10551bbccb8652a4fb955a5c6610fe3374",
-    "MergeSidecarTransport::global_outbound_bytes": "08d0adfd0e8cb91b5e0974b9339cc417f0983e3b179e2f0fd924eb5a312b4654",
-    "MergeSidecarTransport::source_outbound_bytes": "b82c1551f1c1b7ea664f9800da4a1b3fe3d4ea5c530a611eb8fbcae352eaa1a6",
+    "MergeSidecarTransport::global_outbound_bytes": "1ec3ffa56334677b60c9c920e8e15a562ed04653674849e665b2d44c623c73a6",
+    "MergeSidecarTransport::source_outbound_bytes": "850983cacf1c21fa04a8b838fe959d7708624446216dc364a41f375dd9219ec3",
     "MergeSidecarTransport::route_update": "2f8d4bf918efcb9070aedbb7e4d57baa89f8127ebcf4375c53af35afa852856a",
     "MergeSidecarTransport::alternate_source_is_authorized": "b948880f14762794e7a9ce8369ebe5ae6c720097345e1ec197f591f6afe1d5ff",
     "MergeSidecarTransport::route_source_capacity": "162b152d56446bffa077c6005f4457ce2757a26a73306018a80cc53f68a9ba25",
     "MergeSidecarTransport::can_add_outbound_attempt": "2d6f18b6258154a2451f3e0d14bf433ca8f0cb979d5c3f7129767b3cc255ec29",
-    "MergeSidecarTransport::admit_server_request": "a27b59d15a85f8a2454f1b9aafc1e71fc72a57f43aa058a394e5c3fcccbcd54c",
+    "MergeSidecarTransport::admit_server_request": "5755c711ae1b4b44655c9505fc2feee30c5b9609a26d2b2d241002a14ebf7b9d",
     "MergeSidecarTransport::cancel_unmaterialized_server_request": "2b6e03e20fc319f76b089f5d25f5915f7af852fe74ecc61219ddb154777dbf94",
-    "MergeSidecarTransport::enqueue_response": "133cce6666a0ba63611b77d62ed2ce8a973d05cc79632e19e4b467ce04ab3d7e",
-    "MergeSidecarTransport::drain_outbound_chunks": "c4e66293cd563ddcbcf650a849423da7c1c258c0a6fb408d3acc8741668f8cf2",
-    "MergeSidecarTransport::acknowledge_outbound_chunk": "2109843718403561e20c222b47847caff0b4f2a1959038c9fa1842d2fb1c44da",
+    "MergeSidecarTransport::enqueue_response": "8927e0b9565cf769df854451713dde07d79d4abf60e7fbe4848a4d502ad6b8f7",
+    "MergeSidecarTransport::drain_outbound_chunks": "f2b68160ad3264c81051c15c91e75b67e65d725123d71887d34eac0b29752810",
+    "MergeSidecarTransport::acknowledge_outbound_chunk": "146c4f68dfe08584aec35d0f0a1a955472e4de73ff9bc36ea19d00716c68766d",
     "MergeSidecarTransport::tick_bounded": "1d21cbc441197288ebdf94dfd1ac0a042f30a140ca9171139a362a6e9ac4ea34",
 }
 
@@ -3180,49 +4461,88 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::prune_finalized_merge_sidecars": "c317de07d30e9a73ae021981d7d6eabf75d40eabceebc52c274917af5cd8cad1",
     "V2LaneWorkAdapter::sidecar_effect_slots": "cb0582cbb1c5a95bfb4a0777208cdb0db3a0d4aece920d3c0f1ee6544bdf5d8e",
     "V2LaneWorkAdapter::push_merge_sidecar_post": "ae20b174b0777d554f1bfe731c025b24b2cd41cd3ff5bbba89ab6fdf52e33a7c",
-    "V2LaneWorkAdapter::push_merge_sidecar_post_or_restart": "f5a9ce48f1e84fb5e632d7474582d4c8b6e578ba1362bb35ee6df6a7c0508bba",
+    "V2LaneWorkAdapter::push_merge_sidecar_post_or_restart": "97ca6c84f5391d44f4dc3ac756d7f3afd7f40d16b6d1b15a1988a235731961fd",
+    "V2LaneWorkAdapter::remove_acknowledged_sidecar_retry_effect": "14002f78eb6eee073c72b1c5fa547c69187392e1a2085d8bd5c1e385fbbf2efb",
     "V2LaneWorkAdapter::acknowledge_certified_merge_sidecar_chunk_admission": "bccf692533b6e5ae5c005c97a36d4ad5e8fea2ddb12e4d71eef4d54c26f1c0c0",
     "V2LaneWorkAdapter::push_merge_sidecar_effect": "afcfcc1b554e30fda01b794cefcda0999855446b9026310e7e117cee5fada73b",
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "05ad5a213422b6f69e76855e1fdd4ea53b1a560dcb3fd009eb77c10dba6f89a0",
+    "run_inner": "31c8492d768dc31b2cad7f8816e71aa086bc76565fd194352baceb48f8c055e4",
     "lane_work_limits": "d2846fa9b0853f4db6a2c5abac5f764f415ccd1bd27050cd8133133b6a3b8b31",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
     "apply_certified_merge_sidecar_chunk_admissions": "0243d1f22247947cc44ac474293a9c852c63509fd46f9357e4ce56b3fd0be518",
     "retry_exact_output_and_apply_sidecar_admissions": "0e165a14b319a387cd1e7d81cff26df6f2e4f50cff72b59f7300810ae79f6ed2",
     "dispatch_lane_work_effects": "411d170cafd9a9a3283759386b13865d77948adb06cb53d87293bb08931af1c1",
-    "retain_active_owned_reply_routes": "fb4330be8d0b86c3e34732d6e344f02660a2538266dc0a88725bf5856ac162e4",
-    "dispatch_lane_work_effect": "442b4366eddc49209081a585b4628b18444367cec26051a47c4146b957513b48",
+    "retain_active_owned_reply_routes": "c452e940c17c0939eaec6a5dacc540df4e74ed2a8b59adae8a39d3d77392c1c2",
+    "dispatch_lane_work_effect": "db52ffa9668f6e112203510845082324318da02f55904bd181cc548516e21414",
+}
+
+# `asyncNodeServiceDeadlines` is a proof-only projection of this one explicit
+# trusted runtime contract. These complete-item seals bind the structural
+# production half of that boundary: one local serialized height loop, finite
+# service batches, and finite idle waits. They intentionally do not claim that
+# Rust proves host scheduling or I/O latency; those remain the trusted half.
+_RUNTIME_AFTER_GST_REQUIREMENT = (
+    "After GST, each non-crashing responsive validator participating in the "
+    "active-height or exact historical-recovery corridor has an advancing "
+    "local monotonic clock, its serialized height runner is invoked within "
+    "the declared service bound after every finite wait, and its admitted "
+    "local fsync, signature, reconstruction, validation, and application "
+    "work terminates within declared service bounds"
+)
+
+_PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
+    "run_inner": "31c8492d768dc31b2cad7f8816e71aa086bc76565fd194352baceb48f8c055e4",
+    "advance_executor": "321df6c9713c5fb64fa6a0948dff6464afa3d08040e752ae0e19196b9badfb31",
+    "advance_pending_tip_recovery_executor": (
+        "6a800d5dd4ef4dfc45ea40fd8fd656f4d5c0ad62ded808d616d0fce5f574ddf1"
+    ),
+    "outer_ingress_turns": (
+        "1c08dc7293a6aacd522d211e8acd862cf8be0fb4926bb943b6464f4bd002e223"
+    ),
+    "apply_bounded_sidecar_admissions": (
+        "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad"
+    ),
+    "dispatch_lane_work_effects": (
+        "411d170cafd9a9a3283759386b13865d77948adb06cb53d87293bb08931af1c1"
+    ),
+    "drain_lane_relay_ingress": (
+        "d4f72c132731bfb743858c17bf178bcb4982bd22f2eeb2c1f449c0fd146fd274"
+    ),
+    "ProductionV2Services::drain_completions": (
+        "64d185ff2dcb7184b9910b4e79d571b9a73e99c23d2cc0271196688dc5231c6b"
+    ),
 }
 
 _PRODUCTION_WORKER_ACK_SEAM_ITEM_SHA256 = {
-    "PendingExactFanout::classified_with_route_history": "c5d63262465d5a78a3179cd7ecce4715b398146150d7b9aab5225ec27308d770",
+    "PendingExactFanout::classified_with_route_history": "a1f9ad9102ffddade0c83bac4895a781a72ba7bec980d99e914eb0641dafc9e7",
     "PendingExactFanout::classified_with_reply_routes": "84c22ccbeecfb531f69c7a03b6f659281fb69fde25f013e0aa394afba347914a",
-    "PendingExactFanout::retain_active_unowned_reply_targets": "5b7e9005d0921d5355ef70084737c352d25c741ff301552ceae90703c74db135",
+    "PendingExactFanout::retain_active_unowned_reply_targets": "b7a3e6ffa8ec14b6d10e01069f7cd1a48aa7f6d1995d6d8ab91edc0130391e6d",
     "PendingExactFanout::reply_target_merge_plan": "3156dd04cb69ee8a304522c4968f283b9ca6782ceddb3c791f1573fee253deea",
-    "PendingExactFanout::reply_target_merge_plan_after_candidate_prune": "c51d9019ffefc446896a7e0e3a41828d70d500b3fc23d19fdb11fb45ed92add9",
-    "PendingExactFanout::preview_coalesce_plan": "b12d4b93103519628ff863cdd51b713c6cdca809e46a2c5ba46732ef67d793b6",
-    "PendingExactFanout::commit_coalesce_plan": "d8939823f1e02524d968714b8f8babd2b11aa3b4c8970f23867ddae06229fea7",
+    "PendingExactFanout::reply_target_merge_plan_after_candidate_prune": "b6ca74b807208d604ba4e405cab3bafcb32ea2f26307a5630029fde0307639ca",
+    "PendingExactFanout::preview_coalesce_plan": "9603241628043de1256d3d7c8e3dab16548fee201be39c96382b93fd95a824a0",
+    "PendingExactFanout::commit_coalesce_plan": "5a110c9fde8c532abd8b20789705b90d44599564b6e8828163d3432d7136a444",
     "PendingExactOutput::new": "ba107183ec112eecdabff06146784412ce64f046af43f3a0db4e60ba957137b7",
     "PendingExactOutput::is_pending": "234ac3a33b41579561cc7866e524071cd1c405ea769fb7de457f4764325dbd9d",
     "PendingExactOutput::sidecar_control_units": "858ef81f3341add894f93e0c8510a653b5ad9f4ac7447803249d20dcd0d46f86",
-    "PendingExactOutput::poll_sidecar_flushes": "e6cbcb227b5a1e08bc1dee1ef939eda8115398dc86719ad7c770a2193968fb94",
+    "PendingExactOutput::poll_sidecar_flushes": "6055d88aac108a264026352a3b3c3dd9195959b011a5771c472b47a3ebb92347",
     "PendingExactOutput::validate_owned_reply_transfer": "c39a07ac424ad25dc1d2d1d5cffec3daacbbd7a83c029ff289739745acb6f591",
-    "PendingExactOutput::can_enqueue_owned_reply_transfer": "093e665c5e402fe88340a495a77dcecfc4b02f19d7a3f27504d4dfb9f960769d",
+    "PendingExactOutput::can_enqueue_owned_reply_transfer": "bd92786d4ebea131029aefd2c3d743a40c7d6a48a09d3d5dfc30d464e5520347",
     "PendingExactOutput::enqueue": "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6",
-    "PendingExactOutput::enqueue_owned_reply_transfer": "27e765c5aa8dd752fdf19be18c55408f7d2b14311f2ab02a8e65da160ceb1da4",
+    "PendingExactOutput::enqueue_owned_reply_transfer": "5645429fdaf7c94961e33e714513dd0bb6f1d2b9447a0054cd95caca8970a429",
+    "PendingExactOutput::complete_sidecar_targets_with_retained_flush_ownership": "5f8fbf0cce9635767f8a132262b1b28e7b99c9479edb06a94c3a41d6ec23e56e",
     "PendingExactOutput::enqueue_validated": "4a61318472a0008268fe725155137a299c759f9e0d505f92ec6d5c8db912bc1e",
-    "PendingExactOutput::handoff_applied_height_to_durable_reconstruction": "64e8f3b4bd350043cfe2544ab5553d8e41f154115ba7614c9ae742c53eb2cff7",
-    "PendingExactOutput::drive_with_budget_ack": "f7dea333167ba9b5e078c87d2c73d4a16182fac6c4bedd8a6e37cc52477f2548",
+    "PendingExactOutput::handoff_applied_height_to_durable_reconstruction": "74b8d8b4b267ee62b8a858bf51d32705d3b3bda72a8d956b36407322cf088445",
+    "PendingExactOutput::drive_with_budget_ack": "18f57aeb600427b1df1d7a47d2fa8b20f1460f79e187f5af6b2d9cc1a6d6ed1b",
     "PendingExactOutput::drive_bounded_with_ack": "e27d32c7c456c068a538ea7033fa01550e83c1d787f2abb5ebd7808688b9e13f",
     "ProductionV2Services::admit_network_exact_output": "af06ab19ba155e653850d0c10344727ce6a47cdb59daa84797ba7aa22d110034",
-    "ProductionV2Services::drive_pending_exact_output": "479c12a8c9c0de78c57e5a92792609567c5aa00a7fefd0f05c90c3355cbf2ed7",
-    "ProductionV2Services::enqueue_owned_exact_reply_routes_while_guarded": "85be9e50200d4767166da7e9d9446bd66ecbc16a4860a0e851e258f6a10891fb",
+    "ProductionV2Services::drive_pending_exact_output": "6258a8d7380dc8ad6afb1161b43352b3b8f51dff55da6c6f4c23e19c578e271a",
+    "ProductionV2Services::enqueue_owned_exact_reply_routes_while_guarded": "64ecd890b7c10d188f27a8bf1d8fe636cfffcfb57849636d2fb49788122fe476",
     "ProductionV2Services::retry_pending_exact_output": "114c6d89433b310fa62053c5b9f6bf0d12d3997d9396964417d4e402036293b4",
     "ProductionV2Services::has_pending_exact_output": "bc3a9598e76ae11d769177aabc5dfe79f583c883c7fbc712455fb9b5e5501ca0",
-    "ProductionV2Services::drain_certified_merge_sidecar_chunk_admissions": "0be994112206675d0b3b68caa7607b600d24d114e53ef8d34bb943f6cbc97f54",
-    "ProductionV2Services::can_retain_lane_work_effect": "70196d3c370f7c1415fe746c826aacc05d321a8c367cba85118d1c3e3295f205",
+    "ProductionV2Services::drain_certified_merge_sidecar_chunk_admissions": "dd7088999af35eff3a8efbd77260c85090b6f8118af433aea65274cafb02a703",
+    "ProductionV2Services::can_retain_lane_work_effect": "1a68dc7e549588df3f533f429aa7d8fee746948eb7f4575d90d3a3bfcf5897db",
     "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction": "05e4b1a5d6d3f95e50bfd359dccfdd99e555e08ceb893ca686ef5743876a551a",
 }
 
@@ -3257,13 +4577,13 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "3156dd04cb69ee8a304522c4968f283b9ca6782ceddb3c791f1573fee253deea"
     ),
     "PendingExactFanout::reply_target_merge_plan_after_candidate_prune": (
-        "c51d9019ffefc446896a7e0e3a41828d70d500b3fc23d19fdb11fb45ed92add9"
+        "b6ca74b807208d604ba4e405cab3bafcb32ea2f26307a5630029fde0307639ca"
     ),
     "PendingExactFanout::coalesce_reservation_additions_for_plan": (
-        "7615c92c201f04902dee5a40fd7a20b5c6b292faf9fede152f35a8d49ec033b4"
+        "a7d8f29728c440044d5daa72098de9c5921e5f3304d74edd563985900a9530ad"
     ),
-    "PendingExactFanout::preview_coalesce_plan": "b12d4b93103519628ff863cdd51b713c6cdca809e46a2c5ba46732ef67d793b6",
-    "PendingExactFanout::commit_coalesce_plan": "d8939823f1e02524d968714b8f8babd2b11aa3b4c8970f23867ddae06229fea7",
+    "PendingExactFanout::preview_coalesce_plan": "9603241628043de1256d3d7c8e3dab16548fee201be39c96382b93fd95a824a0",
+    "PendingExactFanout::commit_coalesce_plan": "5a110c9fde8c532abd8b20789705b90d44599564b6e8828163d3432d7136a444",
     "PendingExactFanout::can_coalesce_retry": (
         "b5f48359f0342b142f04b6fee8c6e74e7cbeaf5068f1dc628fffe7ad5a971de5"
     ),
@@ -3289,7 +4609,7 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "028bce9d7aa7c84ad347212ecfdb1b76066ac80fa9e713219a89e590ef0715bc"
     ),
     "PendingExactOutput::validate_fanout_bounds": (
-        "3da8be8e941141ffdc058d9800ef85daa1be2bd17b62d9f07e6fe7767a140777"
+        "1b40b3085feb03a957e28a2bb7776ce874cd571f0206148aa00126a7dd57bea6"
     ),
     "PendingExactOutput::capacity_available_for": (
         "de94c2648c59bc1e9a4b0ec3c5f4824ad7bdedf153012603c6ddf407c42326e0"
@@ -3301,13 +4621,13 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6"
     ),
     "ProductionV2Services::start": (
-        "0f5b02ddcca7b7cad448b483ceecf0b3a523d6fd30dc3968ce74bf4221c8a86b"
+        "2b4b260e744507b36798adf96fd9045211931218dabcc9f78f10a8294c70e6e0"
     ),
     "ProductionV2Services::exact_target_geometry": (
         "978520459f9dd3c5459478e222418ffed2924445c40a79722c307f97e6d28871"
     ),
     "ProductionV2Services::can_retain_lane_work_effect": (
-        "70196d3c370f7c1415fe746c826aacc05d321a8c367cba85118d1c3e3295f205"
+        "1a68dc7e549588df3f533f429aa7d8fee746948eb7f4575d90d3a3bfcf5897db"
     ),
 }
 
@@ -3344,46 +4664,46 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
         "ea750c0562f04052fefaad867a386eb6a44780ae48e79c93bf9e612b35910dd7"
     ),
     "enqueue_owned_exact_reply_routes_while_guarded": (
-        "85be9e50200d4767166da7e9d9446bd66ecbc16a4860a0e851e258f6a10891fb"
+        "64ecd890b7c10d188f27a8bf1d8fe636cfffcfb57849636d2fb49788122fe476"
     ),
     "drive_pending_exact_output": (
-        "479c12a8c9c0de78c57e5a92792609567c5aa00a7fefd0f05c90c3355cbf2ed7"
+        "6258a8d7380dc8ad6afb1161b43352b3b8f51dff55da6c6f4c23e19c578e271a"
     ),
     "exact_output_scope": (
         "2c322931cf99b7f7e6484c11c48b4bb570b48bc6a95f240e09fab88eea599be0"
     ),
     "post_to_peer_on_reply_routes": (
-        "591c929ec5700bbaad697e08113a0e5658ccbcb2e82299261f181c4a43dcda90"
+        "9383eaac2a00e932116b5f9efa38b100f8e61d8bd65fbff080b6504dacb8acca"
     ),
     "post_durable_history_response_on_reply_routes_with_permit": (
-        "14d9206a3d1d7d47450029eac49379c709a8a6e07f55a99317048a8cb4fe8fba"
+        "c2f9ac9b07a52814d6ba43a0701ecd6a04cb6ca7cd890efb100330b958c0d651"
     ),
     "post_durable_history_response_with_routes": (
-        "6dca39e76cbdf425d4a5a33ecda3719416f19a15fecf74484dc3e27527a499fe"
+        "a318b9a3e2823381613bf87f911d1efd3721a62d9a6a35e4b2151396672363a5"
     ),
     "post_lane_block": (
         "23f0e65f794c42ed8dee7d4da5a14ab5df1f6aa616222d0c354afd7f0ed8a8fb"
     ),
     "post_durable_lane_certificate_on_reply_routes": (
-        "5fbfb93845d39cefcb66537fe08f31afff61693cec382f777d5bfca34e86fa1d"
+        "84b9fa1c26b45f636ad7fd2b605b3cb4398a74abb3f515ea9e05034ca7a9e429"
     ),
     "post_durable_lane_certificate_with_routes": (
-        "974fdaa3c236345a3e3ed9e703e2ea9fc085427ee99e575b8bf6661a9324e932"
+        "27bd2d06ec38071aaee1e45c9fa21ee51205e34dcfbb76f59d4b2cbf906c3fb8"
     ),
     "post_certified_merge_sidecar_with_reply_routes": (
-        "b566982cf4ab2392b6384e4cd4fcea29518f22e4c14261f4eeb07277a9b391f8"
+        "97c11fdf5aff55d93dc576bed2a5659f776aaa7587412a7137423088c38ec4fe"
     ),
     "post_native_amx_with_reply_routes": (
-        "f8d445dab6840870d3b52d08e32fda83dc34b3fce95bf339d953a7566d04da62"
+        "17d66596b19902ce6ac3da41c7c05a000b42a54a87320f92cb588500f151c396"
     ),
     "broadcast_merge_to_voters": (
-        "bbb3a14f0a9f3f180a6a8b36cb2b09c267137414d54c757643baf6aeb9d1f577"
+        "99b0c80af2876f9b92cd9789605a7040d3e6dec0b4ab11f47edf292aeadf5f59"
     ),
     "post_block_message_while_guarded": (
-        "0395bfac9673d80cf3ebb6aa78456fb91ee68347395599c4a5e1633c75d0de95"
+        "ff6088b70a8d6787cf145247cd9c140be0883ce5e45562e4d8c491b94e501a11"
     ),
     "post_block_message_on_reply_routes_while_guarded": (
-        "cfea4a5ffd9fc8b4ecf5b7e210838ff7cfc878752b49f4fd7afcfc4db014b4d6"
+        "0b2742ea23f0b31b3c507b1936fc9e2f7198c3bfaa3d69e3836eb5bf033ff3a6"
     ),
     "broadcast_preencoded_to_voters_while_guarded": (
         "1c22c254ba300a86887affe725dd01e126563ac584f791e9da329fe67296bf4f"
@@ -3419,7 +4739,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
         "1109194f99b88c00567cde139cbd07ed63513b8540c0ba4e1fb7ec5cb53cd496"
     ),
     "serve_durable_lane_certificate": (
-        "4e1588c726a9e0fecc42e988096c1f499cbdf9c1e71ba03d24dec6ef1ece6391"
+        "bcab2428b4a2d43dd23989bebe917077e84b069c4e120808f6b25ce4503ce52f"
     ),
     "reconstruct_durable_lane_certificate": (
         "adf988938c94e9869ec4f26c9942cea89fb0cc0669677688640f9c7567dc2a59"
@@ -3428,34 +4748,115 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
         "cdca18bef9df99c77e3698622c9cf6941dd249967bb587f60e9fd381a4f8b235"
     ),
     "lane_work_effect_reply_routes_have_valid_shape": (
-        "bfdb89253fe9d29883c8204e545fccbd9838453ce9ad1f5a5054c9427d3449f7"
+        "2b1ef5492a99058800621c070dca17783d202d0fa3c72f28060a2ab423f20d34"
     ),
     "lane_work_effect_reply_routes_are_valid": (
-        "ba9097edf80aa63e5537d7deaa7bc7f9af73997e118e9893eaaca1249cc45073"
+        "f0bb9441bc48cbd1409fe29c5bc7ba3c5558cc6928f2e0696a35eddabbc55593"
     ),
     "merge_optional_reply_routes": (
         "1725b574b5cb599bdc8ab8e81784c6c161deadfdeb36635ed5fab149fd98213c"
     ),
     "merge_lane_work_effect_reply_routes": (
-        "3744422044ecebd59b46084a5578c40ba997fdb1fbb1d0759772221edd5b9ee1"
+        "ad1ff31796c2e32fa065c53bf3995f2b9c2c1a80d606b39fd1753f077bac46cd"
     ),
     "lane_work_effect_key": (
-        "9732f784b7b7c65d5e09234ae10a5c1f34b8e87133d8cea0da1b99b4aad38d73"
+        "7ba520327ba10103552fad7e4e543b069ca7a47aa8668f7613ae61490ca3b060"
     ),
 }
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "05ad5a213422b6f69e76855e1fdd4ea53b1a560dcb3fd009eb77c10dba6f89a0"
+        "31c8492d768dc31b2cad7f8816e71aa086bc76565fd194352baceb48f8c055e4"
     ),
     "drain_v2_ingress": (
-        "9e1431117e7180be83b41c1432440f01b318b0ede7410e8626cfed442a6c4b1d"
+        "9f46145a2e35c00fbbcbfcf1bac5fd8629b3c103a6a07a95abd8c1af34ca981d"
     ),
     "dispatch_lane_work_effects": (
         "411d170cafd9a9a3283759386b13865d77948adb06cb53d87293bb08931af1c1"
     ),
     "dispatch_lane_work_effect": (
-        "442b4366eddc49209081a585b4628b18444367cec26051a47c4146b957513b48"
+        "db52ffa9668f6e112203510845082324318da02f55904bd181cc548516e21414"
+    ),
+}
+
+# Exact source seals for the configuration-to-worker capacity corridor.  The
+# constants are checked as exact source tokens below; these item digests bind
+# the checked arithmetic kernels, the user-root call site, and production's
+# narrow refinement wrapper to the same geometry.
+_PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
+    "actual::sumeragi_v2_exact_output_shared_ownership_capacity": (
+        "e71d1a2376fc34aac057abebde05a41c5b32bbcbad17a409c954845bc4aa64ef"
+    ),
+    "actual::validate_sumeragi_v2_exact_output_geometry": (
+        "b9ad00e3d2ee76b202fa98f53cab9f7264c63a7d9a3050b0c3d57c0449cfb8f5"
+    ),
+    "user::Root::parse": (
+        "1c5b726a914462c1abe1d0df51563d8461b20eccc5d2c6500951410a5e719b8a"
+    ),
+    "worker::validate_shared_ownership_geometry": (
+        "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"
+    ),
+}
+
+# Complete token seals for the process-local fair-ingress carrier and every
+# exact-output consumer which must retain it.  These close the route-only gap:
+# equal payload bytes cannot substitute a different semantic origin, and
+# alternate authenticated sources keep independent non-regressing cursors all
+# the way through runner, effect, worker, lane, and sidecar service.
+_PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
+    "ingress::merge_downstream": (
+        "4b61327926cd81926035a34930ccbba40148a22c95a8bf2454fb4ccef9095506"
+    ),
+    "ingress::matches_message": (
+        "6dab8ef36de2046cada66b6aef1a4db08e458e0d43fc3862f794002192c58398"
+    ),
+    "ingress::matches_semantic_origin": (
+        "222fb8e00e39a211f73c88d8c7a41b83a82897c7428f70339aa38e40f78da719"
+    ),
+    "ingress::process_local_projection_hash": (
+        "a5a76214e85da5a36b1403be9c9fd4d09f65f756d2dec6697fb32d7970565740"
+    ),
+    "ingress::matches_reply_routes": (
+        "4fd6701c0cf6b703ca2d12d88a3c06a6e92e665dde9ffbd373550d926370e5a5"
+    ),
+    "ingress::retain_active_reply_routes": (
+        "79a7d66d056b5b32a6d363a92c2cc58692037516d86972a311bed08456923a35"
+    ),
+    "ingress::advance_reply_cursors": (
+        "8eed146d8a77d2898fd1d7d969d67511e623636b799ad106b39c11acdeb6e6fb"
+    ),
+    "ingress::validate_exact": (
+        "0c9b751fe794a818961d23fba976cc055f3158e37b5f936b5e6cac06ec622c95"
+    ),
+    "effects::accept_payload_chunk_with_ingress_ownership": (
+        "6bc433297ce152cc25f8c67fe66d314f250806a7abf8408a11720cb0480165c8"
+    ),
+    "effects::accept_certified_body_response_with_ingress_ownership": (
+        "0f42039eb636c26adf431576ffb70a9cc59885f1bd19355c2a221d2fdbf59322"
+    ),
+    "worker::claimed_with_reply_routes_and_ingress_ownership": (
+        "8c95a2604897a3dbf327d36721388bf466784f2203869d1fc6aead594ecd7e44"
+    ),
+    "worker::serve_certified_request_on_routes": (
+        "b30f223b216942d5920f4a56bc6d35d9cc31c08b29087865d2fb64b4ef346a15"
+    ),
+    "worker::route_payload_chunk": (
+        "f633a311a20e8964a46d5f6a6542edbad3bcd052fced5038a65d9a471f2a557a"
+    ),
+    "worker::buffer_orphan_payload_chunk_inner": (
+        "df4b2555d8fda4e356299093d3fa1f41c58ad3c469fb2b4720cdb17da460849b"
+    ),
+    "worker::replay_buffered_chunks": (
+        "145f9931fea75aed16111a55937abd9d0d821502314d970c4d57106ccceaf900"
+    ),
+    "worker::deliver_payload_chunk": (
+        "6c218a4286b317b43f4fd68240328979714b1d831aae46f80108622c34e77052"
+    ),
+    "lane::accept_lane_message_owned": (
+        "67bbe828c2dea717c348cf32b5576bb4aafe34a98af04e0b5fef39812947e700"
+    ),
+    "runner::v2_ingress_head_can_drain": (
+        "8e79047184e038e296aa2dc0ba725b4df7c7b825c13b4489bd5ebbbfe84d2bfa"
     ),
 }
 
@@ -3611,7 +5012,7 @@ _PRODUCTION_P2P_RELIABLE_PEER_ITEM_SHA256 = {
     ),
     "run": "b689f263e43d86fe04719a5dbfbcbd14f54265c412cb1989d4ac49094ca3231b",
     "reattach_reply_route": (
-        "7c4ab9b5c47e487c743fcc9ec94121be3254ed95afbb9b6aff52d536e98383dc"
+        "120803740de09553bb9112a556cceed7e2db414f4f5da3a9691a7886b5264be0"
     ),
 }
 _PRODUCTION_P2P_RELIABLE_PEER_QUALIFIED_ITEM_SHA256 = {
@@ -3626,6 +5027,12 @@ _PRODUCTION_P2P_RELIABLE_PEER_QUALIFIED_ITEM_SHA256 = {
     ),
 }
 _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
+    "new": (
+        "b06baebfca688fe1182cab468451157e75320543600ec679cfdd46a79b420f61"
+    ),
+    "validate_delivery_binding": (
+        "f231d50a1984538606124ca88b6bfda2be639cc399e2592bf69c43e7bbc10337"
+    ),
     "reliable_progress_class": (
         "542367e1dbca6344eab5fd6d22d8614ad543ee29479dae51fea97963eccc75ae"
     ),
@@ -3657,13 +5064,13 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "b95727867096f1decdc53b785e1414412643e70259488585a5571c5cabbcd573"
     ),
     "source_update_from": (
-        "1fb60fcf36e95afecf3f387f51709bd2c6b8d46eb953a854c1b3448065425791"
+        "115d1a0dfb23e300c60b4aa23c2bea9b612448502ca20d99e4d8ad03357405b0"
     ),
     "same_request_authority": (
         "96bbd9cc1360fea28d3d6caa772fb5ead105d0bd1fc44466fd977882cac87be5"
     ),
     "try_from_route": (
-        "d5d0bce4baac2c016ff171c088d6811be1402cc0dab428407ce56475c3ba9292"
+        "8766ab36eb93485a362dff5c943c7041b2db370f2e5a6a10254c3ad05c333285"
     ),
     "source_capacity": (
         "8a7caf36391c3d7a43862cbfb3de6dcc23b56553321cc34cbfc3b9b383a19557"
@@ -3675,16 +5082,16 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "ba99a668ba50acf991d46f1cd163884366973d6fa0b8dac63cb5a7476467bd36"
     ),
     "preflight_merge": (
-        "7099ae0ad2708e3d464759ebbd5efff86ced93c7b713901f4e5c2d865d4701ba"
+        "6c7673d05aae408e43298e94b2dd96a92629eb9e5e3a11f56cac05399bd923ff"
     ),
     "attach": (
-        "741b883df1c253b0a184391cd387bdad8f525731a398c23cb7882a85c326d43b"
+        "2108891e80282d99ded0ac6ecb51edf1a9751478258afd10904bdf2262734911"
     ),
     "validate_after_retired_delivery": (
         "2e009c9933701b132d260e568198941452d2c0ca283fd2196a5b4033aeea3416"
     ),
     "merge_retired_delivery": (
-        "9673a2563c357a2a8f002d07ca1cd0c5db8a588d80d45b66ded00fadd22cb7c6"
+        "82986cefa1af383784b80efc2ba54c320684dfd029908bcddbc65f7bdaca733c"
     ),
     "record_retired_delivery": (
         "bf6c5d70e2d92a45285565a11b94fb76db76da6b8400f8c75324fcdad0ef2517"
@@ -3698,14 +5105,17 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
     "peer_connected": (
         "d96c77fd2279f8f44eb50e7c7e6a9791125fd10f14fd541450a0c18abb1c622e"
     ),
+    "peer_message": (
+        "eb7b824a76c51bbe27cad865cd3cea5d8d9c92c5163b6e1402c5de82081b0673"
+    ),
     "progress_ticket_request_digest": (
         "ab51b06be057b794221217b6505e2cd4abbb66c2d7f87504a6f2257c260124c4"
     ),
     "try_reserve_for_source": (
-        "b56ff70d8d73c05f493fe5f36b8eef0cc4983be131e8d4921026278f9627aabf"
+        "b2016863bfd550c6874d90843564126c7fc3ec4871998fa16a14d4287ee9714b"
     ),
     "submit_progress_message_to_source": (
-        "fac5d25f372791f9d704c38dc00c1fa279c788348a4a3890bee0f1b2205771df"
+        "6987ce3c6eaf5db107896e749d2964d65b6e18c3c61e8b70cf0bea9b4f95babe"
     ),
     "new_targeted_post": (
         "888dd40f150e73106406cd89204dcbe27400a7a3c79324792030bc7669f08ea5"
@@ -3732,7 +5142,7 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "e9d679402868c6db0ebdd162d8eae9ef5f7395df2cd68ffa327504034974b5d5"
     ),
     "post_reply_recoverable_with_flush_ack_inner": (
-        "68885442b35ec97a339e9076a33882c095373b51c9d063a5a7f058db0fd22f85"
+        "9a83073e00ef4560d30facc5edf51117aae5b55efabfabfe1ba77613cdf5e1ed"
     ),
     "broadcast_recoverable": (
         "7a885b128ec7a8ed3a1315e76fc51aff776e45e78b37916a9062751460863374"
@@ -3740,8 +5150,8 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
     "into_dispatch_parts": (
         "8e3db4123f35b99ee42b15263d61f8937e7c0e1306b6783d04a2a766d0c3d11a"
     ),
-    "from_dispatch_parts": (
-        "6af51ef22e3f17225f263475064524be8b8feb5a80f01a0b4e7f14bbe554ba86"
+    "retain_after_dispatch_attempt": (
+        "3a55ca23e84c9c937898d6b484efec9fe2f53476ecaa4d562cca4ee51f3cd947"
     ),
     "cancel_reply_route": (
         "9bb0a32ff652a06ef803fb010f0ca3ad5a44cca6a16b047ed77da7eb8a1307d7"
@@ -3753,7 +5163,7 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "0fda142e7b012e810a6f02fb32463100f04e33829cdb893f924881fcb2d0ad0f"
     ),
     "dispatch_reliable_actor_message": (
-        "77d766d476a65b6a8504c858bb55ba77c8c27e3b5cdc8ff55969ac88432d411d"
+        "769f29a41622681d8e27c778cf46e2cca6917201a626305f1d927b36dd001999"
     ),
     "post_reliable_actor_frame_to_writer": (
         "d3cc9ecf084cd3086fa38a4c3bc9316216dc04a992a735563b59a412e1229310"
@@ -3767,10 +5177,19 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
     "cancel_reply_route_tenure": (
         "2d7e36900984d9c105daa48441fe27b408448456da2ef9a88909e487dc80c2b7"
     ),
+    "cancel_all_reply_route_tenures": (
+        "85556605246c148cb390b143406a6a5320fc14c57ec964c52b1eb5f0f9395ca1"
+    ),
+    "drop": (
+        "ecd2987b63057f26e35d5753bf94c5c68fc4d720c9529630c4b1ff52e18b69ce"
+    ),
+    "run": (
+        "2fd749aa9cc75eb3bacf98060012d447fec5d7fb9eaeb1e0f1cccd813a192ba2"
+    ),
 }
 
 _PRODUCTION_P2P_REPLY_FLUSH_ACK_ITEM_SHA256 = {
-    "new": "c7ec3238092fc2470d8553855952c9000928a3d5773a12ff97603e322b597a72",
+    "new": "2a782b477a14763d3d50e02544ffbde825e0643cd2b0ae2cc5a6afe0d3d393cf",
     "poll": "2680081e2ab903007af648ac7a9d9ae5056a6feeb56acc9c9b463460921279ef",
 }
 
@@ -3778,7 +5197,7 @@ _PRODUCTION_P2P_PROGRESS_LEASE_DROP_SHA256 = (
     "5786fb4d2c21a18923cc7b636dd6a5634f91c6d47879958977eadde37c419f07"
 )
 _PRODUCTION_P2P_REPLY_ROUTE_IS_ACTIVE_SHA256 = (
-    "92ff4730883f2581350a60d97a04b84b487650065fff25ee0440a4430a89138e"
+    "e2e80f75efe8739fab1d6030ffc1cd0af070ee6d223eca06b953d81b2c3537a7"
 )
 _PRODUCTION_P2P_REPLY_ROUTE_IS_AUTHENTICATED_VIA_SHA256 = (
     "817add7dcd219464c6d20df132fbd8bfcfe10a0caf56f5a815d86e975b3d03af"
@@ -3788,7 +5207,7 @@ _PRODUCTION_P2P_REPLY_ROUTES_MERGE_OBSERVED_SHA256 = (
 )
 _PRODUCTION_TRANSPORT_REPLY_ROUTE_ITEM_SHA256 = {
     "try_from_transport_with_reply_route": (
-        "0581e09d768207ee2acd1b5542ebc5cd32e69fe8b96d4035c404e2c84ce800e6"
+        "614facaea868b070cd9ce0dc08e8bb472f3afc3fff9769f09a85128e54a7c11e"
     ),
     "transport_reply_route_construction_is_fallible_and_target_bound": (
         "4a26c079cad7e57615605b7af734211e3b62ba1e9dc54c36f2e0581fe5c23190"
@@ -3884,7 +5303,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
     "classify": (
-        "afbcf3f01384dfdcbfd05ab2cdef991c3d62c052052ca7ad074308f01614f083"
+        "4c5af83b512d633256649e19265a22e80ef9d2e5fde50507ec91c075642b98e6"
     ),
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
@@ -3901,7 +5320,7 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "d289203f86e087dc73e66e4d10be2cf44109d93afb213d729ad0391039cc3fcf"
     ),
     "try_push_at": (
-        "93f19b1da72b58fa57e1b1b80fc8c5619dd42635d5902660ce5939d7d19e766d"
+        "751a8801bf143df9a8e8e567b0038608dfdd8f5eccb32ba72ef924d09eb7c1ad"
     ),
     "try_recv_if_at": (
         "ccf1326659f76bbcda3c1e4d1d54fca1f36946805b5a6a62d0623cadbe2520cf"
@@ -3909,6 +5328,7 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
 }
 
 
+@lru_cache(maxsize=512)
 def rust_code_tokens(source: str) -> tuple[str, ...]:
     """Tokenize Rust/Verus structure after removing comments and literals."""
 
@@ -4654,7 +6074,7 @@ def _verus_evidence_contract_module() -> Any:
 
 
 def _cross_tool_contract_errors() -> list[str]:
-    """Check the immutable 4 + 6 + 6 refinement mapping itself."""
+    """Check the immutable 4 + 7 + 6 refinement mapping itself."""
 
     errors: list[str] = []
     expected_ids = (
@@ -4673,9 +6093,9 @@ def _cross_tool_contract_errors() -> list[str]:
     observed_counts = tuple(
         len(contract.claims) for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
     )
-    if observed_counts != (4, 6, 6):
+    if observed_counts != (4, 7, 6):
         errors.append(
-            "cross-tool production claim cardinalities must equal (4, 6, 6); "
+            "cross-tool production claim cardinalities must equal (4, 7, 6); "
             f"found {observed_counts!r}"
         )
 
@@ -4697,6 +6117,21 @@ def _cross_tool_contract_errors() -> list[str]:
             "/\\ EffectiveLockAcquisitionModelObligation",
             "BY EffectiveLockAcquisitionModelObligation "
             "DEF EffectiveLockBodyAcquisitionProductionRefinementObligation",
+        ),
+        "progress-witness-production-refinement": (
+            "operator",
+            "/\\ ProductionProgressWitnessTraceRefinement "
+            "/\\ ProgressWitnessObligation",
+            "BY ProgressWitnessObligation "
+            "DEF ProgressWitnessProductionRefinementObligation",
+        ),
+        "successor-activation-exact-recovery-production-refinement": (
+            "operator",
+            "/\\ ProductionSuccessorAndExactRecoveryTraceRefinement "
+            "/\\ (IndexedChainSpec => []"
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)",
+            "BY IndexedChainSpecEstablishesSuccessorActivationAndExactHistoricalRecoveryInvariant "
+            "DEF SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
         ),
     }
 
@@ -4755,8 +6190,8 @@ def _cross_tool_contract_errors() -> list[str]:
                         f"{relative!r}"
                     )
     for label, values, expected_count in (
-        ("TLA constants", constants, 16),
-        ("Verus theorem names", verus_theorems, 16),
+        ("TLA constants", constants, 17),
+        ("Verus theorem names", verus_theorems, 17),
         ("TLA theorem names", tla_theorems, 3),
     ):
         if len(values) != expected_count or len(set(values)) != expected_count:
@@ -4911,6 +6346,80 @@ def _rust_precondition_is_obviously_contradictory(
     return bool(positive & negative)
 
 
+def _rust_top_level_clauses(
+    tokens: Sequence[str], separator: str = ","
+) -> tuple[tuple[str, ...], ...]:
+    """Split one Rust/Verus clause list without crossing nested delimiters."""
+
+    matching = {")": "(", "]": "[", "}": "{"}
+
+    def strip_outer(value: tuple[str, ...]) -> tuple[str, ...]:
+        while len(value) >= 2 and value[0] == "(" and value[-1] == ")":
+            depth = 0
+            closes_at_end = False
+            for index, token in enumerate(value):
+                if token == "(":
+                    depth += 1
+                elif token == ")":
+                    depth -= 1
+                    if depth == 0:
+                        closes_at_end = index == len(value) - 1
+                        break
+            if not closes_at_end:
+                break
+            value = value[1:-1]
+        return value
+
+    value = tuple(tokens)
+    parts: list[tuple[str, ...]] = []
+    start = 0
+    stack: list[str] = []
+    for index, token in enumerate(value):
+        if token in "([{":
+            stack.append(token)
+        elif token in matching:
+            if stack and stack[-1] == matching[token]:
+                stack.pop()
+        elif token == separator and not stack:
+            clause = strip_outer(value[start:index])
+            if clause:
+                parts.append(clause)
+            start = index + 1
+    clause = strip_outer(value[start:])
+    if clause:
+        parts.append(clause)
+    return tuple(parts)
+
+
+def _rust_clause_is_obviously_tautological(tokens: Sequence[str]) -> bool:
+    """Recognize constant or reflexive Rust/Verus postcondition atoms."""
+
+    clause = tuple(tokens)
+    if clause == ("true",):
+        return True
+    stack: list[str] = []
+    matching = {")": "(", "]": "[", "}": "{"}
+    for index, token in enumerate(clause):
+        if token in "([{":
+            stack.append(token)
+            continue
+        if token in matching:
+            if stack and stack[-1] == matching[token]:
+                stack.pop()
+            continue
+        if stack:
+            continue
+        if token in ("==", "<=", ">="):
+            if token == "==" and index + 1 < len(clause) and clause[index + 1] == ">":
+                left = clause[:index]
+                right = clause[index + 2 :]
+            else:
+                left = clause[:index]
+                right = clause[index + 1 :]
+            return bool(left) and left == right
+    return False
+
+
 def _cross_tool_promotion_contract_errors(
     contracts: Sequence[CrossToolObligationContract],
 ) -> list[str]:
@@ -5031,6 +6540,8 @@ def _cross_tool_promotion_contract_errors(
             normalized_kernel_projection = _normalized_rust_contract(
                 f"{kernel}({projection})"
             )
+            requires_clauses = set(_rust_top_level_clauses(requires_tokens))
+            ensures_clauses = _rust_top_level_clauses(ensures_tokens)
             if requires_tokens in ((), ("true",)):
                 errors.append(
                     f"cross-tool claim {claim.constant} has a vacuous Verus "
@@ -5046,10 +6557,42 @@ def _cross_tool_promotion_contract_errors(
                     f"cross-tool claim {claim.constant} has a vacuous or constant "
                     "Verus ensures clause"
                 )
-            elif ensures_tokens != kernel_call_tokens:
+            elif ensures_tokens == requires_tokens:
                 errors.append(
-                    f"cross-tool claim {claim.constant} ensures must equal the exact "
-                    f"verified kernel projection {normalized_kernel_projection!r}"
+                    f"cross-tool claim {claim.constant} Verus ensures must not restate "
+                    "its exact requires clause"
+                )
+            elif _rust_precondition_is_obviously_contradictory(ensures_tokens):
+                errors.append(
+                    f"cross-tool claim {claim.constant} has an obviously "
+                    "contradictory Verus ensures clause"
+                )
+            kernel_clause_count = sum(
+                clause == kernel_call_tokens for clause in ensures_clauses
+            )
+            kernel_call_count = _token_sequence_count(
+                ensures_tokens, kernel_call_tokens
+            )
+            if kernel_clause_count != 1 or kernel_call_count != 1:
+                errors.append(
+                    f"cross-tool claim {claim.constant} ensures must contain the "
+                    "exact verified kernel projection once as a top-level clause: "
+                    f"{normalized_kernel_projection!r}"
+                )
+            postconditions = tuple(
+                clause for clause in ensures_clauses if clause != kernel_call_tokens
+            )
+            nontrivial_postconditions = tuple(
+                clause
+                for clause in postconditions
+                if clause not in requires_clauses
+                and not _rust_clause_is_obviously_tautological(clause)
+            )
+            if not nontrivial_postconditions:
+                errors.append(
+                    f"cross-tool claim {claim.constant} must retain at least one "
+                    "reviewed nontrivial postcondition beyond its kernel and "
+                    "requires clauses"
                 )
             disconnected_precondition_inputs = [
                 name for name in theorem_parameter_names if name not in requires_tokens
@@ -5537,6 +7080,7 @@ def _cross_tool_claim_contract_document(
             claim.verified_kernel_body or ""
         ),
         "verified_kernel_const": claim.verified_kernel_const,
+        "verified_kernel_public": claim.verified_kernel_public,
         "verified_kernel_shared_macro_sha256": [
             {"name": name, "item_token_sha256": sha256}
             for name, sha256 in claim.verified_kernel_shared_macro_sha256
@@ -6029,9 +7573,10 @@ def _cross_tool_claim_payload(
         raise ValueError(
             f"cross-tool verified kernel {kernel} may not be gated or rewritten by attributes"
         )
+    kernel_visibility = "pub" if claim.verified_kernel_public else "pub(crate)"
     kernel_const = "const " if claim.verified_kernel_const else ""
     expected_kernel_header = rust_code_tokens(
-        f"pub(crate) {kernel_const}fn {kernel}({kernel_parameters}) -> bool"
+        f"{kernel_visibility} {kernel_const}fn {kernel}({kernel_parameters}) -> bool"
     )
     observed_kernel_header = _rust_item_header_tokens(kernel_item)
     if observed_kernel_header != expected_kernel_header:
@@ -6136,15 +7681,33 @@ def _cross_tool_claim_payload(
                 f"must have brace context {call_site.brace_context!r}; found "
                 f"{call_item.brace_context!r}"
             )
+        allowed_call_attributes = {("#", "[", "must_use", "]")}
+        if (
+            call_site.source == "crates/iroha_core/src/sumeragi/v2_runner.rs"
+            and call_site.item == "run_inner"
+        ):
+            allowed_call_attributes.add(
+                (
+                    "#",
+                    "[",
+                    "allow",
+                    "(",
+                    "clippy",
+                    "::",
+                    "too_many_lines",
+                    ")",
+                    "]",
+                )
+            )
         unexpected_call_attributes = tuple(
             attribute
             for attribute in call_item.attributes
-            if rust_code_tokens(attribute) != ("#", "[", "must_use", "]")
+            if rust_code_tokens(attribute) not in allowed_call_attributes
         )
         if unexpected_call_attributes or call_item.ancestor_inner_attributes:
             raise ValueError(
                 f"cross-tool production call site {call_site.source}!{call_site.item} "
-                "may use only the non-gating #[must_use] attribute; found "
+                "may use only the non-gating approved attributes; found "
                 f"{unexpected_call_attributes!r}"
             )
         required_expression = rust_code_tokens(call_site.required_expression)
@@ -6919,16 +8482,18 @@ def _proof_obligation_architecture_errors(
         )
     for obligation_id, symbol in ASYNC_LIVENESS_OBLIGATIONS.items():
         property_wrapper = ASYNC_LIVENESS_PROPERTY_WRAPPERS[obligation_id]
+        exact_statement = ASYNC_LIVENESS_EXACT_STATEMENTS.get(
+            obligation_id,
+            f"\\A initialContext: "
+            f"{property_wrapper}(AsyncSpecAt(initialContext))",
+        )
         check_direct_theorem(
             obligation_id,
             symbol,
             module="SumeragiV2AsyncLivenessProofs",
             required_spec="AsyncSpecAt",
             forbidden=("Spec", "NextV2", "AdvanceContext"),
-            exact_statement=(
-                f"\\A initialContext: "
-                f"{property_wrapper}(AsyncSpecAt(initialContext))"
-            ),
+            exact_statement=exact_statement,
         )
     for obligation_id, (symbol, property_wrapper) in CHAIN_SAFETY_OBLIGATIONS.items():
         check_closed_theorem(
@@ -7260,7 +8825,9 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "/\\ StrongInductiveInvariant /\\ AsyncSchedulerTypeInvariant "
             "/\\ ReceivedTimeoutVotePoolInvariant "
             "/\\ AsyncRecoveryTypeInvariant /\\ AsyncRestartAuthorityInvariant "
-            "/\\ AsyncRecoveryExecutionInvariant"
+            "/\\ AsyncRecoveryExecutionInvariant "
+            "/\\ AsyncHistoricalLockRestartAuthorityTypeInvariant "
+            "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant"
         )
         if strong_type is None:
             errors.append(f"{path}: missing AsyncStrongTypeInvariant")
@@ -7342,6 +8909,9 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "<2>2b. AsyncRestartAuthorityInvariant "
                 "BY <1>1 DEF AsyncStrongTypeInvariant "
                 "<2>2c. AsyncRecoveryExecutionInvariant "
+                "BY <1>1 DEF AsyncStrongTypeInvariant "
+                "<2>2d. /\\ AsyncHistoricalLockRestartAuthorityTypeInvariant "
+                "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant "
                 "BY <1>1 DEF AsyncStrongTypeInvariant"
             )
             expected_recovery_step = (
@@ -7355,8 +8925,14 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "BY <1>1, <2>1, <2>2, <2>2a, <2>2b, <2>2c, "
                 "AsyncNextPreservesRecoveryExecutionInvariant"
             )
+            expected_historical_restart_authority_step = (
+                "<2>8. /\\ AsyncHistoricalLockRestartAuthorityTypeInvariant' "
+                "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant' "
+                "BY <1>1, <2>1, <2>2d, "
+                "AsyncNextPreservesHistoricalLockRestartAuthorityInvariants"
+            )
             expected_recovery_qed = (
-                "<2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7 "
+                "<2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8 "
                 "DEF AsyncStrongTypeInvariant"
             )
             normalized_body = " ".join(body.split())
@@ -7384,11 +8960,17 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     "pass every named recovery premise projection to the exact "
                     "AsyncRecoveryExecutionInvariant-prime preservation step"
                 )
+            if normalized_body.count(expected_historical_restart_authority_step) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "pass the historical-lock authority type/source projections "
+                    "to their exact preservation step"
+                )
             if normalized_body.count(expected_recovery_qed) != 1:
                 errors.append(
                     f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
-                    "make the <2>7 recovery-execution prime step an exact QED "
-                    "dependency"
+                    "make the <2>7 recovery-execution and <2>8 historical-lock "
+                    "authority prime steps exact QED dependencies"
                 )
     universally_quantified = re.compile(
         r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
@@ -7921,8 +9503,11 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"specification => []ProgressWitnessInvariant"
               ),
               "DeadlockFreedomProperty": (
+                r"DeadlockFreedomWithLocalWorkProperty(specification, FALSE)"
+              ),
+              "DeadlockFreedomWithLocalWorkProperty": (
                 r"specification => [](gst /\ ~ResponsiveNodesDecide "
-                r"=> PostGstProductiveActionEnabled)"
+                r"=> PostGstProductiveActionEnabledWith( localWorkDecreaseStep))"
               ),
               "HeightProtocolEvidenceGrows": (
                 r"\/ SetGains(availableBodies, availableBodies') "
@@ -7945,10 +9530,14 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"IF now < deadline THEN deadline - now ELSE 0"
               ),
               "PostGstProductiveStep": (
+                r"PostGstProductiveStepWith(FALSE)"
+              ),
+              "PostGstProductiveStepWith": (
                 r"/\ gst /\ AsyncNext /\ \/ HeightProtocolEvidenceGrows "
                 r"\/ PostGstDeadlineDebtDecreases "
                 r"\/ ProtectedServiceRankDecreaseStep "
-                r"\/ ProtectedServeRankDecreaseStep"
+                r"\/ ProtectedServeRankDecreaseStep "
+                r"\/ localWorkDecreaseStep"
               ),
               "PostGstProductiveActionEnabled": (
                 r"ENABLED PostGstProductiveStep"
@@ -8329,29 +9918,213 @@ def _application_completion_source_fidelity_errors(
                 f"{exact_body!r}; found {normalized!r}"
             )
 
-    proofless_symbol = "ApplicationCompletionProgressObligation"
-    proofless = _top_level_theorem_body(proof_source, proofless_symbol)
-    exact_proofless_statement = (
+    exact_corridor_operators = {
+        "DecisionPipelineKinds": (
+            '{"FetchBody", "RequestCertifiedBody", "FetchCertifiedBody", '
+            '"StoreBody", "ValidateBody", "Apply"}'
+        ),
+        "DecisionCertifiedRequestSetActive": (
+            "/\\ CertifiedRequestOutbox(node, qc) # {} "
+            "/\\ CertifiedRequestOutbox(node, qc) \\subseteq "
+            "asyncActiveRequests"
+        ),
+        "DecisionCertifiedRequestCompletenessInvariant": (
+            "\\A decision \\in decisions: "
+            "/\\ decision.node \\in AsyncCurrentResponsiveVoters "
+            "/\\ decision.qc.context = context "
+            "/\\ DecisionCertifiedRequestActive(decision.node, decision.qc) "
+            "=> DecisionCertifiedRequestSetActive(decision.node, decision.qc)"
+        ),
+        "DecisionApplicationFrontier": (
+            "\\/ NodeHasApplication(node) "
+            "\\/ DecisionCertifiedRequestActive(node, qc) "
+            "\\/ \\E candidate \\in AsyncCandidateSet: "
+            "DecisionPipelineCandidate(node, qc, candidate)"
+        ),
+        "DecisionPipelineStageOutcome": (
+            "\\/ NodeHasApplication(node) "
+            '\\/ CASE kind = "FetchBody" -> '
+            "\\/ DecisionCertifiedRequestActive(node, qc) "
+            '\\/ DecisionPipelineKindOwned(node, qc, "ValidateBody") '
+            '[] kind = "RequestCertifiedBody" -> '
+            "DecisionCertifiedRequestActive(node, qc) "
+            '[] kind = "FetchCertifiedBody" -> '
+            'DecisionPipelineKindOwned(node, qc, "StoreBody") '
+            '[] kind = "StoreBody" -> '
+            'DecisionPipelineKindOwned(node, qc, "ValidateBody") '
+            '[] kind = "ValidateBody" -> '
+            'DecisionPipelineKindOwned(node, qc, "Apply") '
+            '[] kind = "Apply" -> NodeHasApplication(node) '
+            "[] OTHER -> FALSE"
+        ),
+        "DecisionPipelineStagePending": (
+            "/\\ gst /\\ ~NodeHasApplication(node) "
+            "/\\ candidate.kind = kind "
+            "/\\ DecisionPipelineCandidate(node, qc, candidate)"
+        ),
+        "DecisionCertifiedResponseOutcome": (
+            "\\/ NodeHasApplication(node) "
+            "\\/ DecisionCertifiedFetchOwned(node, qc)"
+        ),
+    }
+    for symbol, exact_body in exact_corridor_operators.items():
+        extracted = _top_level_operator_body(
+            proof_source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{proof_path}: missing exact application operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != exact_body:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must equal only "
+                f"{exact_body!r}; found {normalized!r}"
+            )
+
+    obligation_symbol = "ApplicationCompletionProgressObligation"
+    obligation = _top_level_theorem_body(proof_source, obligation_symbol)
+    exact_obligation_statement = (
         "\\A initialContext: ApplicationCompletionProgressProperty("
         "AsyncSpecAt(initialContext))"
     )
-    if proofless is None:
-        errors.append(f"{proof_path}: missing {proofless_symbol}")
+    if obligation is None:
+        errors.append(f"{proof_path}: missing {obligation_symbol}")
     else:
-        body, line = proofless
+        body, line = obligation
         parts = re.split(
             r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
         )
         normalized = " ".join(parts[0].split())
-        if normalized != exact_proofless_statement:
+        if normalized != exact_obligation_statement:
             errors.append(
-                f"{proof_path}:{line}: {proofless_symbol} must state only "
-                f"{exact_proofless_statement!r}; found {normalized!r}"
+                f"{proof_path}:{line}: {obligation_symbol} must state only "
+                f"{exact_obligation_statement!r}; found {normalized!r}"
             )
-        if len(parts) != 1:
+        if len(parts) != 2 or re.search(r"(?m)^[ \t]*PROOF\b", body) is None:
             errors.append(
-                f"{proof_path}:{line}: {proofless_symbol} must remain the "
-                "explicit proofless per-validator application debt"
+                f"{proof_path}:{line}: {obligation_symbol} must have the "
+                "reviewed noncircular exact-corridor proof"
+            )
+        else:
+            proof = parts[1]
+            dependencies = (
+                "StarvationFreedomObligation",
+                "RecoveryAwareDecisionProgressWitnessObligation",
+                "DecisionCertifiedRequestCompletenessObligation",
+                "ResponsiveDecisionReachesApplicationFromExactCorridor",
+                "AsyncSpecAlwaysUsesFixedResponsiveVoters",
+            )
+            positions = [proof.find(dependency) for dependency in dependencies]
+            if any(position < 0 for position in positions) or positions != sorted(
+                positions
+            ):
+                errors.append(
+                    f"{proof_path}:{line}: {obligation_symbol} proof must "
+                    "compose the reviewed exact-corridor dependencies in "
+                    f"order {dependencies!r}"
+                )
+            repeated = [
+                dependency
+                for dependency in dependencies
+                if proof.count(dependency) != 1
+            ]
+            if repeated:
+                errors.append(
+                    f"{proof_path}:{line}: {obligation_symbol} proof must "
+                    "consume each reviewed exact-corridor dependency exactly "
+                    f"once; found {repeated!r}"
+                )
+
+    closure_proofs = {
+        "DecisionCertifiedRequestCompletenessObligation": (
+            "AsyncInitEstablishesDecisionCertifiedRequestCompleteness",
+            "AsyncBracketPreservesDecisionCertifiedRequestCompleteness",
+        ),
+        "AsyncNextPreservesDecisionCertifiedRequestCompleteness": (
+            "PublishCertifiedRequests",
+            "MatchingCertifiedRequests",
+            "ResetNodeSchedulerForRestart",
+        ),
+        "DecisionPipelineStagePersistsUntilExactHandoff": (
+            "ExecuteDecisionFetch",
+            "ExecuteRequestCertifiedBody",
+            "FetchCertifiedBody",
+            "StoreBody",
+            "ValidateDecidedBody",
+            "ExecuteApply",
+            "ApplyDecision",
+        ),
+        "DecisionPipelineStageReachesExactHandoff": (
+            "StarvationFreedomProperty",
+            "DecisionPipelineStagePendingIsProtected",
+            "DecisionPipelineStagePersistsUntilExactHandoff",
+        ),
+        "ActiveDecisionCertifiedRequestReachesCertifiedFetch": (
+            "DecisionCertifiedRequestCompletenessInvariant",
+            "DecisionRecoveryCertificateHasResponsiveRemoteBodySource",
+            "DirectRetransmitStep",
+            "DeferredRetransmitStep",
+            "PostGstAdmitHiddenPacket",
+            "DrainFairIngressSelected",
+            "ResponsiveProtectedServeJobOwned",
+            "PostGstServiceIoWorker",
+            "CertifiedResponseCandidate",
+        ),
+        "ResponsiveDecisionReachesApplicationFromExactCorridor": (
+            "RecoveryAwareDecisionWitnessProjectsApplicationFrontier",
+            "ActiveDecisionCertifiedRequestReachesCertifiedFetch",
+            "DecisionPipelineStageReachesExactHandoff",
+        ),
+    }
+    forbidden_closure_dependencies = (
+        "ApplicationCompletionProgressObligation",
+        "ResponsiveDecisionApplicationFromExactCorridor",
+        "HistoricalDecisionConcreteLeafProperties",
+        "HistoricalDecisionFetchProgressLeaf",
+        "HistoricalDecisionRequestBodyProgressLeaf",
+        "HistoricalDecisionCertifiedResponseProgressLeaf",
+        "HistoricalDecisionFetchCertifiedProgressLeaf",
+        "HistoricalDecisionStoreProgressLeaf",
+        "HistoricalDecisionValidateProgressLeaf",
+        "HistoricalDecisionApplyProgressLeaf",
+        "ProductionProgressWitnessTraceRefinement",
+        "ProductionApplicationTraceRefinesDecisionCompletion",
+    )
+    for symbol, dependencies in closure_proofs.items():
+        extracted = _top_level_theorem_body(proof_source, symbol)
+        if extracted is None:
+            errors.append(f"{proof_path}: missing application-corridor theorem {symbol}")
+            continue
+        body, line = extracted
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        if len(parts) != 2 or re.search(
+            r"(?m)^[ \t]*(?:BY|PROOF)\b", body
+        ) is None:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must retain its explicit "
+                "deductive application-corridor proof"
+            )
+            continue
+        proof = parts[1]
+        missing = [dependency for dependency in dependencies if dependency not in proof]
+        if missing:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} proof must retain exact "
+                f"application-corridor dependencies; missing {missing!r}"
+            )
+        forbidden = [
+            dependency
+            for dependency in forbidden_closure_dependencies
+            if dependency in proof
+        ]
+        if forbidden:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} proof may not rely on the "
+                "application result itself, production-fidelity predicates, "
+                f"or unproved historical leaf conjunctions; found {forbidden!r}"
             )
 
     reviewed_proofs = {
@@ -8779,6 +10552,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 )
 
     network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    network_source = ""
     if network_path.is_file():
         network_source = network_path.read_text(encoding="utf-8")
         extracted = _top_level_operator_body(
@@ -8831,6 +10605,842 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         return errors
     async_source = async_path.read_text(encoding="utf-8")
 
+    # A responsive crash clears process-local body work before Restart advances
+    # the consumer generation.  Pin the generation-free ghost projection of
+    # the already-durable historical PrepareQC, its exact post-state FetchBody
+    # handoff, and the production derivation from DurableState::locked().
+    # These checks are source-fidelity sentinels; they do not promote the
+    # progress-witness ledger entry or replace its deductive TLAPS proof.
+    historical_restart_markers = (
+        "asyncHistoricalLockRestartAuthorities",
+        "HistoricalLockedBodyRestartAuthority",
+    )
+    if any(
+        marker in network_source or marker in async_source
+        for marker in historical_restart_markers
+    ):
+        exact_historical_restart_network_operators = {
+            "AsyncHistoricalLockRestartAuthority": (
+                "[node |-> node, context |-> qc.context, "
+                "view |-> qc.view, subject |-> qc.subject]"
+            ),
+            "AsyncRecoveryControlVars": (
+                "<<asyncRecoveryPhase, asyncRecoveryNode, "
+                "asyncRecoveryGeneration, asyncRecoveryReplayQueue>>"
+            ),
+            "AsyncRecoveryVars": (
+                "<<asyncRecoveryPhase, asyncRecoveryNode, "
+                "asyncRecoveryGeneration, asyncRecoveryReplayQueue, "
+                "asyncHistoricalLockRestartAuthorities>>"
+            ),
+            "HistoricalLockRestartAuthoritySourceKernel": (
+                "/\\ authority = "
+                "AsyncHistoricalLockRestartAuthority(authority.node, qc) "
+                "/\\ qc.context = currentContext "
+                '/\\ qc.phase = "Prepare" '
+                "/\\ qc.view < currentNodeView[authority.node] "
+                "/\\ qc.view = currentLockRank[authority.node] "
+                "/\\ qc.subject = currentLockSubject[authority.node] "
+                "/\\ \\/ \\E installed \\in currentInstalledTCs: "
+                "/\\ installed.node = authority.node "
+                "/\\ installed.tc.context = qc.context "
+                "/\\ installed.tc.view >= qc.view "
+                "/\\ TcHighRank(installed.tc) = qc.view "
+                "/\\ TcHighSubject(installed.tc) = qc.subject "
+                "\\/ \\E vote \\in currentCommitIntents: "
+                "/\\ vote.signer = authority.node "
+                "/\\ vote.context = currentContext "
+                '/\\ vote.phase = "Commit" '
+                "/\\ vote.view = qc.view "
+                "/\\ vote.subject = qc.subject "
+                "/\\ ~\\E decision \\in currentDecisions: "
+                "/\\ decision.node = authority.node "
+                "/\\ decision.qc.context = currentContext"
+            ),
+            "HistoricalLockRestartExactCurrentFetchKernel": (
+                '/\\ candidate.class = "Completion" '
+                '/\\ candidate.kind = "FetchBody" '
+                "/\\ candidate.node = authority.node "
+                "/\\ candidate.height = authority.context.height "
+                "/\\ candidate.view = authority.view "
+                "/\\ candidate.subject = authority.subject "
+                "/\\ candidate.item = NoAsyncItem "
+                "/\\ candidate.consumerContext = authority.context "
+                "/\\ candidate.consumerContext = currentContext "
+                "/\\ candidate.consumerView = currentNodeView[authority.node] "
+                "/\\ candidate.consumerGeneration = "
+                "currentGeneration[authority.node] "
+                "/\\ candidate.evidence = qc "
+                "/\\ candidate.bodyIdentity = authority.subject "
+                "/\\ candidate.manifestIdentity = authority.subject "
+                "/\\ candidate.commitmentIdentity = authority.subject "
+                "/\\ CandidateScheduledIn( candidate, commandQueues, "
+                "deferredCompletionQueues, deferredProgressQueues, "
+                "deferredNormalQueues, causalQueues, outstandingWork)"
+            ),
+            "HistoricalLockRestartAuthoritySourceAfter": (
+                "\\E qc \\in prepareQCs': "
+                "HistoricalLockRestartAuthoritySourceKernel( authority, qc, "
+                "context', nodeView', lockRank', lockSubject', installedTCs', "
+                "commitIntents', decisions')"
+            ),
+            "HistoricalLockRestartExactCurrentFetchOwnerAfter": (
+                "\\E qc \\in prepareQCs', candidate \\in AsyncCandidateSet: "
+                "/\\ HistoricalLockRestartAuthoritySourceKernel( authority, "
+                "qc, context', nodeView', lockRank', lockSubject', "
+                "installedTCs', commitIntents', decisions') "
+                "/\\ HistoricalLockRestartExactCurrentFetchKernel( authority, "
+                "qc, candidate, context', nodeView', generation', "
+                "asyncCommandQueues', asyncDeferredCompletionQueues', "
+                "asyncDeferredProgressQueues', asyncDeferredNormalQueues', "
+                "asyncCausalQueues', asyncOutstandingWork')"
+            ),
+            "ResponsiveCrashHistoricalLockRestartAuthorities": (
+                "{AsyncHistoricalLockRestartAuthority(node, qc): qc \\in "
+                "{candidateQc \\in prepareQCs: "
+                "HistoricalLockRestartAuthoritySourceKernel( "
+                "AsyncHistoricalLockRestartAuthority(node, candidateQc), "
+                "candidateQc, context, nodeView, lockRank, lockSubject, "
+                "installedTCs, commitIntents, decisions)}}"
+            ),
+            "AsyncHistoricalLockRestartAuthorityTransition": (
+                "\\/ \\E node \\in ValidatorIds: "
+                "/\\ ResponsiveCrashRecoveryRegistration(node) "
+                "/\\ asyncHistoricalLockRestartAuthorities' = "
+                "asyncHistoricalLockRestartAuthorities \\cup "
+                "ResponsiveCrashHistoricalLockRestartAuthorities(node) "
+                "\\/ /\\ ~\\E node \\in ValidatorIds: "
+                "ResponsiveCrashRecoveryRegistration(node) "
+                "/\\ asyncHistoricalLockRestartAuthorities' = "
+                "{authority \\in asyncHistoricalLockRestartAuthorities: "
+                "/\\ HistoricalLockRestartAuthoritySourceAfter(authority) "
+                "/\\ ~HistoricalLockRestartExactCurrentFetchOwnerAfter(authority)}"
+            ),
+            "AsyncHistoricalLockRestartAuthorityTypeInvariant": (
+                "/\\ IsFiniteSet(asyncHistoricalLockRestartAuthorities) "
+                "/\\ asyncHistoricalLockRestartAuthorities "
+                "\\subseteq AsyncHistoricalLockRestartAuthoritySet "
+                "/\\ Cardinality(asyncHistoricalLockRestartAuthorities) "
+                "<= Cardinality(ValidatorIds)"
+            ),
+        }
+        for symbol, exact_body in exact_historical_restart_network_operators.items():
+            extracted = _top_level_operator_body(
+                network_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{network_path}: missing historical-lock restart authority "
+                    f"operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{network_path}:{line}: {symbol} must equal only the exact "
+                    "durable-source projection/current-generation FetchBody "
+                    f"handoff contract {exact_body!r}; found {normalized!r}"
+                )
+
+        required_network_fragments = {
+            "AsyncRecoveryInit": (
+                "/\\ asyncHistoricalLockRestartAuthorities = {}",
+            ),
+            "AsyncNonCrashOuterFrame": (
+                "/\\ UNCHANGED AsyncRecoveryControlVars",
+                "/\\ AsyncHistoricalLockRestartAuthorityTransition",
+            ),
+            "AsyncRecoveryOuterFrame": (
+                "/\\ AsyncHistoricalLockRestartAuthorityTransition",
+            ),
+            "RearmResponsiveRecovery": (
+                "/\\ AsyncHistoricalLockRestartAuthorityTransition",
+            ),
+            "AsyncNext": (
+                "/\\ AsyncHistoricalLockRestartAuthorityTransition",
+                "\\/ (\\E node \\in ValidatorIds: PreGstResponsiveCrash(node))",
+                "\\/ PreGstResponsiveRestart",
+                "\\/ PreGstResponsiveReplay",
+            ),
+        }
+        for symbol, fragments in required_network_fragments.items():
+            extracted = _top_level_operator_body(
+                network_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{network_path}: missing historical-lock restart frame {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            missing = [fragment for fragment in fragments if fragment not in normalized]
+            if missing:
+                errors.append(
+                    f"{network_path}:{line}: {symbol} omits the historical-lock "
+                    f"restart authority frame; missing={missing}"
+                )
+
+        exact_historical_restart_liveness_operators = {
+            "HistoricalLockRestartAuthoritySourceRetentionInvariant": (
+                "\\A authority \\in asyncHistoricalLockRestartAuthorities: "
+                "HistoricalLockRestartAuthoritySource(authority)"
+            ),
+            "HistoricalLockedSemanticPrepareAuthority": (
+                "/\\ HistoricalLockedPrepareSource(node, authorityQc) "
+                "/\\ authorityQc.context = qc.context "
+                "/\\ authorityQc.view = qc.view "
+                "/\\ authorityQc.subject = qc.subject"
+            ),
+            "HistoricalLockedCertifiedRequestMatches": (
+                '/\\ request.kind = "CertifiedRequest" '
+                "/\\ request.source = node "
+                "/\\ request.envelope.height = qc.context.height "
+                "/\\ request.envelope.view = qc.view "
+                "/\\ request.envelope.subject = qc.subject "
+                "/\\ \\E authorityQc \\in prepareQCs: "
+                "/\\ HistoricalLockedSemanticPrepareAuthority( "
+                "node, qc, authorityQc) "
+                "/\\ request.envelope.recipient "
+                "\\in authorityQc.signers \\ {node}"
+            ),
+            "HistoricalLockedCertifiedResponseMatches": (
+                '/\\ item.kind = "CertifiedResponse" '
+                "/\\ item.envelope.recipient = node "
+                "/\\ item.envelope.height = qc.context.height "
+                "/\\ item.envelope.view = qc.view "
+                "/\\ item.envelope.subject = qc.subject "
+                "/\\ \\E authorityQc \\in prepareQCs: "
+                "/\\ HistoricalLockedSemanticPrepareAuthority( "
+                "node, qc, authorityQc) "
+                "/\\ item.source \\in authorityQc.signers"
+            ),
+            "HistoricalLockedBodyPipelineCandidate": (
+                "/\\ candidate \\in AsyncCandidateSet "
+                '/\\ candidate.class = "Completion" '
+                "/\\ candidate.node = node "
+                "/\\ candidate.height = qc.context.height "
+                "/\\ candidate.view = qc.view "
+                "/\\ candidate.subject = qc.subject "
+                "/\\ candidate.kind \\in "
+                '{"FetchBody", "RequestCertifiedBody", "FetchCertifiedBody", '
+                '"StoreBody", "ValidateBody"} '
+                "/\\ CASE candidate.kind \\in "
+                '{"FetchBody", "RequestCertifiedBody"} -> '
+                "/\\ candidate.item = NoAsyncItem "
+                "/\\ candidate.evidence \\in prepareQCs "
+                "/\\ HistoricalLockedSemanticPrepareAuthority( "
+                "node, qc, candidate.evidence) "
+                '[] candidate.kind = "FetchCertifiedBody" -> '
+                "HistoricalLockedCertifiedResponseMatches( "
+                "node, qc, candidate.item) "
+                "[] OTHER -> TRUE "
+                "/\\ CandidateConsumerCurrent(candidate) "
+                "/\\ CandidateScheduled(candidate)"
+            ),
+            "HistoricalLockedCertifiedRequestActive": (
+                "\\E request \\in asyncActiveRequests: "
+                "HistoricalLockedCertifiedRequestMatches(node, qc, request)"
+            ),
+            "HistoricalLockedBodyPipelineKindOwned": (
+                "\\E candidate \\in AsyncCandidateSet: "
+                "/\\ candidate.kind = kind "
+                "/\\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate)"
+            ),
+            "HistoricalLockedBodyFetchOwned": (
+                'HistoricalLockedBodyPipelineKindOwned(node, qc, "FetchBody")'
+            ),
+            "HistoricalLockedBodyRequestOwned": (
+                "HistoricalLockedBodyPipelineKindOwned( "
+                'node, qc, "RequestCertifiedBody")'
+            ),
+            "HistoricalLockedBodyCertifiedFetchOwned": (
+                "HistoricalLockedBodyPipelineKindOwned( "
+                'node, qc, "FetchCertifiedBody")'
+            ),
+            "HistoricalLockedBodyStoreOwned": (
+                "/\\ BodyRecord(node, qc.context, qc.view, qc.subject) "
+                "\\in availableBodies "
+                "/\\ HistoricalLockedBodyPipelineKindOwned(node, qc, "
+                '"StoreBody")'
+            ),
+            "HistoricalLockedBodyValidateOwned": (
+                "/\\ BodyHeldBy(durableBodies, node, qc.context, qc.view, "
+                "qc.subject) "
+                "/\\ HistoricalLockedBodyPipelineKindOwned(node, qc, "
+                '"ValidateBody")'
+            ),
+            "HistoricalLockedBodyServeOwned": (
+                "\\E server \\in ValidatorIds: "
+                "\\E job \\in SequenceSet(asyncIoQueues[server]): "
+                "/\\ job \\in AsyncServeJobSet "
+                "/\\ HistoricalLockedCertifiedRequestMatches( "
+                "node, qc, job.candidate.item)"
+            ),
+            "HistoricalLockedBodyResponseInFlight": (
+                "\\E item \\in AsyncNetworkItems: "
+                "/\\ HistoricalLockedCertifiedResponseMatches(node, qc, item) "
+                "/\\ \\/ \\E packet \\in asyncTransport: packet.item = item "
+                "\\/ \\E source \\in AsyncIngressSources: "
+                "item \\in SequenceSet(IngressLane(node, source))"
+            ),
+            "HistoricalLockedBodyRestartAuthority": (
+                "AsyncHistoricalLockRestartAuthority(node, qc) "
+                "\\in asyncHistoricalLockRestartAuthorities"
+            ),
+            "HistoricalLockedBodyValidated": (
+                "/\\ BodyHeldBy(durableBodies, node, qc.context, qc.view, "
+                "qc.subject) "
+                "/\\ BodyValidatedBy(validatedBodies, node, qc.context, "
+                "qc.view, generation[node], qc.subject)"
+            ),
+            "HistoricalLockedBodyRecoveryTerminal": (
+                "/\\ HistoricalLockedBodyValidated(node, qc) "
+                "/\\ \\/ HistoricalLockedCommitRecoveryWitness(node, qc) "
+                "\\/ ~HistoricalLockedPrepareForCommit(node, qc)"
+            ),
+            "HistoricalLockedBodyRecoveryStage": (
+                "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc) "
+                "\\/ HistoricalLockedCommitRecoveryWitness(node, qc) "
+                "\\/ HistoricalLockedCertifiedRequestActive(node, qc) "
+                "\\/ HistoricalLockedBodyRestartAuthority(node, qc) "
+                "\\/ HistoricalLockedBodyFetchOwned(node, qc) "
+                "\\/ HistoricalLockedBodyRequestOwned(node, qc) "
+                "\\/ HistoricalLockedBodyCertifiedFetchOwned(node, qc) "
+                "\\/ HistoricalLockedBodyStoreOwned(node, qc) "
+                "\\/ HistoricalLockedBodyValidateOwned(node, qc)"
+            ),
+            "HistoricalLockedBodyRecoveryStageInvariant": (
+                "\\A node \\in AsyncCurrentResponsiveVoters, "
+                "qc \\in prepareQCs: "
+                "HistoricalLockedPrepareSource(node, qc) "
+                "=> HistoricalLockedBodyRecoveryStage(node, qc)"
+            ),
+            "HistoricalLockedBodyRecoveryProperty": (
+                "specification => []HistoricalLockedBodyRecoveryStageInvariant"
+            ),
+            "HistoricalLockedBodySourceRetired": (
+                "~HistoricalLockedPrepareSource(node, qc)"
+            ),
+            "HistoricalLockedBodyRuntimeExecutes": (
+                "/\\ [AsyncNext]_AsyncAllVars "
+                "/\\ \\/ /\\ candidate = NextNodeCommand(candidate.node) "
+                "/\\ FifoRuntimeStep(candidate.node) "
+                "/\\ CommandDispatchable(candidate) "
+                "\\/ /\\ DeferredQueueNonempty(candidate.node) "
+                "/\\ candidate = NextDeferredCommand(candidate.node) "
+                "/\\ DeferredDrainStep(candidate.node) "
+                "/\\ DeferredHandoffAllowsExecution(candidate.node, candidate)"
+            ),
+            "HistoricalLockedCertifiedRequestSelected": (
+                "/\\ asyncIngressReady[server] # <<>> "
+                "/\\ DrainableIngressIndices(server) # {} "
+                "/\\ HistoricalLockedCertifiedRequestMatches( node, qc, "
+                "SelectedIngressItemAt( server, "
+                "FirstDrainableIngressIndex(server)))"
+            ),
+            "HistoricalLockedCertifiedResponseSelected": (
+                "/\\ asyncIngressReady[node] # <<>> "
+                "/\\ DrainableIngressIndices(node) # {} "
+                "/\\ HistoricalLockedCertifiedResponseMatches( node, qc, "
+                "SelectedIngressItemAt( node, "
+                "FirstDrainableIngressIndex(node)))"
+            ),
+            "HistoricalLockedBodyServeHeadOwned": (
+                "/\\ AsyncIoQueueDepth(server) > 0 "
+                "/\\ Head(asyncIoQueues[server]) \\in AsyncServeJobSet "
+                "/\\ HistoricalLockedCertifiedRequestMatches( node, qc, "
+                "Head(asyncIoQueues[server]).candidate.item)"
+            ),
+        }
+        for symbol, exact_body in exact_historical_restart_liveness_operators.items():
+            extracted = _top_level_operator_body(
+                async_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{async_path}: missing historical-lock restart liveness "
+                    f"operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{async_path}:{line}: {symbol} must equal only the exact "
+                    f"historical locked-body ownership contract {exact_body!r}; "
+                    f"found {normalized!r}"
+                )
+
+        strong_type = _top_level_operator_body(
+            async_source, "AsyncStrongTypeInvariant", preserve_string_contents=True
+        )
+        if strong_type is None:
+            errors.append(
+                f"{async_path}: missing AsyncStrongTypeInvariant historical-lock frame"
+            )
+        else:
+            body, line = strong_type
+            normalized = " ".join(body.split())
+            required = (
+                "/\\ AsyncHistoricalLockRestartAuthorityTypeInvariant",
+                "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant",
+            )
+            missing = [fragment for fragment in required if fragment not in normalized]
+            if missing:
+                errors.append(
+                    f"{async_path}:{line}: AsyncStrongTypeInvariant omits exact "
+                    f"historical-lock restart source retention; missing={missing}"
+                )
+
+        historical_restart_proof_contracts = {
+            "ResponsiveCrashRegistrationProjectsExistingDurableLock": (
+                "PreGstResponsiveCrash",
+                "Crash",
+                "ResponsiveCrashHistoricalLockRestartAuthorities",
+                "HistoricalLockRestartAuthoritySourceAfter",
+            ),
+            "AsyncNextPreservesHistoricalLockRestartAuthorityInvariants": (
+                "AsyncHistoricalLockRestartAuthorityTransition",
+                "ResponsiveCrashRegistrationProjectsExistingDurableLock",
+                "AsyncHistoricalLockRestartAuthorityTypeInvariant",
+                "HistoricalLockRestartAuthoritySourceRetentionInvariant",
+            ),
+            "HistoricalLockRestartAuthorityRetirementRequiresExactFetch": (
+                "AsyncHistoricalLockRestartAuthorityTransition",
+                "HistoricalLockRestartAuthoritySourceAfter",
+                "HistoricalLockRestartExactCurrentFetchOwnerAfter",
+            ),
+            "HistoricalLockRestartAuthoritySurvivesGenerationAndReplayReset": (
+                "AsyncHistoricalLockRestartAuthorityTransition",
+                "HistoricalLockRestartAuthoritySourceAfter",
+                "HistoricalLockRestartExactCurrentFetchOwnerAfter",
+            ),
+            "ResponsiveCrashRegistersExactHistoricalLockProjection": (
+                "PreGstResponsiveCrash",
+                "AsyncNext",
+                "AsyncHistoricalLockRestartAuthorityTransition",
+                "ResponsiveCrashHistoricalLockRestartAuthorities",
+            ),
+            "HistoricalLockRestartAuthoritySourceRetentionFromAsyncSpec": (
+                "AsyncSpecAlwaysStrongTypeInvariant",
+                "AsyncStrongTypeInvariant",
+            ),
+        }
+        for symbol, required_tokens in historical_restart_proof_contracts.items():
+            theorem = _top_level_theorem_body(
+                async_source, symbol, preserve_string_contents=True
+            )
+            if theorem is None:
+                errors.append(
+                    f"{async_path}: missing historical-lock restart proof {symbol}"
+                )
+                continue
+            body, line = theorem
+            parts = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )
+            proof = parts[1] if len(parts) == 2 else ""
+            missing = [
+                token
+                for token in required_tokens
+                if re.search(rf"\b{re.escape(token)}\b", proof) is None
+            ]
+            if len(parts) != 2 or missing:
+                errors.append(
+                    f"{async_path}:{line}: {symbol} must retain the exact "
+                    "historical-lock restart proof chain; "
+                    f"missing={missing}, has_proof={len(parts) == 2}"
+                )
+
+        historical_locked_body_theorem_contracts = {
+            "HistoricalLockRestartAuthorityEstablishesRecoveryStage": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs: "
+                "HistoricalLockedBodyRestartAuthority(node, qc) "
+                "=> HistoricalLockedBodyRecoveryStage(node, qc)",
+                (
+                    "HistoricalLockedBodyRecoveryStage",
+                ),
+            ),
+            "HistoricalLockedFetchExecutionHandsOff": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs, "
+                "candidate \\in AsyncCandidateSet: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedPrepareSource(node, qc) "
+                '/\\ candidate.kind = "FetchBody" '
+                "/\\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate) "
+                "/\\ HistoricalLockedBodyRuntimeExecutes(candidate) "
+                "=> \\/ HistoricalLockedBodySourceRetired(node, qc)' "
+                "\\/ HistoricalLockedCertifiedRequestActive(node, qc)' "
+                "\\/ HistoricalLockedBodyValidateOwned(node, qc)' "
+                "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc)'",
+                (
+                    "HistoricalLockedBodyRuntimeExecutes",
+                    "HistoricalLockedSemanticPrepareAuthority",
+                    "ExecuteDecisionFetch",
+                    "PublishCertifiedRequests",
+                    "CommandSuccessors",
+                ),
+            ),
+            "HistoricalLockedRequestExecutionHandsOff": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs, "
+                "candidate \\in AsyncCandidateSet: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedPrepareSource(node, qc) "
+                '/\\ candidate.kind = "RequestCertifiedBody" '
+                "/\\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate) "
+                "/\\ HistoricalLockedBodyRuntimeExecutes(candidate) "
+                "=> \\/ HistoricalLockedBodySourceRetired(node, qc)' "
+                "\\/ HistoricalLockedCertifiedRequestActive(node, qc)' "
+                "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc)'",
+                (
+                    "HistoricalLockedBodyRuntimeExecutes",
+                    "HistoricalLockedSemanticPrepareAuthority",
+                    "ExecuteRequestCertifiedBody",
+                    "PublishCertifiedRequests",
+                ),
+            ),
+            "HistoricalLockedCertifiedFetchExecutionHandsOff": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs, "
+                "candidate \\in AsyncCandidateSet: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedPrepareSource(node, qc) "
+                '/\\ candidate.kind = "FetchCertifiedBody" '
+                "/\\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate) "
+                "/\\ HistoricalLockedBodyRuntimeExecutes(candidate) "
+                "=> \\/ HistoricalLockedBodySourceRetired(node, qc)' "
+                "\\/ HistoricalLockedBodyStoreOwned(node, qc)' "
+                "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc)'",
+                (
+                    "HistoricalLockedCertifiedResponseMatches",
+                    "ExecuteRegularCommand",
+                    "FetchCertifiedBody",
+                    "CommandSuccessors",
+                ),
+            ),
+            "HistoricalLockedStoreExecutionHandsOff": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs, "
+                "candidate \\in AsyncCandidateSet: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedPrepareSource(node, qc) "
+                '/\\ candidate.kind = "StoreBody" '
+                "/\\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate) "
+                "/\\ HistoricalLockedBodyRuntimeExecutes(candidate) "
+                "=> \\/ HistoricalLockedBodySourceRetired(node, qc)' "
+                "\\/ HistoricalLockedBodyValidateOwned(node, qc)' "
+                "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc)'",
+                (
+                    "HistoricalLockedBodyValidateOwned",
+                    "ExecuteRegularCommand",
+                    "StoreBody",
+                    "CommandSuccessors",
+                ),
+            ),
+            "HistoricalLockedValidateExecutionHandsOff": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs, "
+                "candidate \\in AsyncCandidateSet: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedPrepareSource(node, qc) "
+                '/\\ candidate.kind = "ValidateBody" '
+                "/\\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate) "
+                "/\\ HistoricalLockedBodyRuntimeExecutes(candidate) "
+                "=> \\/ HistoricalLockedBodySourceRetired(node, qc)' "
+                "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc)' "
+                "\\/ HistoricalLockedCommitRecoveryWitness(node, qc)'",
+                (
+                    "HistoricalLockedBodyRecoveryTerminal",
+                    "HistoricalLockedCommitRecoveryWitness",
+                    "ValidateLockedBody",
+                    "HistoricalLockedPrepareForCommit",
+                ),
+            ),
+            "HistoricalLockedRequestIngressHandsOffToRemoteServe": (
+                "\\A server, node \\in ValidatorIds, qc \\in prepareQCs: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedPrepareSource(node, qc) "
+                "/\\ HistoricalLockedCertifiedRequestActive(node, qc) "
+                "/\\ HistoricalLockedCertifiedRequestSelected(server, node, qc) "
+                "/\\ [AsyncNext]_AsyncAllVars "
+                "/\\ IngressDrainStep(server) "
+                "=> /\\ HistoricalLockedCertifiedRequestActive(node, qc)' "
+                "/\\ HistoricalLockedBodyServeOwned(node, qc)'",
+                (
+                    "HistoricalLockedCertifiedRequestSelected",
+                    "HistoricalLockedBodyServeOwned",
+                    "DrainFairIngressSelected",
+                    "AsyncIoCertifiedServeJob",
+                ),
+            ),
+            "HistoricalLockedServeExecutionPublishesResponse": (
+                "\\A server, node \\in ValidatorIds, qc \\in prepareQCs: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedPrepareSource(node, qc) "
+                "/\\ HistoricalLockedCertifiedRequestActive(node, qc) "
+                "/\\ HistoricalLockedBodyServeHeadOwned(server, node, qc) "
+                "/\\ CertifiedServeCanRespond( "
+                "Head(asyncIoQueues[server]).candidate.item) "
+                "/\\ [AsyncNext]_AsyncAllVars "
+                "/\\ ServiceIoWorkerWork(server) "
+                "=> /\\ HistoricalLockedCertifiedRequestActive(node, qc)' "
+                "/\\ HistoricalLockedBodyResponseInFlight(node, qc)'",
+                (
+                    "HistoricalLockedBodyServeHeadOwned",
+                    "HistoricalLockedBodyResponseInFlight",
+                    "CertifiedResponseItem",
+                    "PublishEphemeralItems",
+                    "PacketsForItems",
+                ),
+            ),
+            "HistoricalLockedResponseIngressHandsOffToCertifiedFetch": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedPrepareSource(node, qc) "
+                "/\\ HistoricalLockedCertifiedRequestActive(node, qc) "
+                "/\\ HistoricalLockedCertifiedResponseSelected(node, qc) "
+                "/\\ [AsyncNext]_AsyncAllVars "
+                "/\\ IngressDrainStep(node) "
+                "=> \\/ HistoricalLockedBodySourceRetired(node, qc)' "
+                "\\/ HistoricalLockedBodyCertifiedFetchOwned(node, qc)' "
+                "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc)'",
+                (
+                    "HistoricalLockedCertifiedResponseSelected",
+                    "HistoricalLockedSemanticPrepareAuthority",
+                    "CertifiedResponseAuthorized",
+                    "MatchingCertifiedRequests",
+                    "CertifiedResponseCandidate",
+                ),
+            ),
+            "HistoricalLockedPrepareSourceRetiresOnlyLegitimately": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedPrepareSource(node, qc) "
+                "/\\ [AsyncNext]_AsyncAllVars "
+                "/\\ HistoricalLockedBodySourceRetired(node, qc)' "
+                "=> \\/ NodeHasDecision(node)' "
+                "\\/ lockRank[node]' > qc.view "
+                "\\/ lockSubject[node]' # qc.subject",
+                (
+                    "HistoricalLockedPrepareRecoveryProvenance",
+                    "InstalledTcSelectsPrepareFor",
+                    "ExactLockedCommitIntents",
+                    "NoDecisionForNode",
+                ),
+            ),
+            "HistoricalLockedPersistInstallEstablishesSemanticFetch": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs, "
+                "command \\in AsyncCandidateSet: "
+                "/\\ AsyncStrongTypeInvariant "
+                '/\\ command.kind = "PersistInstallTC" '
+                "/\\ command.node = node "
+                "/\\ HistoricalLockedBodyRuntimeExecutes(command) "
+                "/\\ HistoricalLockedPrepareSource(node, qc)' "
+                "=> \\/ HistoricalLockedBodyFetchOwned(node, qc)' "
+                "\\/ HistoricalLockedCommitRecoveryWitness(node, qc)' "
+                "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc)'",
+                (
+                    "InstallResultingLockedPrepareQCs",
+                    "InstallLockedFetchSuccessor",
+                    "InstallCommitSignSuccessors",
+                    "HistoricalLockedSemanticPrepareAuthority",
+                ),
+            ),
+            "HistoricalLockedPersistCommitEstablishesTerminalWitness": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs, "
+                "command \\in AsyncCandidateSet: "
+                "/\\ AsyncStrongTypeInvariant "
+                '/\\ command.kind = "PersistLockCommit" '
+                "/\\ command.node = node "
+                "/\\ command.view = qc.view "
+                "/\\ command.subject = qc.subject "
+                "/\\ HistoricalLockedBodyRuntimeExecutes(command) "
+                "/\\ HistoricalLockedPrepareSource(node, qc)' "
+                "=> HistoricalLockedCommitRecoveryWitness(node, qc)'",
+                (
+                    "PersistLockCommit",
+                    "ExactLockedCommitIntents",
+                    "HistoricalLockedCommitRecoveryWitness",
+                ),
+            ),
+            "HistoricalLockedBodyExistingSourceStepPreservation": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedPrepareSource(node, qc) "
+                "/\\ HistoricalLockedBodyRecoveryStage(node, qc) "
+                "/\\ [AsyncNext]_AsyncAllVars "
+                "=> \\/ HistoricalLockedBodySourceRetired(node, qc)' "
+                "\\/ HistoricalLockedBodyRecoveryStage(node, qc)'",
+                (
+                    "HistoricalLockedFetchExecutionHandsOff",
+                    "HistoricalLockedRequestExecutionHandsOff",
+                    "HistoricalLockedCertifiedFetchExecutionHandsOff",
+                    "HistoricalLockedStoreExecutionHandsOff",
+                    "HistoricalLockedValidateExecutionHandsOff",
+                    "HistoricalLockedRequestIngressHandsOffToRemoteServe",
+                    "HistoricalLockedServeExecutionPublishesResponse",
+                    "HistoricalLockedResponseIngressHandsOffToCertifiedFetch",
+                    "HistoricalLockRestartAuthorityRetirementRequiresExactFetch",
+                    "HistoricalLockRestartAuthoritySurvivesGenerationAndReplayReset",
+                ),
+            ),
+            "HistoricalLockedBodyNewSourceStepEstablishment": (
+                "\\A node \\in ValidatorIds, qc \\in prepareQCs: "
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ ~HistoricalLockedPrepareSource(node, qc) "
+                "/\\ [AsyncNext]_AsyncAllVars "
+                "/\\ HistoricalLockedPrepareSource(node, qc)' "
+                "=> HistoricalLockedBodyRecoveryStage(node, qc)'",
+                (
+                    "HistoricalLockedPersistInstallEstablishesSemanticFetch",
+                    "HistoricalLockedPersistCommitEstablishesTerminalWitness",
+                ),
+            ),
+            "AsyncInitEstablishesHistoricalLockedBodyRecoveryStage": (
+                "\\A initialContext: AsyncInitAt(initialContext) "
+                "=> HistoricalLockedBodyRecoveryStageInvariant",
+                (
+                    "AsyncInitAt",
+                    "HistoricalLockedBodyRecoveryStageInvariant",
+                    "HistoricalLockedPrepareRecoveryProvenance",
+                ),
+            ),
+            "AsyncBracketPreservesHistoricalLockedBodyRecoveryStage": (
+                "/\\ AsyncStrongTypeInvariant "
+                "/\\ HistoricalLockedBodyRecoveryStageInvariant "
+                "/\\ [AsyncNext]_AsyncAllVars "
+                "=> HistoricalLockedBodyRecoveryStageInvariant'",
+                (
+                    "HistoricalLockedBodyExistingSourceStepPreservation",
+                    "HistoricalLockedBodyNewSourceStepEstablishment",
+                    "HistoricalLockedBodySourceRetired",
+                ),
+            ),
+            "AsyncSpecAlwaysHistoricalLockedBodyRecoveryStage": (
+                "\\A initialContext: AsyncSpecAt(initialContext) "
+                "=> []HistoricalLockedBodyRecoveryStageInvariant",
+                (
+                    "AsyncInitEstablishesHistoricalLockedBodyRecoveryStage",
+                    "AsyncSpecAlwaysStrongTypeInvariant",
+                    "AsyncBracketPreservesHistoricalLockedBodyRecoveryStage",
+                    "PTL",
+                ),
+            ),
+        }
+        for symbol, (exact_statement, required_tokens) in (
+            historical_locked_body_theorem_contracts.items()
+        ):
+            theorem = _top_level_theorem_body(
+                async_source, symbol, preserve_string_contents=True
+            )
+            if theorem is None:
+                errors.append(
+                    f"{async_path}: missing historical locked-body proof {symbol}"
+                )
+                continue
+            body, line = theorem
+            parts = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )
+            statement = " ".join(parts[0].split())
+            proof = parts[1] if len(parts) == 2 else ""
+            missing = [token for token in required_tokens if token not in proof]
+            vacuous = re.search(
+                r"(?:\bASSUME\s+FALSE\b|\bPROVE\s+TRUE\b|\bBY\s+TRUE\b)",
+                proof,
+            )
+            if statement != exact_statement:
+                errors.append(
+                    f"{async_path}:{line}: {symbol} must state only the exact "
+                    "historical locked-body handoff/preservation contract "
+                    f"{exact_statement!r}; found {statement!r}"
+                )
+            if len(parts) != 2 or missing or vacuous is not None:
+                errors.append(
+                    f"{async_path}:{line}: {symbol} must retain the exact "
+                    "non-vacuous historical locked-body proof chain; "
+                    f"missing={missing}, vacuous={vacuous is not None}, "
+                    f"has_proof={len(parts) == 2}"
+                )
+
+        reducer_path = (
+            repo_root / "crates" / "iroha_core" / "src" / "sumeragi" /
+            "v2_core" / "reducer.rs"
+        )
+        if not reducer_path.is_file() or reducer_path.is_symlink():
+            errors.append(
+                f"{reducer_path}: historical-lock restart authority requires the "
+                "real production reducer source"
+            )
+        else:
+            reducer_source = reducer_path.read_text(encoding="utf-8")
+            reducer_items = {
+                name: _require_qualified_rust_item(
+                    reducer_path,
+                    reducer_source,
+                    "Reducer",
+                    name,
+                    errors,
+                    f"historical-lock restart {name} seam",
+                )
+                for name in (
+                    "recover",
+                    "from_durable",
+                    "on_resume_after_replay",
+                    "on_retransmit_elapsed",
+                    "ensure_body_fetch",
+                )
+            }
+            _require_rust_token_sequence(
+                reducer_path,
+                reducer_items["recover"],
+                "let durable = DurableState::replay(&context, local_validator, entries)?; "
+                "Self::from_durable(context, local_validator, generation, durable, false)",
+                "WAL recovery must pass the exact replayed durable state forward",
+                errors,
+            )
+            _require_rust_token_sequence(
+                reducer_path,
+                reducer_items["from_durable"],
+                "if let Some(certificate) = durable.locked() { "
+                "known_prepare.insert(certificate.reference(), certificate.clone()); }",
+                "recovery must retain the exact pre-existing durable locked QC",
+                errors,
+            )
+            _require_rust_token_sequence(
+                reducer_path,
+                reducer_items["on_retransmit_elapsed"],
+                "if let Some(locked) = self.durable.locked().cloned() "
+                "&& self.body_state(locked.round(), locked.subject()) "
+                "== BodyState::Missing { "
+                "effects.push(self.ensure_body_fetch(&locked)); "
+                "return StepOutcome::applied(effects); }",
+                "retransmit must derive FetchBody from the exact durable lock",
+                errors,
+            )
+            _require_rust_token_sequence(
+                reducer_path,
+                reducer_items["ensure_body_fetch"],
+                "Effect::FetchBody { tag: self.current_tag(), round, subject, "
+                "manifest: self.body_work.get(&(round, subject))"
+                ".and_then(|work| work.manifest), "
+                "certified_sources: certificate.signatures().iter()"
+                ".map(SignatureShare::signer).collect(), "
+                "certificate: Some(certificate.clone()), }",
+                "FetchBody must carry the exact current tag, round, subject, "
+                "certified sources, and locked certificate",
+                errors,
+            )
+            for forbidden in ("durable.locked()", "ensure_body_fetch"):
+                _require_rust_token_sequence(
+                    reducer_path,
+                    reducer_items["on_resume_after_replay"],
+                    forbidden,
+                    "ResumeAfterReplay must not invent a special crash-time "
+                    "historical-lock owner before the ordinary retransmit handoff",
+                    errors,
+                    count=0,
+                )
+
     hash_path = formal_dir / "SumeragiV2CertifiedRequestHashAuthorityProofs.tla"
     if not hash_path.is_file():
         errors.append(f"{hash_path}: missing certified-request hash-authority proof")
@@ -8850,6 +11460,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ ProductionDurableIntentTraceRefinesProgressWitness = TRUE "
             "/\\ ProductionDecisionTraceRefinesRecoveryWitness = TRUE "
             "/\\ ProductionSchedulerTraceRefinesProtectedOwnership = TRUE "
+            "/\\ ProductionTwoStageRelayRetryTraceRefinesSourceFairness = TRUE "
             "/\\ ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership = TRUE "
             "/\\ ProductionReliableFlushTraceRefinesOutboundOwnership = TRUE "
             "/\\ ProductionApplicationTraceRefinesDecisionCompletion = TRUE"
@@ -8913,10 +11524,13 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "=> [][PostDecisionTimeoutTrafficConsumeOnly]_AsyncAllVars "
             "/\\ specification => []PostDecisionTimeoutCausalSuccessorsExcluded"
         ),
-        "DecisionFetchBodyOwned": (
+        "DecisionPipelineKindOwned": (
             "\\E candidate \\in AsyncCandidateSet: "
-            '/\\ candidate.kind = "FetchBody" '
+            "/\\ candidate.kind = kind "
             "/\\ DecisionPipelineCandidate(node, qc, candidate)"
+        ),
+        "DecisionFetchBodyOwned": (
+            'DecisionPipelineKindOwned(node, qc, "FetchBody")'
         ),
         "DecisionSourceRetentionInvariant": (
             "\\A decision \\in decisions: "
@@ -8925,11 +11539,8 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "=> DecisionRecoveryStage(decision.node, decision.qc)"
         ),
         "DecisionRecoveryAuthority": (
-            "/\\ asyncRecoveryPhase \\in "
-            '{"RestartRequired", "ReplayRequired", "Replaying"} '
-            "/\\ asyncRecoveryNode = node "
-            "/\\ generation[node] = asyncRecoveryGeneration "
-            "/\\ [node |-> node, qc |-> qc] \\in RestartDecisions(node)"
+            "/\\ DurableDecisionRecoveryAuthority(node, qc) "
+            "/\\ DurableDecisionRecoveryExecutorCurrent(node)"
         ),
         "AsyncDecisionRecoveryStage": (
             "\\/ DecisionRecoveryStage(node, qc) "
@@ -9569,6 +12180,49 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "ordered durable-recovery proof chain"
             )
 
+    async_network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    if not async_network_path.is_file():
+        errors.append(
+            f"{async_network_path}: missing exact PersistDecision successor source"
+        )
+    else:
+        async_network_source = async_network_path.read_text(encoding="utf-8")
+        exact_persist_decision_operators = {
+            "PersistDecisionRequests": (
+                "{request \\in pendingDecision: "
+                "/\\ request.node = command.node "
+                "/\\ request.qc.context.height = command.height "
+                "/\\ request.qc.view = command.view "
+                "/\\ request.qc.subject = command.subject}"
+            ),
+            "PersistDecisionFetchSuccessor": (
+                "LET request == CHOOSE entry \\in PersistDecisionRequests(command): TRUE "
+                "qc == request.qc IN AsyncCandidateAtConsumer( "
+                '"Completion", "FetchBody", request.node, qc.context.height, '
+                "qc.view, qc.subject, NoAsyncItem, command.consumerView, "
+                "command.consumerGeneration, qc, qc.subject, qc.subject, qc.subject)"
+            ),
+        }
+        for symbol, exact_body in exact_persist_decision_operators.items():
+            extracted = _top_level_operator_body(
+                async_network_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{async_network_path}: missing exact PersistDecision operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{async_network_path}:{line}: {symbol} must equal only "
+                    f"the exact Decision request/successor projection {exact_body!r}; "
+                    f"found {normalized!r}"
+                )
+
     persist_decision_theorem = _top_level_theorem_body(
         async_source,
         "PersistDecisionRecoveryUsesCompletionFetchBody",
@@ -9576,21 +12230,26 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     )
     exact_persist_decision_statement = (
         "\\A command: "
-        'command.kind = "PersistDecision" '
-        "=> /\\ CommandSuccessors(command) = "
-        '<<CausalCandidate("Completion", "FetchBody", command)>> '
+        '/\\ command.kind = "PersistDecision" '
+        "/\\ PersistDecisionRequests(command) # {} "
+        "=> LET successor == PersistDecisionFetchSuccessor(command) IN "
+        "/\\ CommandSuccessors(command) = <<successor>> "
         "/\\ Len(CommandSuccessors(command)) = 1 "
         '/\\ CommandSuccessors(command)[1].kind = "FetchBody" '
         '/\\ CommandSuccessors(command)[1].class = "Completion" '
+        "/\\ CommandSuccessors(command)[1].item = NoAsyncItem "
+        "/\\ CommandSuccessors(command)[1].evidence = "
+        "(CHOOSE request \\in PersistDecisionRequests(command): TRUE).qc "
         "/\\ (CandidateConsumerCurrent(command) "
         "=> CandidateConsumerCurrent( CommandSuccessors(command)[1]))"
     )
     exact_persist_decision_proof_tokens = (
         "CommandSuccessors",
-        "CausalCandidate",
-        "AsyncCandidateFrom",
+        "PersistDecisionFetchSuccessor",
+        "AsyncCandidateAtConsumer",
         "AsyncCandidateWithIdentity",
         "CandidateConsumerCurrent",
+        "PersistDecisionRequests",
     )
     if persist_decision_theorem is None:
         errors.append(
@@ -9615,31 +12274,71 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             errors.append(
                 f"{async_path}:{line}: PersistDecision recovery theorem must "
                 "derive the singleton frontier and current-consumer identity "
-                "from the concrete CommandSuccessors/CausalCandidate chain"
+                "from the exact pending request and PersistDecision successor chain"
             )
 
+    progress_witness_contract = CROSS_TOOL_REFINEMENT_BY_ID[
+        "progress-witness-production-refinement"
+    ]
+    production_refinement_operator = _top_level_operator_body(
+        async_source,
+        progress_witness_contract.ledger_symbol,
+        preserve_string_contents=True,
+    )
     production_refinement_theorem = _top_level_theorem_body(
-        async_source, "ProgressWitnessProductionRefinementObligation"
+        async_source,
+        progress_witness_contract.ledger_symbol,
+        preserve_string_contents=True,
     )
-    exact_production_refinement_statement = (
-        "ProductionProgressWitnessTraceRefinement"
-    )
-    if production_refinement_theorem is None:
+    if production_refinement_operator is None or production_refinement_theorem is not None:
         errors.append(
-            f"{async_path}: missing production progress-witness refinement sentinel"
+            f"{async_path}: production progress-witness refinement sentinel "
+            f"{progress_witness_contract.ledger_symbol} must remain a top-level "
+            "operator and may not be substituted by a proofless theorem"
         )
     else:
-        body, line = production_refinement_theorem
-        statement = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
-        )[0]
-        normalized = " ".join(statement.split())
-        if normalized != exact_production_refinement_statement:
+        body, line = production_refinement_operator
+        observed = _tla_statement_without_proof(body)
+        expected = " ".join(
+            (progress_witness_contract.ledger_statement or "").split()
+        )
+        if observed != expected:
             errors.append(
-                f"{async_path}:{line}: production progress-witness refinement "
-                "must state only the exact external trace sentinel "
-                f"{exact_production_refinement_statement!r}; "
-                f"found {normalized!r}"
+                f"{async_path}:{line}: progress-witness ledger operator must "
+                f"state exactly {expected!r}; found {observed!r}"
+            )
+
+    progress_witness_bridge = _top_level_theorem_body(
+        async_source,
+        progress_witness_contract.tla_theorem,
+        preserve_string_contents=True,
+    )
+    if progress_witness_bridge is None:
+        errors.append(
+            f"{async_path}: missing progress-witness cross-tool theorem "
+            f"{progress_witness_contract.tla_theorem}"
+        )
+    else:
+        body, line = progress_witness_bridge
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        observed_statement = " ".join(parts[0].split())
+        expected_statement = progress_witness_contract.tla_statement
+        if observed_statement != expected_statement:
+            errors.append(
+                f"{async_path}:{line}: progress-witness cross-tool theorem must "
+                f"state exactly {expected_statement!r}; found "
+                f"{observed_statement!r}"
+            )
+        observed_proof = " ".join(parts[1].split()) if len(parts) == 2 else ""
+        expected_proof = " ".join(
+            (progress_witness_contract.tla_proof or "").split()
+        )
+        if observed_proof != expected_proof:
+            errors.append(
+                f"{async_path}:{line}: progress-witness cross-tool theorem must "
+                "retain its exact model-obligation bridge proof"
             )
 
     effective_lock_contract = CROSS_TOOL_REFINEMENT_BY_ID[
@@ -9803,7 +12502,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     )
     exact_progress_obligation = (
         "\\A initialContext: "
-        "AsyncProgressWitnessAndHistoricalRecoveryProperty( "
+        "AsyncProgressWitnessAndHistoricalRecoveryProperty("
         "AsyncSpecAt(initialContext))"
     )
     if progress_obligation is None:
@@ -10437,6 +13136,118 @@ def _causal_fifo_rank_mutation_source_fidelity_errors(
     return errors
 
 
+def _deferred_handoff_mutation_source_fidelity_errors(
+    formal_dir: Path,
+    repo_root: Path,
+) -> list[str]:
+    """Pin the exact red/green witness for deferred handoff ownership."""
+
+    module_path = formal_dir / "SumeragiV2DeferredHandoffMutation.tla"
+    errors: list[str] = []
+    if not module_path.is_file():
+        errors.append(f"{module_path}: missing deferred-handoff mutation model")
+    else:
+        source = module_path.read_text(encoding="utf-8")
+        expected_operators = {
+            "OldDrain": (
+                'LET selected == SelectedClass IN /\\ IF selected = "Completion" '
+                "THEN /\\ busy' = FALSE /\\ UNCHANGED targetPending ELSE IF "
+                'selected = "Progress" THEN /\\ busy\' = TRUE /\\ UNCHANGED '
+                "targetPending ELSE IF busy THEN UNCHANGED <<targetPending, busy>> "
+                "ELSE /\\ targetPending' = FALSE /\\ busy' = FALSE "
+                "/\\ nextClass' = NextClass(selected) /\\ handoff' = FALSE"
+            ),
+            "HandoffDrain": (
+                'LET selected == SelectedClass IN /\\ IF selected = "Completion" '
+                "THEN /\\ busy' = FALSE /\\ UNCHANGED <<targetPending, handoff>> "
+                'ELSE IF selected = "Progress" THEN /\\ IF handoff /\\ ~busy '
+                "THEN busy' = FALSE ELSE busy' = TRUE /\\ UNCHANGED "
+                "<<targetPending, handoff>> ELSE IF busy THEN /\\ UNCHANGED "
+                "<<targetPending, busy>> /\\ handoff' = TRUE ELSE "
+                "/\\ targetPending' = FALSE /\\ busy' = FALSE "
+                "/\\ handoff' = FALSE /\\ nextClass' = NextClass(selected)"
+            ),
+            "OldSpec": "/\\ Init /\\ [][OldDrain]_vars /\\ WF_vars(OldDrain)",
+            "HandoffSpec": (
+                "/\\ Init /\\ [][HandoffDrain]_vars /\\ WF_vars(HandoffDrain)"
+            ),
+            "HeldTargetEventuallyServed": "targetPending ~> ~targetPending",
+        }
+        for symbol, expected in expected_operators.items():
+            extracted = _top_level_operator_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{module_path}: missing deferred-handoff operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != expected:
+                errors.append(
+                    f"{module_path}:{line}: {symbol} must equal the exact "
+                    "reviewed deferred-handoff mutation"
+                )
+
+    config_contracts = {
+        "deferred_handoff_rebusy_bug.cfg": (
+            "SPECIFICATION OldSpec\n"
+            "CHECK_DEADLOCK FALSE\n\n"
+            "PROPERTY HeldTargetEventuallyServed\n"
+        ),
+        "deferred_handoff_exact.cfg": (
+            "SPECIFICATION HandoffSpec\n"
+            "CHECK_DEADLOCK FALSE\n\n"
+            "PROPERTY HeldTargetEventuallyServed\n"
+        ),
+    }
+    for name, expected in config_contracts.items():
+        path = formal_dir / name
+        if not path.is_file():
+            errors.append(f"{path}: missing deferred-handoff mutation config")
+            continue
+        if path.read_text(encoding="utf-8") != expected:
+            errors.append(
+                f"{path}: deferred-handoff mutation config must equal the exact "
+                "reviewed TLC contract"
+            )
+
+    runner_path = (
+        repo_root / "scripts" / "formal" / "run_sumeragi_v2_service_rank_mutation.sh"
+    )
+    if not runner_path.is_file():
+        errors.append(f"{runner_path}: missing service-rank mutation runner")
+        return errors
+    runner = runner_path.read_text(encoding="utf-8")
+    runner_contracts = (
+        "-config deferred_handoff_rebusy_bug.cfg",
+        "-config deferred_handoff_exact.cfg",
+        "SumeragiV2DeferredHandoffMutation.tla",
+        "deferred_handoff_rebusy_status=$?",
+        "[[ $deferred_handoff_rebusy_status -eq 13 ]]",
+        "handoff-free deferred retry did not fail with TLC status 13",
+        "Temporal properties were violated.",
+        "3 distinct states",
+        "Back to state 1",
+        "Model checking completed. No error has been found.",
+    )
+    for token in runner_contracts:
+        if token not in runner:
+            errors.append(
+                f"{runner_path}: deferred-handoff mutation runner omits {token!r}"
+            )
+    if runner.count("-config deferred_handoff_rebusy_bug.cfg") != 1:
+        errors.append(
+            f"{runner_path}: deferred-handoff red config must execute exactly once"
+        )
+    if runner.count("-config deferred_handoff_exact.cfg") != 1:
+        errors.append(
+            f"{runner_path}: deferred-handoff green config must execute exactly once"
+        )
+    return errors
+
+
 def _causal_fifo_rank_mutation_runner_errors(repo_root: Path) -> list[str]:
     """Pin the exact red/green TLC outcomes for the Stage-6 rank slice."""
 
@@ -10507,7 +13318,7 @@ def _causal_fifo_rank_mutation_runner_errors(repo_root: Path) -> list[str]:
 def _reply_route_ownership_source_fidelity_errors(
     formal_dir: Path, repo_root: Path = ROOT_DIR
 ) -> list[str]:
-    """Pin tenure-aware per-source reply cursors and their red/green TLC slice."""
+    """Pin reply ownership/pipeline proofs and their complete TLC matrix."""
 
     errors: list[str] = []
     sources: dict[str, str] = {}
@@ -10563,6 +13374,30 @@ def _reply_route_ownership_source_fidelity_errors(
                 errors.append(
                     f"{path}:{line}: {symbol} may not contain cursor-reset or "
                     f"vacuous-progress fragment {fragment!r}"
+                )
+
+    def require_theorem_fragments(
+        source_name: str,
+        symbol: str,
+        required: tuple[str, ...],
+    ) -> None:
+        source = sources.get(source_name)
+        if source is None:
+            return
+        extracted = _top_level_theorem_body(
+            source, symbol, preserve_string_contents=True
+        )
+        path = formal_dir / source_name
+        if extracted is None:
+            errors.append(f"{path}: missing reviewed reply-route theorem {symbol}")
+            return
+        body, line = extracted
+        normalized = " ".join(body.split())
+        for fragment in required:
+            if " ".join(fragment.split()) not in normalized:
+                errors.append(
+                    f"{path}:{line}: {symbol} must retain deductive connection "
+                    f"fragment {fragment!r}"
                 )
 
     ownership = "SumeragiV2ReplyRouteOwnership.tla"
@@ -10677,6 +13512,40 @@ def _reply_route_ownership_source_fidelity_errors(
         ),
         forbidden=("~ReplySourceAtCursor", "~ReplyAttemptOwned"),
     )
+    require_theorem_fragments(
+        "SumeragiV2ReplyRouteOwnershipProofs.tla",
+        "ReplyRouteOwnershipModelObligation",
+        (
+            "ReplyRouteSpec =>",
+            "[]ReplyRouteSafetyInvariant",
+            "ReplyTenureAwareReplay",
+            "ReplySourceIsolation",
+            "ReplySourceEventuallyProgresses(owner, semantic, source)",
+            "BY ReplyRouteSpecAlwaysSafetyInvariant, ReplyRouteSpecAlwaysReplayAndIsolation, ReplyRouteSpecProvidesSourceProgress",
+        ),
+    )
+
+    require_theorem_fragments(
+        "SumeragiV2ReplyRoutePipelineProofs.tla",
+        "ReplyResponsivePipelineItemLeadsToAdvance",
+        (
+            "ReplyPipelineSpec",
+            "ReplyPipelineResponsiveSource(owner, source)",
+            "[]ReplySourceRouteStable(owner, semantic, source)",
+            "[]~ReplyReconnectPendingForSource(owner, source)",
+            "ReplyPipelineItemEventuallyAdvances( owner, semantic, source)",
+        ),
+    )
+    require_theorem_fragments(
+        "SumeragiV2ReplyRoutePipelineProofs.tla",
+        "ReplyRoutePipelineModelObligation",
+        (
+            "ReplyPipelineSpec =>",
+            "[]ReplyPipelineSafetyInvariant",
+            "ReplyPendingAttachmentEventuallyConsumed( owner, semantic, source)",
+            "BY ReplyPipelineSpecAlwaysSafe, ReplyPendingAttachmentLeadsToConsumption",
+        ),
+    )
 
     async_routes = "SumeragiV2AsyncNetworkReplyRoutes.tla"
     require_operator_fragments(
@@ -10720,6 +13589,20 @@ def _reply_route_ownership_source_fidelity_errors(
         async_routes,
         "AsyncReplySourceEventuallyProgresses",
         ("AsyncReplyRoute!ReplySourceEventuallyProgresses",),
+    )
+    require_theorem_fragments(
+        "SumeragiV2AsyncNetworkReplyRouteProofs.tla",
+        "AsyncNetworkReplyRouteModelObligation",
+        (
+            "AsyncProductionSpecAt(initialContext) =>",
+            "AsyncSpecAt(initialContext)",
+            "AsyncReplyRoute!ReplyRouteSpec",
+            "[]AsyncReplyRouteSafetyInvariant",
+            "AsyncReplyTenureAwareReplay",
+            "AsyncReplySourceIsolation",
+            "AsyncReplySourceEventuallyProgresses( owner, semantic, source)",
+            "BY AsyncProductionSpecAtProjectsAsyncSpecAt, AsyncProductionSpecAtProjectsReplyRouteSpec, AsyncProductionSpecAtProvidesReplyRouteProgress",
+        ),
     )
 
     mutation = "SumeragiV2ReplyRouteOwnershipMutation.tla"
@@ -10806,6 +13689,18 @@ def _reply_route_ownership_source_fidelity_errors(
         ("reply_route_fixed.cfg", "Fixed"),
         ("reply_route_cursor_reset_bug.cfg", "CursorReset"),
         ("reply_route_source_replacement_bug.cfg", "SourceReplacement"),
+        ("reply_route_target_substitution_bug.cfg", "TargetSubstitution"),
+        ("reply_route_ticket_payload_reuse_bug.cfg", "TicketPayloadReuse"),
+        ("reply_route_reconnect_sibling_ticket_bug.cfg", "ReconnectSiblingTicket"),
+        ("reply_route_retired_ordinal_collision_bug.cfg", "RetiredOrdinalCollision"),
+        (
+            "reply_route_intrinsic_tenure_substitution_bug.cfg",
+            "IntrinsicTenureSubstitution",
+        ),
+        (
+            "reply_route_source_capacity_substitution_bug.cfg",
+            "SourceCapacitySubstitution",
+        ),
     ):
         config_path = formal_dir / config_name
         if not config_path.is_file() or config_path.is_symlink():
@@ -10827,6 +13722,102 @@ def _reply_route_ownership_source_fidelity_errors(
                     f"reviewed fragment {fragment!r}"
                 )
 
+    pipeline_configs = (
+        (
+            "reply_route_pipeline_fixed.cfg",
+            "Fixed",
+            (
+                "INIT PipelineMutationInit",
+                "NEXT PipelineMutationNext",
+                "INVARIANT PipelineMutationSafety",
+            ),
+        ),
+        (
+            "reply_route_pipeline_unfair_attach_bug.cfg",
+            "UnfairAttach",
+            (
+                "SPECIFICATION UnfairPendingAttachSpec",
+                "PROPERTY PendingAttachmentEventuallyConsumed",
+            ),
+        ),
+        (
+            "reply_route_pipeline_fifo_bypass_bug.cfg",
+            "FifoBypass",
+            (
+                "INIT PipelineMutationInit",
+                "NEXT PipelineMutationNext",
+                "INVARIANT PipelineMutationSafety",
+            ),
+        ),
+        (
+            "reply_route_pipeline_cursor_regression_bug.cfg",
+            "CursorRegression",
+            (
+                "INIT PipelineMutationInit",
+                "NEXT PipelineMutationNext",
+                "INVARIANT PipelineMutationSafety",
+            ),
+        ),
+        (
+            "reply_route_pipeline_ticket_reuse_bug.cfg",
+            "WrongTicketReuse",
+            (
+                "INIT PipelineMutationInit",
+                "NEXT PipelineMutationNext",
+                "INVARIANT PipelineMutationSafety",
+            ),
+        ),
+        (
+            "reply_route_pipeline_premature_reconnect_bug.cfg",
+            "PrematureRetire",
+            (
+                "INIT PipelineMutationInit",
+                "NEXT PipelineMutationNext",
+                "INVARIANT PipelineMutationSafety",
+            ),
+        ),
+        (
+            "reply_route_pipeline_old_flush_double_apply_bug.cfg",
+            "OldFlushDoubleApply",
+            (
+                "INIT PipelineMutationInit",
+                "NEXT PipelineMutationNext",
+                "INVARIANT PipelineMutationSafety",
+            ),
+        ),
+        (
+            "reply_route_pipeline_source_class_writer_fixed.cfg",
+            "ClassWriterFixed",
+            (
+                "SPECIFICATION ClassWriterResponsiveSpec",
+                "INVARIANT PipelineMutationSafety",
+                "PROPERTY ClassWriterSiblingEventuallyAdvances",
+            ),
+        ),
+        (
+            "reply_route_pipeline_cross_semantic_close_cycle_bug.cfg",
+            "ClassWriterCloseCycle",
+            (
+                "SPECIFICATION ClassWriterWeakSpec",
+                "INVARIANT PipelineMutationSafety",
+                "PROPERTY ClassWriterSiblingEventuallyAdvances",
+            ),
+        ),
+    )
+    for config_name, mode, required_config in pipeline_configs:
+        config_path = formal_dir / config_name
+        if not config_path.is_file() or config_path.is_symlink():
+            continue
+        normalized_config = " ".join(
+            config_path.read_text(encoding="utf-8").split()
+        )
+        for fragment in (*required_config, f'CONSTANT PipelineMutationMode = "{mode}"'):
+            if " ".join(fragment.split()) not in normalized_config:
+                errors.append(
+                    f"{config_path}: reply-route pipeline configuration must "
+                    f"retain reviewed fragment {fragment!r}"
+                )
+
     runner = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
     if not runner.is_file() or runner.is_symlink():
         errors.append(f"{runner}: missing reply-route mutation runner")
@@ -10842,28 +13833,199 @@ def _reply_route_ownership_source_fidelity_errors(
     cases = (
         (
             "reply-route-fixed",
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
             "reply_route_fixed.cfg",
             "0",
-            "Model checking completed. No error has been found.",
+            (
+                "Model checking completed. No error has been found.",
+                "16 states generated, 16 distinct states found",
+            ),
         ),
         (
             "reply-route-cursor-reset-bug",
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
             "reply_route_cursor_reset_bug.cfg",
             "12",
-            "messageCursor |-> 0",
+            (
+                "Invariant RouteMutationSafety is violated.",
+                "messageCursor |-> 0",
+            ),
         ),
         (
             "reply-route-source-replacement-bug",
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
             "reply_route_source_replacement_bug.cfg",
             "12",
-            "attempts = { [ connectionTenure |-> 1",
+            (
+                "Invariant RouteMutationSafety is violated.",
+                "attempts = { [ connectionTenure |-> 1",
+            ),
+        ),
+        (
+            "reply-route-target-substitution-bug",
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
+            "reply_route_target_substitution_bug.cfg",
+            "12",
+            (
+                "Invariant RouteMutationSafety is violated.",
+                "acceptedInvalidCapability = TRUE",
+                "phase = 16",
+            ),
+        ),
+        (
+            "reply-route-ticket-payload-reuse-bug",
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
+            "reply_route_ticket_payload_reuse_bug.cfg",
+            "12",
+            (
+                "Invariant RouteMutationSafety is violated.",
+                "ticketTenure |-> 1",
+                "phase = 3",
+            ),
+        ),
+        (
+            "reply-route-reconnect-sibling-ticket-bug",
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
+            "reply_route_reconnect_sibling_ticket_bug.cfg",
+            "12",
+            (
+                "Invariant RouteMutationSafety is violated.",
+                "ticketTenure |-> 1",
+            ),
+        ),
+        (
+            "reply-route-retired-ordinal-collision-bug",
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
+            "reply_route_retired_ordinal_collision_bug.cfg",
+            "12",
+            (
+                "Invariant RouteMutationSafety is violated.",
+                "acceptedInvalidCapability = TRUE",
+            ),
+        ),
+        (
+            "reply-route-intrinsic-tenure-substitution-bug",
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
+            "reply_route_intrinsic_tenure_substitution_bug.cfg",
+            "12",
+            (
+                "Invariant RouteMutationSafety is violated.",
+                "acceptedInvalidCapability = TRUE",
+            ),
+        ),
+        (
+            "reply-route-source-capacity-substitution-bug",
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
+            "reply_route_source_capacity_substitution_bug.cfg",
+            "12",
+            (
+                "Invariant RouteMutationSafety is violated.",
+                "acceptedInvalidCapability = TRUE",
+            ),
+        ),
+        (
+            "reply-route-pipeline-fixed",
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "reply_route_pipeline_fixed.cfg",
+            "0",
+            (
+                "Model checking completed. No error has been found.",
+                "20 states generated, 18 distinct states found",
+                "depth of the complete state graph search is 18",
+            ),
+        ),
+        (
+            "reply-route-pipeline-unfair-attach-bug",
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "reply_route_pipeline_unfair_attach_bug.cfg",
+            "13",
+            (
+                "Temporal properties were violated.",
+                "2 states generated, 2 distinct states found",
+                "State 3: Stuttering",
+            ),
+        ),
+        (
+            "reply-route-pipeline-fifo-bypass-bug",
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "reply_route_pipeline_fifo_bypass_bug.cfg",
+            "12",
+            (
+                "Invariant PipelineMutationSafety is violated.",
+                "phase = 30",
+            ),
+        ),
+        (
+            "reply-route-pipeline-cursor-regression-bug",
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "reply_route_pipeline_cursor_regression_bug.cfg",
+            "12",
+            (
+                "Invariant PipelineMutationSafety is violated.",
+                "phase = 34",
+            ),
+        ),
+        (
+            "reply-route-pipeline-ticket-reuse-bug",
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "reply_route_pipeline_ticket_reuse_bug.cfg",
+            "12",
+            (
+                "Invariant PipelineMutationSafety is violated.",
+                "ticketTenure |-> 2",
+                "phase = 31",
+            ),
+        ),
+        (
+            "reply-route-pipeline-premature-reconnect-bug",
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "reply_route_pipeline_premature_reconnect_bug.cfg",
+            "12",
+            (
+                "Invariant PipelineMutationSafety is violated.",
+                "sourceActive = (0 :> (0 :> FALSE",
+                "phase = 32",
+            ),
+        ),
+        (
+            "reply-route-pipeline-old-flush-double-apply-bug",
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "reply_route_pipeline_old_flush_double_apply_bug.cfg",
+            "12",
+            (
+                "Invariant PipelineMutationSafety is violated.",
+                "oldFlushAppliedTwice = TRUE",
+                "messageCursor |-> 2",
+            ),
+        ),
+        (
+            "reply-route-pipeline-source-class-writer-fixed",
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "reply_route_pipeline_source_class_writer_fixed.cfg",
+            "0",
+            (
+                "Model checking completed. No error has been found.",
+                "14 states generated, 13 distinct states found",
+                "depth of the complete state graph search is 13",
+            ),
+        ),
+        (
+            "reply-route-pipeline-cross-semantic-close-cycle-bug",
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "reply_route_pipeline_cross_semantic_close_cycle_bug.cfg",
+            "13",
+            (
+                "Temporal properties were violated.",
+                "14 states generated, 13 distinct states found",
+                "Back to state 7",
+            ),
         ),
     )
     offsets: list[int] = []
-    for label, config, status, marker in cases:
+    for label, model, config, status, expected_markers in cases:
         pattern = re.compile(
             rf"run_case\s+{re.escape(label)}\s+"
-            rf"SumeragiV2ReplyRouteOwnershipMutation\.tla\s+"
+            rf"{re.escape(model)}\s+"
             rf"{re.escape(config)}\s+{status}\s+"
             + r'(?P<markers>(?:"[^"\n]*"\s*)+)'
         )
@@ -10876,16 +14038,18 @@ def _reply_route_ownership_source_fidelity_errors(
             continue
         match = matches[0]
         offsets.append(match.start())
-        markers = tuple(re.findall(r'"([^"\n]*)"', match.group("markers")))
-        if marker not in markers:
+        observed_markers = tuple(
+            re.findall(r'"([^"\n]*)"', match.group("markers"))
+        )
+        if observed_markers != expected_markers:
             errors.append(
-                f"{runner}: {label} must require exact counterexample marker "
-                f"{marker!r}; found {markers!r}"
+                f"{runner}: {label} must require exact markers "
+                f"{expected_markers!r}; found {observed_markers!r}"
             )
     if len(offsets) == len(cases) and offsets != sorted(offsets):
         errors.append(
-            f"{runner}: fixed, cursor-reset, and source-replacement reply-route "
-            "cases must retain reviewed order"
+            f"{runner}: reply-route ownership and pipeline mutation cases must "
+            "retain reviewed order"
         )
     return errors
 
@@ -11673,36 +14837,31 @@ fn retained_dispatch_allows_network_ingress(
         errors,
     )
 
-    public_admission = _require_rust_item(
-        effects_path,
-        source,
-        "can_admit_network_message",
-        errors,
-    )
-    _require_rust_item_context(
-        effects_path,
-        public_admission,
-        production_executor_context,
-        "public retained-debt network admission method",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        effects_path,
-        public_admission,
-        """
-pub(crate) fn can_admit_network_message(
-    &self,
-    message: &wire::ConsensusMessageV2
-) -> bool {
-    self.fatal_reason.is_none()
-        && !self.output_guard.restart_required()
-        && self.retained_dispatch_allows_network_ingress(&message.payload)
-        && self.runtime.can_admit_network_message(message)
-}
-""",
-        "public retained-debt network admission path",
-        errors,
-    )
+    for item_name, description in (
+        (
+            "enqueue_network_with_ingress_ownership",
+            "public ownership-aware network admission and fail-stop latch",
+        ),
+        (
+            "can_admit_network_message_with_ingress_ownership",
+            "public ownership-aware retained-debt capacity preflight",
+        ),
+    ):
+        item = _require_rust_item(effects_path, source, item_name, errors)
+        _require_rust_item_context(
+            effects_path,
+            item,
+            production_executor_context,
+            description,
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            effects_path,
+            item,
+            _EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256[item_name],
+            description,
+            errors,
+        )
     return errors
 
 
@@ -11777,14 +14936,27 @@ def _transport_geometry_production_source_fidelity_errors(
         ),
     ):
         for item_name, expected_sha256 in digest_inventory.items():
-            item = _require_rust_item(core_path, core_source, item_name, errors)
-            _require_rust_item_context(
-                core_path,
-                item,
-                expected_context,
-                f"authoritative fair-v2 ingress geometry {item_name}",
-                errors,
-            )
+            description = f"authoritative fair-v2 ingress geometry {item_name}"
+            if expected_context == (("impl", "FairV2IngressClass"),):
+                item = _require_qualified_rust_item(
+                    core_path,
+                    core_source,
+                    "FairV2IngressClass",
+                    item_name,
+                    errors,
+                    description,
+                )
+            else:
+                item = _require_rust_item(
+                    core_path, core_source, item_name, errors
+                )
+                _require_rust_item_context(
+                    core_path,
+                    item,
+                    expected_context,
+                    description,
+                    errors,
+                )
             if item is None:
                 continue
             observed_sha256 = _rust_item_token_sha256(item)
@@ -11856,6 +15028,24 @@ let reply_routes = NetworkReplyRoutes::try_from_route(reply_route)?;
         "authoritative transport reply-route regression",
         errors,
     )
+    _require_rust_token_sequence(
+        core_path,
+        reply_route_regression,
+        """
+let mismatched_delivery = routes.mint_via(semantic_origin.clone(), wrong_via);
+assert!(matches!(
+    InboundBlockMessage::try_from_transport_with_reply_route(
+        message.clone(),
+        semantic_origin.clone(),
+        authenticated_via.clone(),
+        mismatched_delivery,
+    ),
+    Err(NetworkReplyRouteError::DifferentSource)
+));
+""",
+        "authoritative transport reply-route regression must match exact reviewed token digest",
+        errors,
+    )
 
     _require_rust_source_token_sequence(
         core_path,
@@ -11904,12 +15094,13 @@ if is_transport_completion && !is_validator_origin {
         core_path,
         push,
         """
-let wire_key = wire_hash.map(|hash| FairV2IngressWireKey {
+let wire_hash = CryptoHash::new(encoded.as_ref());
+let wire_key = Some(FairV2IngressWireKey {
     origin: inbound.sender.clone(),
-    hash,
+    hash: wire_hash,
 });
 """,
-        "semantic-origin delivery deduplication",
+        "canonical semantic wire key binds origin and exact encoded payload",
         errors,
     )
     _require_rust_token_sequence(
@@ -11939,27 +15130,35 @@ if let Some((key, owner_source)) = wire_key.as_ref().and_then(|key| {
         .cloned()
         .map(|owner| (key, owner))
 }) {
+    let resource = self.ownership_resource_snapshot(&state, &source);
     let lane = state
         .lanes
-        .get_mut(&owner_source)
+        .get(&owner_source)
         .expect("globally indexed fair-ingress owner lane remains present");
     let queued = lane
         .entries
-        .iter_mut()
+        .iter()
         .find(|entry| entry.wire_key.as_ref() == Some(key))
         .expect("global pending wire key has one queued owner");
 """,
-        "semantic request identity locates one retained occurrence independently of delivery source",
+        "semantic request identity locates one immutable retained occurrence before shadow validation",
         errors,
     )
     _require_rust_token_sequence(
         core_path,
         push,
         """
-match (
-    &mut queued.inbound.reply_routes,
-    &inbound.reply_routes
+let routes_before = queued.inbound.reply_routes.clone();
+let routes_candidate = inbound.reply_routes.clone();
+let action = match fair_v2_ingress_route_action(
+    routes_before.as_ref(),
+    routes_candidate.as_ref(),
 ) {
+    Ok(action) => action,
+    Err(_) => return Err(FairV2IngressPushError::Rejected(inbound)),
+};
+let mut routes_after = routes_before.clone();
+match (&mut routes_after, &routes_candidate) {
     (Some(retained), Some(candidate)) => {
         if retained.merge(candidate).is_err() {
             return Err(FairV2IngressPushError::Rejected(inbound));
@@ -11968,9 +15167,31 @@ match (
     (slot @ None, Some(candidate)) => *slot = Some(candidate.clone()),
     (Some(_), None) | (None, None) => {}
 }
+""",
+        "coalesced ingress shadow-merges one source route without mutating the retained owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+let Some(evidence) = prior_evidence.merged(occurrence) else {
+    return Err(FairV2IngressPushError::Rejected(inbound));
+};
+let lane = state
+    .lanes
+    .get_mut(&owner_source)
+    .expect("globally indexed fair-ingress owner lane remains present");
+let queued = lane
+    .entries
+    .iter_mut()
+    .find(|entry| entry.wire_key.as_ref() == Some(key))
+    .expect("global pending wire key has one queued owner");
+queued.inbound.reply_routes = routes_after;
+queued.inbound.ingress_ownership = Some(evidence);
 return Ok(FairV2IngressPushDisposition::Coalesced);
 """,
-        "coalesced ingress attaches independent source routes atomically without changing semantic ownership",
+        "validated ingress route shadow commits atomically beside its exact ownership evidence",
         errors,
     )
     _require_rust_token_sequence(
@@ -13561,14 +16782,17 @@ stream_io = next_peer_stream_io(
         p2p_peer_path,
         peer_reliable_items.get("reattach_reply_route"),
         """
-if route.semantic_target() != self.peer.id() || !route.is_active() {
+if self.reply_route.is_some()
+    || route.semantic_target() != self.peer.id()
+    || !route.is_active()
+{
     return Err(route);
 }
 self.authenticated_via = route.authenticated_via().clone();
 self.reply_route = Some(route);
 Ok(())
 """,
-        "peer-message reply-route reattachment rejects retargeted or retired authority",
+        "peer-message reply-route reattachment rejects capability overwrite, retargeted authority, or retired authority",
         errors,
     )
     peer_tokens = rust_code_tokens(p2p_peer_source)
@@ -13627,6 +16851,8 @@ Ok(())
         ),
     )
     network_reliable_contexts = {
+        "new": (("impl", "NetworkReplyRoute"),),
+        "validate_delivery_binding": (("impl", "NetworkReplyRoute"),),
         "reliable_progress_class": (),
         "is_reliable_progress_route": (),
         "for_route": (("impl", "ActorProgressClass"),),
@@ -13693,7 +16919,7 @@ Ok(())
         "into_dispatch_parts": (
             ("impl", "<", "T", ">", "AdmittedNetworkMessage", "<", "T", ">"),
         ),
-        "from_dispatch_parts": (
+        "retain_after_dispatch_attempt": (
             ("impl", "<", "T", ">", "AdmittedNetworkMessage", "<", "T", ">"),
         ),
         "release_cancelled_targets": (
@@ -13702,6 +16928,21 @@ Ok(())
                 ">", "ReliableActorPending", "<", "T", ">",
             ),
         ),
+        "cancel_all_reply_route_tenures": (
+            (
+                "impl", "<", "T", ":", "Pload", ",", "K", ":", "Kex",
+                ",", "E", ":", "Enc", ">", "NetworkBase", "<", "T", ",",
+                "K", ",", "E", ">",
+            ),
+        ),
+        "drop": (
+            (
+                "impl", "<", "T", ":", "Pload", ",", "K", ":", "Kex",
+                ",", "E", ":", "Enc", ">", "Drop", "for", "NetworkBase",
+                "<", "T", ",", "K", ",", "E", ">",
+            ),
+        ),
+        "run": network_actor_context,
     }
     network_reliable_attributes = {
         "reliable_progress_class": ("#[must_use]",),
@@ -13725,6 +16966,10 @@ Ok(())
             "#[allow(clippy::needless_pass_by_value)]",
         ),
         "broadcast_recoverable": ("#[allow(clippy::needless_pass_by_value)]",),
+        "run": (
+            "#[allow(clippy::too_many_lines)]",
+            "#[log(skip(self, shutdown_signal), fields(listen_addr=%self.listen_addr, public_key=%self.key_pair.public_key()))]",
+        ),
     }
     network_reliable_items: dict[str, RustItem | None] = {}
     for item_name, expected_sha256 in (
@@ -13770,6 +17015,14 @@ Ok(())
         p2p_network_source,
         "clear_generation",
         "the retired connection-generation-era clear_generation API must remain absent",
+        errors,
+        count=0,
+    )
+    _require_rust_source_token_sequence(
+        p2p_network_path,
+        p2p_network_source,
+        "from_dispatch_parts",
+        "the retired reconstruction-era from_dispatch_parts API must remain absent",
         errors,
         count=0,
     )
@@ -13931,6 +17184,34 @@ Ok(())
         p2p_network_path,
         p2p_network_source,
         """
+struct ReliableReplyDeliveryBinding {
+    owner: Arc<()>,
+    minting_tenure: Weak<ReliableReplyRouteTenure>,
+    semantic_target: PeerId,
+    delivery_ordinal: u128,
+}
+""",
+        "reply delivery occurrences retain an immutable actor, minting-tenure, semantic-target, and actor-global ordinal binding",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        p2p_network_path,
+        p2p_network_source,
+        """
+pub struct NetworkReplyRoute {
+    semantic_target: PeerId,
+    tenure: Arc<ReliableReplyRouteTenure>,
+    delivery_ordinal: u128,
+    delivery_binding: Arc<ReliableReplyDeliveryBinding>,
+}
+""",
+        "opaque reply routes carry their immutable actor-minted delivery binding beside the selected tenure",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        p2p_network_path,
+        p2p_network_source,
+        """
 pub struct NetworkReplyRoutes {
     semantic_target: PeerId,
     owner: Arc<()>,
@@ -13982,11 +17263,12 @@ pub enum NetworkReplyFlushAckStatus {
         p2p_network_source,
         """
 pub struct NetworkReplyFlushAck {
+    identity: NetworkReplyFlushIdentity,
     receiver: Option<tokio::sync::oneshot::Receiver<()>>,
     terminal: Option<NetworkReplyFlushAckStatus>,
 }
 """,
-        "reply completion owns one process-local writer-flush receiver and terminal state",
+        "reply completion owns immutable route-ticket identity, one writer-flush receiver, and terminal state",
         errors,
     )
     _require_rust_token_sequence(
@@ -13994,11 +17276,12 @@ pub struct NetworkReplyFlushAck {
         reply_flush_ack_items.get("new"),
         """
 Self {
+    identity,
     receiver: Some(receiver),
     terminal: None,
 }
 """,
-        "new reply completion starts pending with the exact actor-owned receiver",
+        "new reply completion starts pending with the exact admitted identity and actor-owned receiver",
         errors,
     )
     _require_rust_token_sequence(
@@ -14052,6 +17335,52 @@ match subscriber_progress_class(topic, route)? {
     )
     _require_rust_token_sequence(
         p2p_network_path,
+        network_reliable_items.get("new"),
+        """
+let delivery_binding = Arc::new(ReliableReplyDeliveryBinding {
+    owner: Arc::clone(&tenure.owner),
+    minting_tenure: Arc::downgrade(&tenure),
+    semantic_target: semantic_target.clone(),
+    delivery_ordinal,
+});
+Self {
+    semantic_target,
+    tenure,
+    delivery_ordinal,
+    delivery_binding,
+}
+""",
+        "reply-route construction mints one immutable binding from the exact actor owner, tenure, target, and delivery ordinal",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("validate_delivery_binding"),
+        """
+let valid = Arc::ptr_eq(&self.delivery_binding.owner, &self.tenure.owner)
+    && self.delivery_binding.delivery_ordinal == self.delivery_ordinal
+    && self.delivery_binding.semantic_target == self.semantic_target
+    && self
+        .delivery_binding
+        .minting_tenure
+        .upgrade()
+        .is_some_and(|minting_tenure| Arc::ptr_eq(&minting_tenure, &self.tenure));
+valid
+    .then_some(())
+    .ok_or(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
+""",
+        "reply-route validation rejects any substituted owner, ordinal, target, or minting tenure",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        reply_route_is_active,
+        "self.validate_delivery_binding().is_ok() && self.tenure.is_active()",
+        "public route liveness requires both the immutable actor-minted binding and its exact live tenure",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
         network_reliable_items.get("is_reliable_progress_route"),
         "reliable_progress_class(topic, route).is_some()",
         "reliable-route admission delegates to the shared progress classification",
@@ -14070,13 +17399,15 @@ match reliable_progress_class(topic, route)? {
         "actor reservations delegate to the shared progress classification",
         errors,
     )
-    _require_rust_token_sequence(
+    _require_exact_rust_tokens(
         p2p_network_path,
         network_reliable_items.get("source_key"),
         """
+pub fn source_key(&self) -> NetworkReplySourceKey {
 NetworkReplySourceKey {
     owner: Arc::clone(&self.tenure.owner),
     authenticated_via: self.tenure.delivery_peer.clone(),
+}
 }
 """,
         "reply fairness keys bind actor identity and authenticated delivery peer",
@@ -14112,6 +17443,16 @@ Arc::ptr_eq(&self.tenure.owner, &other.tenure.owner)
     && self.tenure.delivery_peer == other.tenure.delivery_peer
 """,
         "authenticated source identity survives reconnect without aliasing another hub",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("source_update_from"),
+        """
+self.validate_delivery_binding()?;
+prior.validate_delivery_binding()?;
+""",
+        "per-source updates validate both actor-minted delivery bindings before classifying rank",
         errors,
     )
     _require_rust_token_sequence(
@@ -14170,6 +17511,7 @@ Arc::ptr_eq(&self.tenure.owner, &other.tenure.owner)
         p2p_network_path,
         network_reliable_items.get("try_from_route"),
         """
+route.validate_delivery_binding()?;
 if !route.is_active() {
     return Err(NetworkReplyRouteError::Inactive);
 }
@@ -14178,7 +17520,24 @@ if source_capacity == 0 {
     return Err(NetworkReplyRouteError::Capacity);
 }
 """,
-        "route-set construction imports a live capability's configured authenticated-source bound",
+        "route-set construction validates the actor-minted binding before importing a live capability's configured authenticated-source bound",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("preflight_merge"),
+        """
+for route in self
+    .attempts
+    .values()
+    .chain(self.retired_attempts.values())
+    .chain(candidate.attempts.values())
+    .chain(candidate.retired_attempts.values())
+{
+    route.validate_delivery_binding()?;
+}
+""",
+        "strict route-set preflight validates every retained and candidate delivery binding before authority or history comparisons",
         errors,
     )
     _require_rust_token_sequence(
@@ -14291,6 +17650,18 @@ Ok(())
         p2p_network_path,
         network_reliable_items.get("attach"),
         """
+route.validate_delivery_binding()?;
+if !route.is_active() {
+    return Err(NetworkReplyRouteError::Inactive);
+}
+""",
+        "single-route attachment validates the actor-minted binding before live-route admission",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("attach"),
+        """
 if self
     .attempts
     .values()
@@ -14357,6 +17728,7 @@ if let Some(retired) = self.retired_attempts.get(&route.source_key()) {
         p2p_network_path,
         network_reliable_items.get("merge_retired_delivery"),
         """
+retired.validate_delivery_binding()?;
 if !Arc::ptr_eq(&self.owner, &retired.tenure.owner) {
     return Err(NetworkReplyRouteError::ForeignOwner);
 }
@@ -14385,7 +17757,7 @@ if self
 }
 self.record_retired_delivery(retired);
 """,
-        "candidate tombstones validate authority and can release only a same-source live attempt at an equal or later ordinal",
+        "candidate tombstones validate their immutable binding and authority and can release only a same-source live attempt at an equal or later ordinal",
         errors,
     )
     _require_rust_token_sequence(
@@ -14452,6 +17824,26 @@ Arc::new(ReliableReplyRouteTenure {
     )
     _require_rust_token_sequence(
         p2p_network_path,
+        network_reliable_items.get("peer_message"),
+        """
+let reply_tenure = msg
+    .connection_id()
+    .and_then(|connection_id| self.reply_route_tenures.get(&connection_id))
+    .filter(|tenure| tenure.is_active() && tenure.delivery_peer == *incoming_peer.id())
+    .cloned();
+let reply_route = reply_tenure.map(|tenure| {
+    let delivery_ordinal = self.next_reply_delivery_ordinal;
+    self.next_reply_delivery_ordinal = delivery_ordinal
+        .checked_add(1)
+        .expect("reply-route delivery ordinal cannot wrap while the actor is live");
+    NetworkReplyRoute::new(origin.clone(), tenure, delivery_ordinal)
+});
+""",
+        "authenticated local delivery mints the immutable binding through the reviewed constructor with one checked actor-global ordinal",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
         network_reliable_items.get("try_reserve_for_source"),
         """
 shape.broadcast
@@ -14514,8 +17906,8 @@ if source_retained.is_some_and(|retained| retained.items >= 1) {
         p2p_network_path,
         network_reliable_items.get("submit_progress_message_to_source"),
         """
-ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(false),
-ProgressLeaseAttempt::CancelledMembership => return Ok(false),
+ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(None),
+ProgressLeaseAttempt::CancelledMembership => return Ok(None),
 ProgressLeaseAttempt::InvalidTicket => {
     return Err(NetworkActorAdmissionError::Rejected {
         message,
@@ -14524,8 +17916,8 @@ ProgressLeaseAttempt::InvalidTicket => {
 }
 """,
         (
-            "same-digest target retries coalesce, cancelled tenures retire, and "
-            "invalid or distinct ownership cannot substitute for the original request"
+            "same-request and cancelled admission return no new ticket identity, while "
+            "invalid ownership cannot substitute for the original request"
         ),
         errors,
     )
@@ -14615,6 +18007,7 @@ let (reply_flush_sender, reply_flush_receiver) = tokio::sync::oneshot::channel()
         """
 if msg.peer_id != *reply_route.semantic_target()
     || !Arc::ptr_eq(&reply_route.tenure.owner, &self.reply_route_owner)
+    || reply_route.validate_delivery_binding().is_err()
 {
     return Err(NetworkActorAdmissionError::Rejected {
         message: msg,
@@ -14622,7 +18015,7 @@ if msg.peer_id != *reply_route.semantic_target()
     });
 }
 """,
-        "reply admission rejects retargeted or foreign actor capabilities",
+        "reply admission rejects retargeted, foreign-actor, or substituted delivery capabilities",
         errors,
     )
     _require_rust_token_sequence(
@@ -14677,11 +18070,15 @@ self.submit_progress_message_to_source(
         p2p_network_path,
         network_reliable_items.get("post_reply_recoverable_with_flush_ack_inner"),
         """
-.map(|newly_admitted| {
-    newly_admitted.then(|| NetworkReplyFlushAck::new(reply_flush_receiver))
+.map(|admitted_ticket| {
+    admitted_ticket.map(|ticket| {
+        let identity = NetworkReplyFlushIdentity::from_admitted_ticket(ticket)
+            .expect("reply admission must retain exact reply authority");
+        NetworkReplyFlushAck::new(identity, reply_flush_receiver)
+    })
 })
 """,
-        "only a newly actor-admitted reply returns a live writer-flush completion",
+        "only a newly admitted exact ticket yields its immutable reply identity and live flush completion",
         errors,
     )
     _require_rust_token_sequence(
@@ -14917,7 +18314,7 @@ reply_flush_ack,
     )
     _require_rust_token_sequence(
         p2p_network_path,
-        network_reliable_items.get("from_dispatch_parts"),
+        network_reliable_items.get("retain_after_dispatch_attempt"),
         """
 Self {
     message: Some(message),
@@ -14928,7 +18325,7 @@ Self {
     reply_flush_ack,
 }
 """,
-        "dispatch retry reconstruction restores the exact reply completion sender",
+        "incomplete dispatch retains the exact reply completion sender without reconstructing authority",
         errors,
     )
     _require_rust_token_sequence(
@@ -14955,6 +18352,37 @@ self.ready_members
     )
     _require_rust_token_sequence(
         p2p_network_path,
+        network_reliable_items.get("cancel_reply_route"),
+        """
+self.cancel_authority_waiters(
+    &tenure.delivery_peer,
+    ProgressAuthorityIdentity::Reply(tenure.connection_ordinal),
+    false,
+)
+""",
+        "reply-tenure cancellation selects only the authenticated source, exact connection authority, and direct-post waiters",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("cancel_authority_waiters"),
+        """
+let source = ActorProgressSource {
+    target: Some(source_peer.clone()),
+    class,
+};
+let removed = state.waiters.get_mut(&source).map_or(0, |waiters| {
+    let before = waiters.len();
+    waiters.retain(|waiter| {
+        !(waiter.shape.broadcast == broadcast
+            && waiter.shape.authority == Some(authority))
+    });
+""",
+        "waiter cancellation is isolated to one authenticated source, progress class, delivery kind, and exact authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
         network_reliable_items.get("cancel_reply_route_tenure"),
         """
 let Some(tenure) = self.reply_route_tenures.remove(&conn_id) else {
@@ -14965,6 +18393,47 @@ self.network_actor_progress_budget
     .cancel_reply_route(&tenure)
 """,
         "connection retirement cancels the exact route and every bound waiter",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("cancel_all_reply_route_tenures"),
+        """
+let tenures = core::mem::take(&mut self.reply_route_tenures);
+tenures.into_values().fold(0usize, |cancelled, tenure| {
+    tenure.cancel();
+    cancelled.saturating_add(
+        self.network_actor_progress_budget
+            .cancel_reply_route(&tenure),
+    )
+})
+""",
+        "actor teardown atomically takes only its own tenure map, retires each exact tenure, and cancels only matching waiters in its own budget",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("drop"),
+        "let _ = self.cancel_all_reply_route_tenures();",
+        "network actor Drop reuses the centralized idempotent reply-tenure teardown",
+        errors,
+    )
+    _require_rust_token_sequence(
+        p2p_network_path,
+        network_reliable_items.get("run"),
+        """
+let _ = self.cancel_all_reply_route_tenures();
+for ref_peer in self.peers.values() {
+    ref_peer.handle.request_termination();
+}
+for task in &self.listener_tasks {
+    task.abort();
+}
+for task in &self.peer_tasks {
+    task.abort();
+}
+""",
+        "normal actor exit publishes exact route and waiter cancellation before terminating or aborting peer writers",
         errors,
     )
     _require_rust_token_sequence(
@@ -15048,7 +18517,7 @@ if transferred {
     drop(actor_lease);
     Ok(())
 } else {
-    Err(AdmittedNetworkMessage::from_dispatch_parts(
+    Err(AdmittedNetworkMessage::retain_after_dispatch_attempt(
         message,
         actor_lease,
         remaining_broadcast_targets,
@@ -15796,13 +19265,12 @@ def _certified_response_registration_production_source_fidelity_errors(
         "CertifiedResponseAuthorized": (
             '/\\ item.kind = "CertifiedResponse" '
             "/\\ MatchingCertifiedRequests(item) # {} "
-            "/\\ \\E decision \\in decisions: "
-            "/\\ decision.node = item.envelope.recipient "
-            "/\\ decision.qc.context = context "
-            "/\\ decision.qc.view = item.envelope.view "
-            "/\\ decision.qc.subject = item.envelope.subject "
-            '/\\ decision.qc.phase = "Commit" '
-            "/\\ item.source \\in decision.qc.signers"
+            "/\\ \\E qc \\in DecisionQcValues \\cup prepareQCs: "
+            "/\\ CertifiedBodyRecoveryAuthority(item.envelope.recipient, qc) "
+            "/\\ item.envelope.height = qc.context.height "
+            "/\\ item.envelope.view = qc.view "
+            "/\\ item.envelope.subject = qc.subject "
+            "/\\ item.source \\in qc.signers"
         ),
     }
     for symbol, expected in expected_bodies.items():
@@ -15819,7 +19287,7 @@ def _certified_response_registration_production_source_fidelity_errors(
         if normalized != expected:
             description = (
                 "must require one exact live matching certified request before "
-                "Decision/signer authorization"
+                "certificate-backed recovery/signer authorization"
                 if symbol == "CertifiedResponseAuthorized"
                 else "must retain exact outstanding-request identity"
             )
@@ -16036,9 +19504,9 @@ def _production_causal_fifo_source_fidelity_errors(
                 "terminal adapter deferred-debt readiness fence",
             ),
             (
-                "drain_deferred",
+                "drain_deferred_with_evidence",
                 (("impl", "SumeragiV2Adapter"),),
-                "single-transition adapter deferred dispatcher",
+                "single-transition adapter deferred ownership dispatcher",
             ),
             (
                 "fail_deferred_service_contract",
@@ -16069,19 +19537,29 @@ def _production_causal_fifo_source_fidelity_errors(
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
-        deferred_qc_adapter_items = (
+        authenticated_deferred_adapter_items = (
             (
-                "reducer_qc_matches_wire",
-                (("impl", "WireRegistry"),),
-                "exact deferred-QC wire identity comparator",
+                "matches_authenticated_runtime_bytes",
+                (("impl", "DeferredServiceEvidence"),),
+                "exact deferred canonical-envelope comparator",
             ),
             (
-                "deferred_quorum_certificate_owner_tag",
+                "deferred_authenticated_message_owner",
                 (("impl", "SumeragiV2Adapter"),),
-                "exact Busy-deferred QC owner lookup",
+                "exact Busy-deferred authenticated-envelope owner lookup",
+            ),
+            (
+                "authenticated_deferred_admission_ordinals",
+                (("impl", "SumeragiV2Adapter"),),
+                "complete authenticated Busy-deferred ordinal snapshot",
+            ),
+            (
+                "deferred_authenticated_event_matches_wire",
+                (("impl", "SumeragiV2Adapter"),),
+                "typed deferred event to canonical-envelope comparator",
             ),
         )
-        for item_name, context, description in deferred_qc_adapter_items:
+        for item_name, context, description in authenticated_deferred_adapter_items:
             item = _require_rust_item(
                 adapter_path, adapter_source, item_name, errors
             )
@@ -16093,7 +19571,7 @@ def _production_causal_fifo_source_fidelity_errors(
                 errors,
             )
             if item is not None:
-                expected_sha256 = _DEFERRED_QC_OWNERSHIP_RUST_ITEM_SHA256[
+                expected_sha256 = _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
                     item_name
                 ]
                 observed_sha256 = _rust_item_token_sha256(item)
@@ -16371,130 +19849,182 @@ assert!(status.liveness.outbound_intents.iter().any(|intent| {
     else:
         runtime_source = runtime_path.read_text(encoding="utf-8")
         runtime_tokens = rust_code_tokens(runtime_source)
-        production_progress_trait_contract = rust_code_tokens(
+        production_deferred_trait_contract = rust_code_tokens(
             """
+fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource;
+fn authenticated_deferred_admission_ordinals(&self) -> BTreeSet<u128>;
+fn dispatch_deferred(
+    &mut self,
+) -> Result<Option<(Vec<Self::Effect>, DeferredServiceEvidence)>, Self::Error>;
 fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
-fn wire_ingress_may_use_progress(
-    &self,
-    payload: &wire::ConsensusMessageV2Payload
-) -> bool;
 """
         )
-        progress_trait_contract_count = _token_sequence_count(
-            runtime_tokens, production_progress_trait_contract
+        deferred_trait_contract_count = _token_sequence_count(
+            runtime_tokens, production_deferred_trait_contract
         )
-        if progress_trait_contract_count != 1:
+        if deferred_trait_contract_count != 1:
             errors.append(
-                f"{runtime_path}: RuntimeDriver progress-capacity method must be "
-                "part of the production trait surface immediately after the "
-                "timer-effect classifier; found "
-                f"{progress_trait_contract_count} reviewed contracts"
+                f"{runtime_path}: RuntimeDriver authenticated deferred-owner "
+                "source, snapshot, and exact dispatch methods must be adjacent "
+                "on the production trait surface; found "
+                f"{deferred_trait_contract_count} reviewed contracts"
             )
 
-        progress_bridge_context = (
+        production_driver_context = (
             ("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),
         )
-        progress_bridges = tuple(
-            item
-            for item in rust_items(runtime_source, "wire_ingress_may_use_progress")
-            if item.brace_context == progress_bridge_context
-        )
-        if len(progress_bridges) != 1:
-            errors.append(
-                f"{runtime_path}: require exactly one production "
-                "RuntimeDriver progress-capacity adapter bridge; found "
-                f"{len(progress_bridges)}"
-            )
-        else:
-            progress_bridge = progress_bridges[0]
-            _require_rust_item_context(
-                runtime_path,
-                progress_bridge,
-                progress_bridge_context,
-                "production progress-capacity adapter bridge",
-                errors,
-            )
-            _require_exact_rust_tokens(
-                runtime_path,
-                progress_bridge,
-                """
-fn wire_ingress_may_use_progress(
-    &self,
-    payload: &wire::ConsensusMessageV2Payload
-) -> bool {
-    SumeragiV2Adapter::wire_ingress_may_use_progress(self, payload)
-}
-""",
-                "production progress-capacity adapter bridge",
-                errors,
-            )
-
-        deferred_qc_runtime_items = (
+        for item_name, digest_name, description in (
             (
-                "check_embedded_quorum_certificate_capacity",
-                (("impl", "BoundedIngress", "<", "AdapterCommand", ">"),),
-                "outer response runtime/deferred QC capacity union",
-                (),
+                "dispatch",
+                "runtime_driver_dispatch",
+                "production authenticated runtime dispatch bridge",
             ),
             (
-                "enqueue_network",
-                (
-                    (
-                        "impl",
-                        "SerializedV2Runtime",
-                        "<",
-                        "SumeragiV2Adapter",
-                        ">",
-                    ),
-                ),
-                "post-authenticated deferred-QC enqueue coalescing",
-                (),
+                "dispatch_deferred",
+                "runtime_driver_dispatch_deferred",
+                "production exact deferred ownership dispatch bridge",
             ),
-            (
-                "can_admit_network_message",
-                (
-                    (
-                        "impl",
-                        "SerializedV2Runtime",
-                        "<",
-                        "SumeragiV2Adapter",
-                        ">",
-                    ),
-                ),
-                "CommitCertificateResponse deferred-owner capacity preflight",
-                (),
-            ),
-            (
-                "commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
-                (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
-                "Busy-deferred CommitQC response coalescing regression",
-                ("#[test]",),
-            ),
-        )
-        for item_name, context, description, attributes in deferred_qc_runtime_items:
-            item = _require_rust_item(
-                runtime_path, runtime_source, item_name, errors
+        ):
+            matching = tuple(
+                item
+                for item in rust_items(runtime_source, item_name)
+                if item.brace_context == production_driver_context
             )
+            if len(matching) != 1:
+                errors.append(
+                    f"{runtime_path}: require exactly one {description}; found "
+                    f"{len(matching)}"
+                )
+                continue
+            item = matching[0]
             _require_rust_item_context(
                 runtime_path,
                 item,
-                context,
+                production_driver_context,
                 description,
                 errors,
-                expected_attributes=attributes,
             )
-            if item is not None:
-                expected_sha256 = _DEFERRED_QC_OWNERSHIP_RUST_ITEM_SHA256[
-                    item_name
-                ]
-                observed_sha256 = _rust_item_token_sha256(item)
-                if observed_sha256 != expected_sha256:
-                    errors.append(
-                        f"{runtime_path}:{item.line}: {description} declaration, "
-                        "contract, and complete control flow must match the exact "
-                        f"reviewed token digest {expected_sha256}; found "
-                        f"{observed_sha256}"
-                    )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[digest_name],
+                description,
+                errors,
+            )
+
+        runtime_ingress_context = (("impl", "RuntimeIngressOwnershipEvidence"),)
+        for item_name, digest_name, description in (
+            (
+                "from_fair_ingress",
+                "runtime_ingress_from_fair_ingress",
+                "canonical fair-ingress ownership constructor",
+            ),
+            (
+                "validate_exact",
+                "runtime_ingress_validate_exact",
+                "canonical payload and route projection validator",
+            ),
+            (
+                "matches_authenticated",
+                "runtime_ingress_matches_authenticated",
+                "post-authentication canonical payload comparator",
+            ),
+            (
+                "can_merge_downstream",
+                "runtime_ingress_can_merge_downstream",
+                "non-mutating per-source ownership merge preflight",
+            ),
+            (
+                "merge_downstream",
+                "runtime_ingress_merge_downstream",
+                "per-source ownership merge transition",
+            ),
+        ):
+            matching = tuple(
+                item
+                for item in rust_items(runtime_source, item_name)
+                if item.brace_context == runtime_ingress_context
+            )
+            if len(matching) != 1:
+                errors.append(
+                    f"{runtime_path}: require exactly one {description}; found "
+                    f"{len(matching)}"
+                )
+                continue
+            item = matching[0]
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                runtime_ingress_context,
+                description,
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[digest_name],
+                description,
+                errors,
+            )
+
+        concrete_runtime_context = (
+            (
+                "impl",
+                "SerializedV2Runtime",
+                "<",
+                "SumeragiV2Adapter",
+                ">",
+            ),
+        )
+        for item_name, description in (
+            (
+                "enqueue_network_with_ingress_ownership",
+                "authenticated ingress ownership admission and deferred merge",
+            ),
+            (
+                "can_admit_network_message_with_ingress_ownership",
+                "authenticated ingress ownership capacity preflight",
+            ),
+        ):
+            item = _require_rust_item(runtime_path, runtime_source, item_name, errors)
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                concrete_runtime_context,
+                description,
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[item_name],
+                description,
+                errors,
+            )
+
+        busy_regression_name = (
+            "commit_certificate_response_coalesces_with_exact_busy_deferred_qc"
+        )
+        busy_regression = _require_rust_item(
+            runtime_path, runtime_source, busy_regression_name, errors
+        )
+        _require_rust_item_context(
+            runtime_path,
+            busy_regression,
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "Busy-deferred authenticated response coalescing regression",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            busy_regression,
+            _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
+                busy_regression_name
+            ],
+            "Busy-deferred authenticated response coalescing regression",
+            errors,
+        )
 
         runtime_context = (
             (
@@ -16548,11 +20078,40 @@ fn wire_ingress_may_use_progress(
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
+        for item_name, description in (
+            (
+                "reconcile_deferred_ingress_ownership",
+                "authenticated deferred carrier reconciliation",
+            ),
+            (
+                "accept_driver_dispatch",
+                "driver dispatch ownership acceptance",
+            ),
+            (
+                "take_last_scheduler_ownership",
+                "runner scheduler ownership handoff",
+            ),
+        ):
+            item = _require_rust_item(runtime_path, runtime_source, item_name, errors)
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                runtime_context,
+                description,
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[item_name],
+                description,
+                errors,
+            )
         for item_name, later_contract in (
-            ("step", "let round_timeout = round_timeout_for_view"),
+            ("step", "let selected_round_tag = self.round_tag"),
             (
                 "step_recovery",
-                "let Some(command) = self.ingress.pop_next() else",
+                "let round_tag = self.round_tag",
             ),
         ):
             item = observed_runtime_items.get(item_name)
@@ -16869,6 +20428,489 @@ pub open spec fn production_async_causal_fifo_after_batch(
     return errors
 
 
+_LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
+    "wal_apply": "ace7adf6ef605c6a1e37fb087522cc91e8bb66b55b62f45a22a44b101571c3f8",
+    "wal_apply_in_place": (
+        "47016b446c08f218362ccd72db20e5563dfbeb61712f54459534ea1bd43a0e2a"
+    ),
+    "local_proposal_directive": (
+        "ae8489fea82bd72963f4343745cd838bdc30be67e8f95e0a5e4c1b76a003796e"
+    ),
+    "schedule_local_proposal": (
+        "7783d67679ba05bc311a2120985b0fb834032947f085fa072b7ef70d3ddc1f13"
+    ),
+    "submit_exact_body": (
+        "3e97acd3970c7456e524897c86b0b91f0f7902bd038b1f03220587e9c4a12bd2"
+    ),
+    "submit_encoded_body": (
+        "78a7d2e2d5cb1e67cfa502ee54e6d5051b1ed0e7b21b24a451742a88e820a39b"
+    ),
+    "validate_request": (
+        "b341fab7be9687fd5db733999adab1a4c78cb7cdddda66e9b6bf9ca6424e6ce3"
+    ),
+}
+
+
+def _locked_body_reproposal_source_fidelity_errors(
+    formal_dir: Path, repo_root: Path = ROOT_DIR
+) -> list[str]:
+    """Bind the justified-high model guard to the exact production body path."""
+
+    errors: list[str] = []
+
+    def read_regular(path: Path, description: str) -> str | None:
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"{path}: {description} must be a regular source file")
+            return None
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(f"{path}: cannot read {description}: {error}")
+            return None
+
+    core_path = formal_dir / "SumeragiV2Core.tla"
+    inductive_path = formal_dir / "SumeragiV2InductiveProofs.tla"
+    core_source = read_regular(core_path, "locked-body core model")
+    inductive_source = read_regular(
+        inductive_path, "locked-body inductive proof"
+    )
+    if core_source is not None:
+        stripped_core = strip_tla_comments(
+            core_source, preserve_string_contents=True
+        )
+        exact_operators = {
+            "LocalProposalJustification": (
+                "LET roundView == nodeView[node] "
+                "IN IF roundView = 0 "
+                "THEN [rank |-> NoRank, subject |-> context.parent] "
+                "ELSE LET tc == CHOOSE installed \\in installedTCs: "
+                "/\\ installed.node = node "
+                "/\\ installed.tc.context = context "
+                "/\\ installed.tc.view + 1 = roundView "
+                "IN [rank |-> TcHighRank(tc.tc), "
+                "subject |-> TcHighSubject(tc.tc)]"
+            ),
+            "LocalProposalFor": (
+                "LET justification == LocalProposalJustification(node) "
+                "IN Proposal(context, nodeView[node], subject, node, "
+                "justification.rank, justification.subject)"
+            ),
+            "LocalProposalReproposesJustifiedHigh": (
+                "\\/ proposal.justifyRank = NoRank "
+                "\\/ proposal.subject = proposal.justifySubject"
+            ),
+        }
+        for symbol, expected in exact_operators.items():
+            declarations = re.findall(
+                rf"(?m)^{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==",
+                stripped_core,
+            )
+            if len(declarations) != 1:
+                errors.append(
+                    f"{core_path}: require exactly one top-level {symbol} "
+                    f"operator; found {len(declarations)}"
+                )
+                continue
+            extracted = _top_level_operator_body(
+                core_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(f"{core_path}: cannot extract {symbol}")
+                continue
+            body, line = extracted
+            observed = " ".join(body.split())
+            if observed != expected:
+                errors.append(
+                    f"{core_path}:{line}: {symbol} must retain the exact "
+                    f"justified-high subject contract {expected!r}; found "
+                    f"{observed!r}"
+                )
+
+        begin_declarations = re.findall(
+            r"(?m)^BeginLocalProposal\s*\([^)=]*\)\s*==", stripped_core
+        )
+        if len(begin_declarations) != 1:
+            errors.append(
+                f"{core_path}: require exactly one top-level BeginLocalProposal "
+                f"action; found {len(begin_declarations)}"
+            )
+        else:
+            extracted = _top_level_operator_body(
+                core_source,
+                "BeginLocalProposal",
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(f"{core_path}: cannot extract BeginLocalProposal")
+            else:
+                body, line = extracted
+                body_tokens = " ".join(body.split())
+                exact_guard = (
+                    "/\\ ProposalWireValidFor(node, proposal) "
+                    "/\\ LocalProposalReproposesJustifiedHigh(proposal)"
+                )
+                observed_count = body_tokens.count(exact_guard)
+                if observed_count != 1:
+                    errors.append(
+                        f"{core_path}:{line}: BeginLocalProposal must enforce "
+                        "the exact justified-high subject guard immediately after "
+                        "wire validation exactly once; found "
+                        f"{observed_count} guarded paths"
+                    )
+
+    if inductive_source is not None:
+        stripped_inductive = strip_tla_comments(
+            inductive_source, preserve_string_contents=True
+        )
+        theorem_symbol = "BeginLocalProposalReproposesExactJustifiedHigh"
+        declarations = re.findall(
+            rf"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
+            rf"{theorem_symbol}\s*(?:\([^)=]*\))?\s*==",
+            stripped_inductive,
+        )
+        theorem = _top_level_theorem_body(
+            inductive_source,
+            theorem_symbol,
+            preserve_string_contents=True,
+        )
+        if len(declarations) != 1 or theorem is None:
+            errors.append(
+                f"{inductive_path}: require exactly one top-level "
+                f"{theorem_symbol} theorem; found {len(declarations)}"
+            )
+        else:
+            body, line = theorem
+            parts = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )
+            expected_statement = (
+                "\\A node, subject: BeginLocalProposal(node, subject) "
+                "=> LET justification == LocalProposalJustification(node) "
+                "IN \\/ justification.rank = NoRank "
+                "\\/ subject = justification.subject"
+            )
+            observed_statement = " ".join(parts[0].split())
+            if observed_statement != expected_statement:
+                errors.append(
+                    f"{inductive_path}:{line}: {theorem_symbol} must state the "
+                    "exact nontrivial justified-high subject postcondition; "
+                    f"found {observed_statement!r}"
+                )
+            expected_proof = (
+                "SMT DEF BeginLocalProposal, "
+                "LocalProposalReproposesJustifiedHigh, LocalProposalFor, "
+                "LocalProposalJustification, Proposal"
+            )
+            observed_proof = " ".join(parts[1].split()) if len(parts) == 2 else ""
+            if observed_proof != expected_proof:
+                errors.append(
+                    f"{inductive_path}:{line}: {theorem_symbol} must retain its "
+                    "exact action-to-justification proof dependency"
+                )
+
+    production_specs = (
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
+            (
+                (
+                    "apply",
+                    (("impl", "DurableState"),),
+                    ("#[allow(clippy::too_many_lines)]",),
+                    "wal_apply",
+                    "atomic durable WAL application wrapper",
+                ),
+                (
+                    "apply_in_place",
+                    (("impl", "DurableState"),),
+                    ("#[allow(clippy::too_many_lines)]",),
+                    "wal_apply_in_place",
+                    "durable proposal/timeout replay kernel",
+                ),
+            ),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            (
+                (
+                    "local_proposal_directive",
+                    (("impl", "SumeragiV2Adapter"),),
+                    (),
+                    "local_proposal_directive",
+                    "durable lock-to-runner directive projection",
+                ),
+            ),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            (
+                (
+                    "schedule_local_proposal",
+                    (),
+                    ("#[allow(clippy::too_many_arguments)]",),
+                    "schedule_local_proposal",
+                    "exact locked-body proposal scheduler",
+                ),
+                (
+                    "submit_exact_body",
+                    (),
+                    (),
+                    "submit_exact_body",
+                    "locked-body subject admission boundary",
+                ),
+                (
+                    "submit_encoded_body",
+                    (),
+                    (),
+                    "submit_encoded_body",
+                    "encoded-body executor admission bridge",
+                ),
+            ),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+            (
+                (
+                    "validate_request",
+                    (),
+                    (),
+                    "validate_request",
+                    "fresh-candidate locked-body rejection",
+                ),
+            ),
+        ),
+    )
+    production_items: dict[str, tuple[Path, RustItem | None]] = {}
+    for relative, specs in production_specs:
+        path = repo_root / relative
+        source = read_regular(path, "locked-body production refinement source")
+        if source is None:
+            continue
+        for item_name, context, attributes, digest_key, description in specs:
+            item = _require_rust_item(path, source, item_name, errors)
+            _require_rust_item_context(
+                path,
+                item,
+                context,
+                description,
+                errors,
+                expected_attributes=attributes,
+            )
+            _require_rust_item_token_sha256(
+                path,
+                item,
+                _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[digest_key],
+                description,
+                errors,
+            )
+            production_items[digest_key] = (path, item)
+
+    def require_sequence(
+        digest_key: str, source: str, description: str, *, count: int = 1
+    ) -> None:
+        path_item = production_items.get(digest_key)
+        if path_item is None:
+            return
+        path, item = path_item
+        _require_rust_token_sequence(
+            path, item, source, description, errors, count=count
+        )
+
+    require_sequence(
+        "wal_apply",
+        """
+let mut next = self.clone();
+next.apply_in_place(context, local_validator, entry)?;
+*self = next;
+Ok(())
+""",
+        "WAL application must atomically commit the reviewed in-place transition",
+    )
+    require_sequence(
+        "wal_apply_in_place",
+        """
+ProposalJustification::Timeout(certificate)
+    if proposal.round().view() > 0
+        && certificate.validate(context).is_ok()
+        && certificate.round().view().checked_add(1)
+            == Some(proposal.round().view())
+        && certificate.highest_prepare().is_none_or(|highest| {
+            highest.subject() == proposal.manifest().subject()
+        }) =>
+{
+    certificate.highest_prepare()
+}
+""",
+        "WAL replay must bind a Timeout justification high certificate to the proposal subject",
+    )
+    require_sequence(
+        "wal_apply_in_place",
+        """
+if let Some(locked) = &self.locked
+    && locked.subject() != proposal.manifest().subject()
+    && proposal_high.is_none_or(|highest| {
+        highest.phase() != Phase::Prepare
+            || highest.subject() != proposal.manifest().subject()
+            || highest.round().view() <= locked.round().view()
+    })
+{
+    return Err(ReplayError::InvalidProposalIntent);
+}
+""",
+        "WAL replay must reject an unrelated proposal unless a strictly higher matching PrepareQC supersedes the lock",
+    )
+    require_sequence(
+        "wal_apply_in_place",
+        """
+let selected = certificate.highest_prepare().cloned();
+if let Some(highest) = &selected {
+    match &self.highest_prepare {
+        None => self.highest_prepare = Some(highest.clone()),
+        Some(existing) if highest.round().view() > existing.round().view() => {
+            self.highest_prepare = Some(highest.clone());
+        }
+        Some(existing)
+            if highest.round().view() == existing.round().view()
+                && highest.subject() != existing.subject() =>
+        {
+            return Err(ReplayError::ConflictingHighestPrepare);
+        }
+        Some(_) => {}
+    }
+
+    match &self.locked {
+        None => self.locked = Some(highest.clone()),
+        Some(locked) if highest.round().view() > locked.round().view() => {
+            self.locked = Some(highest.clone());
+        }
+        Some(locked)
+            if highest.round().view() == locked.round().view()
+                && highest.subject() != locked.subject() =>
+        {
+            return Err(ReplayError::LockRegression);
+        }
+        Some(_) => {}
+    }
+}
+""",
+        "InstallTimeout must promote its selected high PrepareQC into the non-regressing durable lock",
+    )
+    require_sequence(
+        "local_proposal_directive",
+        """
+let locked = durable.locked();
+let locked_round =
+    locked.map(|certificate| self.registry.round_to_wire(certificate.round()));
+let locked_subject = locked
+    .map(|certificate| self.registry.subject(certificate.subject()))
+    .transpose()?;
+""",
+        "the runner directive must project the exact durable lock round and subject",
+    )
+    require_sequence(
+        "local_proposal_directive",
+        """
+Ok(LocalProposalDirective {
+    tag: self.reducer.current_tag(),
+    leader,
+    locked_round,
+    locked_subject,
+    decided_subject,
+})
+""",
+        "the adapter must return the durable lock projection without reconstruction",
+    )
+    require_sequence(
+        "schedule_local_proposal",
+        """
+if let Some((locked_round, locked)) = directive.locked_body() {
+    services
+        .request_locked_candidate(directive.tag(), locked_round, locked)
+        .map_err(V2RunnerError::Service)?;
+}
+""",
+        "the runner must request the exact durable locked-body key before observing readiness",
+    )
+    require_sequence(
+        "schedule_local_proposal",
+        """
+if loaded.tag() != current.tag()
+    || current.locked_body() != Some((loaded.round(), loaded.subject()))
+{
+""",
+        "the runner must discard a load which no longer matches the exact current lock",
+    )
+    require_sequence(
+        "schedule_local_proposal",
+        """
+submit_exact_body(
+    context,
+    current,
+    canonical_wire,
+    executor,
+    services,
+    proposal_state,
+)?;
+""",
+        "a current locked-body load must enter the exact-body admission path",
+    )
+    require_sequence(
+        "schedule_local_proposal",
+        """
+if directive.locked_subject().is_some() {
+    proposal_state.attempted = Some(owner);
+} else if context.height == 1 {
+""",
+        "a locked directive must never fall through to fresh or genesis candidate construction",
+    )
+    require_sequence(
+        "submit_exact_body",
+        """
+if directive
+    .locked_subject()
+    .is_some_and(|locked| locked != subject)
+{
+    return Err(V2RunnerError::LockedBodyMismatch);
+}
+""",
+        "exact-body submission must reject bytes whose canonical subject differs from the durable lock",
+    )
+    require_sequence(
+        "submit_exact_body",
+        """
+submit_encoded_body(
+    LocalProposalOwner::from(directive),
+    canonical_wire,
+    payload,
+    executor,
+    services,
+    proposal_state,
+)
+""",
+        "the verified exact body must retain its directive owner through encoding",
+    )
+    require_sequence(
+        "submit_encoded_body",
+        """
+let manifest = services
+    .register_outbound_payload(owner.tag, payload)
+    .map_err(V2RunnerError::Service)?;
+proposal_state.submitted = Some((owner, manifest.subject));
+executor.admit_local_proposal(owner.tag, manifest, canonical_wire, services)?;
+""",
+        "encoded proposal admission must preserve the exact owner, manifest subject, and canonical bytes",
+    )
+    require_sequence(
+        "validate_request",
+        """
+if request.directive.locked_subject().is_some() {
+    return Err(CandidateError::LockedBodyMustBeReproposed);
+}
+""",
+        "fresh candidate construction must reject every directive which owns a locked subject",
+    )
+    return errors
+
+
 def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     """Reject async-model shortcuts that previously made progress circular."""
 
@@ -17037,7 +21079,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "AsyncCoreOuterFrame": "UNCHANGED <<height, context>>",
         "AsyncNonCrashOuterFrame": (
-            "/\\ UNCHANGED up /\\ UNCHANGED AsyncRecoveryVars "
+            "/\\ UNCHANGED up /\\ UNCHANGED AsyncRecoveryControlVars "
+            "/\\ AsyncHistoricalLockRestartAuthorityTransition "
             "/\\ AsyncCoreOuterFrame"
         ),
         "AsyncNonRunnerOuterFrame": (
@@ -17045,7 +21088,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ AsyncNonCrashOuterFrame"
         ),
         "AsyncRecoveryOuterFrame": (
-            "/\\ UNCHANGED up /\\ AsyncCoreOuterFrame"
+            "/\\ UNCHANGED up "
+            "/\\ AsyncHistoricalLockRestartAuthorityTransition "
+            "/\\ AsyncCoreOuterFrame"
         ),
         "AsyncFairActionAt": (
             "\\/ AsyncSetGST "
@@ -17086,9 +21131,14 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ UNCHANGED <<AsyncSchedulerVars, AsyncRecoveryVars>> "
             "/\\ AsyncNonRunnerOuterFrame"
         ),
-        "AsyncRecoveryVars": (
+        "AsyncRecoveryControlVars": (
             "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration, "
             "asyncRecoveryReplayQueue>>"
+        ),
+        "AsyncRecoveryVars": (
+            "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration, "
+            "asyncRecoveryReplayQueue, "
+            "asyncHistoricalLockRestartAuthorities>>"
         ),
         "AsyncRecoveryLifecycleVars": (
             "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration>>"
@@ -17187,6 +21237,42 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "NextDeferredCommand": (
             "Head(DeferredClassQueue(node, SelectedDeferredClass(node)))"
         ),
+        "NoAsyncDeferredHandoff": "[active |-> FALSE]",
+        "AsyncDeferredHandoff": (
+            "[active |-> TRUE, candidate |-> candidate, identity |-> "
+            "ExactAsyncCandidateIdentity(candidate)]"
+        ),
+        "AsyncDeferredHandoffSet": (
+            "{NoAsyncDeferredHandoff} \\cup "
+            "{AsyncDeferredHandoff(candidate): candidate \\in AsyncCandidateSet}"
+        ),
+        "DeferredHandoffActive": (
+            "asyncDeferredHandoffs[node] # NoAsyncDeferredHandoff"
+        ),
+        "DeferredHandoffCandidate": "asyncDeferredHandoffs[node].candidate",
+        "DeferredHandoffMatches": (
+            "/\\ DeferredHandoffActive(node) "
+            "/\\ asyncDeferredHandoffs[node] = AsyncDeferredHandoff(candidate)"
+        ),
+        "InstallDeferredHandoff": (
+            "asyncDeferredHandoffs' = [asyncDeferredHandoffs EXCEPT "
+            "![node] = AsyncDeferredHandoff(candidate)]"
+        ),
+        "RetainDeferredHandoffs": "UNCHANGED asyncDeferredHandoffs",
+        "ClearDeferredHandoff": (
+            "asyncDeferredHandoffs' = [asyncDeferredHandoffs EXCEPT "
+            "![node] = NoAsyncDeferredHandoff]"
+        ),
+        "DeferredHandoffAllowsExecution": (
+            "/\\ CommandDispatchable(candidate) "
+            "/\\ (~DeferredHandoffActive(node) "
+            "\\/ DeferredHandoffMatches(node, candidate) "
+            '\\/ candidate.class = "Completion")'
+        ),
+        "DeferredHandoffBlocksExecution": (
+            "/\\ DeferredHandoffActive(node) "
+            "/\\ ~DeferredHandoffMatches(node, candidate)"
+        ),
         "AdvanceNextDeferredClass": (
             "asyncNextDeferredClass' = [asyncNextDeferredClass EXCEPT "
             "![node] = NextCommandClass(SelectedDeferredClass(node))]"
@@ -17259,8 +21345,20 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "\\/ command.class = \"Completion\")"
         ),
         "CandidateScheduled": (
-            "candidate \\in QueuedCandidates \\cup DeferredCandidates "
-            "\\cup CausalCandidates \\cup TrackedWorkCandidates"
+            "CandidateScheduledIn( candidate, asyncCommandQueues, "
+            "asyncDeferredCompletionQueues, asyncDeferredProgressQueues, "
+            "asyncDeferredNormalQueues, asyncCausalQueues, "
+            "asyncOutstandingWork)"
+        ),
+        "CandidateScheduledIn": (
+            "candidate \\in UNION {SequenceSet(commandQueues[node]): "
+            "node \\in ValidatorIds} \\cup UNION "
+            "{SequenceSet(deferredCompletionQueues[node]) \\cup "
+            "SequenceSet(deferredProgressQueues[node]) \\cup "
+            "SequenceSet(deferredNormalQueues[node]): "
+            "node \\in ValidatorIds} \\cup UNION "
+            "{SequenceSet(causalQueues[node]): node \\in ValidatorIds} "
+            "\\cup UNION {outstandingWork[node]: node \\in ValidatorIds}"
         ),
         "FreshCandidateSequence": (
             "IF CandidateScheduled(candidate) THEN <<>> ELSE <<candidate>>"
@@ -17295,6 +21393,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "HistoricalRecoveryTarget": (
             "node \\in asyncHistoricalRecoveryTargets"
+        ),
+        "LocalRunnerServiceOwners": (
+            "AsyncCurrentResponsiveVoters \\cup "
+            "asyncHistoricalRecoveryTargets"
         ),
         "HistoricalRecoverySourceReady": (
             "/\\ node \\in Responsive \\cap up "
@@ -17963,7 +22065,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             re.DOTALL,
         )
         expected_fetch_branch = (
-            "IF DecisionFetchFrontier(command) "
+            "IF CertifiedRecoveryFetchFrontier(command) "
             "THEN IF BodyHeldBy(durableBodies, command.node, context, "
             "command.view, command.subject) "
             'THEN <<CausalCandidate("Completion", "ValidateBody", command)>> '
@@ -17991,7 +22093,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             re.DOTALL,
         )
         expected_persist_decision_branch = (
-            '<<CausalCandidate("Completion", "FetchBody", command)>>'
+            "IF PersistDecisionRequests(command) = {} THEN <<>> "
+            "ELSE <<PersistDecisionFetchSuccessor(command)>>"
         )
         if persist_decision_branch is None:
             errors.append(
@@ -18284,8 +22387,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncTickEnabled": (
             "~gst",
             "OverdueResponsivePackets",
-            "AsyncCurrentResponsiveVoters",
-            "asyncHistoricalRecoveryTargets",
+            "LocalRunnerServiceOwners",
         ),
         "AsyncRunnerStep": (
             "\\E node \\in AsyncCurrentResponsiveVoters: RunNode(node)",
@@ -18308,6 +22410,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncNext": ("AsyncNonCrashStep", "PreGstCrash(node)"),
         "AsyncSchedulerVars": (
             "asyncNextCommandClass",
+            "asyncDeferredHandoffs",
             "asyncNextDeferredClass",
             "asyncHistoricalRecoveryTargets",
         ),
@@ -18319,15 +22422,39 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncNextCommandClass \\in [ValidatorIds -> AsyncCommandClasses]",
         ),
         "AsyncDeferredInit": (
+            "asyncDeferredHandoffs =",
+            "NoAsyncDeferredHandoff",
             "asyncNextDeferredClass =",
             '[node \\in ValidatorIds |-> "Completion"]',
         ),
         "AsyncDeferredTopologyTypeInvariant": (
+            "asyncDeferredHandoffs",
+            "[ValidatorIds -> AsyncDeferredHandoffSet]",
             "asyncNextDeferredClass \\in",
             "[ValidatorIds -> AsyncCommandClasses]",
         ),
+        "AsyncDeferredHandoffOwnershipInvariant": (
+            "DeferredHandoffActive(node)",
+            "DeferredHandoffCandidate(node)",
+            "ExactAsyncCandidateIdentity(candidate)",
+            "DeferredHandoffQueueHead(node)",
+        ),
+        "DeferredHandoffAllowsExecution": (
+            "CommandDispatchable(candidate)",
+            "DeferredHandoffMatches(node, candidate)",
+            'candidate.class = "Completion"',
+        ),
+        "DeferredHandoffBlocksExecution": (
+            "DeferredHandoffActive(node)",
+            "~DeferredHandoffMatches(node, candidate)",
+        ),
         "DeferredDrainStep": (
             "NextDeferredCommand(node)",
+            "DeferredHandoffAllowsExecution(node, command)",
+            "DeferredHandoffBlocksExecution(node, command)",
+            "InstallDeferredHandoff(node, command)",
+            "ClearDeferredHandoff(node)",
+            "RetainDeferredHandoffs",
             "RemoveNextDeferredCommand(node)",
             "AdvanceNextDeferredClass(node)",
             "UNCHANGED <<vars, asyncCommandQueues,",
@@ -18544,16 +22671,18 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "recipient \\in CurrentVoters \\ {request.node}",
         ),
         "InstallCommandSuccessors": (
-            "InstallCommitSignRequests(command)",
-            "InstallCommitSignSuccessor(command)",
+            "InstallLockedFetchSuccessors(command)",
+            "InstallCommitSignSuccessors(command)",
             "InstallProposalSuccessor(command)",
         ),
         "CommandSuccessors": (
             'command.kind = "FetchBody"',
-            "DecisionFetchFrontier(command)",
+            "CertifiedRecoveryFetchFrontier(command)",
             "BodyHeldBy(durableBodies, command.node, context,",
             'CausalCandidate("Completion", "ValidateBody", command)',
             'CausalCandidate("Completion", "StoreBody", command)',
+            "PersistDecisionRequests(command)",
+            "PersistDecisionFetchSuccessor(command)",
         ),
         "AsyncProgressOwnershipInvariant": (
             "AsyncLogicalCandidateOwnershipInvariant",
@@ -18571,16 +22700,15 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "TrackedWorkCandidates",
         ),
         "ExecuteDecisionFetch": (
-            "DecisionFetchFrontier(command)",
+            "CertifiedRecoveryFetchFrontier(command)",
             "BodyHeldBy(durableBodies, command.node, context, command.view, command.subject)",
             "THEN /\\ UNCHANGED vars /\\ UNCHANGED <<asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport>>",
-            "decision.node = command.node",
-            "decision.qc.context = context",
-            "decision.qc.view = command.view",
-            "decision.qc.subject = command.subject",
-            'decision.qc.phase = "Commit"',
+            "qc \\in DecisionQcValues \\cup prepareQCs",
+            "CommandMatches(command, command.node, qc.view, qc.subject)",
+            "command.evidence = qc",
+            "CertifiedBodyRecoveryAuthority(command.node, qc)",
             "PublishCertifiedRequests(",
-            "CertifiedRequestOutbox(command.node, decision.qc)",
+            "CertifiedRequestOutbox(command.node, qc)",
         ),
         "ExecuteCommand": (
             "ExecuteRegularCommand(command)",
@@ -18791,6 +22919,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncDeferredCompletionQueues' = [asyncDeferredCompletionQueues EXCEPT ![node] = <<>>]",
             "asyncDeferredProgressQueues' = [asyncDeferredProgressQueues EXCEPT ![node] = <<>>]",
             "asyncDeferredNormalQueues' = [asyncDeferredNormalQueues EXCEPT ![node] = <<>>]",
+            "asyncDeferredHandoffs' = [asyncDeferredHandoffs EXCEPT ![node] = NoAsyncDeferredHandoff]",
             "asyncCausalQueues' = [asyncCausalQueues EXCEPT ![node] = replay]",
             "asyncOutstandingTags' = [asyncOutstandingTags EXCEPT ![node] = {}]",
             "asyncSentItems' = asyncSentItems",
@@ -19177,6 +23306,39 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                         f"{expected_sha256}; found {observed_sha256}"
                     )
 
+        effect_runtime_context = (
+            ("impl", "EffectRuntime", "for", "SerializedV2Runtime"),
+        )
+        scheduler_handoff_candidates = tuple(
+            item
+            for item in rust_items(effects_source, "take_scheduler_ownership")
+            if item.brace_context == effect_runtime_context
+        )
+        if len(scheduler_handoff_candidates) != 1:
+            errors.append(
+                f"{effects_path}: require exactly one production exact scheduler "
+                "ownership handoff; found "
+                f"{len(scheduler_handoff_candidates)}"
+            )
+        else:
+            scheduler_handoff = scheduler_handoff_candidates[0]
+            _require_rust_item_context(
+                effects_path,
+                scheduler_handoff,
+                effect_runtime_context,
+                "production exact scheduler ownership handoff",
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                effects_path,
+                scheduler_handoff,
+                _PRODUCTION_EFFECT_SCHEDULER_HANDOFF_ITEM_SHA256[
+                    "take_scheduler_ownership"
+                ],
+                "production exact scheduler ownership handoff",
+                errors,
+            )
+
         consume = executor_items["consume_effects"]
         _require_rust_token_sequence(
             effects_path,
@@ -19318,6 +23480,41 @@ if self.retained_effect_batch.is_some() {
                 errors.append(
                     f"{effects_path}:{step.line}: step must drain retained "
                     "causal debt before its single runtime step"
+                )
+
+        for item_name, runtime_call in (
+            ("step", "self.runtime.step_effects(now)"),
+            (
+                "step_pending_tip_recovery",
+                "self.runtime.step_recovery_effects(now)",
+            ),
+        ):
+            item = executor_items[item_name]
+            if item is None:
+                continue
+            item_tokens = rust_code_tokens(item.source)
+            ordered_fragments = tuple(
+                rust_code_tokens(fragment)
+                for fragment in (
+                    runtime_call,
+                    "self.runtime.take_scheduler_ownership()",
+                    "wal_step.complete()",
+                )
+            )
+            positions: list[int] = []
+            for fragment in ordered_fragments:
+                observed = [
+                    index
+                    for index in range(len(item_tokens) - len(fragment) + 1)
+                    if item_tokens[index : index + len(fragment)] == fragment
+                ]
+                if len(observed) == 1:
+                    positions.append(observed[0])
+            if len(positions) != 3 or positions != sorted(positions):
+                errors.append(
+                    f"{effects_path}:{item.line}: {item_name} must consume the "
+                    "exact scheduler owner immediately after the runtime step "
+                    "and before releasing the WAL permit"
                 )
 
     regular = _top_level_operator_body(
@@ -19966,6 +24163,7 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
         "ProductionDurableIntentTraceRefinesProgressWitness",
         "ProductionDecisionTraceRefinesRecoveryWitness",
         "ProductionSchedulerTraceRefinesProtectedOwnership",
+        "ProductionTwoStageRelayRetryTraceRefinesSourceFairness",
         "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
         "ProductionReliableFlushTraceRefinesOutboundOwnership",
         "ProductionApplicationTraceRefinesDecisionCompletion",
@@ -20010,6 +24208,59 @@ def _exact_output_production_source_fidelity_errors(
     merge_path = (
         repo_root / "crates" / "iroha_core" / "src" / "merge_sidecar.rs"
     )
+    network_message_path = repo_root / "crates" / "iroha_core" / "src" / "lib.rs"
+    config_defaults_path = (
+        repo_root
+        / "crates"
+        / "iroha_config"
+        / "src"
+        / "parameters"
+        / "defaults.rs"
+    )
+    config_actual_path = (
+        repo_root
+        / "crates"
+        / "iroha_config"
+        / "src"
+        / "parameters"
+        / "actual.rs"
+    )
+    config_user_path = (
+        repo_root
+        / "crates"
+        / "iroha_config"
+        / "src"
+        / "parameters"
+        / "user.rs"
+    )
+    refinement_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_core"
+        / "refinement.rs"
+    )
+    embedded_core_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_core.rs"
+    )
+    ingress_path = (
+        repo_root / "crates" / "iroha_core" / "src" / "sumeragi" / "mod.rs"
+    )
+    effects_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_effects.rs"
+    )
     errors: list[str] = []
     if not worker_path.is_file() or worker_path.is_symlink():
         return [
@@ -20017,9 +24268,17 @@ def _exact_output_production_source_fidelity_errors(
         ]
     worker_source = worker_path.read_text(encoding="utf-8")
     required_sources = (
+        (network_message_path, "production network-message carrier source"),
         (merge_path, "production merge-sidecar source"),
         (lane_path, "production lane-work source"),
         (runner_path, "production runner source"),
+        (config_defaults_path, "production exact-output defaults source"),
+        (config_actual_path, "production exact-output geometry kernel source"),
+        (config_user_path, "production exact-output user-config call site"),
+        (refinement_path, "production exact-output reducer refinement source"),
+        (embedded_core_path, "production embedded reducer binding source"),
+        (ingress_path, "production fair-ingress ownership source"),
+        (effects_path, "production ingress-owned effect source"),
     )
     loaded_sources: dict[Path, str] = {}
     for path, description in required_sources:
@@ -20029,8 +24288,620 @@ def _exact_output_production_source_fidelity_errors(
         else:
             loaded_sources[path] = path.read_text(encoding="utf-8")
     merge_source = loaded_sources[merge_path]
+    network_message_source = loaded_sources[network_message_path]
     lane_source = loaded_sources[lane_path]
     runner_source = loaded_sources[runner_path]
+    config_defaults_source = loaded_sources[config_defaults_path]
+    config_actual_source = loaded_sources[config_actual_path]
+    config_user_source = loaded_sources[config_user_path]
+    refinement_source = loaded_sources[refinement_path]
+    embedded_core_source = loaded_sources[embedded_core_path]
+    ingress_source = loaded_sources[ingress_path]
+    effects_source = loaded_sources[effects_path]
+
+    for variant, payload in (
+        ("SumeragiBlock", "BlockMessageWire"),
+        ("MergeCommitteeSignature", "MergeCommitteeSignature"),
+        ("CertifiedMergeSidecar", "CertifiedMergeSidecarMessage"),
+        ("NativeAmx", "native_amx::NativeAmxMessage"),
+    ):
+        _require_rust_source_token_sequence(
+            network_message_path,
+            network_message_source,
+            f"{variant}(Arc<{payload}>),",
+            "every exact-output network payload class must use an immutable shared carrier",
+            errors,
+            count=1,
+        )
+
+    _require_rust_source_token_sequence(
+        merge_path,
+        merge_source,
+        """
+const MAX_OUTBOUND_SESSIONS_PER_SOURCE: usize = 2;
+const MAX_OUTBOUND_BYTES_PER_SOURCE: usize = 16 * 1024 * 1024;
+const MAX_SERVER_REQUEST_GATES_PER_SOURCE: usize = 4;
+""",
+        "certified sidecar authenticated-source limits must remain exactly four gates, two sessions, and 16 MiB",
+        errors,
+    )
+
+    _require_rust_source_token_sequence(
+        config_defaults_path,
+        config_defaults_source,
+        """
+pub const V2_RUNTIME_COMPLETION_RESERVE_DIVISOR: usize = 4;
+pub const V2_MAX_EFFECTS_PER_STEP: usize = 8;
+pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;
+""",
+        "exact-output defaults must retain the reviewed completion divisor, reducer batch, and three-class geometry",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        refinement_path,
+        refinement_source,
+        """
+pub const MAX_EFFECTS_PER_STEP: usize = 8;
+""",
+        "the dependency-free reducer refinement must retain the reviewed maximum effect batch",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        embedded_core_path,
+        embedded_core_source,
+        """
+const _: [(); refinement::MAX_EFFECTS_PER_STEP] =
+    [(); iroha_config::parameters::defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP];
+""",
+        "the production embedded reducer must bind its dependency-free batch to configured exact-output geometry",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        """
+const EXACT_OUTPUT_CLASSES: [ExactOutputClass; V2_EXACT_OUTPUT_CLASS_COUNT] = [
+    ExactOutputClass::Safety,
+    ExactOutputClass::Lane,
+    ExactOutputClass::Bulk,
+];
+""",
+        "production exact output must instantiate every and only configured ownership class",
+        errors,
+    )
+
+    geometry_items: dict[str, tuple[Path, RustItem | None]] = {}
+    for item_name in (
+        "sumeragi_v2_exact_output_shared_ownership_capacity",
+        "validate_sumeragi_v2_exact_output_geometry",
+    ):
+        geometry_items[f"actual::{item_name}"] = (
+            config_actual_path,
+            _require_rust_item(
+                config_actual_path,
+                config_actual_source,
+                item_name,
+                errors,
+            ),
+        )
+    geometry_items["user::Root::parse"] = (
+        config_user_path,
+        _require_qualified_rust_item(
+            config_user_path,
+            config_user_source,
+            "Root",
+            "parse",
+            errors,
+            "exact-output user configuration call site",
+            expected_attributes=("#[allow(clippy::too_many_lines)]",),
+        ),
+    )
+    geometry_items["worker::validate_shared_ownership_geometry"] = (
+        worker_path,
+        _require_rust_item(
+            worker_path,
+            worker_source,
+            "validate_shared_ownership_geometry",
+            errors,
+        ),
+    )
+    for qualified_name in (
+        "actual::sumeragi_v2_exact_output_shared_ownership_capacity",
+        "actual::validate_sumeragi_v2_exact_output_geometry",
+        "worker::validate_shared_ownership_geometry",
+    ):
+        path, item = geometry_items[qualified_name]
+        _require_rust_item_context(
+            path,
+            item,
+            (),
+            f"exact-output geometry {qualified_name}",
+            errors,
+        )
+    for qualified_name, expected_sha256 in (
+        _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256.items()
+    ):
+        path, item = geometry_items[qualified_name]
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            expected_sha256,
+            f"exact-output geometry {qualified_name}",
+            errors,
+        )
+
+    _require_rust_token_sequence(
+        config_actual_path,
+        geometry_items[
+            "actual::sumeragi_v2_exact_output_shared_ownership_capacity"
+        ][1],
+        """
+effect_work_capacity
+    .checked_add(certified_request_capacity)
+    .and_then(|capacity| capacity.checked_add(defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP))
+    .ok_or(SumeragiV2ExactOutputGeometryError::SharedCapacityOverflow)
+""",
+        "the shared exact-output owner must reserve both bounded producers and one complete reducer batch with checked arithmetic",
+        errors,
+    )
+    _require_rust_token_sequence(
+        config_actual_path,
+        geometry_items["actual::validate_sumeragi_v2_exact_output_geometry"][1],
+        """
+if max_sources_per_fanout == 0 {
+    return Err(SumeragiV2ExactOutputGeometryError::ZeroSourceCapacity);
+}
+let minimum = max_sources_per_fanout
+    .checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)
+    .ok_or(SumeragiV2ExactOutputGeometryError::MaximumFanoutOverflow)?;
+if shared_ownership_unit_capacity < minimum {
+    return Err(SumeragiV2ExactOutputGeometryError::CapacityTooSmall {
+        actual: shared_ownership_unit_capacity,
+        minimum,
+    });
+}
+Ok(())
+""",
+        "the geometry kernel must reject zero, multiplication overflow, and any corridor smaller than source-count times exact classes",
+        errors,
+    )
+    _require_rust_token_sequence(
+        config_user_path,
+        geometry_items["user::Root::parse"][1],
+        """
+let reply_source_capacity = network
+    .max_total_connections
+    .map(NonZeroUsize::get)
+    .unwrap_or(defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS);
+let effect_work_capacity = (sumeragi.queues.commands.get()
+    / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+    .max(1);
+let geometry = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
+    effect_work_capacity,
+    sumeragi.queues.bodies.get(),
+)
+.and_then(|shared_capacity| {
+    actual::validate_sumeragi_v2_exact_output_geometry(
+        shared_capacity,
+        reply_source_capacity,
+    )
+});
+if let Err(error) = geometry {
+    emitter.emit(
+        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+            "{error}; configured network reply-source capacity is {reply_source_capacity}"
+        )),
+    );
+}
+""",
+        "root configuration must derive the authenticated-source bound from network geometry and fail parsing when one exact fanout cannot fit",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        worker_path,
+        geometry_items["worker::validate_shared_ownership_geometry"][1],
+        """
+fn validate_shared_ownership_geometry(
+    shared_ownership_unit_capacity: usize,
+    max_reply_sources_per_request: usize,
+) -> Result<(), String> {
+    validate_sumeragi_v2_exact_output_geometry(
+        shared_ownership_unit_capacity,
+        max_reply_sources_per_request,
+    )
+    .map_err(|error| error.to_string())
+}
+""",
+        "the worker geometry refinement must delegate without altering the shared configuration kernel",
+        errors,
+    )
+
+    ingress_seam_items: dict[str, tuple[Path, RustItem | None]] = {}
+    for item_name in (
+        "merge_downstream",
+        "matches_message",
+        "matches_semantic_origin",
+        "process_local_projection_hash",
+        "matches_reply_routes",
+        "retain_active_reply_routes",
+        "advance_reply_cursors",
+        "validate_exact",
+    ):
+        ingress_seam_items[f"ingress::{item_name}"] = (
+            ingress_path,
+            _require_qualified_rust_item(
+                ingress_path,
+                ingress_source,
+                "FairV2IngressOwnershipEvidence",
+                item_name,
+                errors,
+                f"fair-ingress ownership {item_name}",
+            ),
+        )
+    effect_executor_context = (
+        (
+            "impl",
+            "<",
+            "R",
+            ":",
+            "EffectRuntime",
+            ">",
+            "V2EffectExecutor",
+            "<",
+            "R",
+            ">",
+        ),
+    )
+    for item_name in (
+        "accept_payload_chunk_with_ingress_ownership",
+        "accept_certified_body_response_with_ingress_ownership",
+    ):
+        item = _require_rust_item(effects_path, effects_source, item_name, errors)
+        _require_rust_item_context(
+            effects_path,
+            item,
+            effect_executor_context,
+            f"ingress-owned effect consumer {item_name}",
+            errors,
+        )
+        ingress_seam_items[f"effects::{item_name}"] = (effects_path, item)
+    ingress_seam_items[
+        "worker::claimed_with_reply_routes_and_ingress_ownership"
+    ] = (
+        worker_path,
+        _require_qualified_rust_item(
+            worker_path,
+            worker_source,
+            "PendingExactFanout",
+            "claimed_with_reply_routes_and_ingress_ownership",
+            errors,
+            "ingress-owned exact reply constructor",
+        ),
+    )
+    for item_name in (
+        "serve_certified_request_on_routes",
+        "route_payload_chunk",
+        "buffer_orphan_payload_chunk_inner",
+        "replay_buffered_chunks",
+        "deliver_payload_chunk",
+    ):
+        ingress_seam_items[f"worker::{item_name}"] = (
+            worker_path,
+            _require_qualified_rust_item(
+                worker_path,
+                worker_source,
+                "ProductionV2Services",
+                item_name,
+                errors,
+                f"ingress-owned worker consumer {item_name}",
+            ),
+        )
+    ingress_seam_items["lane::accept_lane_message_owned"] = (
+        lane_path,
+        _require_qualified_rust_item(
+            lane_path,
+            lane_source,
+            "V2LaneWorkAdapter",
+            "accept_lane_message_owned",
+            errors,
+            "ingress-owned lane consumer",
+        ),
+    )
+    ingress_head = _require_rust_item(
+        runner_path,
+        runner_source,
+        "v2_ingress_head_can_drain",
+        errors,
+    )
+    _require_rust_item_context(
+        runner_path,
+        ingress_head,
+        (),
+        "ingress-owned runner head preflight",
+        errors,
+    )
+    ingress_seam_items["runner::v2_ingress_head_can_drain"] = (
+        runner_path,
+        ingress_head,
+    )
+    for qualified_name, expected_sha256 in (
+        _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256.items()
+    ):
+        path, item = ingress_seam_items[qualified_name]
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            expected_sha256,
+            f"exact-output ingress seam {qualified_name}",
+            errors,
+        )
+    _require_rust_source_token_sequence(
+        ingress_path,
+        ingress_source,
+        """
+struct FairV2IngressReplyAttempt {
+    route: NetworkReplyRoute,
+    message_cursor: u64,
+    chunk_cursor: u64,
+}
+""",
+        "fair-ingress ownership must retain an independent route, message cursor, and chunk cursor for every authenticated source",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        ingress_path,
+        ingress_source,
+        """
+pub(crate) struct FairV2IngressOwnershipEvidence {
+    first: FairV2IngressOwnershipOccurrence,
+    latest: FairV2IngressOwnershipOccurrence,
+    admission_count: u128,
+    occurrence_count: u128,
+    action_counts: [u128; FairV2IngressOwnershipAction::COUNT],
+    current_routes: Option<NetworkReplyRoutes>,
+    attempts: Vec<FairV2IngressReplyAttempt>,
+    attempts_hash: CryptoHash,
+}
+""",
+        "fair-ingress evidence must bind semantic occurrence history to the complete bounded route and cursor set",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        ingress_seam_items["ingress::merge_downstream"][1],
+        """
+if !self.validate_exact()
+    || !candidate.validate_exact()
+    || self.first.wire_key != candidate.first.wire_key
+    || self.first.message_kind != candidate.first.message_kind
+    || self.first.class != candidate.first.class
+    || self.first.encoded_bytes.as_ref() != candidate.first.encoded_bytes.as_ref()
+{
+    return false;
+}
+""",
+        "downstream ownership merging must require the exact semantic request identity rather than payload bytes alone",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        ingress_seam_items["ingress::merge_downstream"][1],
+        """
+let attempts = fair_v2_ingress_merge_attempt_cursors(
+    &self.attempts,
+    &candidate.attempts,
+    current_routes.as_ref(),
+);
+let attempts_hash = fair_v2_ingress_attempt_cursor_hash(&attempts);
+let merged = Self {
+    first: self.first.clone(),
+    latest: candidate.latest,
+    admission_count,
+    occurrence_count,
+    action_counts,
+    current_routes,
+    attempts,
+    attempts_hash,
+};
+if !merged.validate_exact() {
+    return false;
+}
+*self = merged;
+true
+""",
+        "downstream ownership merging must atomically preserve source-isolated non-regressing cursors and validated route history",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        ingress_seam_items["ingress::matches_semantic_origin"][1],
+        "self.validate_exact() && self.first.semantic_origin.as_ref() == origin",
+        "semantic-origin validation must compare the independently retained canonical request origin",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        ingress_seam_items["ingress::advance_reply_cursors"][1],
+        """
+if message_cursor < attempt.message_cursor || chunk_cursor < attempt.chunk_cursor {
+    return false;
+}
+attempt.message_cursor = message_cursor;
+attempt.chunk_cursor = chunk_cursor;
+self.attempts_hash = fair_v2_ingress_attempt_cursor_hash(&self.attempts);
+true
+""",
+        "a source attempt may advance but never reset either exact-output cursor",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        ingress_seam_items["ingress::validate_exact"][1],
+        """
+self.first.wire_key == self.latest.wire_key
+    && self.first.semantic_origin == self.latest.semantic_origin
+    && self.first.authenticated_source == self.first.semantic_owner_source
+    && (self.admission_count != 1
+        || self.first.semantic_owner_source == self.latest.semantic_owner_source)
+    && self.first.message_kind == self.latest.message_kind
+    && self.first.class == self.latest.class
+    && self.first.encoded_bytes.as_ref() == self.latest.encoded_bytes.as_ref()
+    && self.first.encoded_len == self.latest.encoded_len
+    && self.first.validate_exact()
+    && self.latest.validate_exact()
+    && self.attempts_hash == fair_v2_ingress_attempt_cursor_hash(&self.attempts)
+    && fair_v2_ingress_attempts_do_not_regress(&self.latest.attempts_after, &self.attempts)
+    && fair_v2_ingress_attempts_match_routes(&self.attempts, self.current_routes.as_ref())
+""",
+        "fair-ingress validation must bind semantic origin, canonical bytes, source ownership, routes, and non-regressing cursors",
+        errors,
+    )
+    for item_key, payload_kind, description in (
+        (
+            "effects::accept_payload_chunk_with_ingress_ownership",
+            "PayloadChunk(chunk.clone())",
+            "payload chunk effect consumption",
+        ),
+        (
+            "effects::accept_certified_body_response_with_ingress_ownership",
+            "CertifiedBodyResponse(response.clone())",
+            "certified body response effect consumption",
+        ),
+    ):
+        _require_rust_token_sequence(
+            effects_path,
+            ingress_seam_items[item_key][1],
+            f"""
+let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+    wire::ConsensusMessageV2Payload::{payload_kind},
+));
+if !ingress_ownership.validate_exact()
+    || !ingress_ownership.matches_message(&message)
+    || !ingress_ownership.matches_semantic_origin(Some(authenticated_{'sender' if payload_kind.startswith('PayloadChunk') else 'responder'}))
+{{
+""",
+            f"{description} must reject a changed envelope or semantic origin before mutation",
+            errors,
+        )
+    _require_rust_token_sequence(
+        worker_path,
+        ingress_seam_items[
+            "worker::claimed_with_reply_routes_and_ingress_ownership"
+        ][1],
+        """
+if let Some(ownership) = ingress_ownership {
+    let routes = fanout.reply_routes.as_ref().ok_or_else(|| {
+        "Sumeragi v2 ingress-owned reply lost its bounded route history".to_owned()
+    })?;
+    if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {
+        return Err("Sumeragi v2 reply carried altered fair-ingress ownership".to_owned());
+    }
+    fanout.ingress_ownership = Some(ownership);
+}
+""",
+        "exact reply construction must attach only a validated fair-ingress carrier matching the complete per-source route set",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        ingress_seam_items["worker::serve_certified_request_on_routes"][1],
+        """
+if !ingress_ownership.validate_exact()
+    || !ingress_ownership.matches_message(&request_message)
+    || !ingress_ownership.matches_semantic_origin(Some(reply_routes.semantic_target()))
+    || !ingress_ownership.matches_reply_routes(Some(&reply_routes))
+{
+""",
+        "certified request service must bind canonical request, semantic origin, and every return source before queued local work",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        ingress_seam_items["worker::route_payload_chunk"][1],
+        """
+if !ingress_ownership.validate_exact()
+    || !ingress_ownership.matches_message(&chunk_message)
+    || !ingress_ownership.matches_semantic_origin(Some(&sender))
+{
+""",
+        "payload chunk routing must bind canonical bytes and semantic sender before buffering or effect mutation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        ingress_seam_items["worker::buffer_orphan_payload_chunk_inner"][1],
+        """
+match (&mut existing.ingress_ownership, ingress_ownership) {
+    (Some(retained), Some(candidate)) => {
+        if !retained.merge_downstream(candidate) {
+            return PayloadChunkDisposition::Rejected;
+        }
+    }
+    (None, None) if cfg!(test) => {}
+    (Some(_), None) | (None, Some(_)) | (None, None) => {
+        return PayloadChunkDisposition::Rejected;
+    }
+}
+""",
+        "orphan chunk duplicates must merge alternate source ownership without replacing canonical semantic identity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        ingress_seam_items["worker::replay_buffered_chunks"][1],
+        """
+buffered.ingress_ownership.ok_or_else(|| {
+    "buffered payload chunk lost fair-ingress ownership".to_owned()
+})?,
+""",
+        "orphan replay must preserve the exact ownership carrier into live chunk delivery",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        ingress_seam_items["worker::deliver_payload_chunk"][1],
+        """
+executor.accept_payload_chunk_with_ingress_ownership(
+    work_id,
+    chunk,
+    &sender,
+    ingress_ownership,
+    self,
+)
+""",
+        "live payload delivery must consume the exact fair-ingress carrier at the mutating effect seam",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        ingress_seam_items["lane::accept_lane_message_owned"][1],
+        """
+if ingress_ownership.as_ref().is_some_and(|ownership| {
+    !ownership.validate_exact()
+        || !ownership.matches_message(&message)
+        || !ownership.matches_semantic_origin(sender.as_ref())
+        || !ownership.matches_reply_routes(reply_routes.as_ref())
+}) {
+    return V2LaneIngressOutcome::Rejected;
+}
+""",
+        "lane ingress must bind semantic origin, canonical message, and the complete source route set before service",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        ingress_seam_items["runner::v2_ingress_head_can_drain"][1],
+        """
+let Some(ingress_ownership) = inbound.ingress_ownership() else {
+    return true;
+};
+if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership) {
+    return false;
+}
+""",
+        "runner preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
+        errors,
+    )
 
     # The lane bridge is the sole reviewed production consumer of the public
     # observed-history reconciliation kernel. It commits benign tombstone and
@@ -20058,14 +24929,13 @@ def _exact_output_production_source_fidelity_errors(
         )
 
     merge_ack_items = {
-        "CertifiedMergeSidecarChunkAdmission::new": _require_qualified_rust_item(
+        "CertifiedMergeSidecarChunkAdmission::from_admitted_reply": _require_qualified_rust_item(
             merge_path,
             merge_source,
             "CertifiedMergeSidecarChunkAdmission",
-            "new",
+            "from_admitted_reply",
             errors,
             "sidecar admission identity production item",
-            expected_attributes=("#[must_use]",),
         )
     }
     for item_name in (
@@ -20128,6 +24998,7 @@ def _exact_output_production_source_fidelity_errors(
                 "can_enqueue_owned_reply_transfer",
                 "enqueue",
                 "enqueue_owned_reply_transfer",
+                "complete_sidecar_targets_with_retained_flush_ownership",
                 "enqueue_validated",
                 "handoff_applied_height_to_durable_reconstruction",
                 "drive_with_budget_ack",
@@ -20271,6 +25142,46 @@ def _exact_output_production_source_fidelity_errors(
         merge_path,
         merge_source,
         """
+struct OutboundTransfer {
+    request: CertifiedMergeSidecarRequestV1,
+    response_len: usize,
+    chunks: Vec<Arc<CertifiedMergeSidecarMessage>>,
+    attempts: BTreeMap<ServerRequestSource, OutboundAttempt>,
+}
+""",
+        "sidecar responses must cache each immutable fixed-boundary payload once for every source cursor",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        merge_path,
+        merge_source,
+        """
+pub(crate) struct MergeSidecarPost {
+    pub(crate) peer: PeerId,
+    pub(crate) reply_route: Option<NetworkReplyRoute>,
+    pub(crate) message: Arc<CertifiedMergeSidecarMessage>,
+}
+""",
+        "sidecar posts must carry the cached payload pointer across the lane boundary",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        lane_path,
+        lane_source,
+        """
+PostCertifiedMergeSidecar {
+    peer: PeerId,
+    reply_routes: Option<NetworkReplyRoutes>,
+    message: Arc<CertifiedMergeSidecarMessage>,
+},
+""",
+        "the lane effect must preserve the exact immutable sidecar carrier",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        merge_path,
+        merge_source,
+        """
 struct OutboundAttempt {
     reply_route: Option<NetworkReplyRoute>,
     next_chunk: usize,
@@ -20319,9 +25230,31 @@ enum ServerResponseCursor {
     )
     _require_rust_token_sequence(
         merge_path,
-        merge_ack_items.get("CertifiedMergeSidecarChunkAdmission::new"),
+        merge_ack_items.get(
+            "CertifiedMergeSidecarChunkAdmission::from_admitted_reply"
+        ),
         """
-Self {
+if post.peer_id != chunk.requester
+    || reply_route.semantic_target() != &chunk.requester
+    || !flush_identity.is_bound_to_delivery(reply_route)
+    || !flush_identity.is_bound_to_canonical_reply(post)
+{
+    return Err(MergeSidecarError::FlushIdentityMismatch(
+        "actor flush identity is not bound to the exact response occurrence",
+    ));
+}
+
+let source_key = flush_identity.source_key();
+let projection = CertifiedMergeSidecarChunkFlushProjection {
+    semantic_target: flush_identity.semantic_target().clone(),
+    authenticated_source: flush_identity.authenticated_source_peer().clone(),
+    connection_tenure_ordinal: flush_identity.connection_tenure_ordinal(),
+    delivery_ordinal: flush_identity.delivery_ordinal(),
+    ticket_id: flush_identity.ticket_id(),
+    ticket_rank: flush_identity.ticket_rank(),
+    ticket_topic: flush_identity.ticket_topic(),
+    canonical_request_digest: flush_identity.canonical_request_digest(),
+    stream_wire_bytes: flush_identity.ticket_stream_wire_bytes(),
     request_id: chunk.request_id,
     entry_hash: chunk.entry_hash,
     encoded_len: chunk.encoded_len,
@@ -20329,12 +25262,28 @@ Self {
     reference_digest: chunk.reference_digest,
     requester: chunk.requester.clone(),
     responder: chunk.responder.clone(),
+    canonical_response_hash: HashOf::new(&post.data),
+    sidecar_response_hash: HashOf::new(message.as_ref()),
+    chunk_hash: HashOf::new(chunk),
+    payload_digest: Hash::new_from_chunks(&[
+        CHUNK_PAYLOAD_DIGEST_DOMAIN,
+        chunk.bytes.as_slice(),
+    ]),
     chunk_index: chunk.chunk_index,
     chunk_count: chunk.chunk_count,
-    reply_route: reply_route.clone(),
+    message_cursor_before,
+    message_cursor_after,
+    chunk_cursor_before,
+    chunk_cursor_after,
+};
+Ok(Self {
+    projection,
+    source_key,
+    flush_identity: flush_identity.clone(),
+})
 }
 """,
-        "sidecar writer-flush admission must bind every immutable response coordinate and the exact route",
+        "sidecar writer-flush admission must bind semantic target, authenticated source, actor ticket, immutable payload, and both non-regressing cursors",
         errors,
     )
     _require_rust_token_sequence(
@@ -20535,7 +25484,7 @@ self.outbound
             """
 self.outbound
     .values()
-    .map(|transfer| transfer.bytes.len())
+    .map(|transfer| transfer.response_len)
     .sum()
 """,
             "global sidecar byte accounting must count each immutable response once",
@@ -20546,7 +25495,7 @@ self.outbound
 self.outbound
     .values()
     .filter(|transfer| transfer.attempts.contains_key(source))
-    .map(|transfer| transfer.bytes.len())
+    .map(|transfer| transfer.response_len)
     .sum()
 """,
             "per-source sidecar byte accounting must charge shared bytes to each owning source",
@@ -20721,6 +25670,36 @@ if update == NetworkReplyRouteSourceUpdate::Reconnected {
 }
 """,
         "a replacement writer tenure must retry the source's current chunk while clearing only tenure-bound in-flight state",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_ack_items.get("MergeSidecarTransport::admit_server_request"),
+        """
+attempt.reply_route = reply_route.cloned();
+if update == NetworkReplyRouteSourceUpdate::Reconnected {
+    let retry_chunk = attempt.in_flight_chunk.unwrap_or(attempt.next_chunk);
+    attempt.next_chunk = retry_chunk;
+    attempt.in_flight_chunk = None;
+    reconnect_retry_chunk = Some(retry_chunk);
+}
+if attempt.in_flight_chunk.is_none() && !attempt.queued {
+    attempt.queued = true;
+    enqueue_attempt = true;
+}
+""",
+        "a later delivery with an in-flight chunk must refresh only its source route without queueing a concurrent copy",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_ack_items.get("MergeSidecarTransport::admit_server_request"),
+        """
+if enqueue_attempt {
+    self.outbound_order.push_back((key, source));
+}
+""",
+        "only the guarded no-in-flight or reconnected sidecar attempt may enter outbound service",
         errors,
     )
     _require_rust_token_sequence(
@@ -20928,6 +25907,33 @@ if update == NetworkReplyRouteSourceUpdate::Exact {
         merge_ack_items.get("MergeSidecarTransport::enqueue_response"),
         """
 Self::park_authorized_server_request_attempts(gate, now);
+let response_len = bytes.len();
+let chunk_count = response_len.div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+let chunk_count_wire = u32::try_from(chunk_count)
+    .expect("bounded certified merge response chunk count fits u32");
+let chunks = bytes
+    .chunks(MAX_CERTIFIED_MERGE_CHUNK_BYTES)
+    .enumerate()
+    .map(|(index, chunk_bytes)| {
+        Arc::new(CertifiedMergeSidecarMessage::Chunk(
+            CertifiedMergeSidecarChunkV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                request_id: request.request_id,
+                entry_hash: request.entry_hash,
+                encoded_len: request.encoded_len,
+                epoch_id: request.epoch_id,
+                reference_digest: request.reference_digest,
+                requester: request.requester.clone(),
+                responder: request.responder.clone(),
+                chunk_index: u32::try_from(index)
+                    .expect("bounded certified merge chunk index fits u32"),
+                chunk_count: chunk_count_wire,
+                bytes: chunk_bytes.to_vec(),
+            },
+        ))
+    })
+    .collect::<Vec<_>>();
+debug_assert_eq!(chunks.len(), chunk_count);
 let mut attempts = BTreeMap::new();
 for (source, reply_route, resume_chunk) in admitted_attempts {
     self.outbound_order.push_back((key.clone(), source.clone()));
@@ -20951,11 +25957,12 @@ for (source, reply_route, resume_chunk) in admitted_attempts {
         """
 OutboundTransfer {
     request,
-    bytes: Arc::from(bytes),
+    response_len,
+    chunks,
     attempts,
 }
 """,
-        "materialized sidecar bytes must be immutable and shared across source-local cursors",
+        "materialized sidecar chunks must be cached once and shared across source-local cursors",
         errors,
     )
     _require_rust_token_sequence(
@@ -20972,15 +25979,21 @@ if index >= count {
         merge_path,
         merge_ack_items.get("MergeSidecarTransport::drain_outbound_chunks"),
         """
+let message = Arc::clone(
+    transfer
+        .chunks
+        .get(index)
+        .expect("bounded sidecar cursor names a cached chunk"),
+);
 posts.push(MergeSidecarPost {
     peer: request.requester.clone(),
     reply_route: attempt.reply_route.clone(),
-    message: CertifiedMergeSidecarMessage::Chunk(chunk),
+    message,
 });
 attempt.in_flight_chunk = Some(index);
 cursor = ServerResponseCursor::Pending(index);
 """,
-        "sidecar drainage must preserve the exact source route and mark only an in-flight cursor",
+        "sidecar drainage must clone only the cached Arc, preserve the exact source route, and mark only an in-flight cursor",
         errors,
     )
     _require_rust_token_sequence(
@@ -21011,36 +26024,83 @@ if retired || completed {
         merge_path,
         merge_ack_items.get("MergeSidecarTransport::acknowledge_outbound_chunk"),
         """
-if request.entry_hash != admission.entry_hash
-    || request.encoded_len != admission.encoded_len
-    || request.epoch_id != admission.epoch_id
-    || request.reference_digest != admission.reference_digest
-    || request.responder != admission.responder
-    || usize::try_from(admission.chunk_count).ok() != Some(count)
+let projection = admission.projection();
+if !admission.projection_matches_identity(&admission.flush_identity) {
+    return Err(MergeSidecarError::FlushIdentityMismatch(
+        "retained actor identity differs from its immutable projection",
+    ));
+}
+let key = (projection.requester.clone(), projection.request_id);
+let Some(transfer) = self.outbound.get_mut(&key) else {
+    return Ok(false);
+};
+let request = &transfer.request;
+let count = transfer.chunks.len();
+if request.request_id != projection.request_id
+    || request.entry_hash != projection.entry_hash
+    || request.encoded_len != projection.encoded_len
+    || request.epoch_id != projection.epoch_id
+    || request.reference_digest != projection.reference_digest
+    || request.requester != projection.requester
+    || request.responder != projection.responder
+    || usize::try_from(request.encoded_len).ok() != Some(transfer.response_len)
+    || usize::try_from(projection.chunk_count).ok() != Some(count)
+    || projection.message_cursor_before != 0
+    || projection.message_cursor_after != 1
 {
-    return Err(MergeSidecarError::UnsolicitedResponse);
+    return Err(MergeSidecarError::FlushIdentityMismatch(
+        "response request or exact-output cursor changed before acknowledgement",
+    ));
 }
 """,
-        "sidecar cursor receipt must match every immutable transfer coordinate",
+        "sidecar cursor receipt must match its actor identity, canonical request, immutable transfer coordinates, and output-message cursor",
         errors,
     )
     _require_rust_token_sequence(
         merge_path,
         merge_ack_items.get("MergeSidecarTransport::acknowledge_outbound_chunk"),
         """
-let source = ServerRequestSource::Authenticated(admission.reply_route.source_key());
+let expected_chunk = transfer
+    .chunks
+    .get(chunk_index)
+    .and_then(|message| match message.as_ref() {
+        CertifiedMergeSidecarMessage::Chunk(chunk) => Some(chunk),
+        CertifiedMergeSidecarMessage::Request(_) => None,
+    })
+    .ok_or(MergeSidecarError::FlushIdentityMismatch(
+        "chunk cursor does not name a cached response chunk",
+    ))?;
+if !admission.matches_materialized_chunk(expected_chunk) {
+""",
+        "sidecar acknowledgement must validate the exact cached chunk without per-source reconstruction",
+        errors,
+    )
+    for item_name in ("drain_outbound_chunks", "acknowledge_outbound_chunk"):
+        _require_rust_token_sequence(
+            merge_path,
+            merge_ack_items.get(f"MergeSidecarTransport::{item_name}"),
+            ".to_vec()",
+            "per-source sidecar drainage and acknowledgement must never reconstruct cached payload bytes",
+            errors,
+            count=0,
+        )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_ack_items.get("MergeSidecarTransport::acknowledge_outbound_chunk"),
+        """
+let source = ServerRequestSource::Authenticated(admission.source_key.clone());
 let Some(attempt) = transfer.attempts.get_mut(&source) else {
     return Ok(false);
 };
 if !attempt
     .reply_route
     .as_ref()
-    .is_some_and(|route| route.same_tenure(&admission.reply_route))
+    .is_some_and(|route| admission.is_bound_to_attempt(route))
 {
     return Ok(false);
 }
 """,
-        "sidecar cursor receipt must bind the exact connection tenure",
+        "sidecar cursor receipt must bind the authenticated source and exact connection tenure retained by the actor admission",
         errors,
     )
     _require_rust_token_sequence(
@@ -21051,26 +26111,30 @@ if attempt.in_flight_chunk != Some(chunk_index) {
     if chunk_index < attempt.next_chunk {
         return Ok(false);
     }
-    return Err(MergeSidecarError::UnsolicitedResponse);
+    return Err(MergeSidecarError::FlushIdentityMismatch(
+        "acknowledgement does not name the in-flight source chunk",
+    ));
 }
-if attempt.next_chunk != chunk_index {
-    return Err(MergeSidecarError::UnsolicitedResponse);
+if attempt.next_chunk != projection.chunk_cursor_before
+    || projection.chunk_cursor_before != chunk_index
+    || projection.chunk_cursor_after != expected_chunk_cursor_after
+{
+    return Err(MergeSidecarError::FlushIdentityMismatch(
+        "per-source sidecar chunk cursor changed before acknowledgement",
+    ));
 }
 """,
-        "sidecar cursor receipt must match the current unacknowledged chunk",
+        "sidecar cursor receipt must match the current unacknowledged chunk and its exact before/after cursor projection",
         errors,
     )
     _require_rust_token_sequence(
         merge_path,
         merge_ack_items.get("MergeSidecarTransport::acknowledge_outbound_chunk"),
         """
-attempt.next_chunk = attempt
-    .next_chunk
-    .checked_add(1)
-    .ok_or(MergeSidecarError::UnsolicitedResponse)?;
+attempt.next_chunk = projection.chunk_cursor_after;
 attempt.in_flight_chunk = None;
 """,
-        "only a validated writer-flush receipt may advance and clear a sidecar source cursor",
+        "only a validated writer-flush receipt may install its projected successor cursor and clear tenure-bound in-flight state",
         errors,
     )
     _require_rust_token_sequence(
@@ -21244,19 +26308,30 @@ NetworkReplyFlushAckStatus::Flushed => {
         worker_path,
         worker_ack_items.get("PendingExactOutput::drive_with_budget_ack"),
         """
-CertifiedMergeSidecarMessage::Chunk(chunk) => {
-    Some(CertifiedMergeSidecarChunkAdmission::new(chunk, reply_route))
-}
-CertifiedMergeSidecarMessage::Request(_) => None,
+let sidecar_reply = match (&post.data, &route) {
+    (
+        NetworkMessage::CertifiedMergeSidecar(message),
+        ExactTargetRoute::Reply(reply_route),
+    ) => match message.as_ref() {
+        CertifiedMergeSidecarMessage::Chunk(_) => Some((
+            post.clone(),
+            reply_route.clone(),
+            message_cursor_before,
+            message_cursor_after,
+        )),
+        CertifiedMergeSidecarMessage::Request(_) => None,
+    },
+    _ => None,
+};
 """,
-        "only a certified response chunk may own a writer-flush receipt",
+        "only an immutable certified response chunk may retain the exact route and before/after message cursor for a writer-flush receipt",
         errors,
     )
     _require_rust_token_sequence(
         worker_path,
         worker_ack_items.get("PendingExactOutput::drive_with_budget_ack"),
         """
-if sidecar_admission.is_some()
+if sidecar_reply.is_some()
     && self.sidecar_control_units() >= self.sidecar_admission_capacity
 {
 """,
@@ -21268,10 +26343,37 @@ if sidecar_admission.is_some()
         worker_ack_items.get("PendingExactOutput::drive_with_budget_ack"),
         """
 Ok(ExactOutputAttemptOutcome::SidecarFlush(flush_ack)) => {
-    let admission = sidecar_admission.ok_or_else(|| {
-        "Sumeragi v2 attached a sidecar flush witness to non-sidecar output"
-            .to_owned()
-    })?;
+    let (canonical_post, reply_route, message_cursor_before, message_cursor_after) =
+        sidecar_reply.ok_or_else(|| {
+            "Sumeragi v2 attached a sidecar flush witness to non-sidecar output"
+                .to_owned()
+        })?;
+    let admission = CertifiedMergeSidecarChunkAdmission::from_admitted_reply(
+        &canonical_post,
+        &reply_route,
+        message_cursor_before,
+        message_cursor_after,
+        flush_ack.identity(),
+    )
+    .map_err(|error| error.to_string())?;
+    self.fanouts
+        .get_mut(fanout_index)
+        .expect("admitted exact fanout must remain present")
+        .mark_admitted(target_index)?;
+    let actual_message_cursor_after = self
+        .fanouts
+        .get(fanout_index)
+        .and_then(|fanout| fanout.targets.get(target_index))
+        .ok_or_else(|| {
+            "Sumeragi v2 admitted sidecar output target disappeared".to_owned()
+        })?
+        .message_index;
+    if actual_message_cursor_after != message_cursor_after {
+        return Err(
+            "Sumeragi v2 sidecar output message cursor changed during admission"
+                .to_owned(),
+        );
+    }
     self.flushing_sidecar_chunks.push_back(
         PendingCertifiedMergeSidecarChunkFlush {
             admission,
@@ -21308,7 +26410,9 @@ match self.network.post_reply_recoverable_with_flush_ack(
         worker_path,
         worker_ack_items.get("ProductionV2Services::drive_pending_exact_output"),
         """
-pending.poll_sidecar_flushes();
+pending
+    .poll_sidecar_flushes()
+    .map_err(|error| error.to_string())?;
 let outcome = {
 """,
         "production exact-output service must poll writer receipts before actor admission",
@@ -21331,7 +26435,9 @@ pending.drive_bounded_with_ack(|post, ticket, route| {
         worker_ack_items.get("ProductionV2Services::drive_pending_exact_output"),
         """
 };
-pending.poll_sidecar_flushes();
+pending
+    .poll_sidecar_flushes()
+    .map_err(|error| error.to_string())?;
 match outcome {
 """,
         "production exact-output service must poll writer receipts after actor admission",
@@ -21343,7 +26449,9 @@ match outcome {
             "ProductionV2Services::drain_certified_merge_sidecar_chunk_admissions"
         ),
         """
-pending.poll_sidecar_flushes();
+pending
+    .poll_sidecar_flushes()
+    .map_err(|error| error.to_string())?;
 let count = limit.min(pending.admitted_sidecar_chunks.len());
 Ok(pending.admitted_sidecar_chunks.drain(..count).collect())
 """,
@@ -21380,6 +26488,14 @@ let reply_routes = self.reply_routes.as_mut().ok_or_else(|| {
     "Sumeragi v2 owned reply transfer lost its bounded route history".to_owned()
 })?;
 reply_routes.retain_active();
+if let Some(ownership) = self.ingress_ownership.as_mut() {
+    ownership.retain_active_reply_routes();
+    if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(reply_routes)) {
+        return Err(
+            "Sumeragi v2 owned reply pruning lost fair-ingress ownership".to_owned(),
+        );
+    }
+}
 let mut retained_targets = Vec::with_capacity(self.targets.len());
 let mut retained_peers = Vec::with_capacity(self.peers.len());
 for (target, peer) in self.targets.drain(..).zip(self.peers.drain(..)) {
@@ -21392,9 +26508,17 @@ self.targets = retained_targets;
 self.peers = retained_peers;
 self.next_target_index = 0;
 reply_routes.retain_active();
+if let Some(ownership) = self.ingress_ownership.as_mut() {
+    ownership.retain_active_reply_routes();
+    if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(reply_routes)) {
+        return Err(
+            "Sumeragi v2 owned reply race pruning lost fair-ingress ownership".to_owned(),
+        );
+    }
+}
 self.rebuild_current_source_targets()?;
 """,
-        "pre-ownership route pruning must preserve matching peers and rebuild source cursors",
+        "pre-ownership route pruning must preserve matching peers, fair-ingress ownership, and rebuilt source cursors",
         errors,
     )
     _require_rust_token_sequence(
@@ -21426,6 +26550,79 @@ match self.validate_fanout_bounds(fanout) {
     )
     _require_rust_token_sequence(
         worker_path,
+        worker_ack_items.get(
+            "PendingExactOutput::complete_sidecar_targets_with_retained_flush_ownership"
+        ),
+        """
+let [message] = fanout.messages.as_slice() else {
+    return Ok(());
+};
+let NetworkMessage::CertifiedMergeSidecar(message) = message else {
+    return Ok(());
+};
+let CertifiedMergeSidecarMessage::Chunk(chunk) = message.as_ref() else {
+    return Ok(());
+};
+""",
+        "retained sidecar flush suppression must apply only to one exact immutable response chunk",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get(
+            "PendingExactOutput::complete_sidecar_targets_with_retained_flush_ownership"
+        ),
+        """
+let already_owned = self
+    .flushing_sidecar_chunks
+    .iter()
+    .map(|completion| &completion.admission)
+    .chain(self.admitted_sidecar_chunks.iter())
+    .any(|admission| {
+        admission.matches_materialized_chunk(chunk)
+            && admission.is_bound_to_attempt(route)
+    });
+if already_owned {
+    target.message_index = completed_cursor;
+    completed_routes.push(route.clone());
+}
+""",
+        "retained sidecar flush completion must match the immutable chunk and exact authenticated-source tenure before advancing only that route",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get(
+            "PendingExactOutput::complete_sidecar_targets_with_retained_flush_ownership"
+        ),
+        """
+for route in &completed_routes {
+    if !ownership.advance_reply_cursors(route, completed_message_cursor, 0) {
+        return Err(
+            "Sumeragi v2 retained sidecar flush lost fair-ingress ownership"
+                .to_owned(),
+        );
+    }
+}
+""",
+        "retained sidecar flush completion must advance only each matching fair-ingress source cursor",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get("PendingExactOutput::can_enqueue_owned_reply_transfer"),
+        """
+if !self.validate_owned_reply_transfer(&mut fanout)? {
+    return Ok(true);
+}
+self.complete_sidecar_targets_with_retained_flush_ownership(&mut fanout)?;
+self.capacity_available_for(&fanout)
+""",
+        "owned reply capacity preflight must suppress only same-tenure terminal sidecar flushes before charging capacity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
         worker_ack_items.get("PendingExactOutput::enqueue"),
         """
 self.validate_fanout_bounds(&fanout)?;
@@ -21441,9 +26638,10 @@ self.enqueue_validated(fanout)
 if !self.validate_owned_reply_transfer(&mut fanout)? {
     return Ok(ExactFanoutOwnership::Owned);
 }
+self.complete_sidecar_targets_with_retained_flush_ownership(&mut fanout)?;
 self.enqueue_validated(fanout)
 """,
-        "owned reply enqueue must prune and validate before the atomic ownership-changing kernel",
+        "owned reply enqueue must prune, validate, and suppress only same-tenure terminal sidecar flushes before the atomic ownership-changing kernel",
         errors,
     )
     _require_rust_token_sequence(
@@ -21452,14 +26650,15 @@ self.enqueue_validated(fanout)
             "ProductionV2Services::enqueue_owned_exact_reply_routes_while_guarded"
         ),
         """
-let Some(fanout) = PendingExactFanout::claimed_with_reply_routes(
+let Some(fanout) = PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
     vec![message],
     peer,
     reply_routes,
+    ingress_ownership,
     rollover_claim,
 )?
 """,
-        "exact replies expand all authenticated sources without changing semantic identity while preserving the complete bounded route history",
+        "exact replies expand all authenticated sources without changing semantic identity while preserving the complete bounded route and fair-ingress histories",
         errors,
     )
     _require_rust_token_sequence(
@@ -21489,9 +26688,10 @@ else {
 };
 rollover_claim.validate_fanout(&fanout.messages, &fanout.semantic_peers())?;
 let mut fanout = fanout;
+fanout.ingress_ownership = ingress_ownership;
 fanout.rollover_claim = rollover_claim;
 """,
-        "lane preflight must retain the complete bounded reply history through typed fanout validation",
+        "lane preflight must retain the complete bounded reply and fair-ingress histories through typed fanout validation",
         errors,
     )
     _require_rust_token_sequence(
@@ -21664,6 +26864,45 @@ self.push_merge_sidecar_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
 """,
         "lane sidecar post conversion must preserve the exact peer, bounded route authority, and message",
         errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get("ProductionV2Services::can_retain_lane_work_effect"),
+        "vec![NetworkMessage::CertifiedMergeSidecar(Arc::clone(message))]",
+        "worker preflight must preserve the exact lane-effect payload pointer",
+        errors,
+    )
+    post_sidecar_item = _require_qualified_rust_item(
+        worker_path,
+        worker_source,
+        "ProductionV2Services",
+        "post_certified_merge_sidecar_with_reply_routes",
+        errors,
+        "immutable sidecar worker dispatch",
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        post_sidecar_item,
+        """
+message: Arc<CertifiedMergeSidecarMessage>,
+""",
+        "worker sidecar dispatch must accept the immutable lane-effect carrier",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        post_sidecar_item,
+        "let data = NetworkMessage::CertifiedMergeSidecar(message);",
+        "worker sidecar dispatch must install the existing Arc without reconstruction",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        post_sidecar_item,
+        "Arc::new(message)",
+        "worker sidecar dispatch must never reconstruct the lane-effect payload",
+        errors,
+        count=0,
     )
     _require_rust_token_sequence(
         lane_path,
@@ -22054,11 +27293,38 @@ Ok(pending)
         runner_path,
         runner_ack_items.get("retain_active_owned_reply_routes"),
         """
+if let V2LaneWorkEffect::PostDurableLaneCertificate {
+    reply_routes,
+    ingress_ownership,
+    ..
+} = effect
+{
+    let Some(routes) = reply_routes.as_mut() else {
+        return false;
+    };
+    let Some(ownership) = ingress_ownership.as_mut() else {
+        return false;
+    };
+    let retained_routes = routes.retain_active();
+    let retained_ownership = ownership.retain_active_reply_routes();
+    return retained_routes != 0
+        && retained_routes == retained_ownership
+        && ownership.validate_exact()
+        && ownership.matches_reply_routes(Some(routes));
+}
+""",
+        "runner pruning must update durable lane routes and fair-ingress ownership atomically without losing sibling sources",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_ack_items.get("retain_active_owned_reply_routes"),
+        """
 V2LaneWorkEffect::PostCertifiedMergeSidecar {
     reply_routes,
-    message: CertifiedMergeSidecarMessage::Chunk(_),
+    message,
     ..
-} => reply_routes,
+} if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(_)) => reply_routes,
 """,
         "runner pruning must include every certified response chunk route set",
         errors,
@@ -22098,7 +27364,7 @@ apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
         runner_path,
         runner_ack_items.get("dispatch_lane_work_effect"),
         """
-let route_shape_is_valid = match &message {
+let route_shape_is_valid = match message.as_ref() {
     CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
     CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
 };
@@ -22110,8 +27376,14 @@ if !route_shape_is_valid {
     _require_rust_token_sequence(
         runner_path,
         runner_ack_items.get("dispatch_lane_work_effect"),
-        "services.post_certified_merge_sidecar_with_reply_routes(peer, reply_routes, message);",
-        "runner sidecar dispatch must preserve the exact peer, complete route set, and immutable message",
+        """
+services.post_certified_merge_sidecar_with_reply_routes(
+    peer.clone(),
+    reply_routes.clone(),
+    Arc::clone(&message),
+)
+""",
+        "runner sidecar dispatch must preserve the exact peer, complete route set, and immutable message pointer",
         errors,
     )
     _require_rust_token_sequence(
@@ -22316,6 +27588,7 @@ let targets = routes
 peers,
 targets,
 reply_routes,
+ingress_ownership: None,
 current_source_targets: BTreeMap::new(),
 next_target_index: 0,
 fifo_id: None,
@@ -22492,8 +27765,16 @@ if !retained_sources.insert(route.source_key()) {
             "PendingExactFanout::reply_target_merge_plan_after_candidate_prune"
         ),
         """
-let update = match candidate_route.source_update_from(prior_route) {
-    Ok(update) => update,
+                if candidate.target_is_complete(candidate_index)
+                    && !self.target_is_complete(prior_index)
+                {
+                    return Err(
+                        "Sumeragi v2 retained sidecar flush conflicts with an incomplete source target"
+                            .to_owned(),
+                    );
+                }
+                let update = match candidate_route.source_update_from(prior_route) {
+                    Ok(update) => update,
     Err(NetworkReplyRouteError::Inactive) => continue,
     Err(NetworkReplyRouteError::Stale) => {
         return Err(
@@ -22507,16 +27788,27 @@ let update = match candidate_route.source_update_from(prior_route) {
         ));
     }
 };
-if !used_prior.insert(prior_index) {
-    return Err("Sumeragi v2 retry updated one reply attempt twice".to_owned());
-}
-plan.push(ReplyTargetMerge::Update {
-    prior_index,
-    candidate_index,
-    update,
-});
+                if !used_prior.insert(prior_index) {
+                    return Err("Sumeragi v2 retry updated one reply attempt twice".to_owned());
+                }
+                if self.target_is_complete(prior_index)
+                    && !candidate.target_is_complete(candidate_index)
+                    && update == NetworkReplyRouteSourceUpdate::Reconnected
+                    && candidate.is_certified_sidecar_chunk_fanout()
+                {
+                    plan.push(ReplyTargetMerge::Reactivate {
+                        prior_index,
+                        candidate_index,
+                    });
+                } else {
+                    plan.push(ReplyTargetMerge::Update {
+                        prior_index,
+                        candidate_index,
+                        update,
+                    });
+                }
 """,
-        "all same-source route changes use one update plan whose reconnect arm preserves the source cursor",
+        "same-source coalescing must reject terminal-candidate cursor regression and restrict cursor reactivation to a reconnected typed certified-sidecar chunk whose writer never produced a Flushed witness",
         errors,
     )
     _require_rust_token_sequence(
@@ -22537,16 +27829,66 @@ for candidate_index in unmatched {
     )
     _require_rust_token_sequence(
         worker_path,
+        worker_ack_items.get(
+            "PendingExactFanout::reply_target_merge_plan_after_candidate_prune"
+        ),
+        """
+let ingress_ownership = match (&self.ingress_ownership, &candidate.ingress_ownership) {
+    (Some(retained), Some(candidate)) => {
+        let mut retained = retained.clone();
+        let mut candidate = candidate.clone();
+        retained.retain_active_reply_routes();
+        candidate.retain_active_reply_routes();
+        if !retained.merge_downstream(candidate)
+            || !retained.matches_reply_routes(Some(&merged_routes))
+        {
+            return Err(
+                "Sumeragi v2 exact-output coalescing lost fair-ingress ownership"
+                    .to_owned(),
+            );
+        }
+        Some(retained)
+    }
+    (None, None) => None,
+    (Some(_), None) | (None, Some(_)) => {
+        return Err(
+            "Sumeragi v2 exact-output retry changed fair-ingress ownership shape"
+                .to_owned(),
+        );
+    }
+};
+""",
+        "exact-output coalescing must atomically merge fair-ingress source cursors with the canonical route history",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
         reservation_items.get(
             "PendingExactFanout::coalesce_reservation_additions_for_plan"
         ),
         """
 let added_mask = match *merge {
     ReplyTargetMerge::Update { .. } => 0,
-    ReplyTargetMerge::Append { .. } => full_mask,
+    ReplyTargetMerge::Reactivate {
+        candidate_index, ..
+    }
+    | ReplyTargetMerge::Append { candidate_index } => {
+        let candidate_target =
+            candidate.targets.get(candidate_index).ok_or_else(|| {
+                "Sumeragi v2 retry candidate disappeared before reservation preflight"
+                    .to_owned()
+            })?;
+        *candidate
+            .message_class_suffixes
+            .get(candidate_target.message_index)
+            .ok_or_else(|| {
+                "Sumeragi v2 retry cursor advanced beyond its reservation suffix"
+                    .to_owned()
+            })?
+    }
 };
 """,
-        "every same-source update retains its existing reservation ownership while only a new source consumes fresh geometry",
+        "ordinary same-source updates retain reservation ownership while closed-writer reactivation and a new source charge exactly the candidate cursor suffix",
         errors,
     )
     _require_rust_token_sequence(
@@ -22586,14 +27928,46 @@ NetworkReplyRouteSourceUpdate::Reconnected => {
         worker_path,
         worker_ack_items.get("PendingExactFanout::preview_coalesce_plan"),
         """
+ReplyTargetMerge::Reactivate {
+    prior_index,
+    candidate_index,
+} => {
+    let target = targets.get_mut(prior_index).ok_or_else(|| {
+        "Sumeragi v2 sidecar reactivation target disappeared before commit"
+            .to_owned()
+    })?;
+    let candidate_target =
+        candidate.targets.get(candidate_index).ok_or_else(|| {
+            "Sumeragi v2 sidecar reactivation candidate disappeared before commit"
+                .to_owned()
+        })?;
+    if !matches!(target.0, ExactTargetRoute::Reply(_))
+        || !matches!(candidate_target.route, ExactTargetRoute::Reply(_))
+    {
+        return Err(
+            "Sumeragi v2 sidecar reactivation changed route kind".to_owned()
+        );
+    }
+    target.0 = candidate_target.route.clone();
+    target.1 = candidate_target.message_index;
+    target.2 = false;
+}
+""",
+        "closed-writer sidecar reactivation must retry the candidate current-item cursor and unpark only that source",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get("PendingExactFanout::preview_coalesce_plan"),
+        """
 targets.push((
     candidate_target.route.clone(),
-    0,
-    false,
+    candidate_target.message_index,
+    candidate_target.parked,
     candidate_peer.clone(),
 ));
 """,
-        "the coalesce preview must give only a newly observed alternate source a zero cursor",
+        "the coalesce preview must copy an appended source cursor and parked state so retained same-tenure flush ownership remains terminal while new sources start at zero by construction",
         errors,
     )
     _require_rust_token_sequence(
@@ -22627,12 +28001,45 @@ target.apply_reply_route_update(candidate_route, update);
         reservation_items.get("PendingExactFanout::commit_coalesce_plan"),
         """
 self.targets.push(PendingExactTarget {
-    route: candidate.targets[candidate_index].route.clone(),
-    ..PendingExactTarget::default()
+    route: candidate_target.route.clone(),
+    message_index: candidate_target.message_index,
+    current: None,
+    ticket: None,
+    parked: candidate_target.parked,
 });
 self.peers.push(candidate.peers[candidate_index].clone());
 """,
-        "only a newly observed alternate source may append a fresh item-zero attempt",
+        "an appended source must preserve its candidate cursor and parked state while starting without actor-post or admission-ticket ownership",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("PendingExactFanout::commit_coalesce_plan"),
+        """
+let target = &mut self.targets[prior_index];
+target.apply_reply_route_update(
+    candidate_route,
+    NetworkReplyRouteSourceUpdate::Reconnected,
+);
+target.message_index = candidate_target.message_index;
+""",
+        "closed-writer sidecar commit must install the reconnected capability before restoring exactly the previewed current-item cursor",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("PendingExactFanout::commit_coalesce_plan"),
+        """
+self.targets.push(PendingExactTarget {
+    route: candidate_target.route.clone(),
+    message_index: candidate_target.message_index,
+    current: None,
+    ticket: None,
+    parked: candidate_target.parked,
+});
+self.peers.push(candidate.peers[candidate_index].clone());
+""",
+        "the infallible commit must exactly mirror the previewed appended-source cursor and parked state",
         errors,
     )
     _require_rust_token_sequence(
@@ -22640,9 +28047,10 @@ self.peers.push(candidate.peers[candidate_index].clone());
         worker_ack_items.get("PendingExactFanout::commit_coalesce_plan"),
         """
 self.reply_routes = Some(plan.reply_routes.clone());
+self.ingress_ownership = plan.ingress_ownership.clone();
 self.current_source_targets = current_source_targets;
 """,
-        "atomic coalesce commit must install the complete route history and its precomputed FIFO projection together",
+        "atomic coalesce commit must install the complete route and fair-ingress histories with their precomputed FIFO projection",
         errors,
     )
     _require_rust_token_sequence(
@@ -22922,18 +28330,17 @@ if let (Some(fifo_id), Some(source)) = (released_source_owner, admitted_source) 
         worker_path,
         reservation_items.get("ProductionV2Services::start"),
         """
-let max_peers_per_fanout = context
-    .roster
-    .len()
-    .max(network.reply_route_source_capacity())
-    .max(1);
-let shared_pending_ownership_unit_capacity = consensus_io_capacity
-    .checked_add(auxiliary_io_capacity)
-    .and_then(|capacity| capacity.checked_add(super::v2_core::MAX_EFFECTS_PER_STEP))
-    .ok_or_else(|| "Sumeragi v2 outbound shared capacity overflowed".to_owned())?;
+let reply_route_source_capacity = network.reply_route_source_capacity().max(1);
+let max_peers_per_fanout = context.roster.len().max(reply_route_source_capacity).max(1);
+let shared_pending_ownership_unit_capacity =
+    sumeragi_v2_exact_output_shared_ownership_capacity(
+        consensus_io_capacity,
+        auxiliary_io_capacity,
+    )
+    .map_err(|error| error.to_string())?;
 validate_shared_ownership_geometry(
     shared_pending_ownership_unit_capacity,
-    max_peers_per_fanout,
+    reply_route_source_capacity,
 )?;
 let frozen_semantic_targets = context
     .roster
@@ -22947,7 +28354,7 @@ let pending_exact_output = PendingExactOutput::new(
     &frozen_semantic_targets,
 )?;
 """,
-        "production derives route fanout from configured source geometry and fails closed unless one maximum fanout fits",
+        "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
         errors,
     )
     _require_rust_token_sequence(
@@ -22978,12 +28385,25 @@ Ok((
 V2LaneWorkEffect::PostDurableLaneCertificate {
     peer,
     reply_routes,
+    ingress_ownership,
     certificate,
 } => {
     let reply_routes = reply_routes.as_ref().ok_or_else(|| {
         "durable lane-certificate response lost its authenticated reply routes"
             .to_owned()
     })?;
+    let ingress_ownership = ingress_ownership.as_ref().ok_or_else(|| {
+        "durable lane-certificate response lost its fair-ingress ownership"
+            .to_owned()
+    })?;
+    if !ingress_ownership.validate_exact()
+        || !ingress_ownership.matches_reply_routes(Some(reply_routes))
+    {
+        return Err(
+            "durable lane-certificate response has altered fair-ingress ownership"
+                .to_owned(),
+        );
+    }
     let (peers, routes, reply_route_history) =
         Self::exact_target_geometry(peer, Some(reply_routes))?;
 """,
@@ -23254,14 +28674,15 @@ if reply_routes.semantic_target() != &peer {
         "Sumeragi v2 reply route does not match its semantic output target".to_owned(),
     );
 }
-let Some(fanout) = PendingExactFanout::claimed_with_reply_routes(
+let Some(fanout) = PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
     vec![message],
     peer,
     reply_routes,
+    ingress_ownership,
     rollover_claim,
 )?
 """,
-        "exact replies expand all authenticated sources without changing semantic identity and preserve bounded tombstones",
+        "exact replies expand all authenticated sources without changing semantic identity and preserve bounded route, cursor, and fair-ingress histories",
         errors,
     )
     _require_rust_token_sequence(
@@ -23271,6 +28692,7 @@ let Some(fanout) = PendingExactFanout::claimed_with_reply_routes(
 let ownership = self.post_block_message_on_reply_routes_while_guarded(
     peer,
     reply_routes,
+    ingress_ownership,
     BlockMessage::V2(message),
     operation.permit(),
 )?;
@@ -23284,18 +28706,29 @@ let ownership = self.post_block_message_on_reply_routes_while_guarded(
             "post_durable_history_response_on_reply_routes_with_permit"
         ),
         """
-self.post_durable_history_response_with_routes(peer, Some(reply_routes), message, permit)
+self.post_durable_history_response_with_routes(
+    peer,
+    Some(reply_routes),
+    Some(ingress_ownership),
+    message,
+    permit,
+)
 """,
-        "durable history public emission passes every retained source route",
+        "durable history public emission passes every retained source route with its matching fair-ingress owner",
         errors,
     )
     _require_rust_token_sequence(
         worker_path,
         exact_output_claim_items.get("post_durable_lane_certificate_on_reply_routes"),
         """
-self.post_durable_lane_certificate_with_routes(peer, Some(reply_routes), certificate)
+self.post_durable_lane_certificate_with_routes(
+    peer,
+    Some(reply_routes),
+    Some(ingress_ownership),
+    certificate,
+)
 """,
-        "durable lane public emission passes every retained source route",
+        "durable lane public emission passes every retained source route with its matching fair-ingress owner",
         errors,
     )
     for item_name, description in (
@@ -23344,11 +28777,12 @@ self.enqueue_owned_exact_reply_routes_while_guarded(
     NetworkMessage::SumeragiBlock(Box::new(wire)),
     peer,
     reply_routes,
+    Some(ingress_ownership),
     rollover_claim,
     permit,
 )
 """,
-        "block response encoding retains every exact authenticated source route",
+        "block response encoding retains every exact authenticated source route and its fair-ingress owner",
         errors,
     )
     _require_rust_token_sequence(
@@ -23751,6 +29185,7 @@ if !requester_is_current_validator && !artifact.commit_qc.validator_set.contains
 let queued = self.push_effect(V2LaneWorkEffect::PostDurableLaneCertificate {
     peer: sender.clone(),
     reply_routes: Some(reply_routes),
+    ingress_ownership,
     certificate,
 });
 Some(if queued {
@@ -23842,15 +29277,47 @@ if !lane_work_effect_reply_routes_are_valid(&effect) {
         lane_items.get("merge_lane_work_effect_reply_routes"),
         """
 V2LaneWorkEffect::PostDurableLaneCertificate {
-    reply_routes: queued,
+    reply_routes: queued_routes,
+    ingress_ownership: queued_ownership,
     ..
 },
 V2LaneWorkEffect::PostDurableLaneCertificate {
-    reply_routes: candidate,
+    reply_routes: candidate_routes,
+    ingress_ownership: candidate_ownership,
     ..
 },
 """,
-        "durable lane effect coalescence retains the complete per-source route set",
+        "durable lane effect coalescence identifies both the complete per-source route set and its fair-ingress owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("merge_lane_work_effect_reply_routes"),
+        """
+let mut merged_routes = queued_routes.clone();
+let retained_candidate_route =
+    merge_optional_reply_routes(&mut merged_routes, candidate_routes);
+let mut merged_ownership = queued_ownership.clone();
+match (&mut merged_ownership, candidate_ownership) {
+    (Some(retained), Some(candidate)) => {
+        if !retained.merge_downstream(candidate.clone()) {
+            return false;
+        }
+    }
+    (None, None) if cfg!(test) => {}
+    (Some(_), None) | (None, Some(_)) | (None, None) => return false,
+}
+if merged_ownership.as_ref().is_some_and(|ownership| {
+    !ownership.matches_reply_routes(merged_routes.as_ref())
+        || !ownership.validate_exact()
+}) {
+    return false;
+}
+*queued_routes = merged_routes;
+*queued_ownership = merged_ownership;
+retained_candidate_route
+""",
+        "durable lane effect coalescence must atomically merge source-isolated routes and their matching fair-ingress ownership",
         errors,
     )
     _require_rust_token_sequence(
@@ -23972,6 +29439,29 @@ if services
         runner_path,
         runner_items.get("drain_v2_ingress"),
         """
+let ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+    V2RunnerError::Service(
+        "global Sumeragi v2 ingress lost its fair ownership carrier".to_owned(),
+    )
+})?;
+if !ingress_ownership.validate_exact()
+    || !ingress_ownership.matches_message(inbound.message())
+    || !ingress_ownership.matches_semantic_origin(inbound.sender())
+{
+    return Err(V2RunnerError::Service(
+        "global Sumeragi v2 ingress carried altered fair ownership".to_owned(),
+    ));
+}
+let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
+if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
+""",
+        "runner ingress must retain canonical message, semantic origin, and source-isolated routes in one exact ownership carrier",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
 block_sync_server.serve_historical_body(
     kura,
     context_store,
@@ -23990,6 +29480,7 @@ block_sync_server.serve_historical_body(
 services.post_durable_history_response_on_reply_routes_with_permit(
     response_peer,
     reply_routes,
+    ingress_ownership,
     response,
     permit,
 )
@@ -24070,6 +29561,7 @@ apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
 V2LaneWorkEffect::PostDurableLaneCertificate {
     peer,
     reply_routes,
+    ingress_ownership,
     certificate,
 } => {
     let reply_routes = reply_routes.ok_or_else(|| {
@@ -24078,12 +29570,414 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                 .to_owned(),
         )
     })?;
+    let ingress_ownership = ingress_ownership.ok_or_else(|| {
+        V2RunnerError::Service(
+            "durable lane-certificate response lost its fair-ingress ownership".to_owned(),
+        )
+    })?;
+    if !ingress_ownership.validate_exact()
+        || !ingress_ownership.matches_reply_routes(Some(&reply_routes))
+    {
+        return Err(V2RunnerError::Service(
+            "durable lane-certificate response carried altered ingress ownership"
+                .to_owned(),
+        ));
+    }
     services
-        .post_durable_lane_certificate_on_reply_routes(peer, reply_routes, certificate)
+        .post_durable_lane_certificate_on_reply_routes(
+            peer,
+            reply_routes,
+            ingress_ownership,
+            certificate,
+        )
         .map_err(V2RunnerError::Service)?;
 }
 """,
-        "historical lane dispatch preserves every authenticated source route",
+        "historical lane dispatch preserves every authenticated source route with its matching fair-ingress owner",
+        errors,
+    )
+    return errors
+
+
+def _local_runner_service_contract_source_fidelity_errors(
+    ledger: dict[str, Any],
+    *,
+    repo_root: Path = ROOT_DIR,
+    formal_dir: Path = FORMAL_DIR,
+) -> list[str]:
+    """Bind the proof-only runner deadline to its exact trusted/source seam.
+
+    The checked Rust structure establishes finite loop shapes and finite idle
+    waits. It deliberately cannot establish OS scheduling or I/O latency; the
+    unique `runtime-after-gst` trusted contract owns those propositions.
+    """
+
+    errors: list[str] = []
+    obligations = ledger.get("obligations")
+    runtime_entries = (
+        [
+            entry
+            for entry in obligations
+            if isinstance(entry, dict)
+            and entry.get("id") == "runtime-after-gst"
+        ]
+        if isinstance(obligations, list)
+        else []
+    )
+    if len(runtime_entries) != 1:
+        errors.append(
+            "proof ledger must contain exactly one runtime-after-gst trusted "
+            f"contract; found {len(runtime_entries)}"
+        )
+    else:
+        runtime_entry = runtime_entries[0]
+        expected_entry = {
+            "id": "runtime-after-gst",
+            "requirement": _RUNTIME_AFTER_GST_REQUIREMENT,
+            "module": "trusted-boundary",
+            "symbol": "post-gst-runtime-service",
+            "status": "trusted_contract",
+        }
+        if runtime_entry != expected_entry:
+            errors.append(
+                "runtime-after-gst must remain the exact per-validator local "
+                "runner/service trusted contract; Rust source checks do not "
+                "prove host scheduling or admitted-work latency"
+            )
+
+    network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    liveness_path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    for path in (network_path, liveness_path):
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: local-runner service formal source must be a regular file"
+            )
+    network_source = (
+        network_path.read_text(encoding="utf-8")
+        if network_path.is_file() and not network_path.is_symlink()
+        else ""
+    )
+    liveness_source = (
+        liveness_path.read_text(encoding="utf-8")
+        if liveness_path.is_file() and not liveness_path.is_symlink()
+        else ""
+    )
+
+    def require_exact_tla_operator(
+        path: Path,
+        source: str,
+        symbol: str,
+        expected: str,
+    ) -> None:
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing local-runner service operator {symbol}")
+            return
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must equal only {expected!r}; "
+                f"found {normalized!r}"
+            )
+
+    require_exact_tla_operator(
+        network_path,
+        network_source,
+        "LocalRunnerServiceOwners",
+        "AsyncCurrentResponsiveVoters \\cup asyncHistoricalRecoveryTargets",
+    )
+    require_exact_tla_operator(
+        liveness_path,
+        liveness_source,
+        "LocalRunnerServiceContractDebt",
+        "IF node \\in LocalRunnerServiceOwners "
+        "/\\ asyncNodeServiceDeadlines[node] <= asyncNow "
+        "THEN 1 ELSE 0",
+    )
+    require_exact_tla_operator(
+        liveness_path,
+        liveness_source,
+        "LocalRunnerServiceContractDecreaseStep",
+        "\\E node \\in LocalRunnerServiceOwners: "
+        "LocalRunnerServiceContractDebt(node)' "
+        "< LocalRunnerServiceContractDebt(node)",
+    )
+    for symbol in ("NodeServiceGateDebt", "NodeServiceGateLocalWorkDecreaseStep"):
+        if re.search(rf"(?m)^[ \t]*{re.escape(symbol)}\s*\(", liveness_source):
+            errors.append(
+                f"{liveness_path}: retired unscoped service-gate operator "
+                f"{symbol} is prohibited"
+            )
+
+    deadlock_obligation = _top_level_theorem_body(
+        liveness_source,
+        "DeadlockFreedomObligation",
+        preserve_string_contents=True,
+    )
+    if deadlock_obligation is None:
+        errors.append(
+            f"{liveness_path}: missing local-runner DeadlockFreedomObligation"
+        )
+    else:
+        body, line = deadlock_obligation
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        statement = " ".join(parts[0].split())
+        expected_statement = ASYNC_LIVENESS_EXACT_STATEMENTS[
+            "post-gst-deadlock-freedom"
+        ]
+        proof = parts[1] if len(parts) == 2 else ""
+        required_proof_tokens = (
+            "PostGstUndecidedEnablesConcreteProductiveStepAt",
+            "AsyncTerminatingLocalWorkDecreaseStep",
+            "DeadlockFreedomWithLocalWorkProperty",
+        )
+        missing = [
+            token
+            for token in required_proof_tokens
+            if re.search(rf"\b{re.escape(token)}\b", proof) is None
+        ]
+        if statement != expected_statement or missing:
+            errors.append(
+                f"{liveness_path}:{line}: DeadlockFreedomObligation must bind "
+                "the exact per-validator terminating-local-work projection; "
+                f"statement={statement!r}, missing={missing}"
+            )
+
+    tick_enabled = _top_level_operator_body(network_source, "AsyncTickEnabled")
+    if tick_enabled is None:
+        errors.append(f"{network_path}: missing AsyncTickEnabled")
+    else:
+        body, line = tick_enabled
+        normalized = " ".join(body.split())
+        required = (
+            "OverdueResponsivePackets = {}",
+            "\\A node \\in LocalRunnerServiceOwners:",
+            "asyncNodeServiceDeadlines[node] > asyncNow",
+            "asyncIoServiceDeadlines[node] > asyncNow",
+        )
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{network_path}:{line}: AsyncTickEnabled must project each "
+                f"independent local runner contract; missing {missing}"
+            )
+
+    exact_runner_reset = (
+        "asyncNodeServiceDeadlines' = "
+        "[asyncNodeServiceDeadlines EXCEPT "
+        "![node] = asyncNow + AsyncDeliveryBound]"
+    )
+    for symbol in ("RunNodeWork", "RunHistoricalServer"):
+        extracted = _top_level_operator_body(network_source, symbol)
+        if extracted is None:
+            errors.append(f"{network_path}: missing runner action {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized.count(exact_runner_reset) != 1:
+            errors.append(
+                f"{network_path}:{line}: {symbol} must refresh exactly its own "
+                "per-node trusted runner deadline once"
+            )
+
+    runner_path = (
+        repo_root / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_runner.rs"
+    )
+    worker_path = (
+        repo_root / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_worker.rs"
+    )
+    for path in (runner_path, worker_path):
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: local-runner service production source must be a regular file"
+            )
+    runner_source = (
+        runner_path.read_text(encoding="utf-8")
+        if runner_path.is_file() and not runner_path.is_symlink()
+        else ""
+    )
+    worker_source = (
+        worker_path.read_text(encoding="utf-8")
+        if worker_path.is_file() and not worker_path.is_symlink()
+        else ""
+    )
+
+    _require_rust_source_token_sequence(
+        runner_path,
+        runner_source,
+        "const IDLE_POLL: Duration = Duration::from_millis(10);",
+        "serialized height runner must use one positive finite idle poll",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        "const MAX_COMPLETION_DRAIN_BATCH: usize = 256;",
+        "completion service must retain its finite batch bound",
+        errors,
+    )
+
+    runner_items: dict[str, RustItem | None] = {}
+    for item_name in (
+        "run_inner",
+        "advance_executor",
+        "advance_pending_tip_recovery_executor",
+        "outer_ingress_turns",
+        "apply_bounded_sidecar_admissions",
+        "dispatch_lane_work_effects",
+        "drain_lane_relay_ingress",
+    ):
+        item = _require_rust_item(runner_path, runner_source, item_name, errors)
+        runner_items[item_name] = item
+        _require_rust_item_context(
+            runner_path,
+            item,
+            (),
+            f"local-runner service {item_name} production item",
+            errors,
+            expected_attributes=("#[allow(clippy::too_many_lines)]",)
+            if item_name == "run_inner"
+            else (),
+        )
+    completion_item = _require_qualified_rust_item(
+        worker_path,
+        worker_source,
+        "ProductionV2Services",
+        "drain_completions",
+        errors,
+        "bounded local-runner completion service production item",
+    )
+    sealed_items = {
+        **runner_items,
+        "ProductionV2Services::drain_completions": completion_item,
+    }
+    for item_name, expected_sha256 in (
+        _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256.items()
+    ):
+        _require_rust_item_token_sha256(
+            runner_path if item_name != "ProductionV2Services::drain_completions" else worker_path,
+            sealed_items.get(item_name),
+            expected_sha256,
+            f"local-runner trusted-contract structural seam {item_name}",
+            errors,
+        )
+
+    run_inner = runner_items.get("run_inner")
+    _require_rust_token_sequence(
+        runner_path,
+        run_inner,
+        "liveness_watchdog.poll(Instant::now());",
+        "every serialized height-loop iteration must poll the liveness watchdog",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        run_inner,
+        "services.drain_completions(&mut executor)?;",
+        "every serialized height-loop iteration must service bounded completions",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        run_inner,
+        "advance_executor(&mut executor, &mut services, control_queue_capacity)?;",
+        "the ordinary height path must invoke the bounded serialized runtime",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        run_inner,
+        "advance_pending_tip_recovery_executor(\n"
+        "    &mut executor,\n"
+        "    &mut services,\n"
+        "    control_queue_capacity,\n"
+        ")?;",
+        "the interrupted-tip path must invoke its bounded serialized runtime",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        run_inner,
+        "let _ = wake_rx.recv_timeout(IDLE_POLL);",
+        "every idle/continue edge must retain the finite local wake bound",
+        errors,
+        count=4,
+    )
+    if run_inner is not None:
+        tokens = rust_code_tokens(run_inner.source)
+        continue_count = _token_sequence_count(tokens, ("continue", ";"))
+        timed_continue_count = _token_sequence_count(
+            tokens,
+            rust_code_tokens(
+                "let _ = wake_rx.recv_timeout(IDLE_POLL); continue;"
+            ),
+        )
+        if continue_count != 3 or timed_continue_count != continue_count:
+            errors.append(
+                f"{runner_path}:{run_inner.line}: all three serialized "
+                "height-loop continue edges must pass through finite IDLE_POLL; "
+                f"continues={continue_count}, timed={timed_continue_count}"
+            )
+        if _token_sequence_count(tokens, rust_code_tokens("wake_rx.recv()")):
+            errors.append(
+                f"{runner_path}:{run_inner.line}: serialized height loop may "
+                "not introduce an unbounded wake receive"
+            )
+
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("advance_executor"),
+        "for _ in 0..limit.max(1) {",
+        "ordinary serialized runtime service must be a finite configured turn",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("advance_pending_tip_recovery_executor"),
+        "for _ in 0..limit.max(1) {",
+        "tip-recovery runtime service must be a finite configured turn",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("outer_ingress_turns"),
+        "(0..limit.max(1)).flat_map(|_| [OuterIngressTurn::Runtime, OuterIngressTurn::Ingress])",
+        "ingress must alternate a finite runtime turn with each finite ingress turn",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("apply_bounded_sidecar_admissions"),
+        "for _ in 0..limit.max(1) {",
+        "sidecar admission service must be a finite configured turn",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("dispatch_lane_work_effects"),
+        "let scan_limit = lane_work.effect_count();\n"
+        "let mut dispatched = 0usize;\n"
+        "for _ in 0..scan_limit {",
+        "lane service must snapshot a finite scan limit before dispatch",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_lane_relay_ingress"),
+        "for _ in 0..limit.max(1) {",
+        "lane relay service must be a finite configured turn",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        completion_item,
+        "while attempts < MAX_COMPLETION_DRAIN_BATCH {",
+        "completion service must terminate its local scan at the fixed batch bound",
         errors,
     )
     return errors
@@ -24376,11 +30270,31 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
         return source[start:end]
 
     def require_tokens(path: Path, label: str, body: str, tokens: tuple[str, ...]) -> None:
-        normalized = " ".join(body.split())
-        missing = [token for token in tokens if token not in normalized]
+        body_tokens = rust_code_tokens(body)
+        missing = [
+            token
+            for token in tokens
+            if _token_sequence_count(body_tokens, rust_code_tokens(token)) == 0
+        ]
         if missing:
             errors.append(
                 f"{path}: {label} omits production refinement tokens {missing}"
+            )
+
+    def require_token_count(
+        path: Path,
+        label: str,
+        body: str,
+        token: str,
+        expected: int,
+    ) -> None:
+        observed = _token_sequence_count(
+            rust_code_tokens(body), rust_code_tokens(token)
+        )
+        if observed != expected:
+            errors.append(
+                f"{path}: {label} must contain {token!r} exactly {expected} "
+                f"time(s); found {observed}"
             )
 
     def require_order(path: Path, label: str, body: str, markers: tuple[str, ...]) -> None:
@@ -24406,8 +30320,23 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
             "PendingSuccessorConstruction",
             construction,
             (
-                "super::status::begin_v2_successor_activation(finalized_height)?;",
-                "PendingSuccessorActivation::Applied { finalized_height: self.finalized_height, successor_context_id, }",
+                "super::status::begin_v2_successor_activation(predecessor)?;",
+                "expected_predecessor: self.predecessor.refinement_projection(),",
+                "authority_predecessor: authority.predecessor().refinement_projection(),",
+                "successor_context_id: super::v2_recovery::successor_context_refinement_projection( authority.successor_context_id(), ),",
+                "if !production_successor_predecessor_binding_kernel(binding)",
+                "PendingSuccessorActivation::Applied { expected_predecessor: self.predecessor, authority, }",
+            ),
+        )
+        require_order(
+            runner_path,
+            "PendingSuccessorConstruction",
+            construction,
+            (
+                "begin_v2_successor_activation(predecessor)",
+                "ProductionSuccessorPredecessorBindingProjection",
+                "production_successor_predecessor_binding_kernel(binding)",
+                "PendingSuccessorActivation::Applied",
             ),
         )
         activation = region(
@@ -24422,9 +30351,26 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
             "PendingSuccessorActivation",
             activation,
             (
-                "Self::Recovered { finalized_height, successor_context_id, }",
-                "super::status::activate_v2_successor_height( finalized_height, successor_context_id, successor, )?;",
-                "super::status::activate_recovered_v2_successor_height( finalized_height, successor_context_id, successor, )?;",
+                "RecoveredSuccessorActivationAuthority::CompleteTip(authority)",
+                "RecoveredSuccessorActivationAuthority::SnapshotBootstrap(authority)",
+                "let published_height = super::status::v2_status().map_or(0, |status| status.height);",
+                "stage_before: SUCCESSOR_STAGE_NONE, stage_after: SUCCESSOR_STAGE_NONE, published_height_before: published_height, published_height_after: published_height, restart_required_before: false, restart_required_after: false,",
+                "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "super::status::activate_v2_successor_height( expected_predecessor, authority, successor, )?;",
+                "super::status::activate_recovered_v2_successor_height(authority, successor)?;",
+                "super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;",
+            ),
+        )
+        require_order(
+            runner_path,
+            "PendingSuccessorActivation::recovered",
+            activation,
+            (
+                "match &authority",
+                "let published_height = super::status::v2_status()",
+                "ProductionSuccessorStartupLifecycleProjection",
+                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "Ok(match authority",
             ),
         )
         open_ingress = region(
@@ -24457,8 +30403,7 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
             "run_inner recovery ownership",
             run_inner,
             (
-                "let recovered_successor_activation_parent = recovered.successor_activation_parent();",
-                "PendingSuccessorActivation::recovered(parent, verified_context.context().id())",
+                "let mut pending_successor_activation = recovered_successor_activation .map(PendingSuccessorActivation::recovered) .transpose()?;",
             ),
         )
         require_order(
@@ -24481,9 +30426,11 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
             "run_inner applied successor handoff",
             run_inner,
             (
-                "PendingSuccessorConstruction::begin(receipt.height())?",
+                "DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)?",
+                "PendingSuccessorConstruction::begin(predecessor)?",
                 "build_verified_successor(",
-                "activation.bind(verified_context.context().id())",
+                "let (next_verified_context, successor_authority) = successor.into_parts()",
+                "activation.bind(successor_authority)?",
             ),
         )
         require_tokens(
@@ -24498,9 +30445,9 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
             ),
             (
                 "block_sync_server.serve_historical_body( kura, context_store, request, &sender, local_key, )",
-                "executor.accept_certified_body_response(response, &sender, services)",
+                "executor.accept_certified_body_response_with_ingress_ownership( response, &sender, ingress_ownership, services, )",
                 "block_sync.authenticate_response(response, &sender)",
-                "block_sync.enqueue_and_complete(discovered, |message| { executor.enqueue_network(message).map(|_| ()) })",
+                "block_sync.enqueue_and_complete(discovered, |message| { executor.enqueue_discovered_commit_certificate(message, ingress_ownership) })",
             ),
         )
 
@@ -24520,8 +30467,22 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
             "begin_v2_successor_activation",
             begin,
             (
-                "SumeragiV2LocalWorkStage::Queued",
-                "SumeragiV2LocalWorkStage::Running",
+                "let height = predecessor.height();",
+                "validate_v2_predecessor_status(&status, height, SumeragiV2LocalWorkStage::Queued)?;",
+                "stage_before: successor_stage_projection(status.liveness.work.successor_height), stage_after: SUCCESSOR_STAGE_RUNNING, published_height_before: status.height, published_height_after: status.height, restart_required_before: status.restart_required, restart_required_after: status.restart_required,",
+                "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "update_v2_successor_work_stage_at( height, SumeragiV2LocalWorkStage::Queued, SumeragiV2LocalWorkStage::Running, Instant::now(), )",
+            ),
+        )
+        require_order(
+            status_path,
+            "begin_v2_successor_activation",
+            begin,
+            (
+                "validate_v2_predecessor_status(",
+                "ProductionSuccessorStartupLifecycleProjection",
+                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "update_v2_successor_work_stage_at(",
             ),
         )
         validate = region(
@@ -24551,23 +30512,75 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
             "fn activate_v2_successor_height_at(",
             "\nfn activate_recovered_v2_successor_height_at(",
         )
+        require_tokens(
+            status_path,
+            "activate_v2_successor_height_at",
+            applied,
+            (
+                "let (authority_predecessor, expected_successor_context_id) = authority.into_parts();",
+                "validate_v2_predecessor_status( &predecessor_status, finalized_height, SumeragiV2LocalWorkStage::Running, )?;",
+                "expected_predecessor: expected_predecessor.refinement_projection(), authority_predecessor: authority_predecessor.refinement_projection(),",
+                "predecessor_status_height: predecessor_status.height, predecessor_stage_before: successor_stage_projection( predecessor_status.liveness.work.successor_height, ), predecessor_stage_after: SUCCESSOR_STAGE_COMPLETE,",
+                "if !production_applied_successor_trace_refines_indexed_activation_kernel(trace)",
+                "update_v2_successor_work_stage_at( finalized_height, SumeragiV2LocalWorkStage::Running, SumeragiV2LocalWorkStage::Complete, now, )?;",
+            ),
+        )
         require_order(
             status_path,
             "activate_v2_successor_height_at",
             applied,
             (
+                "authority.into_parts()",
                 "validate_v2_successor_snapshot(",
-                "SumeragiV2LocalWorkStage::Running",
-                "SumeragiV2LocalWorkStage::Complete",
+                "validate_v2_predecessor_status(",
+                "ProductionAppliedSuccessorTraceProjection",
+                "production_applied_successor_trace_refines_indexed_activation_kernel(trace)",
+                "update_v2_successor_work_stage_at(",
                 "set_v2_status_at(successor, now)",
+            ),
+        )
+        recovered_wrapper = region(
+            status_path,
+            status_source,
+            "activate_recovered_v2_successor_height_at",
+            "fn activate_recovered_v2_successor_height_at(",
+            "\nfn publish_recovered_v2_successor_height_at(",
+        )
+        require_tokens(
+            status_path,
+            "activate_recovered_v2_successor_height_at",
+            recovered_wrapper,
+            (
+                "let (predecessor, expected_successor_context_id) = authority.into_parts();",
+                "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP",
+                "predecessor.refinement_projection()",
+                "CanonicalIdentityProjection::zero(), 0, CanonicalIdentityProjection::zero(),",
             ),
         )
         recovered = region(
             status_path,
             status_source,
-            "activate_recovered_v2_successor_height_at",
-            "fn activate_recovered_v2_successor_height_at(",
+            "publish_recovered_v2_successor_height_at",
+            "fn publish_recovered_v2_successor_height_at(",
             "\n/// Publish the exact one-shot boundary",
+        )
+        require_tokens(
+            status_path,
+            "publish_recovered_v2_successor_height_at",
+            recovered,
+            (
+                "published_status_height_before: published.as_ref().map_or(0, |status| status.height),",
+                "if !production_recovered_successor_trace_refines_indexed_activation_kernel(trace)",
+                "if let Some(published) = published",
+                "set_v2_status_at(successor, now);",
+            ),
+        )
+        require_token_count(
+            status_path,
+            "publish_recovered_v2_successor_height_at",
+            recovered,
+            "if let Some(published) = published",
+            2,
         )
         require_order(
             status_path,
@@ -24575,6 +30588,9 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
             recovered,
             (
                 "validate_v2_successor_snapshot(",
+                "let published = SUMERAGI_V2_STATUS",
+                "ProductionRecoveredSuccessorTraceProjection",
+                "production_recovered_successor_trace_refines_indexed_activation_kernel(trace)",
                 "if let Some(published)",
                 "set_v2_status_at(successor, now)",
             ),
@@ -24584,6 +30600,182 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
                 f"{status_path}: recovered successor publication may not fabricate "
                 "physical predecessor completion"
             )
+        snapshot = region(
+            status_path,
+            status_source,
+            "activate_snapshot_bootstrap_v2_height",
+            "pub(crate) fn activate_snapshot_bootstrap_v2_height(",
+            "\n/// Register the live bounded transport-to-runner ingress",
+        )
+        require_tokens(
+            status_path,
+            "activate_snapshot_bootstrap_v2_height",
+            snapshot,
+            (
+                "authority.into_parts()",
+                "SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP",
+                "ProductionDurablePredecessorIdentityProjection::default()",
+                "snapshot_record_refinement_projection(snapshot_record_hash)",
+                "successor_block_refinement_projection(snapshot_block_hash)",
+            ),
+        )
+        restart = region(
+            status_path,
+            status_source,
+            "mark_v2_restart_required",
+            "pub(crate) fn mark_v2_restart_required()",
+            "\n/// Clear protocol-v2 status during shutdown and isolated tests.",
+        )
+        require_tokens(
+            status_path,
+            "mark_v2_restart_required",
+            restart,
+            (
+                "stage_before: successor_stage_projection(status.liveness.work.successor_height), stage_after: successor_stage_projection(status.liveness.work.successor_height), published_height_before: status.height, published_height_after: status.height, restart_required_before: status.restart_required, restart_required_after: true,",
+                "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "status.restart_required = true;",
+            ),
+        )
+        require_token_count(
+            status_path,
+            "mark_v2_restart_required",
+            restart,
+            "return;",
+            1,
+        )
+        require_order(
+            status_path,
+            "mark_v2_restart_required",
+            restart,
+            (
+                "ProductionSuccessorStartupLifecycleProjection",
+                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "status.restart_required = true",
+            ),
+        )
+
+    recovery_path, recovery_source = load(
+        "crates/iroha_core/src/sumeragi/v2_recovery.rs"
+    )
+    if recovery_source:
+        predecessor_authentication = region(
+            recovery_path,
+            recovery_source,
+            "DurableV2PredecessorIdentity::authenticate",
+            "pub(crate) fn authenticate(\n        artifact: &wire::finality::V2FinalityArtifact,",
+            "\n    /// Lossless primitive identity consumed by the shared production/Verus kernel.",
+        )
+        require_tokens(
+            recovery_path,
+            "DurableV2PredecessorIdentity::authenticate",
+            predecessor_authentication,
+            (
+                "height: artifact.height, block_hash: artifact.block_hash, artifact_hash: HashOf::new(artifact),",
+                "receipt.height() != identity.height || receipt.block_hash() != identity.block_hash || receipt.context_id() != artifact.context_id() || receipt.subject() != artifact.subject || receipt.certificate() != artifact.commit_qc.as_ref() || receipt.artifact_hash() != identity.artifact_hash",
+                "if !production_durable_predecessor_identity_kernel(identity.refinement_projection())",
+            ),
+        )
+        require_order(
+            recovery_path,
+            "DurableV2PredecessorIdentity::authenticate",
+            predecessor_authentication,
+            (
+                "let identity = Self",
+                "receipt.height() != identity.height",
+                "production_durable_predecessor_identity_kernel(identity.refinement_projection())",
+                "Ok(identity)",
+            ),
+        )
+        snapshot_authority = region(
+            recovery_path,
+            recovery_source,
+            "SnapshotSuccessorActivationAuthority::new",
+            "fn new(record: &wire::SnapshotV2BootstrapRecord) -> Self",
+            "\n    /// Imported snapshot height which anchors the first executable context.",
+        )
+        require_tokens(
+            recovery_path,
+            "SnapshotSuccessorActivationAuthority::new",
+            snapshot_authority,
+            (
+                "record.context.snapshot_bootstrap.as_ref()",
+                "expect(\"verified snapshot activation authority retains its anchor\")",
+                "record_hash: HashOf::new(record), snapshot_height: anchor.snapshot_height, snapshot_block_hash: anchor.snapshot_block_hash, successor_context_id: record.context.id(),",
+            ),
+        )
+        recovery = region(
+            recovery_path,
+            recovery_source,
+            "recover_active_height",
+            "pub(crate) fn recover_active_height(",
+            "\nfn verify_state_kura_prefix(",
+        )
+        require_tokens(
+            recovery_path,
+            "recover_active_height snapshot authority",
+            recovery,
+            (
+                "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;",
+                "if record.context() != &bootstrap.context || record.proofs_of_possession() != bootstrap.validator_set_pops",
+                "let verified_context = VerifiedHeightContext::snapshot_bootstrap(bootstrap)?;",
+                "RecoveredSuccessorActivationAuthority::SnapshotBootstrap( SnapshotSuccessorActivationAuthority::new(bootstrap), )",
+            ),
+        )
+        require_order(
+            recovery_path,
+            "recover_active_height snapshot authority",
+            recovery,
+            (
+                "authenticate_v2_snapshot_replay_boundary(",
+                "is_entirely_audited_snapshot_import()",
+                "authenticated_snapshot_v2_bootstrap()",
+                "record.context() != &bootstrap.context",
+                "VerifiedHeightContext::snapshot_bootstrap(bootstrap)",
+                "SnapshotSuccessorActivationAuthority::new(bootstrap)",
+            ),
+        )
+        require_tokens(
+            recovery_path,
+            "recover_active_height complete-tip authority",
+            recovery,
+            (
+                "kura.v2_finality_artifact_with_receipt(durable_height)?",
+                "build_verified_successor(state, &context_store, &parent_artifact, &parent_receipt)?;",
+                "RecoveredSuccessorActivationAuthority::CompleteTip( activation, )",
+            ),
+        )
+        verified_successor = region(
+            recovery_path,
+            recovery_source,
+            "build_verified_successor",
+            "pub(crate) fn build_verified_successor(",
+            "\nfn verify_persisted_height(",
+        )
+        require_tokens(
+            recovery_path,
+            "build_verified_successor",
+            verified_successor,
+            (
+                "DurableV2PredecessorIdentity::authenticate(parent_artifact, parent_receipt)?;",
+                "if state_height != parent_height || state_block_hash != Some(predecessor.block_hash)",
+                "if parent_record.context() != &parent_artifact.height_context",
+                "VerifiedHeightContext::successor( expected, proofs, parent_artifact, parent_receipt, parent_record.proofs_of_possession(), )?;",
+                "DurableSuccessorActivationAuthority { predecessor, successor_context_id: verified.context().id(), }",
+                "DurableSuccessorActivationAuthority { predecessor, successor_context_id: verified_context.context().id(), }",
+            ),
+        )
+        require_order(
+            recovery_path,
+            "build_verified_successor",
+            verified_successor,
+            (
+                "DurableV2PredecessorIdentity::authenticate(",
+                "state_height != parent_height",
+                "parent_record.context() != &parent_artifact.height_context",
+                "VerifiedHeightContext::successor(",
+                "DurableSuccessorActivationAuthority",
+            ),
+        )
 
     adapter_path, adapter_source = load(
         "crates/iroha_core/src/sumeragi/v2.rs"
@@ -24657,7 +30849,9 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
             "enqueue_and_complete",
             enqueue,
             (
-                "enqueue(discovered.message())",
+                "let message = discovered.message()",
+                "enqueue(message.clone())",
+                "admission.matches(&message)",
                 "self.complete(discovered)",
             ),
         )
@@ -24816,8 +31010,7 @@ def _successor_stale_token_mutation_source_fidelity_errors(
     require_operator(
         "SuccessorActivationPipelineDistance",
         required=(
-            'CASE activationStatus = "Queued" -> IF '
-            "activationFailureHistoryPresent THEN 9 ELSE 10",
+            'CASE activationStatus = "Queued" -> 10',
             '/\\ activationStatus = "Running" /\\ '
             "~SuccessorActivationCredentialReady -> 9",
             "/\\ SuccessorActivationCredentialReady /\\ "
@@ -24827,11 +31020,7 @@ def _successor_stale_token_mutation_source_fidelity_errors(
     )
     require_operator(
         "SuccessorActivationRank",
-        exact=(
-            "IF ~activationFailureHistoryPresent THEN 9 + "
-            "SuccessorActivationPipelineDistance ELSE "
-            "SuccessorActivationPipelineDistance"
-        ),
+        exact="SuccessorActivationPipelineDistance",
     )
     require_operator(
         "MutationTypeInvariant",
@@ -24839,7 +31028,7 @@ def _successor_stale_token_mutation_source_fidelity_errors(
             "activationPrerequisites \\subseteq "
             "SuccessorActivationRequiredPrerequisites",
             "activationTokens \\subseteq {AppliedSuccessorActivationToken}",
-            "previousRank \\in 0..19",
+            "previousRank \\in 0..10",
         ),
     )
     require_operator(
@@ -24847,8 +31036,8 @@ def _successor_stale_token_mutation_source_fidelity_errors(
         exact=(
             "/\\ MutationTypeInvariant "
             "/\\ ExactDurableParentApplicationWitness "
-            "/\\ (activationFailureHistoryPresent => "
-            'predecessorOwnership = "Absent") '
+            "/\\ (activationFailurePresent => "
+            'activationStatus = "Running") '
             "/\\ SuccessorActivationPipelineDistance \\in 1..10"
         ),
     )
@@ -24867,7 +31056,7 @@ def _successor_stale_token_mutation_source_fidelity_errors(
         "StaleAppliedTokenInit",
         exact=(
             '/\\ StaleAppliedTokenState /\\ lastTransition = "Initial" '
-            "/\\ previousRank = 19"
+            "/\\ previousRank = 10"
         ),
     )
     require_operator(
@@ -24897,19 +31086,18 @@ def _successor_stale_token_mutation_source_fidelity_errors(
         ),
     )
     require_operator(
-        "MutationFailClosedSuccessorStartup",
+        "MutationLatchAppliedSuccessorStartupFailure",
         required=(
-            'activationStatus \\in {"Queued", "Running"}',
+            'activationStatus = "Running"',
             'predecessorOwnership = "Published"',
-            "~activationFailureHistoryPresent",
-            'activationStatus\' = "Queued"',
-            'predecessorOwnership\' = "Absent"',
+            "~activationFailurePresent",
             "activationPrerequisites' = {}",
             "activationTokens' = {}",
             "activationFailurePresent' = TRUE",
             "activationFailureHistoryPresent' = TRUE",
-            'lastTransition\' = "FailClosed"',
+            'lastTransition\' = "AppliedFailure"',
             "previousRank' = SuccessorActivationRank",
+            "UNCHANGED <<activationStatus, predecessorOwnership>>",
         ),
     )
     exact_operators = {
@@ -24921,17 +31109,17 @@ def _successor_stale_token_mutation_source_fidelity_errors(
             "StaleAppliedTokenState => ~ENABLED "
             "FixedBeginSuccessorActivation"
         ),
-        "StaleFailClosedIsEnabled": (
-            "StaleAppliedTokenState => ENABLED "
-            "MutationFailClosedSuccessorStartup"
+        "StaleAppliedFailureIsDisabled": (
+            "StaleAppliedTokenState => ~ENABLED "
+            "MutationLatchAppliedSuccessorStartupFailure"
         ),
         "BuggyBeginViolationWitness": (
             'lastTransition = "BuggyBegin" => '
             "~SuccessorActivationProtocolInvariantProjection"
         ),
-        "FailClosedStrictlyDecreasesRankWitness": (
-            'lastTransition = "FailClosed" => '
-            "SuccessorActivationRank < previousRank"
+        "AppliedFailurePreservesRunningWitness": (
+            'lastTransition = "AppliedFailure" => '
+            'activationStatus = "Running"'
         ),
         "BugMutationNext": "BuggyBeginSuccessorActivation",
         "BugMutationSpec": (
@@ -24940,7 +31128,7 @@ def _successor_stale_token_mutation_source_fidelity_errors(
         ),
         "FixedMutationNext": (
             "\\/ FixedBeginSuccessorActivation "
-            "\\/ MutationFailClosedSuccessorStartup"
+            "\\/ MutationLatchAppliedSuccessorStartupFailure"
         ),
         "FixedMutationSpec": (
             "StaleAppliedTokenInit /\\ "
@@ -24957,7 +31145,7 @@ def _successor_stale_token_mutation_source_fidelity_errors(
             "INVARIANT MutationTypeInvariant",
             "INVARIANT StaleBuggyBeginIsEnabled",
             "INVARIANT StaleFixedBeginIsDisabled",
-            "INVARIANT StaleFailClosedIsEnabled",
+            "INVARIANT StaleAppliedFailureIsDisabled",
             "INVARIANT BuggyBeginViolationWitness",
             "INVARIANT SuccessorActivationProtocolInvariantProjection",
         ),
@@ -24966,8 +31154,8 @@ def _successor_stale_token_mutation_source_fidelity_errors(
             "CHECK_DEADLOCK FALSE",
             "INVARIANT MutationTypeInvariant",
             "INVARIANT StaleFixedBeginIsDisabled",
-            "INVARIANT StaleFailClosedIsEnabled",
-            "INVARIANT FailClosedStrictlyDecreasesRankWitness",
+            "INVARIANT StaleAppliedFailureIsDisabled",
+            "INVARIANT AppliedFailurePreservesRunningWitness",
             "INVARIANT SuccessorActivationProtocolInvariantProjection",
         ),
     }
@@ -24999,17 +31187,14 @@ def _successor_activation_rank_source_fidelity_errors(
     source = proof_path.read_text(encoding="utf-8")
     errors: list[str] = []
     operator_contracts = {
-        "SuccessorActivationRankCarrier": "0..19",
+        "SuccessorActivationRankCarrier": "0..21",
         "SuccessorActivationPipelineDistance": " ".join(
             r'''
             LET successorContext ==
                   CanonicalIndexedContext(parentContext.height + 1)
                 marker ==
                   SuccessorActivationMarker(parentContext, node, successorContext)
-            IN CASE successorActivationStatus[parentContext][node] = "Queued"
-                      -> IF SuccessorActivationOwner(parentContext, node)
-                              \in successorActivationFailureHistory
-                         THEN 9 ELSE 10
+            IN CASE successorActivationStatus[parentContext][node] = "Queued" -> 10
                [] /\ successorActivationStatus[parentContext][node] = "Running"
                   /\ ~SuccessorActivationCredentialReady(
                         parentContext, node, successorContext)
@@ -25060,8 +31245,8 @@ def _successor_activation_rank_source_fidelity_errors(
         ),
         "SuccessorActivationRank": (
             "IF SuccessorPublicationOrSuperseded(parentContext, node) THEN 0 "
-            "ELSE IF SuccessorActivationOwner(parentContext, node) "
-            "\\notin successorActivationFailureHistory THEN 9 + "
+            "ELSE IF successorPredecessorStatusOwnership[parentContext][node] "
+            '= "Published" THEN 11 + '
             "SuccessorActivationPipelineDistance(parentContext, node) "
             "ELSE SuccessorActivationPipelineDistance(parentContext, node)"
         ),
@@ -25075,6 +31260,10 @@ def _successor_activation_rank_source_fidelity_errors(
         "SuccessorActivationAtRank": (
             "/\\ SuccessorActivationPending(parentContext, node) "
             "/\\ SuccessorActivationRank(parentContext, node) = rank"
+        ),
+        "SuccessorActivationFailureAbsent": (
+            "SuccessorActivationOwner(parentContext, node) "
+            "\\notin successorActivationFailures"
         ),
         "SuccessorActivationPendingStructureProperty": (
             "[](\\A parentContext \\in AdmissibleContextRecords, "
@@ -25093,6 +31282,8 @@ def _successor_activation_rank_source_fidelity_errors(
             "\\A parentContext \\in AdmissibleContextRecords, "
             "node \\in Responsive: "
             "[][ /\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
             "/\\ IndexedSuccessorActivationProgressStep(parentContext, node) "
             "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
             "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
@@ -25106,9 +31297,7 @@ def _successor_activation_rank_source_fidelity_errors(
             "[][ /\\ SuccessorActivationPending(parentContext, node) "
             "/\\ [IndexedChainNext]_IndexedChainVars "
             "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "<= SuccessorActivationRank(parentContext, node) "
+            "\\/ SuccessorActivationPending(parentContext, node)' "
             "]_IndexedChainVars"
         ),
         "SuccessorActivationOutcomeIsStableProperty": (
@@ -25135,6 +31324,16 @@ def _successor_activation_rank_source_fidelity_errors(
             "SuccessorActivationPending(parentContext, node) "
             "~> SuccessorPublicationOrSuperseded(parentContext, node)"
         ),
+        "SuccessorActivationTemporalKernel": (
+            "/\\ []IndexedCompositionInvariant "
+            "/\\ []SuccessorActivationProtocolInvariant "
+            "/\\ [][IndexedChainNext]_IndexedChainVars "
+            "/\\ WF_IndexedChainVars( "
+            "IndexedSuccessorActivationProgressStep(parentContext, node))"
+        ),
+        "SuccessorActivationFailureFreeSuffix": (
+            "[]SuccessorActivationFailureAbsent(parentContext, node)"
+        ),
     }
     for symbol, exact_body in operator_contracts.items():
         extracted = _top_level_operator_body(
@@ -25149,6 +31348,203 @@ def _successor_activation_rank_source_fidelity_errors(
             errors.append(
                 f"{proof_path}:{line}: {symbol} must equal only "
                 f"{exact_body!r}; found {normalized!r}"
+            )
+
+    theorem_contracts = {
+        "CleanCompleteTipRestartDescendsPublishedTier": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "successorContext \\in AdmissibleContextRecords, "
+            "application \\in Chain!DecisionEvidenceSet: "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ RehydrateCleanCompleteTipSuccessorStartup( "
+            "parentContext, node, successorContext, application) "
+            "=> /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "< SuccessorActivationRank(parentContext, node)",
+            (
+                "SuccessorActivationRank",
+                "SuccessorActivationPipelineDistance",
+                "RehydrateCleanCompleteTipSuccessorStartup",
+                "Isa",
+            ),
+        ),
+        "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
+            "/\\ IndexedSuccessorActivationProgressStep(parentContext, node) "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "< SuccessorActivationRank(parentContext, node)",
+            (
+                "CleanCompleteTipRestartDescendsPublishedTier",
+                "LatchAppliedSuccessorStartupFailure",
+                "LatchRecoveredSuccessorStartupFailure",
+                "RehydrateFailedSuccessorStartup",
+                "Isa",
+            ),
+        ),
+        "IndexedFailureFreeStepDoesNotRaiseSuccessorActivationRank": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ IndexedCompositionInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
+            "/\\ [IndexedChainNext]_IndexedChainVars "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "<= SuccessorActivationRank(parentContext, node)",
+            (
+                "IndexedStepDoesNotOrphanSuccessorActivation",
+                "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank",
+                "IndexedChainNext",
+                "Isa",
+            ),
+        ),
+        "FailureFreeSuccessorActivationRankLeadsToExit": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "rank \\in SuccessorActivationRankCarrier: "
+            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> (SuccessorActivationAtRank(parentContext, node, rank) "
+            "~> SuccessorActivationRankExit(parentContext, node, rank))",
+            (
+                "SuccessorActivationFailureFreeRankPersistsOrExits",
+                "SuccessorActivationAtRankEnablesFairProgress",
+                "SuccessorActivationFailureFreeProgressExitsCurrentRank",
+                "WF_IndexedChainVars",
+                "PTL",
+            ),
+        ),
+        "FailureFreeSuccessorActivationRankConverges": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> \\A rank \\in SuccessorActivationRankCarrier: "
+            "SuccessorActivationAtRank(parentContext, node, rank) "
+            "~> SuccessorPublicationOrSuperseded(parentContext, node)",
+            (
+                "SuccessorActivationRankOrderingIsWellFounded",
+                "FailureFreeSuccessorActivationRankLeadsToExit",
+                "WellFoundedLeadsTo",
+            ),
+        ),
+        "FailureFreeSuccessorActivationConverges": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> (SuccessorActivationPending(parentContext, node) "
+            "~> SuccessorPublicationOrSuperseded(parentContext, node))",
+            (
+                "FailureFreeSuccessorActivationRankConverges",
+                "SuccessorActivationRankExistentialLift",
+                "SuccessorActivationPendingHasRankWitness",
+                "PTL",
+            ),
+        ),
+        "SuccessorActivationTemporalKernelIsSuffixClosed": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "SuccessorActivationTemporalKernel(parentContext, node) "
+            "=> []SuccessorActivationTemporalKernel(parentContext, node)",
+            ("PTL", "SuccessorActivationTemporalKernel"),
+        ),
+        "FailureFreeSuccessorActivationConvergenceAtEverySuffix": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "[]( /\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> (SuccessorActivationPending(parentContext, node) "
+            "~> SuccessorPublicationOrSuperseded(parentContext, node)))",
+            ("FailureFreeSuccessorActivationConverges", "PTL"),
+        ),
+        "EventualFailureFreeSuffixLiftsSuccessorConvergence": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ <>SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> (SuccessorActivationPending(parentContext, node) "
+            "~> SuccessorPublicationOrSuperseded(parentContext, node))",
+            (
+                "SuccessorActivationTemporalKernelIsSuffixClosed",
+                "FailureFreeSuccessorActivationConvergenceAtEverySuffix",
+                "IndexedStepDoesNotOrphanSuccessorActivation",
+                "PTL",
+            ),
+        ),
+        "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom": (
+            "IndexedChainSpec => "
+            "SuccessorActivationStarvationFreedomProperty",
+            (
+                "IndexedChainSpecEstablishesSuccessorActivationTemporalKernel",
+                "EventualFailureFreeSuccessorStartupSuffix",
+                "EventualFailureFreeSuffixLiftsSuccessorConvergence",
+            ),
+        ),
+        "IndexedChainSpecEstablishesSuccessorActivationRankProgress": (
+            "IndexedChainSpec => SuccessorActivationRankProgressProperty",
+            (
+                "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom",
+                "SuccessorActivationRankProgressProperty",
+                "PTL",
+            ),
+        ),
+    }
+    for symbol, (exact_statement, required_proof_tokens) in (
+        theorem_contracts.items()
+    ):
+        theorem = _top_level_theorem_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if theorem is None:
+            errors.append(f"{proof_path}: missing successor-rank theorem {symbol}")
+            continue
+        theorem_body, line = theorem
+        observed_statement = _tla_statement_without_proof(theorem_body)
+        if observed_statement != exact_statement:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must state only "
+                f"{exact_statement!r}; found {observed_statement!r}"
+            )
+        theorem_parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            theorem_body,
+            maxsplit=1,
+        )
+        if len(theorem_parts) != 2:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must retain an explicit "
+                "non-vacuous proof body"
+            )
+            continue
+        observed_proof = " ".join(theorem_parts[1].split())
+        for required_token in required_proof_tokens:
+            if required_token not in observed_proof:
+                errors.append(
+                    f"{proof_path}:{line}: {symbol} proof must invoke "
+                    f"{required_token}"
+                )
+        if re.search(
+            r"(?:\bOBVIOUS\b|\bASSUME\s+FALSE\b|\bBY\s+TRUE\b|"
+            r"\bPROVE\s+TRUE\b)",
+            observed_proof,
+        ):
+            errors.append(
+                f"{proof_path}:{line}: {symbol} proof may not use a "
+                "vacuous assertion"
             )
 
     chain_path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
@@ -25207,41 +31603,36 @@ def _successor_activation_rank_source_fidelity_errors(
                 f"{proof_path}:{line}: {theorem_symbol} must state only "
                 f"{exact_statement!r}; found {normalized!r}"
             )
-        exact_proof = (
-            "<1>1. IndexedChainSpec "
-            "=> SuccessorActivationPendingStructureProperty "
-            "BY IndexedChainSpecEstablishesSuccessorActivationPendingStructure "
-            "<1>2. IndexedChainSpec "
-            "=> SuccessorActivationStepDecreasesRankProperty "
-            "BY IndexedChainSpecEstablishesSuccessorActivationStepDecrease "
-            "<1>3. IndexedChainSpec "
-            "=> SuccessorActivationPendingIsNotOrphanedProperty "
-            "BY IndexedChainSpecEstablishesSuccessorActivationNonOrphaning "
-            "<1>4. IndexedChainSpec "
-            "=> SuccessorActivationOutcomeIsStableProperty "
-            "BY IndexedChainSpecEstablishesSuccessorActivationOutcomeStability "
-            "<1>5. IndexedChainSpec "
-            "=> SuccessorActivationRankProgressProperty "
-            "BY IndexedChainSpecEstablishesSuccessorActivationRankProgress "
-            "<1>6. IndexedChainSpec "
-            "=> SuccessorActivationStarvationFreedomProperty "
-            "BY IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom "
-            "<1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, <1>6"
-        )
-        if len(theorem_parts) != 2 or not re.search(
-            r"(?m)^[ \t]*PROOF\b", body
-        ):
+        if len(theorem_parts) != 2:
             errors.append(
-                f"{proof_path}:{line}: {theorem_symbol} must have the "
-                "reviewed deductive composition proof"
+                f"{proof_path}:{line}: {theorem_symbol} must retain the "
+                "explicit candidate TLAPS proof while strict verification "
+                "remains pending"
             )
         else:
-            normalized_proof = " ".join(theorem_parts[1].split())
-            if normalized_proof != exact_proof:
+            aggregate_proof = " ".join(theorem_parts[1].split())
+            required_aggregate_dependencies = (
+                "IndexedChainSpecEstablishesSuccessorActivationPendingStructure",
+                "IndexedChainSpecEstablishesSuccessorActivationStepDecrease",
+                "IndexedChainSpecEstablishesSuccessorActivationNonOrphaning",
+                "IndexedChainSpecEstablishesSuccessorActivationOutcomeStability",
+                "IndexedChainSpecEstablishesSuccessorActivationRankProgress",
+                "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom",
+            )
+            for dependency in required_aggregate_dependencies:
+                if aggregate_proof.count(dependency) != 1:
+                    errors.append(
+                        f"{proof_path}:{line}: {theorem_symbol} proof must "
+                        f"invoke {dependency} exactly once"
+                    )
+            if re.search(
+                r"(?:\bOBVIOUS\b|\bASSUME\s+FALSE\b|\bBY\s+TRUE\b|"
+                r"\bPROVE\s+TRUE\b)",
+                aggregate_proof,
+            ):
                 errors.append(
-                    f"{proof_path}:{line}: {theorem_symbol} proof must "
-                    "compose exactly the six reviewed successor-activation "
-                    "theorems"
+                    f"{proof_path}:{line}: {theorem_symbol} proof may not "
+                    "use a vacuous assertion"
                 )
 
     equivalence_symbol = "SuccessorActivationStarvationMatchesChainProgress"
@@ -25265,6 +31656,724 @@ def _successor_activation_rank_source_fidelity_errors(
                 f"{proof_path}:{line}: {equivalence_symbol} must state only "
                 f"{exact_equivalence!r}; found {normalized!r}"
             )
+    return errors
+
+
+def _async_historical_recovery_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the exact all-responsive historical-recovery proof boundary."""
+
+    path = formal_dir / "SumeragiV2AsyncHistoricalRecoveryLivenessProofs.tla"
+    if not path.is_file():
+        return [f"{path}: missing Async historical-recovery liveness child"]
+
+    raw_source = path.read_text(encoding="utf-8")
+    source = strip_tla_comments(raw_source, preserve_string_contents=True)
+    errors: list[str] = []
+
+    extends = re.search(r"(?m)^EXTENDS\s+([^\n]+)$", source)
+    exact_extends = "SumeragiV2AsyncLivenessProofs, TLAPS"
+    if extends is None or " ".join(extends.group(1).split()) != exact_extends:
+        errors.append(
+            f"{path}: Async historical-recovery child must extend exactly "
+            f"{exact_extends!r}"
+        )
+
+    operator_contracts = {
+        "HistoricalRecoveryTargetDecisionProgressProperty": (
+            "specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalRecoveryTarget(node)) "
+            "~> NodeHasDecision(node)"
+        ),
+        "ResponsiveDecisionApplicationProgressProperty": (
+            "specification => \\A node \\in Responsive: "
+            "(gst /\\ NodeHasDecision(node)) "
+            "~> NodeHasApplication(node)"
+        ),
+        "HistoricalRecoveryAsyncTemporalPrerequisites": (
+            "/\\ HistoricalRecoveryTargetDecisionProgressProperty(specification) "
+            "/\\ ResponsiveDecisionApplicationProgressProperty(specification)"
+        ),
+        "HistoricalProtectedCandidateOwned": (
+            "/\\ candidate.node \\in Responsive "
+            "/\\ HistoricalRecoveryTarget(candidate.node) "
+            "/\\ ProtectedCandidateOwned(candidate)"
+        ),
+        "HistoricalProtectedOwnedAtServiceRank": (
+            "/\\ gst /\\ HistoricalProtectedCandidateOwned(candidate) "
+            "/\\ CandidateServiceRank(candidate) = rank"
+        ),
+        "HistoricalProtectedServiceOwnershipExit": (
+            "~HistoricalProtectedCandidateOwned(candidate)"
+        ),
+        "HistoricalProtectedServiceRankProgressProperty": (
+            "specification => \\A candidate \\in AsyncCandidateSet, "
+            "rank \\in OwnedServiceRankCarrier: "
+            "HistoricalProtectedOwnedAtServiceRank(candidate, rank) "
+            "~> (HistoricalProtectedServiceOwnershipExit(candidate) "
+            "\\/ \\E lower \\in SetLessThan( rank, "
+            "OwnedServiceRankOrdering, OwnedServiceRankCarrier): "
+            "HistoricalProtectedOwnedAtServiceRank(candidate, lower))"
+        ),
+        "HistoricalProtectedStageRankProgressProperty": (
+            "specification => \\A candidate \\in AsyncCandidateSet, "
+            "position \\in Nat: (gst "
+            "/\\ HistoricalProtectedCandidateOwned(candidate) "
+            "/\\ CandidateServiceRank(candidate) = <<stage, position>>) "
+            "~> (HistoricalProtectedServiceOwnershipExit(candidate) "
+            "\\/ \\E lower \\in SetLessThan( <<stage, position>>, "
+            "OwnedServiceRankOrdering, OwnedServiceRankCarrier): "
+            "HistoricalProtectedOwnedAtServiceRank(candidate, lower))"
+        ),
+        "HistoricalProtectedStage2RankProgressProperty": (
+            "HistoricalProtectedStageRankProgressProperty(specification, 2)"
+        ),
+        "HistoricalProtectedStage3RankProgressProperty": (
+            "HistoricalProtectedStageRankProgressProperty(specification, 3)"
+        ),
+        "HistoricalProtectedStage4RankProgressProperty": (
+            "HistoricalProtectedStageRankProgressProperty(specification, 4)"
+        ),
+        "HistoricalProtectedStage5RankProgressProperty": (
+            "HistoricalProtectedStageRankProgressProperty(specification, 5)"
+        ),
+        "HistoricalProtectedStage6RankProgressProperty": (
+            "HistoricalProtectedStageRankProgressProperty(specification, 6)"
+        ),
+        "HistoricalProtectedServiceRankLeafProperties": (
+            "/\\ HistoricalProtectedStage2RankProgressProperty(specification) "
+            "/\\ HistoricalProtectedStage3RankProgressProperty(specification) "
+            "/\\ HistoricalProtectedStage4RankProgressProperty(specification) "
+            "/\\ HistoricalProtectedStage5RankProgressProperty(specification) "
+            "/\\ HistoricalProtectedStage6RankProgressProperty(specification)"
+        ),
+        "HistoricalProtectedCandidateStarvationProperty": (
+            "specification => \\A candidate \\in AsyncCandidateSet: "
+            "(gst /\\ HistoricalProtectedCandidateOwned(candidate)) "
+            "~> HistoricalProtectedServiceOwnershipExit(candidate)"
+        ),
+        "HistoricalCommitCertificateDiscoveryPending": (
+            "/\\ AsyncStrongTypeInvariant /\\ gst "
+            "/\\ HistoricalCommitCertificateDiscoveryDue(node)"
+        ),
+        "HistoricalCommitCertificateDiscoveryOutcome": (
+            "\\/ NodeHasDecision(node) "
+            "\\/ /\\ HistoricalRecoveryTarget(node) "
+            "/\\ ActiveCommitCertificateRequests(node) # {}"
+        ),
+        "HistoricalCommitCertificateDiscoveryPersistenceObligation": (
+            "\\A node \\in Responsive: "
+            "HistoricalCommitCertificateDiscoveryPending(node) "
+            "/\\ [AsyncNext]_AsyncAllVars "
+            "=> HistoricalCommitCertificateDiscoveryPending(node)' "
+            "\\/ HistoricalCommitCertificateDiscoveryOutcome(node)'"
+        ),
+        "HistoricalCommitCertificateDiscoveryPersistenceUnless": (
+            "[][HistoricalCommitCertificateDiscoveryPending(node) "
+            "/\\ ~HistoricalCommitCertificateDiscoveryOutcome(node) "
+            "=> HistoricalCommitCertificateDiscoveryPending(node)' "
+            "\\/ HistoricalCommitCertificateDiscoveryOutcome(node)']_AsyncAllVars"
+        ),
+        "HistoricalCommitCertificateDiscoveryPersistenceProperty": (
+            "specification => \\A node \\in Responsive: "
+            "HistoricalCommitCertificateDiscoveryPersistenceUnless(node)"
+        ),
+        "HistoricalRecoveryTargetRemoteServerInvariant": (
+            "\\A node \\in Responsive: HistoricalRecoveryTarget(node) "
+            "=> CommitCertificateRequestOutbox(node) # {}"
+        ),
+        "HistoricalRecoveryTargetRemoteServerProperty": (
+            "specification => []HistoricalRecoveryTargetRemoteServerInvariant"
+        ),
+        "HistoricalCommitCertificateDiscoveryClockProgressProperty": (
+            "specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalRecoveryTarget(node)) "
+            "~> (NodeHasDecision(node) "
+            "\\/ /\\ HistoricalRecoveryTarget(node) "
+            "/\\ \\/ ActiveCommitCertificateRequests(node) # {} "
+            "\\/ asyncNow >= AsyncRoundTimeout)"
+        ),
+        "HistoricalCommitCertificateRequestScheduled": (
+            "/\\ HistoricalRecoveryTarget(node) "
+            "/\\ \\E request \\in ActiveCommitCertificateRequests(node): "
+            "ItemScheduled(request)"
+        ),
+        "HistoricalCommitCertificateResponseScheduled": (
+            "/\\ HistoricalRecoveryTarget(node) "
+            "/\\ \\E response \\in AsyncNetworkItems: "
+            "/\\ response.kind = \"CommitCertificateResponse\" "
+            "/\\ response.envelope.recipient = node "
+            "/\\ CommitCertificateResponseAuthorized(response) "
+            "/\\ ItemScheduled(response)"
+        ),
+        "HistoricalCommitDecisionCandidateOwned": (
+            "\\E candidate \\in AsyncCandidateSet: "
+            "/\\ candidate.node = node /\\ candidate.kind = kind "
+            "/\\ candidate.item.kind = \"CommitQC\" "
+            "/\\ candidate.item.envelope.qc \\in commitQCs "
+            "/\\ candidate.item.envelope.qc.context = context "
+            "/\\ HistoricalProtectedCandidateOwned(candidate)"
+        ),
+        "HistoricalActiveRequestRetransmissionProgressLeaf": (
+            "specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalRecoveryTarget(node) "
+            "/\\ ActiveCommitCertificateRequests(node) # {}) "
+            "~> (NodeHasDecision(node) "
+            "\\/ HistoricalCommitCertificateRequestScheduled(node))"
+        ),
+        "HistoricalCommitRequestServeProgressLeaf": (
+            "StarvationFreedomProperty(specification) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalCommitCertificateRequestScheduled(node)) "
+            "~> (NodeHasDecision(node) "
+            "\\/ HistoricalCommitCertificateResponseScheduled(node)))"
+        ),
+        "HistoricalCommitResponseAdmissionProgressLeaf": (
+            "specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalCommitCertificateResponseScheduled(node)) "
+            "~> (NodeHasDecision(node) "
+            "\\/ HistoricalCommitDecisionCandidateOwned( "
+            "node, \"DeliverQC\"))"
+        ),
+        "HistoricalCommitDeliveryProgressLeaf": (
+            "HistoricalProtectedCandidateStarvationProperty(specification) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalCommitDecisionCandidateOwned(node, \"DeliverQC\")) "
+            "~> (NodeHasDecision(node) "
+            "\\/ HistoricalCommitDecisionCandidateOwned( "
+            "node, \"BeginDecision\")))"
+        ),
+        "HistoricalBeginDecisionProgressLeaf": (
+            "HistoricalProtectedCandidateStarvationProperty(specification) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalCommitDecisionCandidateOwned( "
+            "node, \"BeginDecision\")) "
+            "~> (NodeHasDecision(node) "
+            "\\/ HistoricalCommitDecisionCandidateOwned( "
+            "node, \"PersistDecision\")))"
+        ),
+        "HistoricalPersistDecisionProgressLeaf": (
+            "HistoricalProtectedCandidateStarvationProperty(specification) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalCommitDecisionCandidateOwned( "
+            "node, \"PersistDecision\")) ~> NodeHasDecision(node))"
+        ),
+        "HistoricalCommitCertificateConcreteLeafProperties": (
+            "/\\ HistoricalActiveRequestRetransmissionProgressLeaf(specification) "
+            "/\\ HistoricalCommitRequestServeProgressLeaf(specification) "
+            "/\\ HistoricalCommitResponseAdmissionProgressLeaf(specification) "
+            "/\\ HistoricalCommitDeliveryProgressLeaf(specification) "
+            "/\\ HistoricalBeginDecisionProgressLeaf(specification) "
+            "/\\ HistoricalPersistDecisionProgressLeaf(specification)"
+        ),
+        "HistoricalDecisionRecordMatches": (
+            "/\\ decision \\in decisions /\\ decision.node = node "
+            "/\\ decision.qc.context = context "
+            "/\\ decision.qc.phase = \"Commit\""
+        ),
+        "HistoricalDecisionPipelineKindOwned": (
+            "/\\ HistoricalRecoveryTarget(node) "
+            "/\\ \\E decision \\in decisions: "
+            "/\\ HistoricalDecisionRecordMatches(node, decision) "
+            "/\\ DecisionPipelineKindOwned(node, decision.qc, kind)"
+        ),
+        "HistoricalDecisionCertifiedRequestActive": (
+            "/\\ HistoricalRecoveryTarget(node) "
+            "/\\ \\E decision \\in decisions: "
+            "/\\ HistoricalDecisionRecordMatches(node, decision) "
+            "/\\ DecisionCertifiedRequestActive(node, decision.qc)"
+        ),
+        "HistoricalDecisionRecoveryFrontier": (
+            "\\/ NodeHasApplication(node) "
+            "\\/ HistoricalDecisionPipelineKindOwned(node, \"FetchBody\") "
+            "\\/ HistoricalDecisionPipelineKindOwned("
+            "node, \"RequestCertifiedBody\") "
+            "\\/ HistoricalDecisionCertifiedRequestActive(node) "
+            "\\/ HistoricalDecisionPipelineKindOwned("
+            "node, \"FetchCertifiedBody\") "
+            "\\/ HistoricalDecisionPipelineKindOwned(node, \"StoreBody\") "
+            "\\/ HistoricalDecisionPipelineKindOwned(node, \"ValidateBody\") "
+            "\\/ HistoricalDecisionPipelineKindOwned(node, \"Apply\")"
+        ),
+        "HistoricalDecisionFrontierAvailabilityProperty": (
+            "specification => []\\A node \\in Responsive: "
+            "(gst /\\ HistoricalRecoveryTarget(node) "
+            "/\\ NodeHasDecision(node)) "
+            "=> HistoricalDecisionRecoveryFrontier(node)"
+        ),
+        "HistoricalDecisionFetchProgressLeaf": (
+            "HistoricalProtectedCandidateStarvationProperty(specification) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalDecisionPipelineKindOwned(node, \"FetchBody\")) "
+            "~> (NodeHasApplication(node) "
+            "\\/ HistoricalDecisionPipelineKindOwned( "
+            "node, \"RequestCertifiedBody\") "
+            "\\/ HistoricalDecisionCertifiedRequestActive(node) "
+            "\\/ HistoricalDecisionPipelineKindOwned( "
+            "node, \"ValidateBody\")))"
+        ),
+        "HistoricalDecisionRequestBodyProgressLeaf": (
+            "HistoricalProtectedCandidateStarvationProperty(specification) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalDecisionPipelineKindOwned( "
+            "node, \"RequestCertifiedBody\")) "
+            "~> (NodeHasApplication(node) "
+            "\\/ HistoricalDecisionCertifiedRequestActive(node)))"
+        ),
+        "HistoricalDecisionCertifiedResponseProgressLeaf": (
+            "(/\\ StarvationFreedomProperty(specification) "
+            "/\\ HistoricalProtectedCandidateStarvationProperty(specification)) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalDecisionCertifiedRequestActive(node)) "
+            "~> (NodeHasApplication(node) "
+            "\\/ HistoricalDecisionPipelineKindOwned( "
+            "node, \"FetchCertifiedBody\")))"
+        ),
+        "HistoricalDecisionFetchCertifiedProgressLeaf": (
+            "HistoricalProtectedCandidateStarvationProperty(specification) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalDecisionPipelineKindOwned( "
+            "node, \"FetchCertifiedBody\")) "
+            "~> (NodeHasApplication(node) "
+            "\\/ HistoricalDecisionPipelineKindOwned( "
+            "node, \"StoreBody\")))"
+        ),
+        "HistoricalDecisionStoreProgressLeaf": (
+            "HistoricalProtectedCandidateStarvationProperty(specification) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalDecisionPipelineKindOwned(node, \"StoreBody\")) "
+            "~> (NodeHasApplication(node) "
+            "\\/ HistoricalDecisionPipelineKindOwned( "
+            "node, \"ValidateBody\")))"
+        ),
+        "HistoricalDecisionValidateProgressLeaf": (
+            "HistoricalProtectedCandidateStarvationProperty(specification) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalDecisionPipelineKindOwned("
+            "node, \"ValidateBody\")) "
+            "~> (NodeHasApplication(node) "
+            "\\/ HistoricalDecisionPipelineKindOwned(node, \"Apply\")))"
+        ),
+        "HistoricalDecisionApplyProgressLeaf": (
+            "HistoricalProtectedCandidateStarvationProperty(specification) "
+            "=> (specification => \\A node \\in Responsive: "
+            "(gst /\\ HistoricalDecisionPipelineKindOwned(node, \"Apply\")) "
+            "~> NodeHasApplication(node))"
+        ),
+        "HistoricalDecisionConcreteLeafProperties": (
+            "/\\ HistoricalDecisionFetchProgressLeaf(specification) "
+            "/\\ HistoricalDecisionRequestBodyProgressLeaf(specification) "
+            "/\\ HistoricalDecisionCertifiedResponseProgressLeaf(specification) "
+            "/\\ HistoricalDecisionFetchCertifiedProgressLeaf(specification) "
+            "/\\ HistoricalDecisionStoreProgressLeaf(specification) "
+            "/\\ HistoricalDecisionValidateProgressLeaf(specification) "
+            "/\\ HistoricalDecisionApplyProgressLeaf(specification)"
+        ),
+        "ResponsiveDecisionServiceOwnershipInvariant": (
+            "\\A node \\in Responsive: "
+            "(gst /\\ NodeHasDecision(node) /\\ ~NodeHasApplication(node)) "
+            "=> \\/ node \\in AsyncCurrentResponsiveVoters "
+            "\\/ HistoricalRecoveryTarget(node)"
+        ),
+        "ResponsiveDecisionServiceOwnershipProperty": (
+            "specification => []ResponsiveDecisionServiceOwnershipInvariant"
+        ),
+        "HistoricalRecoveryAsyncTemporalClosurePremises": (
+            "/\\ HistoricalCommitCertificateDiscoveryPersistenceProperty(specification) "
+            "/\\ HistoricalRecoveryTargetRemoteServerProperty(specification) "
+            "/\\ HistoricalCommitCertificateDiscoveryClockProgressProperty(specification) "
+            "/\\ HistoricalProtectedServiceRankLeafProperties(specification) "
+            "/\\ HistoricalCommitCertificateConcreteLeafProperties(specification) "
+            "/\\ HistoricalDecisionFrontierAvailabilityProperty(specification) "
+            "/\\ HistoricalDecisionConcreteLeafProperties(specification) "
+            "/\\ ResponsiveDecisionServiceOwnershipProperty(specification)"
+        ),
+        "HistoricalLockedBodyRecoveryOutcome": (
+            "\\/ HistoricalLockedBodySourceRetired(node, qc) "
+            "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc)"
+        ),
+        "HistoricalLockedCommitCarrierRecoveryProgressLeaf": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
+            "qc \\in prepareQCs: "
+            "(/\\ gst "
+            "/\\ HistoricalLockedPrepareSource(node, qc) "
+            "/\\ HistoricalLockedCommitRecoveryWitness(node, qc) "
+            "/\\ ~HistoricalLockedBodyValidated(node, qc)) "
+            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
+            "\\/ HistoricalLockedBodyRestartAuthority(node, qc) "
+            "\\/ HistoricalLockedBodyFetchOwned(node, qc) "
+            "\\/ HistoricalLockedCertifiedRequestActive(node, qc) "
+            "\\/ HistoricalLockedBodyValidateOwned(node, qc))"
+        ),
+        "HistoricalLockedRestartRecoveryProgressLeaf": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
+            "qc \\in prepareQCs: "
+            "(/\\ gst "
+            "/\\ HistoricalLockedPrepareSource(node, qc) "
+            "/\\ HistoricalLockedBodyRestartAuthority(node, qc)) "
+            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
+            "\\/ HistoricalLockedBodyFetchOwned(node, qc))"
+        ),
+        "HistoricalLockedFetchRecoveryProgressLeaf": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
+            "qc \\in prepareQCs: "
+            "(/\\ gst "
+            "/\\ HistoricalLockedPrepareSource(node, qc) "
+            "/\\ HistoricalLockedBodyFetchOwned(node, qc)) "
+            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
+            "\\/ HistoricalLockedCertifiedRequestActive(node, qc) "
+            "\\/ HistoricalLockedBodyValidateOwned(node, qc))"
+        ),
+        "HistoricalLockedRequestCandidateProgressLeaf": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
+            "qc \\in prepareQCs: "
+            "(/\\ gst "
+            "/\\ HistoricalLockedPrepareSource(node, qc) "
+            "/\\ HistoricalLockedBodyRequestOwned(node, qc)) "
+            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
+            "\\/ HistoricalLockedCertifiedRequestActive(node, qc))"
+        ),
+        "HistoricalLockedActiveRequestProgressLeaf": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
+            "qc \\in prepareQCs: "
+            "(/\\ gst "
+            "/\\ HistoricalLockedPrepareSource(node, qc) "
+            "/\\ HistoricalLockedCertifiedRequestActive(node, qc)) "
+            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
+            "\\/ HistoricalLockedBodyCertifiedFetchOwned(node, qc))"
+        ),
+        "HistoricalLockedCertifiedFetchProgressLeaf": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
+            "qc \\in prepareQCs: "
+            "(/\\ gst "
+            "/\\ HistoricalLockedPrepareSource(node, qc) "
+            "/\\ HistoricalLockedBodyCertifiedFetchOwned(node, qc)) "
+            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
+            "\\/ HistoricalLockedBodyStoreOwned(node, qc))"
+        ),
+        "HistoricalLockedStoreRecoveryProgressLeaf": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
+            "qc \\in prepareQCs: "
+            "(/\\ gst "
+            "/\\ HistoricalLockedPrepareSource(node, qc) "
+            "/\\ HistoricalLockedBodyStoreOwned(node, qc)) "
+            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
+            "\\/ HistoricalLockedBodyValidateOwned(node, qc))"
+        ),
+        "HistoricalLockedValidateRecoveryProgressLeaf": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
+            "qc \\in prepareQCs: "
+            "(/\\ gst "
+            "/\\ HistoricalLockedPrepareSource(node, qc) "
+            "/\\ HistoricalLockedBodyValidateOwned(node, qc)) "
+            "~> HistoricalLockedBodyRecoveryOutcome(node, qc)"
+        ),
+        "HistoricalLockedBodyRecoveryConeLeafProperties": (
+            "/\\ HistoricalLockedCommitCarrierRecoveryProgressLeaf(specification) "
+            "/\\ HistoricalLockedRestartRecoveryProgressLeaf(specification) "
+            "/\\ HistoricalLockedFetchRecoveryProgressLeaf(specification) "
+            "/\\ HistoricalLockedRequestCandidateProgressLeaf(specification) "
+            "/\\ HistoricalLockedActiveRequestProgressLeaf(specification) "
+            "/\\ HistoricalLockedCertifiedFetchProgressLeaf(specification) "
+            "/\\ HistoricalLockedStoreRecoveryProgressLeaf(specification) "
+            "/\\ HistoricalLockedValidateRecoveryProgressLeaf(specification)"
+        ),
+        "HistoricalLockedBodyRecoveryConeProperty": (
+            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
+            "qc \\in prepareQCs: "
+            "(gst /\\ HistoricalLockedPrepareSource(node, qc)) "
+            "~> HistoricalLockedBodyRecoveryOutcome(node, qc)"
+        ),
+    }
+    for symbol, exact_body in operator_contracts.items():
+        extracted = _top_level_operator_body(
+            raw_source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing Async historical operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != exact_body:
+            errors.append(
+                f"{path}:{line}: {symbol} must equal only "
+                f"{exact_body!r}; found {normalized!r}"
+            )
+
+    endpoint_symbols = (
+        "HistoricalRecoveryTargetDecisionProgressProperty",
+        "ResponsiveDecisionApplicationProgressProperty",
+        "HistoricalRecoveryAsyncTemporalPrerequisites",
+    )
+    for symbol in endpoint_symbols:
+        if _symbol_exists(source, symbol, theorem_only=True):
+            errors.append(
+                f"{path}: {symbol} must remain an operator property until its "
+                "exact corridor is proved without extra premises"
+            )
+
+    if re.search(r"(?m)^CONSTANTS?\b", source):
+        errors.append(
+            f"{path}: Async historical-recovery child may not replace exact "
+            "temporal predicates with unconstrained constants"
+        )
+    if re.search(r"\bResponsiveProtectedCandidateOwned\b", source):
+        errors.append(
+            f"{path}: historical rank may not reuse the current-voter-only "
+            "ResponsiveProtectedCandidateOwned predicate"
+        )
+
+    theorem_contracts = {
+        "HistoricalProtectedServiceRankProgressFromStageLeaves": (
+            "\\A specification: "
+            "HistoricalProtectedServiceRankLeafProperties(specification) "
+            "=> HistoricalProtectedServiceRankProgressProperty(specification)",
+            (
+                "HistoricalProtectedStage2RankProgressProperty",
+                "HistoricalProtectedStage3RankProgressProperty",
+                "HistoricalProtectedStage4RankProgressProperty",
+                "HistoricalProtectedStage5RankProgressProperty",
+                "HistoricalProtectedStage6RankProgressProperty",
+                "HistoricalProtectedStageRankProgressProperty",
+            ),
+        ),
+        "HistoricalProtectedCandidateHasServiceRank": (
+            "\\A candidate: /\\ AsyncTypeInvariant /\\ gst "
+            "/\\ HistoricalProtectedCandidateOwned(candidate) "
+            "=> \\E rank \\in OwnedServiceRankCarrier: "
+            "HistoricalProtectedOwnedAtServiceRank(candidate, rank)",
+            (
+                "ScheduledCandidateServiceRankInCarrier",
+                "HistoricalProtectedOwnedAtServiceRank",
+            ),
+        ),
+        "HistoricalProtectedServiceRankProgressImpliesStarvation": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ HistoricalProtectedServiceRankProgressProperty( "
+            "AsyncSpecAt(initialContext)) "
+            "=> HistoricalProtectedCandidateStarvationProperty( "
+            "AsyncSpecAt(initialContext))",
+            (
+                "OwnedServiceRankOrderingWellFounded",
+                "WellFoundedLeadsTo",
+                "HistoricalProtectedCandidateHasServiceRank",
+            ),
+        ),
+        "HistoricalCommitCertificateDiscoveryReadinessFromClock": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ HistoricalRecoveryTargetRemoteServerProperty( "
+            "AsyncSpecAt(initialContext)) "
+            "/\\ HistoricalCommitCertificateDiscoveryClockProgressProperty( "
+            "AsyncSpecAt(initialContext)) "
+            "=> \\A node \\in Responsive: "
+            "(gst /\\ HistoricalRecoveryTarget(node)) "
+            "~> (HistoricalCommitCertificateDiscoveryPending(node) "
+            "\\/ HistoricalCommitCertificateDiscoveryOutcome(node))",
+            (
+                "DEF HistoricalRecoveryTargetRemoteServerProperty",
+                "DEF HistoricalCommitCertificateDiscoveryClockProgressProperty",
+                "HistoricalRecoveryTargetRemoteServerInvariant",
+                "HistoricalCommitCertificateDiscoveryPending",
+                "HistoricalCommitCertificateDiscoveryOutcome",
+            ),
+        ),
+        "DirectHistoricalCommitCertificateDiscoveryPublishes": (
+            "\\A node \\in ValidatorIds: "
+            "DirectHistoricalCommitCertificateDiscoveryStep(node) "
+            "=> /\\ HistoricalRecoveryTarget(node)' "
+            "/\\ ActiveCommitCertificateRequests(node)' # {}",
+            (
+                "CommitCertificateDiscoveryStepWork",
+                "PublishCommitCertificateRequests",
+                "ActiveCommitCertificateRequests",
+            ),
+        ),
+        "HistoricalCommitCertificateDiscoveryPrefixIsEnabled": (
+            "\\A node \\in ValidatorIds: "
+            "HistoricalCommitCertificateDiscoveryDue(node) "
+            "=> ENABLED DirectHistoricalCommitCertificateDiscoveryStep(node)",
+            (
+                "ExpandENABLED",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+            ),
+        ),
+        "HistoricalCommitCertificateDiscoveryPendingEnablesFairPrefix": (
+            "\\A node \\in Responsive: "
+            "HistoricalCommitCertificateDiscoveryPending(node) "
+            "=> ENABLED "
+            "<<PostGstHistoricalCommitCertificateDiscovery(node)>>_AsyncAllVars",
+            (
+                "HistoricalRecoveryTargetsAreValidators",
+                "HistoricalCommitCertificateDiscoveryPrefixIsEnabled",
+                "DirectHistoricalCommitCertificateDiscoveryPublishes",
+                "ENABLEDaxioms",
+            ),
+        ),
+        "HistoricalCommitCertificateDiscoveryFairStepPublishes": (
+            "\\A node \\in Responsive: "
+            "/\\ HistoricalCommitCertificateDiscoveryPending(node) "
+            "/\\ <<PostGstHistoricalCommitCertificateDiscovery(node)>>_AsyncAllVars "
+            "=> HistoricalCommitCertificateDiscoveryOutcome(node)'",
+            (
+                "DirectHistoricalCommitCertificateDiscoveryPublishes",
+                "HistoricalCommitCertificateDiscoveryOutcome",
+            ),
+        ),
+        "FairHistoricalCommitCertificateDiscoveryFromPersistence": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ HistoricalCommitCertificateDiscoveryPersistenceProperty( "
+            "AsyncSpecAt(initialContext)) "
+            "=> \\A node \\in Responsive: "
+            "HistoricalCommitCertificateDiscoveryPending(node) "
+            "~> HistoricalCommitCertificateDiscoveryOutcome(node)",
+            (
+                "HistoricalCommitCertificateDiscoveryPendingEnablesFairPrefix",
+                "HistoricalCommitCertificateDiscoveryFairStepPublishes",
+                "HistoricalCommitCertificateDiscoveryPersistenceUnless",
+                "HistoricalCommitCertificateDiscoveryPersistenceProperty",
+                "WF_AsyncAllVars(",
+                "PostGstHistoricalCommitCertificateDiscovery(node)",
+            ),
+        ),
+        "HistoricalActiveCommitCertificateRequestReachesDecision": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ HistoricalProtectedServiceRankLeafProperties( "
+            "AsyncSpecAt(initialContext)) "
+            "/\\ HistoricalCommitCertificateConcreteLeafProperties( "
+            "AsyncSpecAt(initialContext)) "
+            "=> \\A node \\in Responsive: "
+            "(gst /\\ HistoricalRecoveryTarget(node) "
+            "/\\ ActiveCommitCertificateRequests(node) # {}) "
+            "~> NodeHasDecision(node)",
+            (
+                "HistoricalProtectedServiceRankProgressFromStageLeaves",
+                "HistoricalProtectedServiceRankProgressImpliesStarvation",
+                "StarvationFreedomObligation",
+                "HistoricalActiveRequestRetransmissionProgressLeaf",
+                "HistoricalCommitRequestServeProgressLeaf",
+                "HistoricalCommitResponseAdmissionProgressLeaf",
+                "HistoricalCommitDeliveryProgressLeaf",
+                "HistoricalBeginDecisionProgressLeaf",
+                "HistoricalPersistDecisionProgressLeaf",
+            ),
+        ),
+        "HistoricalTargetDecisionReachesApplicationFromConcreteLeaves": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ HistoricalProtectedServiceRankLeafProperties( "
+            "AsyncSpecAt(initialContext)) "
+            "/\\ HistoricalDecisionFrontierAvailabilityProperty( "
+            "AsyncSpecAt(initialContext)) "
+            "/\\ HistoricalDecisionConcreteLeafProperties( "
+            "AsyncSpecAt(initialContext)) "
+            "=> \\A node \\in Responsive: "
+            "(gst /\\ HistoricalRecoveryTarget(node) "
+            "/\\ NodeHasDecision(node)) ~> NodeHasApplication(node)",
+            (
+                "HistoricalProtectedServiceRankProgressFromStageLeaves",
+                "HistoricalProtectedServiceRankProgressImpliesStarvation",
+                "StarvationFreedomObligation",
+                "HistoricalDecisionFrontierAvailabilityProperty",
+                "HistoricalDecisionFetchProgressLeaf",
+                "HistoricalDecisionRequestBodyProgressLeaf",
+                "HistoricalDecisionCertifiedResponseProgressLeaf",
+                "HistoricalDecisionFetchCertifiedProgressLeaf",
+                "HistoricalDecisionStoreProgressLeaf",
+                "HistoricalDecisionValidateProgressLeaf",
+                "HistoricalDecisionApplyProgressLeaf",
+            ),
+        ),
+        "HistoricalRecoveryTargetDecisionFromExactCorridor": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
+            "AsyncSpecAt(initialContext)) "
+            "=> HistoricalRecoveryTargetDecisionProgressProperty( "
+            "AsyncSpecAt(initialContext))",
+            (
+                "FairHistoricalCommitCertificateDiscoveryFromPersistence",
+                "HistoricalCommitCertificateDiscoveryReadinessFromClock",
+                "HistoricalActiveCommitCertificateRequestReachesDecision",
+                "HistoricalCommitCertificateDiscoveryOutcome",
+            ),
+        ),
+        "ResponsiveDecisionApplicationFromExactCorridor": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
+            "AsyncSpecAt(initialContext)) "
+            "=> ResponsiveDecisionApplicationProgressProperty( "
+            "AsyncSpecAt(initialContext))",
+            (
+                "HistoricalTargetDecisionReachesApplicationFromConcreteLeaves",
+                "ApplicationCompletionProgressObligation",
+                "ResponsiveDecisionServiceOwnershipProperty",
+                "AsyncSpecAlwaysUsesFixedResponsiveVoters",
+            ),
+        ),
+        "HistoricalRecoveryAsyncTemporalPrerequisitesFromExactCorridor": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
+            "AsyncSpecAt(initialContext)) "
+            "=> HistoricalRecoveryAsyncTemporalPrerequisites( "
+            "AsyncSpecAt(initialContext))",
+            (
+                "HistoricalRecoveryTargetDecisionFromExactCorridor",
+                "ResponsiveDecisionApplicationFromExactCorridor",
+            ),
+        ),
+        "HistoricalLockedBodyRecoveryConeComposesFromExactLeaves": (
+            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ HistoricalLockedBodyRecoveryConeLeafProperties( "
+            "AsyncSpecAt(initialContext)) "
+            "=> HistoricalLockedBodyRecoveryConeProperty( "
+            "AsyncSpecAt(initialContext))",
+            (
+                "AsyncSpecAlwaysHistoricalLockedBodyRecoveryStage",
+                "HistoricalLockedCommitCarrierRecoveryProgressLeaf",
+                "HistoricalLockedRestartRecoveryProgressLeaf",
+                "HistoricalLockedFetchRecoveryProgressLeaf",
+                "HistoricalLockedRequestCandidateProgressLeaf",
+                "HistoricalLockedActiveRequestProgressLeaf",
+                "HistoricalLockedCertifiedFetchProgressLeaf",
+                "HistoricalLockedStoreRecoveryProgressLeaf",
+                "HistoricalLockedValidateRecoveryProgressLeaf",
+                "HistoricalLockedBodyRecoveryStageInvariant",
+                "HistoricalLockedBodyRecoveryOutcome",
+                "PTL",
+            ),
+        ),
+    }
+
+    for symbol, (exact_statement, proof_tokens) in theorem_contracts.items():
+        extracted = _top_level_theorem_body(
+            raw_source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing Async historical theorem {symbol}")
+            continue
+        body, line = extracted
+        parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        statement = " ".join(parts[0].split())
+        if statement != exact_statement:
+            errors.append(
+                f"{path}:{line}: {symbol} must state only "
+                f"{exact_statement!r}; found {statement!r}"
+            )
+        proof = parts[1] if len(parts) == 2 else ""
+        missing = tuple(token for token in proof_tokens if token not in proof)
+        vacuous = re.search(
+            r"(?:\bASSUME\s+FALSE\b|\bPROVE\s+TRUE\b|\bBY\s+TRUE\b)",
+            proof,
+        )
+        if len(parts) != 2 or missing or vacuous is not None:
+            errors.append(
+                f"{path}:{line}: {symbol} proof must retain exact historical "
+                "dependencies without a vacuous proof; "
+                f"missing={missing!r}, vacuous={vacuous is not None}, "
+                f"has_proof={len(parts) == 2}"
+            )
+
     return errors
 
 
@@ -25294,6 +32403,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "asyncDeferredCompletionQueues",
         "asyncDeferredProgressQueues",
         "asyncDeferredNormalQueues",
+        "asyncDeferredHandoffs",
         "asyncNextDeferredClass",
         "asyncDeferredDrainOwed",
         "asyncCausalQueues",
@@ -25317,6 +32427,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "asyncRecoveryNode",
         "asyncRecoveryGeneration",
         "asyncRecoveryReplayQueue",
+        "asyncHistoricalLockRestartAuthorities",
     )
     recovery_arity = len(recovery_fields)
     node_service_deadline_slot = scheduler_fields.index(
@@ -26074,6 +33185,20 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "=> IndexedHeightLivenessProperty"
             ),
         )
+        require_chain_operator(
+            "IndexedHeightLivenessReleaseTarget",
+            exact="IndexedChainSpec => IndexedHeightLivenessProperty",
+        )
+        if _top_level_theorem_body(
+            raw_source,
+            "HeightLivenessObligation",
+            preserve_string_contents=True,
+        ) is not None:
+            errors.append(
+                f"{refinement_path}: HeightLivenessObligation must live in the "
+                "child chain-liveness module so it can consume the successor "
+                "starvation theorem"
+            )
 
         require_chain_operator(
             "SuccessorActivationRequiredPrerequisites",
@@ -26185,29 +33310,75 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             )
 
         require_chain_operator(
-            "FailClosedSuccessorStartup",
+            "LatchAppliedSuccessorStartupFailure",
             required=(
+                'successorActivationStatus[parentContext][node] = "Running"',
                 'successorPredecessorStatusOwnership[parentContext][node] = "Published"',
+                "owner \\notin successorActivationFailures",
+                "ExactDurableParentApplication(parentContext, node, application)",
+                "successorActivationFailures \\cup {owner}",
+                "successorActivationFailureHistory \\cup {owner}",
+                "UNCHANGED <<successorActivationStatus, successorPredecessorStatusOwnership,",
+            ),
+            forbidden=(
                 '![parentContext][node] = "Queued"',
                 '![parentContext][node] = "Absent"',
-                "![parentContext][node] = {}",
-                "{token \\in successorActivationTokens:",
-                "{authority \\in successorRecoveryAuthorities:",
-                "{marker \\in preparedSuccessorActivationMarkers:",
-                "successorActivationFailureHistory \\cup {owner}",
-                "UNCHANGED <<publishedSuccessorActivationMarkers, successorActivationCompletions, joinedByContext>>",
+                "owner \\notin successorActivationFailureHistory",
+                "joinedByContext'",
             ),
-            forbidden=("joinedByContext'",),
+        )
+        require_chain_operator(
+            "LatchRecoveredSuccessorStartupFailure",
+            required=(
+                'successorActivationStatus[parentContext][node] = "Running"',
+                'successorPredecessorStatusOwnership[parentContext][node] = "Absent"',
+                '"Recovered", parentContext, node, successorContext',
+                "ExactCompleteTipRecoveryAuthority(",
+                "successorActivationFailures \\cup {owner}",
+                "successorActivationFailureHistory \\cup {owner}",
+                "UNCHANGED <<successorActivationStatus, successorPredecessorStatusOwnership,",
+            ),
+            forbidden=(
+                "owner \\notin successorActivationFailureHistory",
+                "joinedByContext'",
+            ),
+        )
+        require_chain_operator(
+            "RehydrateCleanCompleteTipSuccessorStartup",
+            required=(
+                'successorPredecessorStatusOwnership[parentContext][node] = "Published"',
+                "owner \\notin successorActivationFailures",
+                "ExactDurableParentApplication(parentContext, node, application)",
+                '![parentContext][node] = "Queued"',
+                '![parentContext][node] = "Absent"',
+                "CompleteTipRecoveryAuthorityRecord(",
+                "\\cup {authority}",
+            ),
+            forbidden=("owner \\in successorActivationFailureHistory",),
+        )
+        require_chain_operator(
+            "RehydrateFailedSuccessorStartup",
+            required=(
+                'successorActivationStatus[parentContext][node] = "Running"',
+                'successorPredecessorStatusOwnership[parentContext][node] \\in {"Published", "Absent"}',
+                "owner \\in successorActivationFailures",
+                '![parentContext][node] = "Queued"',
+                '![parentContext][node] = "Absent"',
+                "successorActivationFailures \\ {owner}",
+                "CompleteTipRecoveryAuthorityRecord(",
+                "\\cup {authority}",
+            ),
         )
         require_chain_operator(
             "AuthenticateRecoveredSuccessorActivation",
             required=(
                 '"Recovered", parentContext, node, successorContext',
                 'successorPredecessorStatusOwnership[parentContext][node] = "Absent"',
-                "owner \\in successorActivationFailures",
+                "owner \\notin successorActivationFailures",
                 "ExactDurableParentApplication(parentContext, node, application)",
                 "CompleteTipRecoveryAuthorityRecord(",
-                "successorRecoveryAuthorities \\cup {authority}",
+                "authority \\in successorRecoveryAuthorities",
+                "successorActivationTokens \\cup {token}",
             ),
             forbidden=('"Applied", parentContext, node, successorContext',),
         )
@@ -26218,6 +33389,89 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "successorContext = CanonicalIndexedContext(parentContext.height + 1)",
                 "CompleteTipRecoveryAuthorityRecord(",
                 "\\in successorRecoveryAuthorities",
+            ),
+        )
+        require_chain_operator(
+            "CompleteTipRecoveryAuthoritySet",
+            required=(
+                'kind: {"CompleteTip"}',
+                "application: Chain!DecisionEvidenceSet",
+            ),
+            forbidden=('"SnapshotBootstrap"',),
+        )
+        require_chain_operator(
+            "SnapshotBootstrapRecoveryAuthoritySet",
+            required=(
+                'kind: {"SnapshotBootstrap"}',
+                "parentContext: AdmissibleContextRecords",
+                "successorContext: AdmissibleContextRecords",
+            ),
+            forbidden=("application: Chain!DecisionEvidenceSet",),
+        )
+        require_chain_operator(
+            "SuccessorRecoveryAuthoritySet",
+            exact=(
+                "CompleteTipRecoveryAuthoritySet \\cup "
+                "SnapshotBootstrapRecoveryAuthoritySet"
+            ),
+        )
+        require_chain_operator(
+            "CompleteTipRecoveryAuthorityRecord",
+            required=(
+                'kind |-> "CompleteTip"',
+                "application |-> application",
+            ),
+            forbidden=('kind |-> "SnapshotBootstrap"',),
+        )
+        require_chain_operator(
+            "SnapshotBootstrapRecoveryAuthorityRecord",
+            required=(
+                'kind |-> "SnapshotBootstrap"',
+                "successorContext |-> successorContext",
+            ),
+            forbidden=("application |-> application",),
+        )
+        require_chain_operator(
+            "ExactSnapshotBootstrapRecoveryAuthority",
+            required=(
+                "successorContext = CanonicalIndexedContext(parentContext.height + 1)",
+                "SnapshotBootstrapRecoveryAuthorityRecord(",
+                "\\in successorRecoveryAuthorities",
+            ),
+            forbidden=(
+                "ExactDurableParentApplication(",
+                "CompleteTipRecoveryAuthorityRecord(",
+            ),
+        )
+        require_chain_theorem(
+            "SnapshotBootstrapAuthorityIsDistinctFromCompleteTipAuthority",
+            (
+                "\\A parentContext \\in AdmissibleContextRecords, "
+                "node \\in ValidatorIds, "
+                "successorContext \\in AdmissibleContextRecords, "
+                "application \\in Chain!DecisionEvidenceSet: "
+                "SnapshotBootstrapRecoveryAuthorityRecord( "
+                "parentContext, node, successorContext) "
+                "# CompleteTipRecoveryAuthorityRecord( "
+                "parentContext, node, successorContext, application)"
+            ),
+        )
+        require_chain_operator(
+            "EventualFailureFreeSuccessorStartupSuffix",
+            exact=(
+                "\\A parentContext \\in AdmissibleContextRecords, "
+                "node \\in Responsive: "
+                "<>[](SuccessorActivationOwner(parentContext, node) "
+                "\\notin successorActivationFailures)"
+            ),
+        )
+        require_chain_operator(
+            "IndexedChainSpec",
+            exact=(
+                "/\\ IndexedChainInit "
+                "/\\ [][IndexedChainNext]_IndexedChainVars "
+                "/\\ IndexedFairness "
+                "/\\ EventualFailureFreeSuccessorStartupSuffix"
             ),
         )
         require_chain_operator(
@@ -26332,7 +33586,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "\\E node \\in Responsive: IndexedAsync(initialContext)! ServiceHistoricalRecoveryIoWorker(node)",
                 "\\E node \\in Responsive: IndexedAsync(initialContext)! EnqueueHistoricalRecoveryIoLocalControl(node)",
                 "IndexedOpenHistoricalRecovery( initialContext, node, server, source)",
-                "UNCHANGED IndexedScheduler(initialContext, 25)",
+                "UNCHANGED IndexedScheduler(initialContext, 26)",
             ),
         )
         require_chain_operator(
@@ -26413,6 +33667,15 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
         )
         require_chain_operator(
+            "HistoricalRecoveryProgressEligible",
+            exact=(
+                "/\\ HistoricalRecoveryOutstanding(initialContext, node) "
+                "/\\ \\/ IndexedHistoricalRecoveryReady(initialContext, node) "
+                "\\/ IndexedAsync(initialContext)!HistoricalRecoveryTarget(node) "
+                "\\/ IndexedAsync(initialContext)!NodeHasDecision(node)"
+            ),
+        )
+        require_chain_operator(
             "HistoricalRecoveryComplete",
             exact=(
                 "IF initialContext.height = MaxHeight "
@@ -26451,20 +33714,20 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "SuccessorActivationShape",
                 "SuccessorHeightActivated(parentContext, node)",
                 "node \\in joinedByContext[ CanonicalIndexedContext( parentContext.height + 1)]",
-                "terminalContext.height = MaxHeight",
-                "IndexedAsync(terminalContext)!NodeHasApplication(node)",
-                "nodeHeight[node] = terminalContext.height",
-                "nodeContext[node] = terminalContext",
+            ),
+            forbidden=(
+                "terminalContext",
+                "ProductionTerminal",
                 'successorActivationStatus[terminalContext][node] = "Idle"',
             ),
         )
         production_trace_constants = (
             "ProductionAppliedSuccessorTraceRefinesIndexedActivation",
             "ProductionRecoveredSuccessorTraceRefinesIndexedActivation",
-            "ProductionStartupFailureRefinesFailClosedActivation",
+            "ProductionStartupFailureAndRestartRefinesIndexedLifecycle",
             "ProductionHistoricalCertificateTraceRefinesIndexedAsync",
             "ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync",
-            "ProductionTerminalApplicationExcludesActivation",
+            "ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal",
         )
         production_constant_block = re.search(
             rf"(?ms)^CONSTANTS\s+({re.escape(production_trace_constants[0])}"
@@ -26495,36 +33758,47 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             exact=(
                 "/\\ ProductionAppliedSuccessorTraceRefinesIndexedActivation = TRUE "
                 "/\\ ProductionRecoveredSuccessorTraceRefinesIndexedActivation = TRUE "
-                "/\\ ProductionStartupFailureRefinesFailClosedActivation = TRUE "
+                "/\\ ProductionStartupFailureAndRestartRefinesIndexedLifecycle = TRUE "
                 "/\\ ProductionHistoricalCertificateTraceRefinesIndexedAsync = TRUE "
                 "/\\ ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync = TRUE "
-                "/\\ ProductionTerminalApplicationExcludesActivation = TRUE"
+                "/\\ ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal = TRUE"
             ),
         )
-        production_obligation = _top_level_theorem_body(
-            raw_source,
-            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
-            preserve_string_contents=True,
-        )
+        for retired_terminal_claim in (
+            "ProductionTerminalApplicationExcludesActivation",
+            "ProductionTerminalSuccessorKernel",
+            "ProductionMaxHeightTerminalKernel",
+        ):
+            if retired_terminal_claim in strip_tla_comments(raw_source):
+                errors.append(
+                    f"{refinement_path}: production terminal claim/kernel "
+                    f"{retired_terminal_claim} is prohibited; MaxHeight is only "
+                    "a finite-horizon projection"
+                )
         exact_production_obligation = (
             "/\\ ProductionSuccessorAndExactRecoveryTraceRefinement "
             "/\\ (IndexedChainSpec => []"
             "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)"
         )
-        if production_obligation is None:
+        production_obligation = _top_level_operator_body(
+            raw_source,
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
+            preserve_string_contents=True,
+        )
+        swapped_production_obligation = _top_level_theorem_body(
+            raw_source,
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
+            preserve_string_contents=True,
+        )
+        if production_obligation is None or swapped_production_obligation is not None:
             errors.append(
-                f"{refinement_path}: missing canonical exact historical-recovery "
-                "production refinement obligation"
+                f"{refinement_path}: canonical exact historical-recovery "
+                "production refinement obligation must be one operator, not a "
+                "proofless theorem"
             )
         else:
             obligation_body, obligation_line = production_obligation
-            obligation_parts = re.split(
-                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
-                obligation_body,
-                maxsplit=1,
-            )
-            obligation_statement = obligation_parts[0]
-            obligation_normalized = " ".join(obligation_statement.split())
+            obligation_normalized = " ".join(obligation_body.split())
             if obligation_normalized != exact_production_obligation:
                 errors.append(
                     f"{refinement_path}:{obligation_line}: canonical exact "
@@ -26532,12 +33806,49 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"state only {exact_production_obligation!r}; found "
                     f"{obligation_normalized!r}"
                 )
-            if len(obligation_parts) != 1:
+
+        production_bridge = _top_level_theorem_body(
+            raw_source,
+            "SuccessorActivationAndExactHistoricalRecoveryCrossToolRefinement",
+            preserve_string_contents=True,
+        )
+        exact_bridge_statement = (
+            "ProductionSuccessorAndExactRecoveryTraceRefinement => "
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
+        )
+        exact_bridge_proof = (
+            "BY IndexedChainSpecEstablishesSuccessorActivationAndExactHistoricalRecoveryInvariant "
+            "DEF SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
+        )
+        if production_bridge is None:
+            errors.append(
+                f"{refinement_path}: missing exact historical-recovery cross-tool "
+                "bridge theorem"
+            )
+        else:
+            bridge_body, bridge_line = production_bridge
+            bridge_parts = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+                bridge_body,
+                maxsplit=1,
+            )
+            bridge_statement = " ".join(bridge_parts[0].split())
+            bridge_proof = (
+                " ".join(bridge_parts[1].split())
+                if len(bridge_parts) == 2
+                else ""
+            )
+            if bridge_statement != exact_bridge_statement:
                 errors.append(
-                    f"{refinement_path}:{obligation_line}: production successor/"
-                    "exact-recovery trace refinement must remain proofless until "
-                    "all six external source claims have machine-checked cross-tool "
-                    "evidence"
+                    f"{refinement_path}:{bridge_line}: exact historical-recovery "
+                    "cross-tool bridge must state only "
+                    f"{exact_bridge_statement!r}; found {bridge_statement!r}"
+                )
+            if bridge_proof != exact_bridge_proof:
+                errors.append(
+                    f"{refinement_path}:{bridge_line}: exact historical-recovery "
+                    "cross-tool bridge must retain reviewed non-tautological proof "
+                    f"{exact_bridge_proof!r}; found {bridge_proof!r}"
                 )
         if indexed_fairness is not None:
             fairness_normalized = " ".join(indexed_fairness[0].split())
@@ -26573,6 +33884,194 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     "must contain exactly one responsive-validator fair "
                     "successor-activation pipeline"
                 )
+
+    liveness_path = formal_dir / "SumeragiV2ChainLivenessProofs.tla"
+    if not liveness_path.is_file():
+        errors.append(
+            f"{liveness_path}: missing non-circular chain temporal composition"
+        )
+    else:
+        liveness_raw = liveness_path.read_text(encoding="utf-8")
+        liveness_source = strip_tla_comments(
+            liveness_raw, preserve_string_contents=True
+        )
+        extends = re.search(r"(?m)^EXTENDS\s+([^\n]+)$", liveness_source)
+        exact_extends = "SumeragiV2SuccessorActivationRefinementProofs, TLAPS"
+        if extends is None or " ".join(extends.group(1).split()) != exact_extends:
+            errors.append(
+                f"{liveness_path}: chain temporal composition must extend "
+                f"exactly {exact_extends!r} so successor progress is a parent "
+                "theorem rather than an impossible child dependency"
+            )
+
+        def require_liveness_operator(symbol: str, exact: str) -> None:
+            extracted = _top_level_operator_body(
+                liveness_raw, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{liveness_path}: missing chain temporal operator {symbol}"
+                )
+                return
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact:
+                errors.append(
+                    f"{liveness_path}:{line}: {symbol} must equal only "
+                    f"{exact!r}; found {normalized!r}"
+                )
+
+        require_liveness_operator(
+            "HistoricalRecoveryOpenOutcome",
+            exact=(
+                "\\/ IndexedAsync(initialContext)!HistoricalRecoveryTarget(node) "
+                "\\/ IndexedAsync(initialContext)!NodeHasDecision(node) "
+                "\\/ IndexedAsync(initialContext)!NodeHasApplication(node)"
+            ),
+        )
+        require_liveness_operator(
+            "IndexedHistoricalRecoveryTargetDecisionProgress",
+            exact=(
+                "\\A initialContext \\in AdmissibleContextRecords, "
+                "node \\in Responsive: "
+                "IndexedAsync(initialContext)!HistoricalRecoveryTarget(node) "
+                "~> IndexedAsync(initialContext)!NodeHasDecision(node)"
+            ),
+        )
+        require_liveness_operator(
+            "IndexedResponsiveDecisionApplicationProgress",
+            exact=(
+                "\\A initialContext \\in AdmissibleContextRecords, "
+                "node \\in Responsive: "
+                "IndexedAsync(initialContext)!NodeHasDecision(node) "
+                "~> IndexedAsync(initialContext)!NodeHasApplication(node)"
+            ),
+        )
+        require_liveness_operator(
+            "IndexedHistoricalRecoveryAsyncTemporalPrerequisites",
+            exact=(
+                "/\\ IndexedHistoricalRecoveryTargetDecisionProgress "
+                "/\\ IndexedResponsiveDecisionApplicationProgress"
+            ),
+        )
+        require_liveness_operator(
+            "IndexedHistoricalRecoveryEligibilityProgress",
+            exact=(
+                "\\A initialContext \\in AdmissibleContextRecords, "
+                "node \\in Responsive: "
+                "HistoricalRecoveryOutstanding(initialContext, node) "
+                "~> HistoricalRecoveryProgressEligible(initialContext, node)"
+            ),
+        )
+        require_liveness_operator(
+            "IndexedHistoricalRecoveryTemporalPrerequisites",
+            exact=(
+                "/\\ IndexedHistoricalRecoveryEligibilityProgress "
+                "/\\ IndexedHistoricalRecoveryAsyncTemporalPrerequisites"
+            ),
+        )
+
+        def require_liveness_theorem(
+            symbol: str,
+            exact_statement: str,
+            required_proof_tokens: tuple[str, ...] = (),
+        ) -> None:
+            extracted = _top_level_theorem_body(
+                liveness_raw, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{liveness_path}: missing chain temporal theorem {symbol}"
+                )
+                return
+            body, line = extracted
+            parts = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )
+            statement = " ".join(parts[0].split())
+            if statement != exact_statement:
+                errors.append(
+                    f"{liveness_path}:{line}: {symbol} must state only "
+                    f"{exact_statement!r}; found {statement!r}"
+                )
+            proof = parts[1] if len(parts) == 2 else ""
+            missing = tuple(
+                token for token in required_proof_tokens if token not in proof
+            )
+            if missing:
+                errors.append(
+                    f"{liveness_path}:{line}: {symbol} proof must retain exact "
+                    f"temporal dependencies {missing!r}"
+                )
+
+        require_liveness_theorem(
+            "IndexedChainSpecEventuallyOpensReadyHistoricalRecovery",
+            exact_statement=(
+                "\\A initialContext \\in AdmissibleContextRecords, "
+                "node \\in Responsive: IndexedChainSpec => "
+                "(IndexedHistoricalRecoveryReady(initialContext, node) "
+                "~> HistoricalRecoveryOpenOutcome(initialContext, node))"
+            ),
+            required_proof_tokens=(
+                "WF_IndexedChainVars(",
+                "IndexedOpenHistoricalRecoveryStep(initialContext, node)",
+                "IndexedHistoricalRecoveryReadyPersistsOrOpens",
+                "IndexedHistoricalRecoveryReadyEnablesExactOpen",
+                "IndexedExactOpenRecordsHistoricalRecoveryTarget",
+            ),
+        )
+        require_liveness_theorem(
+            "IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites",
+            exact_statement=(
+                "/\\ IndexedChainSpec "
+                "/\\ IndexedHistoricalRecoveryTemporalPrerequisites "
+                "=> IndexedExactHistoricalRecoveryProgress"
+            ),
+            required_proof_tokens=(
+                "IndexedChainSpecEventuallyOpensReadyHistoricalRecovery",
+                "IndexedHistoricalRecoveryEligibilityProgress",
+                "IndexedHistoricalRecoveryTargetDecisionProgress",
+                "IndexedResponsiveDecisionApplicationProgress",
+                "HistoricalRecoveryProgressEligible",
+                "HistoricalRecoveryComplete",
+            ),
+        )
+        require_liveness_theorem(
+            "IndexedSuccessorActivationProgressFromStarvationProof",
+            exact_statement=(
+                "IndexedChainSpec => IndexedSuccessorActivationProgress"
+            ),
+            required_proof_tokens=(
+                "SuccessorActivationStarvationFreedomObligation",
+                "SuccessorActivationStarvationMatchesChainProgress",
+            ),
+        )
+        require_liveness_theorem(
+            "IndexedHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs",
+            exact_statement=(
+                "/\\ IndexedChainSpec "
+                "/\\ IndexedHistoricalRecoveryTemporalPrerequisites "
+                "=> IndexedHeightLivenessProperty"
+            ),
+            required_proof_tokens=(
+                "IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites",
+                "IndexedSuccessorActivationProgressFromStarvationProof",
+                "VerificationOneHeightCompletionObligation",
+                "HeightLivenessFromOneHeightAndExactRecoveryProgress",
+            ),
+        )
+        require_liveness_theorem(
+            "HeightLivenessObligation",
+            exact_statement=(
+                "IndexedChainSpec => IndexedHeightLivenessProperty"
+            ),
+        )
+
+        if re.search(r"(?m)^CONSTANTS?\b", liveness_source):
+            errors.append(
+                f"{liveness_path}: chain temporal composition may not replace "
+                "the two Async progress properties with unconstrained constants"
+            )
     errors.extend(_successor_activation_rank_source_fidelity_errors(formal_dir))
     errors.extend(_successor_production_source_fidelity_errors(ROOT_DIR))
     return errors
@@ -26791,8 +34290,8 @@ def _production_liveness_release_inventory_errors(
             f"{release_path}: production liveness source count must be sealed as "
             f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
         )
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 175:
-        errors.append("internal release-regression seal must contain exactly 175 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 200:
+        errors.append("internal release-regression seal must contain exactly 200 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -26805,7 +34304,7 @@ def _production_liveness_release_inventory_errors(
     if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
         errors.append(
             f"{release_path}: production liveness modules must equal the reviewed "
-            f"ordered twenty-four-module inventory; found {modules}"
+            f"ordered thirty-module inventory; found {modules}"
         )
     leg_ids = shell_array("production_liveness_leg_ids")
     expected_leg_ids = [
@@ -26814,7 +34313,7 @@ def _production_liveness_release_inventory_errors(
     if leg_ids != expected_leg_ids or len(set(leg_ids)) != len(leg_ids):
         errors.append(
             f"{release_path}: production module leg IDs must equal the reviewed "
-            f"twenty-four-entry inventory; found {leg_ids}"
+            f"thirty-entry inventory; found {leg_ids}"
         )
     for _, module, expected_count in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS:
         observed_count = sum(
@@ -26825,10 +34324,10 @@ def _production_liveness_release_inventory_errors(
                 f"{release_path}: production module {module} must contain exactly "
                 f"{expected_count} named tests; found {observed_count}"
             )
-    if source.splitlines().count("  readonly expected_corridor_leg_count=47") != 1:
+    if source.splitlines().count("  readonly expected_corridor_leg_count=53") != 1:
         errors.append(
             f"{release_path}: complete pre-network release corridor must remain "
-            "sealed at forty-seven legs"
+            "sealed at fifty-three legs"
         )
 
     expected_p2p_list = (
@@ -26865,6 +34364,39 @@ def _production_liveness_release_inventory_errors(
         errors.append(
             f"{release_path}: irohad route-control discovery must use the exact "
             "test-network-message-control feature"
+        )
+    expected_config_list = (
+        'production_config_unit_list="$(cargo test --locked -p iroha_config '
+        '--lib -- --list)"'
+    )
+    expected_config_ignored_list = (
+        'production_config_ignored_unit_list="$(\n'
+        '  cargo test --locked -p iroha_config --lib -- --list --ignored\n'
+        ')"'
+    )
+    if source.count(expected_config_list) != 1 or source.count(
+        expected_config_ignored_list
+    ) != 1:
+        errors.append(
+            f"{release_path}: exact-output configuration discovery must use the "
+            "exact iroha_config library test surface"
+        )
+    config_inventory_route = (
+        '  elif [[ "$required_test" == parameters::* ]]; then\n'
+        '    required_unit_list="$production_config_unit_list"\n'
+        '    required_ignored_unit_list="$production_config_ignored_unit_list"'
+    )
+    config_module_route = (
+        '  elif [[ "$module" == parameters::* ]]; then\n'
+        '    module_command="cargo test --locked -p iroha_config --lib '
+        '${module} -- --test-threads=1"'
+    )
+    if source.count(config_inventory_route) != 1 or source.count(
+        config_module_route
+    ) != 1:
+        errors.append(
+            f"{release_path}: exact-output configuration tests must route through "
+            "the iroha_config library corridor"
         )
 
     source_sealed_commands = (
@@ -26949,17 +34481,17 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "inventories 406 named tests\nacross 24 Rust modules",
-            "all 47 pre-network legs and the exact\n406-test inventory",
+            "inventories 465 named tests\nacross 30 Rust modules",
+            "all 53 pre-network legs and the exact\n465-test inventory",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "release inventory names 406 tests across twenty-four Rust\nmodules",
-            "pre-network corridor\nnow has 47 legs",
+            "yielding the current 465-test, 30-module, 53-leg geometry",
+            "pre-network corridor\nnow has 53 legs",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
-            "module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic\n"
-            "lane-certificate contracts bring the aggregate pre-network corridor to 47\n"
-            "legs",
+            "current 465-test inventory across 30 modules and 53\npre-network legs",
+            "receipt binds the 53 pre-network corridor legs and\n"
+            "their exact 465-test inventory",
         ),
     }
     for path, claims in documentation_claims.items():
@@ -27175,6 +34707,9 @@ def validate_ledger(
     errors.extend(_causal_fifo_rank_mutation_source_fidelity_errors(formal_dir))
     errors.extend(_causal_fifo_rank_mutation_runner_errors(ROOT_DIR))
     errors.extend(
+        _deferred_handoff_mutation_source_fidelity_errors(formal_dir, ROOT_DIR)
+    )
+    errors.extend(
         _reply_route_ownership_source_fidelity_errors(formal_dir, ROOT_DIR)
     )
     errors.extend(_effective_lock_acquisition_mutation_runner_errors(ROOT_DIR))
@@ -27196,7 +34731,18 @@ def validate_ledger(
             formal_dir, ROOT_DIR
         )
     )
+    errors.extend(
+        _locked_body_reproposal_source_fidelity_errors(formal_dir, ROOT_DIR)
+    )
     errors.extend(_async_source_fidelity_errors(formal_dir))
+    errors.extend(
+        _local_runner_service_contract_source_fidelity_errors(
+            ledger,
+            repo_root=ROOT_DIR,
+            formal_dir=formal_dir,
+        )
+    )
+    errors.extend(_async_historical_recovery_source_fidelity_errors(formal_dir))
     errors.extend(_ownership_n1_configuration_errors(formal_dir))
     errors.extend(_exact_output_production_source_fidelity_errors(ROOT_DIR))
     errors.extend(

@@ -12,6 +12,18 @@ The first-release target is therefore conditional:
 This remains the conditional protocol target and paper argument until the
 proof ledger reports `machine_checked_completion: true`.
 
+The runtime premise is per validator. Each non-crashing responsive validator
+in the active-height or exact historical-recovery corridor must have an
+advancing local monotonic clock, regain its serialized height-runner turn after
+each finite wait within the declared service bound, and finish admitted local
+work within its declared bound. The formal service-deadline vector is ghost
+bookkeeping for that trusted premise, not shared production state. Source
+fidelity seals the narrower implementation facts: the height loop is
+serialized, completion/ingress/runtime/sidecar work is serviced in finite
+batches, the watchdog is polled on every loop edge, and idle/continue paths use
+the finite 10 ms `IDLE_POLL`. Those checks do not prove host scheduling or I/O
+latency.
+
 For the first release, a “responsive validator” is a voting Sumeragi v2 node
 running on the validator-storage platform contract implemented and exercised
 by the release corridor: Linux or macOS with stable filesystem object
@@ -697,16 +709,59 @@ The following focused checks were recorded through 2026-07-18:
 
 Those retained serial counts predate the native-AMX, successor-activation,
 source-linked body-kernel, ingress-ownership, transport, and active-watchdog
-additions. The current source-bound inventory contains 378 exact tests across
-24 modules, including the authoritative outer ingress, merge sidecar,
+additions. The preceding source-bound inventory contained 406 exact tests
+across 24 modules, including the authoritative outer ingress, merge sidecar,
 historical block sync, Kura progress-witness durability, P2P actor/writer
 ownership, daemon route-control and Hold/Release bridges, and watchdog
-modules. Relative to the preceding 298-name inventory, 83 additions and three
-retired names produce the exact net increase of 80. The additions pin semantic
-request coalescing, per-source route ownership and cursor progress, source-
+modules. The geometry closure added 14 names and two `iroha_config` modules
+without retiring a name, producing the historical 420-test checkpoint across
+26 modules. The route-lifecycle closure added three P2P names without
+retiring a name, producing the historical 423-test checkpoint across the same
+26 modules. They
+bind a delivery capability to its original minting tenure after bounded
+retired-source tombstone churn, reject a second rehydrated route rather than
+overwriting the first capability, and prove normal-exit/`Drop` teardown retires
+every actor-owned route and cancels only that actor's waiters. Mechanical
+source-to-inventory reconciliation now adds 16 distinct, non-ignored tests and
+three owning modules, producing 439 exact tests across 29 modules. The delta
+pins Kura replay-metadata preflight; five successor/durable-intent refinement
+projections; discovered-CommitQC reducer admission; successor recovery,
+runner, and watchdog failure boundaries; two P2P source/waiter geometry
+modules; and four daemon genesis producer/fanout geometry boundaries. The
+renamed lane-relay saturation regression replaces its obsolete
+`saturated_relay_owner_returns_sixty_fifth_exact_envelope` inventory entry with
+`saturated_relay_owner_returns_sixty_fifth_without_actor_ticket`; it does not
+increase that module's cardinality. A follow-up sidecar seam audit adds
+`later_delivery_while_chunk_is_in_flight_waits_for_flush_before_next_emit`,
+bringing that inventory to 440 tests while retaining the same 29
+modules and 52 corridor legs. It proves that a same-tenure route refresh cannot
+emit a second concurrent copy of a chunk which still awaits its exact writer-
+flush receipt. Three worker regressions then produce the historical 443-test
+checkpoint without changing the module or corridor geometry. They prove that a
+same-tenure replay cannot cross actor admission again while its writer flush
+is pending or flushed-but-unapplied, that a terminal source remains a
+zero-reservation route-history member while two live sibling sources progress,
+and that a closed writer's replacement tenure reacquires the current sidecar
+item only after exact-output capacity is available. The last transition is a
+capacity-checked reactivation, not a cursor reset: the old test which treated
+an unflushed reconnect as terminal is renamed to assert the required retry.
+The source-authority, immutable-sidecar, runner-race, daemon-corridor,
+shared-byte-budget, cached-Arc-admission, and executable-refinement closure adds 22 exact
+regressions. It also moves two peer tests to their actual shared-byte-budget
+module, yielding the current 465-test inventory across 30 modules and 53
+pre-network legs.
+Relative
+to the preceding 298-name inventory, the 406-name closure's 110 additions and two
+retired names produced the exact net increase of 108. The current additions
+pin exact-envelope deferred service, semantic-origin separation, source-
+swapped response/chunk rejection, alternate-source runtime and orphan-chunk
+ownership, actor-global ordinals across tenures, and checked source/capacity
+geometry. Together, the route closures pin semantic request coalescing,
+per-source route ownership and cursor progress, source-
 scoped sidecar limits, worker-to-network chunk-admission receipts, runner route
-preservation, worker backpressure, opaque
-delivery ordinals, and daemon Hold/Release behavior. The rollover tests cover
+preservation, worker backpressure, actor-global deferred capabilities,
+scheduler ownership handoff, opaque delivery ordinals, and daemon Hold/Release
+failure behavior. The rollover tests cover
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; and lane proof/supersession, Native AMX, merge-share, certified-sidecar,
 and untyped fail-closed boundaries. The network tests distinguish identical-
@@ -716,6 +771,15 @@ inactive sidecar source releases shared session and byte budget but retains an
 incomplete per-source chunk cursor across the server-gate TTL; only a terminal
 no-outbound tombstone may expire. A delayed reconnect therefore rematerializes
 shared bytes at its retained chunk rather than restarting at chunk zero.
+The retained runner seam explicitly inventories
+`runner_dispatch_preserves_durable_lane_certificate_reply_routes`,
+`runner_dispatch_preserves_certified_sidecar_chunk_reply_routes`,
+`runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route`, and
+`runner_dispatch_rejects_durable_response_without_reply_routes`. The sidecar
+boundary retains the fixed four-gate/two-session/16-MiB source contract plus
+the same-hub fifth-gate, third-session, and byte-overflow rejections while an
+independent authenticated hub progresses. These names were already present at
+the 423-test checkpoint and remain exact release-contract entries.
 Daemon saturation now returns the exact occurrence to its durable remote
 source under an explicit source-release disposition; the former route-era
 "reconstruction" names are retired and no capability is synthesized.
@@ -723,9 +787,13 @@ The current inventory retains the four-per-validator plus two aggregate
 untrusted owners (`4N+2` total) capacity-negative boundary and the exact
 PrepareQC count-and-power quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-47 legs, including separate exact status and atomic lane-certificate decode
-contracts plus source-sealed workspace clippy, workspace test, and feature-
-enabled `irohad` command-success legs. The complete inventory must still run as
+53 legs, including separate exact status and atomic lane-certificate decode
+contracts, two `iroha_config` geometry modules, the two new `iroha_p2p`
+geometry modules, the shared-byte-budget module, the daemon genesis module,
+plus source-sealed workspace
+clippy, workspace test, and feature-enabled `irohad` command-success legs. The
+465-test inventory is a mechanically checked source contract, not execution
+evidence; the complete inventory must still run as
 one clean committed, detached, source-sealed release leg before it becomes
 release evidence.
 
@@ -860,8 +928,8 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 378 exact production
-liveness tests and executes all 24 owning Rust modules serially. The
+Before those longer scenarios, the PR gate inventories 465 exact production
+liveness tests and executes all 30 owning Rust modules serially. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin native-AMX signing-guard
 capacity at small, hard-boundary, oversized, overflow, and production-like
@@ -927,11 +995,37 @@ subscriber-network regressions, 1 runtime/Busy-deferred exact CommitQC
 coalescing regression, and 4 Nexus lane-relay ownership/fairness regressions—
 are offset by removal of the obsolete adapter cursor alias and two superseded
 network broadcast-residual tests, bringing that inventory up by a net 34 to
-298 tests across 21 modules. The current bounded per-source route, writer-flush,
-and transport-route construction closure adds 83 exact regressions and retires
-three obsolete target, generation, or phantom-runner names, yielding 378 tests
-across 24 modules. The
-rollover slice covers
+298 tests across 21 modules. The bounded per-source route, writer-flush, and
+transport-route construction closure added 82 exact regressions and retired
+two obsolete target or broadcast-residual names, yielding 378 tests across 24
+modules. The subsequent ownership-carrier closure adds 28 exact adapter,
+effects, runtime, ingress, sidecar, lane-work, worker, P2P, and daemon
+regressions without removing a name, yielding 406 tests across 24 modules. The
+current-source geometry closure adds 14 exact ingress, sidecar, adapter,
+effects, runtime, worker, P2P, and `iroha_config` regressions without removing a
+name, yielding the historical 420-test checkpoint across 26 modules. The
+route-lifecycle closure added three exact P2P regressions without removing a
+name, yielding the historical 423-test checkpoint across the same 26 modules.
+Those tests pin immutable
+delivery-to-minting-tenure binding through bounded tombstone churn, reject
+second-route overwrite at the rehydration boundary, and isolate actor-exit/`Drop`
+cancellation to the actor's own routes and waiters.
+The current reconciliation adds 16 exact tests and two P2P geometry modules
+plus the daemon genesis module. It separately replaces one obsolete lane-relay
+name in place, yielding a net total of 439 tests across 29 modules. Its Kura,
+refinement, effects, recovery, runner, watchdog,
+P2P, and genesis entries pin replay metadata, successor authority/lifecycle,
+discovered CommitQC admission, source geometry, and clone-safe producer/fanout
+ownership. The lane-relay saturation test was renamed in place, so the module
+still contributes four tests. The subsequent in-flight sidecar refresh
+regression raises that total to 440 without adding a module or corridor leg
+and binds one exact writer-flush owner per source chunk. Three subsequent
+worker regressions produce the historical 443-test checkpoint. They bind same-tenure
+pending/unapplied flush deduplication, mixed-source terminal-route history, and
+capacity-checked reconnect reactivation of the unflushed current item.
+The subsequent 21-test source-authority and shared-payload closure raises the
+current inventory to 465 across 30 modules and 53 pre-network legs.
+The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -947,7 +1041,7 @@ These newest tests pin local typed retirement, ownership, and fail-closed
 behavior; they do not claim end-to-end relay/application acknowledgement or
 unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
-lane-certificate contracts bring the aggregate pre-network corridor to 47
+lane-certificate contracts bring the aggregate pre-network corridor to 52
 legs. That set needs fresh discovery and execution plus its clean source-sealed
 release rerun; the full PR corridor is not claimed passed.
 
@@ -1188,8 +1282,8 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 47 pre-network corridor legs and
-their exact 378-test inventory, semantic test names/counts, commands, logs, and
+evidence directory. That receipt binds the 53 pre-network corridor legs and
+their exact 465-test inventory, semantic test names/counts, commands, logs, and
 resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos
 completion/log; and the exact-identity Taira completion/canonical JSON/full run

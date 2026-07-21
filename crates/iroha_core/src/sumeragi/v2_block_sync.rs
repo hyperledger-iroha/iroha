@@ -32,8 +32,17 @@ use super::v2_transport::{
     authenticate_commit_certificate_request_identity,
 };
 use super::{
-    v2::verify_persisted_quorum_certificate, v2_chunks::encode_payload,
+    v2::verify_persisted_quorum_certificate,
+    v2_chunks::encode_payload,
     v2_context_store::V2ContextStore,
+    v2_core::{
+        CanonicalIdentityProjection, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_PAYLOAD,
+        IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST, IDENTITY_KIND_CONSENSUS_MESSAGE,
+        IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+        ProductionHistoricalCertificateTraceProjection,
+        production_historical_certificate_trace_refines_indexed_async_kernel,
+    },
+    v2_effects::CommitCertificateReducerAdmission,
 };
 use crate::kura::Kura;
 
@@ -452,11 +461,73 @@ impl V2BlockSyncDiscovery {
         enqueue: Enqueue,
     ) -> Result<(), CommitCertificateAdmissionError<EnqueueError>>
     where
-        Enqueue: FnOnce(wire::ConsensusMessageV2) -> Result<(), EnqueueError>,
+        Enqueue: FnOnce(
+            wire::ConsensusMessageV2,
+        ) -> Result<CommitCertificateReducerAdmission, EnqueueError>,
     {
-        enqueue(discovered.message()).map_err(CommitCertificateAdmissionError::Enqueue)?;
+        let message = discovered.message();
+        let request_hash = discovered.request_hash;
+        let response_request_hash = discovered.response.request_hash;
+        let certificate = discovered.response.certificate.clone();
+        let request_present_before = self.outstanding.contains(request_hash);
+        let admission =
+            enqueue(message.clone()).map_err(CommitCertificateAdmissionError::Enqueue)?;
+        if !admission.matches(&message) {
+            return Err(CommitCertificateAdmissionError::MismatchedReducerAdmission);
+        }
+        let admitted_message_hash = admission.refinement_projection();
         if !self.complete(discovered) {
             return Err(CommitCertificateAdmissionError::RequestDisappeared);
+        }
+        let historical_trace = ProductionHistoricalCertificateTraceProjection {
+            context_id: historical_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                self.context.id().0,
+            ),
+            context_height: self.context.height,
+            certificate_context_id: historical_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                certificate.round.context_id.0,
+            ),
+            certificate_height: certificate.round.height,
+            request_hash: historical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST,
+                request_hash,
+            ),
+            response_request_hash: historical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST,
+                response_request_hash,
+            ),
+            response_certificate: historical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_QUORUM_CERTIFICATE,
+                HashOf::new(&certificate),
+            ),
+            message_certificate: match &message.payload {
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                    historical_typed_identity(
+                        IDENTITY_DOMAIN_PAYLOAD,
+                        IDENTITY_KIND_QUORUM_CERTIFICATE,
+                        HashOf::new(certificate),
+                    )
+                }
+                _ => CanonicalIdentityProjection::zero(),
+            },
+            message_hash: historical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CONSENSUS_MESSAGE,
+                HashOf::new(&message),
+            ),
+            admitted_message_hash,
+            request_present_before,
+            request_present_after: self.outstanding.contains(request_hash),
+        };
+        if !production_historical_certificate_trace_refines_indexed_async_kernel(historical_trace) {
+            return Err(CommitCertificateAdmissionError::RefinementRejected);
         }
         Ok(())
     }
@@ -466,6 +537,14 @@ impl V2BlockSyncDiscovery {
     pub(crate) fn outstanding_len(&self) -> usize {
         self.outstanding.len()
     }
+}
+
+fn historical_typed_identity<T>(
+    domain: u8,
+    kind: u8,
+    hash: HashOf<T>,
+) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
 }
 
 /// Serve a signed request from a canonical historical Kura finality artifact.
@@ -715,17 +794,25 @@ pub(crate) enum V2BlockSyncError {
 pub(crate) enum CommitCertificateAdmissionError<E> {
     /// The serialized reducer queue rejected or deferred the message.
     Enqueue(E),
+    /// The callback returned reducer ownership for a different canonical message.
+    MismatchedReducerAdmission,
     /// The exact request disappeared between authentication and serialized enqueue.
     RequestDisappeared,
+    /// The authenticated discovery handoff failed its shared pure refinement gate.
+    RefinementRejected,
 }
 
 impl<E: fmt::Display> fmt::Display for CommitCertificateAdmissionError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Enqueue(error) => write!(formatter, "CommitQC reducer enqueue failed: {error}"),
+            Self::MismatchedReducerAdmission => formatter
+                .write_str("CommitQC reducer admission belongs to a different canonical message"),
             Self::RequestDisappeared => formatter.write_str(
                 "CommitQC discovery request disappeared before reducer admission completed",
             ),
+            Self::RefinementRejected => formatter
+                .write_str("CommitQC discovery failed its exact historical refinement gate"),
         }
     }
 }
@@ -1092,7 +1179,7 @@ pub(super) mod tests {
             ))
         );
 
-        let response = fixture.response(request);
+        let response = fixture.response(request.clone());
         let late_replay = response.clone();
         let discovered = discovery
             .authenticate_response(response, &peer(&fixture.rotated_responder))
@@ -1104,8 +1191,9 @@ pub(super) mod tests {
                 if certificate == &fixture.artifact.commit_qc
         ));
 
-        let rejected = discovery
-            .enqueue_and_complete(discovered.clone(), |_| Err::<(), _>("runtime backpressure"));
+        let rejected = discovery.enqueue_and_complete(discovered.clone(), |_| {
+            Err::<CommitCertificateReducerAdmission, _>("runtime backpressure")
+        });
         assert_eq!(
             rejected,
             Err(CommitCertificateAdmissionError::Enqueue(
@@ -1114,11 +1202,29 @@ pub(super) mod tests {
         );
         assert_eq!(discovery.outstanding_len(), 1);
 
+        let foreign_admission =
+            CommitCertificateReducerAdmission::for_test(&wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CommitCertificateRequest(request.clone()),
+            ));
+        let mismatched = discovery.enqueue_and_complete(discovered.clone(), |_| {
+            Ok::<_, &'static str>(foreign_admission)
+        });
+        assert_eq!(
+            mismatched,
+            Err(CommitCertificateAdmissionError::MismatchedReducerAdmission)
+        );
+        assert_eq!(
+            discovery.outstanding_len(),
+            1,
+            "foreign reducer ownership must not retire authenticated discovery"
+        );
+
         let mut enqueued = None;
         discovery
             .enqueue_and_complete(discovered, |message| {
+                let admission = CommitCertificateReducerAdmission::for_test(&message);
                 enqueued = Some(message);
-                Ok::<(), &'static str>(())
+                Ok::<_, &'static str>(admission)
             })
             .expect("successful reducer enqueue retires request");
         assert_eq!(discovery.outstanding_len(), 0);
@@ -1240,8 +1346,9 @@ pub(super) mod tests {
             .authenticate_response(valid.clone(), &peer(&fixture.rotated_responder))
             .expect("transport authenticates before ordinary QC ingress");
         assert_eq!(
-            discovery
-                .enqueue_and_complete(invalid_aggregate, |_| { Err::<(), _>("invalid aggregate") }),
+            discovery.enqueue_and_complete(invalid_aggregate, |_| {
+                Err::<CommitCertificateReducerAdmission, _>("invalid aggregate")
+            }),
             Err(CommitCertificateAdmissionError::Enqueue(
                 "invalid aggregate"
             ))
@@ -1269,7 +1376,9 @@ pub(super) mod tests {
             .authenticate_response(response_one.clone(), &peer(&fixture.rotated_responder))
             .expect("height-one response");
         height_one
-            .enqueue_and_complete(discovered_one, |_| Ok::<(), &'static str>(()))
+            .enqueue_and_complete(discovered_one, |message| {
+                Ok::<_, &'static str>(CommitCertificateReducerAdmission::for_test(&message))
+            })
             .expect("height one reducer admission");
 
         let mut context_two = fixture.context.clone();

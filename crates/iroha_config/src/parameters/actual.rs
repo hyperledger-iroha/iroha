@@ -5765,7 +5765,10 @@ impl Sumeragi {
             });
         }
         let runtime_progress_reserve = (runtime_command_capacity / 8).max(1);
-        let runtime_completion_reserve = (runtime_command_capacity / 4).max(1);
+        let runtime_completion_reserve = (runtime_command_capacity
+            / u64::try_from(defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+                .expect("static completion-reserve divisor fits u64"))
+        .max(1);
         if runtime_progress_reserve
             .checked_add(runtime_completion_reserve)
             .is_none_or(|reserved| reserved >= runtime_command_capacity)
@@ -6031,6 +6034,75 @@ pub struct SumeragiV2KeyPolicy {
     pub allowed_algorithms: Vec<Algorithm>,
     /// Canonically sorted and deduplicated allowed HSM providers.
     pub allowed_hsm_providers: Vec<String>,
+}
+
+/// Invalid bounded geometry for the Sumeragi v2 exact-output corridor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SumeragiV2ExactOutputGeometryError {
+    /// Adding the two asynchronous producer bounds and one reducer batch overflowed.
+    #[error("Sumeragi v2 outbound shared capacity overflowed")]
+    SharedCapacityOverflow,
+    /// A maximum fanout must contain at least one source.
+    #[error("Sumeragi v2 maximum fanout source capacity must be non-zero")]
+    ZeroSourceCapacity,
+    /// Multiplying source capacity by the exact output-class count overflowed.
+    #[error("Sumeragi v2 maximum fanout ownership overflowed")]
+    MaximumFanoutOverflow,
+    /// The shared owner cannot retain one complete maximum fanout.
+    #[error(
+        "Sumeragi v2 outbound shared ownership capacity {actual} is below one maximum fanout {minimum}"
+    )]
+    CapacityTooSmall {
+        /// Available shared target/class ownership units.
+        actual: usize,
+        /// Required units for one maximum source fanout across every class.
+        minimum: usize,
+    },
+}
+
+/// Derive the exact shared ownership-unit capacity used by production output.
+///
+/// The two arguments are the bounded asynchronous effect and certified-request
+/// producer counts. One full serialized reducer effect batch is added with
+/// checked arithmetic.
+///
+/// # Errors
+///
+/// Returns [`SumeragiV2ExactOutputGeometryError::SharedCapacityOverflow`] when
+/// the complete producer bound is not representable.
+pub fn sumeragi_v2_exact_output_shared_ownership_capacity(
+    effect_work_capacity: usize,
+    certified_request_capacity: usize,
+) -> core::result::Result<usize, SumeragiV2ExactOutputGeometryError> {
+    effect_work_capacity
+        .checked_add(certified_request_capacity)
+        .and_then(|capacity| capacity.checked_add(defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP))
+        .ok_or(SumeragiV2ExactOutputGeometryError::SharedCapacityOverflow)
+}
+
+/// Require one complete source fanout to fit the exact-output shared owner.
+///
+/// # Errors
+///
+/// Returns an exact geometry error for a zero source bound, multiplication
+/// overflow, or insufficient shared capacity.
+pub fn validate_sumeragi_v2_exact_output_geometry(
+    shared_ownership_unit_capacity: usize,
+    max_sources_per_fanout: usize,
+) -> core::result::Result<(), SumeragiV2ExactOutputGeometryError> {
+    if max_sources_per_fanout == 0 {
+        return Err(SumeragiV2ExactOutputGeometryError::ZeroSourceCapacity);
+    }
+    let minimum = max_sources_per_fanout
+        .checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)
+        .ok_or(SumeragiV2ExactOutputGeometryError::MaximumFanoutOverflow)?;
+    if shared_ownership_unit_capacity < minimum {
+        return Err(SumeragiV2ExactOutputGeometryError::CapacityTooSmall {
+            actual: shared_ownership_unit_capacity,
+            minimum,
+        });
+    }
+    Ok(())
 }
 
 /// Invalid or non-canonical Sumeragi v2 runtime configuration.
@@ -7899,7 +7971,23 @@ impl SorafsGovernanceDagServiceView {
     ///
     /// Returns [`FromTomlSourceError`] when the dedicated view cannot be read
     /// or its conditional service requirements are invalid.
-    pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
+    pub fn from_toml_source(mut src: TomlSource) -> Result<Self, FromTomlSourceError> {
+        let root = src.table_mut();
+        root.retain(|key, _| key == "sorafs");
+        if let Some(sorafs) = root
+            .get_mut("sorafs")
+            .and_then(|value| value.as_table_mut())
+        {
+            sorafs.retain(|key, _| key == "storage");
+            if let Some(storage) = sorafs
+                .get_mut("storage")
+                .and_then(|value| value.as_table_mut())
+            {
+                storage.retain(|key, _| {
+                    matches!(key, "governance_dag_dir" | "governance_dag_service")
+                });
+            }
+        }
         ConfigReader::new()
             .with_toml_source(src)
             .read_and_complete::<user::SorafsGovernanceDagServiceRoot>()
@@ -11002,6 +11090,34 @@ mod tests {
             .v2_config(Duration::from_secs(1), mode)
             .expect("test v2 config must validate")
             .fingerprint()
+    }
+
+    #[test]
+    fn sumeragi_v2_exact_output_geometry_checks_every_arithmetic_boundary() {
+        assert_eq!(
+            sumeragi_v2_exact_output_shared_ownership_capacity(256, 130),
+            Ok(394),
+        );
+        assert_eq!(validate_sumeragi_v2_exact_output_geometry(394, 131), Ok(()));
+        assert_eq!(
+            validate_sumeragi_v2_exact_output_geometry(394, 132),
+            Err(SumeragiV2ExactOutputGeometryError::CapacityTooSmall {
+                actual: 394,
+                minimum: 396,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_exact_output_shared_ownership_capacity(usize::MAX, 1),
+            Err(SumeragiV2ExactOutputGeometryError::SharedCapacityOverflow),
+        );
+        assert_eq!(
+            validate_sumeragi_v2_exact_output_geometry(1, 0),
+            Err(SumeragiV2ExactOutputGeometryError::ZeroSourceCapacity),
+        );
+        assert_eq!(
+            validate_sumeragi_v2_exact_output_geometry(usize::MAX, usize::MAX),
+            Err(SumeragiV2ExactOutputGeometryError::MaximumFanoutOverflow),
+        );
     }
 
     #[test]

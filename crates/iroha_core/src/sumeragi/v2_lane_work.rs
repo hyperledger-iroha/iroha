@@ -363,7 +363,7 @@ pub(crate) enum V2LaneWorkEffect {
         /// Independent request sources for response chunks; absent for local fetch requests.
         reply_routes: Option<NetworkReplyRoutes>,
         /// Bounded request or fixed-boundary response chunk.
-        message: CertifiedMergeSidecarMessage,
+        message: Arc<CertifiedMergeSidecarMessage>,
     },
 }
 
@@ -1986,6 +1986,7 @@ impl V2LaneWorkAdapter {
         if ingress_ownership.as_ref().is_some_and(|ownership| {
             !ownership.validate_exact()
                 || !ownership.matches_message(&message)
+                || !ownership.matches_semantic_origin(sender.as_ref())
                 || !ownership.matches_reply_routes(reply_routes.as_ref())
         }) {
             return V2LaneIngressOutcome::Rejected;
@@ -2508,7 +2509,7 @@ impl V2LaneWorkAdapter {
     fn schedule_lane_artifact_retransmissions(&mut self) {
         // Peer-queue admission is only a volatile delivery boundary. Begin a
         // fresh bounded fanout round after the previous round transferred all
-        // destinations, so a connection-generation failure after enqueue
+        // destinations, so loss of an authenticated transport tenure after enqueue
         // cannot permanently erase the final lane certificate. Once Decision
         // is installed, the decision branch above finishes the current
         // handoff without starting another round; the durable global decision
@@ -2691,11 +2692,11 @@ impl V2LaneWorkAdapter {
         &mut self,
         post: MergeSidecarPost,
     ) -> Result<(), V2LaneWorkError> {
-        let retired_response_route = match (&post.message, &post.reply_route) {
+        let retired_response_route = match (post.message.as_ref(), &post.reply_route) {
             (CertifiedMergeSidecarMessage::Chunk(_), Some(route)) => Some(route.clone()),
             _ => None,
         };
-        let unsent_request = match &post.message {
+        let unsent_request = match post.message.as_ref() {
             CertifiedMergeSidecarMessage::Request(request) => Some(request.clone()),
             CertifiedMergeSidecarMessage::Chunk(_) => None,
         };
@@ -2731,6 +2732,7 @@ impl V2LaneWorkAdapter {
             .acknowledge_outbound_chunk(admission, now)
             .map_err(|_| V2LaneWorkError::RestartRequired)?;
         if acknowledged {
+            self.remove_acknowledged_sidecar_retry_effect(admission);
             let posts = self
                 .merge_sidecars
                 .drain_outbound_chunks(self.sidecar_effect_slots().min(8), now);
@@ -2740,6 +2742,44 @@ impl V2LaneWorkAdapter {
         }
         operation.complete();
         Ok(())
+    }
+
+    fn remove_acknowledged_sidecar_retry_effect(
+        &mut self,
+        admission: &CertifiedMergeSidecarChunkAdmission,
+    ) {
+        let mut retained = VecDeque::with_capacity(self.sidecar_effects.len());
+        while let Some(mut effect) = self.sidecar_effects.pop_front() {
+            let mut keep = true;
+            if let V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                reply_routes: Some(reply_routes),
+                message,
+                ..
+            } = &mut effect
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(_))
+                && admission.matches_materialized_chunk(message)
+            {
+                let completed_sources = reply_routes
+                    .iter()
+                    .filter(|route| admission.is_bound_to_source(route))
+                    .map(NetworkReplyRoute::source_key)
+                    .collect::<Vec<_>>();
+                for source in completed_sources {
+                    let removed = reply_routes.remove_completed_source(&source);
+                    debug_assert!(removed);
+                }
+                keep = !reply_routes.is_empty();
+            }
+            if keep {
+                retained.push_back(effect);
+            }
+        }
+        self.sidecar_effects = retained;
+        self.sidecar_effect_keys = self
+            .sidecar_effects
+            .iter()
+            .map(lane_work_effect_key)
+            .collect();
     }
 
     fn push_merge_sidecar_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
@@ -2967,7 +3007,7 @@ impl V2LaneWorkAdapter {
         );
         if let Some(post) = retry {
             if !self.push_merge_sidecar_post(post.clone())
-                && let CertifiedMergeSidecarMessage::Request(request) = &post.message
+                && let CertifiedMergeSidecarMessage::Request(request) = post.message.as_ref()
             {
                 self.merge_sidecars.release_unsent_request(request);
             }
@@ -5393,7 +5433,7 @@ fn lane_work_effect_reply_routes_have_valid_shape(effect: &V2LaneWorkEffect) -> 
             peer,
             reply_routes,
             message,
-        } => match message {
+        } => match message.as_ref() {
             CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
             CertifiedMergeSidecarMessage::Chunk(_) => reply_routes
                 .as_ref()
@@ -5432,7 +5472,7 @@ fn lane_work_effect_reply_routes_are_valid(effect: &V2LaneWorkEffect) -> bool {
             peer,
             reply_routes,
             message,
-        } => match message {
+        } => match message.as_ref() {
             CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
             CertifiedMergeSidecarMessage::Chunk(_) => reply_routes
                 .as_ref()
@@ -5588,7 +5628,7 @@ fn lane_work_effect_key(effect: &V2LaneWorkEffect) -> Hash {
         V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message, .. } => {
             encoded.push(3);
             encoded.extend(peer.encode());
-            encoded.extend(message.encode());
+            encoded.extend(message.as_ref().encode());
         }
     }
     Hash::new(encoded)
@@ -6981,7 +7021,7 @@ pub(super) mod tests {
         let post = |reply_route| MergeSidecarPost {
             peer: requester.clone(),
             reply_route: Some(reply_route),
-            message: CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
+            message: Arc::new(CertifiedMergeSidecarMessage::Chunk(chunk.clone())),
         };
 
         assert!(routes.retire(&route_a));
@@ -9562,7 +9602,7 @@ pub(super) mod tests {
         let effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
             peer: responder,
             reply_routes: None,
-            message: CertifiedMergeSidecarMessage::Request(request.clone()),
+            message: Arc::new(CertifiedMergeSidecarMessage::Request(request.clone())),
         };
 
         assert!(adapter.push_effect(effect.clone()));
@@ -9573,7 +9613,7 @@ pub(super) mod tests {
             adapter.push_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
                 peer: alternate_destination,
                 reply_routes: None,
-                message: CertifiedMergeSidecarMessage::Request(request.clone()),
+                message: Arc::new(CertifiedMergeSidecarMessage::Request(request.clone())),
             })
         );
         assert_eq!(
@@ -9588,7 +9628,7 @@ pub(super) mod tests {
             adapter.push_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
                 peer: distinct_request.responder.clone(),
                 reply_routes: None,
-                message: CertifiedMergeSidecarMessage::Request(distinct_request),
+                message: Arc::new(CertifiedMergeSidecarMessage::Request(distinct_request)),
             })
         );
         assert_eq!(

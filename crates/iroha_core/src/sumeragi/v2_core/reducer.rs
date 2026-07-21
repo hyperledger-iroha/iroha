@@ -5,9 +5,9 @@ use std::{
 };
 
 use super::{
-    CertificateRef, ConsensusMessageV2, DurableState, EventTag, Generation, HeightContext,
-    MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest, PersistenceId, Phase, Proposal,
-    ProposalJustification, Quorum, QuorumCertificate, QuorumError, ReplayError, Round,
+    CertificateRef, ConsensusMessageV2, ContextId, DurableState, EventTag, Generation,
+    HeightContext, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest, PersistenceId, Phase,
+    Proposal, ProposalJustification, Quorum, QuorumCertificate, QuorumError, ReplayError, Round,
     SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
     TimeoutSignatureGroup, TimeoutVote, ValidatorId, Vote, VotingPower, WalEntry, WalRecord,
     refinement::{
@@ -17,8 +17,8 @@ use super::{
         CanonicalIdentityProjection, CertificateIdentityProjection, EFFECT_APPLY, EFFECT_BROADCAST,
         EFFECT_ENTER_VIEW, EFFECT_FETCH, EFFECT_PERSIST, EFFECT_REPORT, EFFECT_SIGN, EFFECT_STORE,
         EFFECT_VALIDATE, EVENT_BODY_AVAILABLE, EVENT_BODY_STORED, EVENT_PERSISTED,
-        EVENT_RESUME_AFTER_REPLAY, EVENT_SIGNED, EffectCapabilityKey, EffectTrace,
-        EnterViewProjection, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_SUBJECT,
+        EVENT_PERSISTENCE_FAILED, EVENT_RESUME_AFTER_REPLAY, EVENT_SIGNED, EffectCapabilityKey,
+        EffectTrace, EnterViewProjection, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_SUBJECT,
         IDENTITY_KIND_CONSENSUS_CONTEXT, IDENTITY_KIND_CONSENSUS_SUBJECT, PendingProjection,
         ProductionDurableIntentTraceProjection, REPLAY_EFFECT_COMMIT, REPLAY_EFFECT_DECISION,
         REPLAY_EFFECT_NONE, REPLAY_EFFECT_PREPARE, REPLAY_EFFECT_PROPOSAL, REPLAY_EFFECT_TIMEOUT,
@@ -2416,7 +2416,7 @@ impl Reducer {
             Event::BodyStored { .. } => EVENT_BODY_STORED,
             Event::ValidationCompleted { .. } => 10,
             Event::Persisted { .. } => EVENT_PERSISTED,
-            Event::PersistenceFailed { .. } => 12,
+            Event::PersistenceFailed { .. } => EVENT_PERSISTENCE_FAILED,
             Event::Signed { .. } => EVENT_SIGNED,
             Event::ApplicationCompleted { .. } => 14,
         }
@@ -4644,7 +4644,7 @@ mod source_link_tests {
         mismatched_effect_lock
             .enter_view
             .effect_protected_lock
-            .subject = Subject::repeat(0xb3);
+            .subject = Reducer::subject_identity_projection(Subject::repeat(0xb3));
         assert!(!refinement::accepts(mismatched_effect_lock));
 
         let mut mismatched_signer_set = projection;

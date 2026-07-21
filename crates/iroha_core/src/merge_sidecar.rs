@@ -247,9 +247,12 @@ impl CertifiedMergeSidecarChunkAdmission {
         let chunk_cursor_before = usize::try_from(chunk.chunk_index).map_err(|_| {
             MergeSidecarError::FlushIdentityMismatch("chunk index is not representable")
         })?;
-        let chunk_cursor_after = chunk_cursor_before.checked_add(1).ok_or(
-            MergeSidecarError::FlushIdentityMismatch("chunk cursor overflowed"),
-        )?;
+        let chunk_cursor_after =
+            chunk_cursor_before
+                .checked_add(1)
+                .ok_or(MergeSidecarError::FlushIdentityMismatch(
+                    "chunk cursor overflowed",
+                ))?;
         let chunk_count = usize::try_from(chunk.chunk_count).map_err(|_| {
             MergeSidecarError::FlushIdentityMismatch("chunk count is not representable")
         })?;
@@ -315,12 +318,8 @@ impl CertifiedMergeSidecarChunkAdmission {
 
     /// Whether `ack_identity` is the exact actor completion queued here.
     #[must_use]
-    pub(crate) fn matches_ack_identity(
-        &self,
-        ack_identity: &NetworkReplyFlushIdentity,
-    ) -> bool {
-        self.flush_identity
-            .same_delivery_occurrence(ack_identity)
+    pub(crate) fn matches_ack_identity(&self, ack_identity: &NetworkReplyFlushIdentity) -> bool {
+        self.flush_identity.same_delivery_occurrence(ack_identity)
             && self.projection_matches_identity(ack_identity)
     }
 
@@ -340,22 +339,40 @@ impl CertifiedMergeSidecarChunkAdmission {
 
     /// Whether the retained actor identity is bound to this live attempt tenure.
     #[must_use]
-    fn is_bound_to_attempt(&self, route: &NetworkReplyRoute) -> bool {
+    pub(crate) fn is_bound_to_attempt(&self, route: &NetworkReplyRoute) -> bool {
         self.flush_identity.is_bound_to_tenure(route)
             && self.projection.semantic_target == *route.semantic_target()
             && self.source_key == route.source_key()
     }
 
-    /// Whether materialized bytes reconstruct the exact admitted response.
-    fn matches_materialized_chunk(&self, chunk: &CertifiedMergeSidecarChunkV1) -> bool {
+    /// Whether this terminal flush belongs to the same semantic source attempt.
+    ///
+    /// Unlike [`Self::is_bound_to_attempt`], this deliberately ignores the
+    /// connection tenure. A reconnect can replace writer authority while the
+    /// old writer's successful flush acknowledgement is still crossing the
+    /// runner boundary; that terminal receipt must advance the shared source
+    /// cursor exactly once.
+    #[must_use]
+    pub(crate) fn is_bound_to_source(&self, route: &NetworkReplyRoute) -> bool {
+        self.projection.semantic_target == *route.semantic_target()
+            && self.source_key == route.source_key()
+    }
+
+    /// Whether one cached materialized carrier is the exact admitted response.
+    pub(crate) fn matches_materialized_chunk(
+        &self,
+        message: &Arc<CertifiedMergeSidecarMessage>,
+    ) -> bool {
+        let CertifiedMergeSidecarMessage::Chunk(chunk) = message.as_ref() else {
+            return false;
+        };
         let Ok(chunk_cursor_before) = usize::try_from(chunk.chunk_index) else {
             return false;
         };
         let Some(chunk_cursor_after) = chunk_cursor_before.checked_add(1) else {
             return false;
         };
-        let message = CertifiedMergeSidecarMessage::Chunk(chunk.clone());
-        let data = crate::NetworkMessage::CertifiedMergeSidecar(Box::new(message.clone()));
+        let data = crate::NetworkMessage::CertifiedMergeSidecar(Arc::clone(message));
         let post = Post {
             data: data.clone(),
             peer_id: chunk.requester.clone(),
@@ -371,7 +388,7 @@ impl CertifiedMergeSidecarChunkAdmission {
             && projection.requester == chunk.requester
             && projection.responder == chunk.responder
             && projection.canonical_response_hash == HashOf::new(&data)
-            && projection.sidecar_response_hash == HashOf::new(&message)
+            && projection.sidecar_response_hash == HashOf::new(message.as_ref())
             && projection.chunk_hash == HashOf::new(chunk)
             && projection.payload_digest
                 == Hash::new_from_chunks(&[CHUNK_PAYLOAD_DIGEST_DOMAIN, chunk.bytes.as_slice()])
@@ -607,7 +624,9 @@ type OutboundAttemptKey = (ServerRequestKey, ServerRequestSource);
 #[derive(Debug)]
 struct OutboundTransfer {
     request: CertifiedMergeSidecarRequestV1,
-    bytes: Arc<[u8]>,
+    response_len: usize,
+    /// Fixed-boundary wire chunks materialized once and shared by every source.
+    chunks: Vec<Arc<CertifiedMergeSidecarMessage>>,
     attempts: BTreeMap<ServerRequestSource, OutboundAttempt>,
 }
 
@@ -669,7 +688,7 @@ pub(crate) struct MergeSidecarPost {
     /// Exact authenticated return route for response chunks.
     pub(crate) reply_route: Option<NetworkReplyRoute>,
     /// Request or chunk to send.
-    pub(crate) message: CertifiedMergeSidecarMessage,
+    pub(crate) message: Arc<CertifiedMergeSidecarMessage>,
 }
 
 impl PartialEq for MergeSidecarPost {
@@ -997,7 +1016,7 @@ impl MergeSidecarTransport {
         Ok(Some(MergeSidecarPost {
             peer: holder,
             reply_route: None,
-            message: CertifiedMergeSidecarMessage::Request(request),
+            message: Arc::new(CertifiedMergeSidecarMessage::Request(request)),
         }))
     }
 
@@ -1463,7 +1482,7 @@ impl MergeSidecarTransport {
     fn global_outbound_bytes(&self) -> usize {
         self.outbound
             .values()
-            .map(|transfer| transfer.bytes.len())
+            .map(|transfer| transfer.response_len)
             .sum()
     }
 
@@ -1471,7 +1490,7 @@ impl MergeSidecarTransport {
         self.outbound
             .values()
             .filter(|transfer| transfer.attempts.contains_key(source))
-            .map(|transfer| transfer.bytes.len())
+            .map(|transfer| transfer.response_len)
             .sum()
     }
 
@@ -1624,7 +1643,16 @@ impl MergeSidecarTransport {
                             attempt.in_flight_chunk = None;
                             reconnect_retry_chunk = Some(retry_chunk);
                         }
-                        if !attempt.queued {
+                        // A later delivery on the same tenure updates only
+                        // the route for this source. If its current chunk is
+                        // already awaiting the exact writer-flush witness,
+                        // queueing here would let the caller drain a second
+                        // concurrent copy of that same chunk. The eventual
+                        // acknowledgement schedules the next chunk through
+                        // the current route. A reconnect has no writer-flush
+                        // continuity, so it cleared `in_flight_chunk` above
+                        // and must queue the retained current chunk again.
+                        if attempt.in_flight_chunk.is_none() && !attempt.queued {
                             attempt.queued = true;
                             enqueue_attempt = true;
                         }
@@ -1658,8 +1686,7 @@ impl MergeSidecarTransport {
                         .outbound
                         .get(&key)
                         .expect("observed outbound transfer remains present")
-                        .bytes
-                        .len();
+                        .response_len;
                     if !self.can_add_outbound_attempt(&source, bytes) {
                         return Err(MergeSidecarError::Capacity("outbound response budget"));
                     }
@@ -1759,7 +1786,11 @@ impl MergeSidecarTransport {
             {
                 return Err(MergeSidecarError::Capacity("server request rate gate"));
             }
-            if let Some(bytes) = self.outbound.get(&key).map(|transfer| transfer.bytes.len()) {
+            if let Some(bytes) = self
+                .outbound
+                .get(&key)
+                .map(|transfer| transfer.response_len)
+            {
                 if !self.can_add_outbound_attempt(&source, bytes) {
                     return Err(MergeSidecarError::Capacity("outbound response budget"));
                 }
@@ -2002,6 +2033,33 @@ impl MergeSidecarTransport {
         // after they leave) without restarting. A completed source remains
         // terminal across connection tenures while this semantic gate exists.
         Self::park_authorized_server_request_attempts(gate, now);
+        let response_len = bytes.len();
+        let chunk_count = response_len.div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+        let chunk_count_wire = u32::try_from(chunk_count)
+            .expect("bounded certified merge response chunk count fits u32");
+        let chunks = bytes
+            .chunks(MAX_CERTIFIED_MERGE_CHUNK_BYTES)
+            .enumerate()
+            .map(|(index, chunk_bytes)| {
+                Arc::new(CertifiedMergeSidecarMessage::Chunk(
+                    CertifiedMergeSidecarChunkV1 {
+                        version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                        request_id: request.request_id,
+                        entry_hash: request.entry_hash,
+                        encoded_len: request.encoded_len,
+                        epoch_id: request.epoch_id,
+                        reference_digest: request.reference_digest,
+                        requester: request.requester.clone(),
+                        responder: request.responder.clone(),
+                        chunk_index: u32::try_from(index)
+                            .expect("bounded certified merge chunk index fits u32"),
+                        chunk_count: chunk_count_wire,
+                        bytes: chunk_bytes.to_vec(),
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        debug_assert_eq!(chunks.len(), chunk_count);
         let mut attempts = BTreeMap::new();
         for (source, reply_route, resume_chunk) in admitted_attempts {
             self.outbound_order.push_back((key.clone(), source.clone()));
@@ -2019,7 +2077,8 @@ impl MergeSidecarTransport {
             key,
             OutboundTransfer {
                 request,
-                bytes: Arc::from(bytes),
+                response_len,
+                chunks,
                 attempts,
             },
         );
@@ -2048,7 +2107,6 @@ impl MergeSidecarTransport {
             let cursor;
             if let Some(transfer) = self.outbound.get_mut(&key) {
                 let request = &transfer.request;
-                let bytes = &transfer.bytes;
                 let Some(attempt) = transfer.attempts.get_mut(&source) else {
                     debug_assert!(false, "outbound response order lost its source attempt");
                     continue;
@@ -2064,36 +2122,22 @@ impl MergeSidecarTransport {
                         attempt.in_flight_chunk.unwrap_or(attempt.next_chunk),
                     );
                 } else {
-                    let count = transfer
-                        .bytes
-                        .len()
-                        .div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+                    let count = transfer.chunks.len();
                     let index = attempt.in_flight_chunk.unwrap_or(attempt.next_chunk);
                     if index >= count {
                         completed = true;
                         cursor = ServerResponseCursor::Complete;
                     } else {
-                        let start = index * MAX_CERTIFIED_MERGE_CHUNK_BYTES;
-                        let end = bytes.len().min(start + MAX_CERTIFIED_MERGE_CHUNK_BYTES);
-                        let chunk = CertifiedMergeSidecarChunkV1 {
-                            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-                            request_id: request.request_id,
-                            entry_hash: request.entry_hash,
-                            encoded_len: request.encoded_len,
-                            epoch_id: request.epoch_id,
-                            reference_digest: request.reference_digest,
-                            requester: request.requester.clone(),
-                            responder: request.responder.clone(),
-                            chunk_index: u32::try_from(index)
-                                .expect("protocol chunk index fits u32"),
-                            chunk_count: u32::try_from(count)
-                                .expect("protocol chunk count fits u32"),
-                            bytes: bytes[start..end].to_vec(),
-                        };
+                        let message = Arc::clone(
+                            transfer
+                                .chunks
+                                .get(index)
+                                .expect("bounded sidecar cursor names a cached chunk"),
+                        );
                         posts.push(MergeSidecarPost {
                             peer: request.requester.clone(),
                             reply_route: attempt.reply_route.clone(),
-                            message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                            message,
                         });
                         attempt.in_flight_chunk = Some(index);
                         cursor = ServerResponseCursor::Pending(index);
@@ -2150,10 +2194,7 @@ impl MergeSidecarTransport {
             return Ok(false);
         };
         let request = &transfer.request;
-        let count = transfer
-            .bytes
-            .len()
-            .div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+        let count = transfer.chunks.len();
         if request.request_id != projection.request_id
             || request.entry_hash != projection.entry_hash
             || request.encoded_len != projection.encoded_len
@@ -2161,6 +2202,7 @@ impl MergeSidecarTransport {
             || request.reference_digest != projection.reference_digest
             || request.requester != projection.requester
             || request.responder != projection.responder
+            || usize::try_from(request.encoded_len).ok() != Some(transfer.response_len)
             || usize::try_from(projection.chunk_count).ok() != Some(count)
             || projection.message_cursor_before != 0
             || projection.message_cursor_after != 1
@@ -2172,39 +2214,20 @@ impl MergeSidecarTransport {
         let chunk_index = usize::try_from(projection.chunk_index).map_err(|_| {
             MergeSidecarError::FlushIdentityMismatch("chunk index is not representable")
         })?;
-        let expected_chunk_cursor_after = chunk_index.checked_add(1).ok_or(
-            MergeSidecarError::FlushIdentityMismatch("chunk cursor overflowed"),
-        )?;
-        let start = chunk_index
-            .checked_mul(MAX_CERTIFIED_MERGE_CHUNK_BYTES)
-            .ok_or(MergeSidecarError::FlushIdentityMismatch(
-                "chunk boundary overflowed",
-            ))?;
-        let end = transfer
-            .bytes
-            .len()
-            .min(start.saturating_add(MAX_CERTIFIED_MERGE_CHUNK_BYTES));
-        if start >= end {
-            return Err(MergeSidecarError::FlushIdentityMismatch(
-                "chunk boundary is outside the materialized response",
-            ));
-        }
-        let expected_chunk = CertifiedMergeSidecarChunkV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            request_id: request.request_id,
-            entry_hash: request.entry_hash,
-            encoded_len: request.encoded_len,
-            epoch_id: request.epoch_id,
-            reference_digest: request.reference_digest,
-            requester: request.requester.clone(),
-            responder: request.responder.clone(),
-            chunk_index: projection.chunk_index,
-            chunk_count: u32::try_from(count).map_err(|_| {
-                MergeSidecarError::FlushIdentityMismatch("chunk count is not representable")
-            })?,
-            bytes: transfer.bytes[start..end].to_vec(),
-        };
-        if !admission.matches_materialized_chunk(&expected_chunk) {
+        let expected_chunk_cursor_after =
+            chunk_index
+                .checked_add(1)
+                .ok_or(MergeSidecarError::FlushIdentityMismatch(
+                    "chunk cursor overflowed",
+                ))?;
+        let expected_message =
+            transfer
+                .chunks
+                .get(chunk_index)
+                .ok_or(MergeSidecarError::FlushIdentityMismatch(
+                    "chunk cursor does not name a cached response chunk",
+                ))?;
+        if !admission.matches_materialized_chunk(expected_message) {
             return Err(MergeSidecarError::FlushIdentityMismatch(
                 "materialized response differs from the actor-admitted chunk",
             ));
@@ -2217,7 +2240,7 @@ impl MergeSidecarTransport {
         if !attempt
             .reply_route
             .as_ref()
-            .is_some_and(|route| admission.is_bound_to_attempt(route))
+            .is_some_and(|route| admission.is_bound_to_source(route))
         {
             return Ok(false);
         }
@@ -3000,7 +3023,8 @@ mod tests {
             .defer_block(block_hash, 2, 0, reference.clone(), &requester, 1, now)
             .expect("defer")
             .expect("request");
-        let CertifiedMergeSidecarMessage::Request(request) = post.message else {
+        let CertifiedMergeSidecarMessage::Request(request) = Arc::unwrap_or_clone(post.message)
+        else {
             panic!("expected request")
         };
         (transport, requester, reference, request, now)
@@ -3035,11 +3059,11 @@ mod tests {
             .reply_route
             .as_ref()
             .expect("response chunk must retain its authenticated reply route");
-        let CertifiedMergeSidecarMessage::Chunk(_) = &post.message else {
+        let CertifiedMergeSidecarMessage::Chunk(_) = post.message.as_ref() else {
             panic!("expected a certified merge-sidecar response chunk")
         };
         let canonical_post = Post {
-            data: crate::NetworkMessage::CertifiedMergeSidecar(Box::new(post.message.clone())),
+            data: crate::NetworkMessage::CertifiedMergeSidecar(Arc::clone(&post.message)),
             peer_id: post.peer.clone(),
             priority: Priority::High,
         };
@@ -3263,7 +3287,7 @@ mod tests {
         let posts = transport.tick_bounded(&requester, now + REQUEST_TIMEOUT, usize::MAX);
         let next = posts
             .into_iter()
-            .find_map(|post| match post.message {
+            .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
                 CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
@@ -3289,7 +3313,7 @@ mod tests {
             request = transport
                 .tick_bounded(&requester, now, usize::MAX)
                 .into_iter()
-                .find_map(|post| match post.message {
+                .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                     CertifiedMergeSidecarMessage::Request(request) => Some(request),
                     CertifiedMergeSidecarMessage::Chunk(_) => None,
                 })
@@ -3371,7 +3395,7 @@ mod tests {
                 .drain_outbound_chunks(8, now)
                 .pop()
                 .expect("one source owns one in-flight response chunk");
-            let CertifiedMergeSidecarMessage::Chunk(chunk) = &post.message else {
+            let CertifiedMergeSidecarMessage::Chunk(chunk) = post.message.as_ref() else {
                 panic!("outbound response emitted a request")
             };
             assert_eq!(usize::try_from(chunk.chunk_index).unwrap(), seen);
@@ -3407,7 +3431,7 @@ mod tests {
             .pop()
             .expect("emit first chunk");
         assert!(matches!(
-            &first.message,
+            first.message.as_ref(),
             CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0
         ));
 
@@ -3429,9 +3453,10 @@ mod tests {
             &continued,
             MergeSidecarPost {
                 reply_route: Some(emitted),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            } if emitted.same_delivery(&route) && chunk.chunk_index == 1
+            } if emitted.same_delivery(&route)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 1)
         ));
         assert!(acknowledge_reply_chunk(&mut server, &continued, now));
         assert!(server.outbound.is_empty());
@@ -3464,9 +3489,9 @@ mod tests {
         assert!(matches!(
             &first_a,
             MergeSidecarPost {
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            } if chunk.chunk_index == 0
+            } if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0)
         ));
         assert!(acknowledge_reply_chunk(&mut server, &first_a, now));
 
@@ -3491,10 +3516,15 @@ mod tests {
             &first_b,
             MergeSidecarPost {
                 reply_route: Some(route),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            } if route.same_delivery(&route_b) && chunk.chunk_index == 0
+            } if route.same_delivery(&route_b)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0)
         ));
+        assert!(
+            Arc::ptr_eq(&first_a.message, &first_b.message),
+            "independent sources must share the materialized chunk-zero carrier"
+        );
         assert!(acknowledge_reply_chunk(&mut server, &first_b, now));
 
         let reconnected_a = routes.mint_via(requester.clone(), hub_a);
@@ -3509,23 +3539,150 @@ mod tests {
             [
                 MergeSidecarPost {
                     reply_route: Some(route_b_post),
-                    message: CertifiedMergeSidecarMessage::Chunk(chunk_b),
+                    message: message_b,
                     ..
                 },
                 MergeSidecarPost {
                     reply_route: Some(route_a_post),
-                    message: CertifiedMergeSidecarMessage::Chunk(chunk_a),
+                    message: message_a,
                     ..
                 }
             ] if route_b_post.same_delivery(&route_b)
                 && route_a_post.same_delivery(&reconnected_a)
-                && chunk_b.chunk_index == 1
-                && chunk_a.chunk_index == 1
+                && matches!(message_b.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 1)
+                && matches!(message_a.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 1)
         ));
+        assert!(
+            Arc::ptr_eq(&continued[0].message, &continued[1].message),
+            "independent source cursors must share the same cached chunk carrier"
+        );
+        assert!(
+            !Arc::ptr_eq(&first_b.message, &continued[0].message),
+            "distinct fixed-boundary chunks must retain distinct carriers"
+        );
         assert!(acknowledge_reply_chunk(&mut server, &continued[0], now));
         assert!(acknowledge_reply_chunk(&mut server, &continued[1], now));
         assert!(server.outbound.is_empty());
         assert!(server.outbound_order.is_empty());
+    }
+
+    #[test]
+    fn cached_sidecar_payload_objects_scale_with_chunks_not_sources() {
+        let source_count = DEFAULT_REPLY_SOURCE_CAPACITY;
+        let response_len = MAX_CERTIFIED_MERGE_CHUNK_BYTES * 2 + 1;
+        let (_, requester, _, request, now) = start_session(response_len, 3);
+        let local_peer = request.responder.clone();
+        let hubs = (0..source_count)
+            .map(|index| peer(format!("cached chunk hub {index}").as_bytes()))
+            .collect::<Vec<_>>();
+        let mut routes = NetworkReplyRouteTestFixture::new(hubs[0].clone());
+        let reply_routes = hubs
+            .into_iter()
+            .map(|hub| routes.mint_via(requester.clone(), hub))
+            .collect::<Vec<_>>();
+        let mut server = MergeSidecarTransport::new();
+
+        for (index, route) in reply_routes.iter().enumerate() {
+            assert_eq!(
+                server
+                    .admit_server_request(&requester, &request, Some(route), &local_peer, now,)
+                    .expect("admit one independent authenticated source"),
+                index == 0,
+                "only the first source authorizes shared materialization"
+            );
+        }
+        server
+            .enqueue_response(
+                request,
+                Some(reply_routes[0].clone()),
+                vec![0xA7; response_len],
+                now,
+            )
+            .expect("materialize one shared response");
+
+        let expected_chunks = response_len.div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+        let mut unique_payloads = BTreeSet::new();
+        let mut emitted = 0usize;
+        for chunk_index in 0..expected_chunks {
+            let posts = server.drain_outbound_chunks(source_count, now);
+            assert_eq!(posts.len(), source_count);
+            let first = &posts[0].message;
+            for post in &posts {
+                assert!(
+                    Arc::ptr_eq(first, &post.message),
+                    "all source-local cursors at one boundary must share one carrier"
+                );
+                assert!(matches!(
+                    post.message.as_ref(),
+                    CertifiedMergeSidecarMessage::Chunk(chunk)
+                        if usize::try_from(chunk.chunk_index).ok() == Some(chunk_index)
+                ));
+                unique_payloads.insert(Arc::as_ptr(&post.message) as usize);
+                let admission = reply_chunk_admission(post);
+                let strong_count = Arc::strong_count(&post.message);
+                assert!(admission.matches_materialized_chunk(&post.message));
+                assert_eq!(
+                    Arc::strong_count(&post.message),
+                    strong_count,
+                    "matching must borrow the cached carrier without retaining another owner"
+                );
+                assert!(
+                    server
+                        .acknowledge_outbound_chunk(&admission, now)
+                        .expect("acknowledge the cached response")
+                );
+                emitted += 1;
+            }
+        }
+
+        assert_eq!(emitted, source_count * expected_chunks);
+        assert_eq!(unique_payloads.len(), expected_chunks);
+        assert!(server.outbound.is_empty());
+    }
+
+    #[test]
+    fn sidecar_admission_matches_the_cached_arc_without_changing_ownership() {
+        let response = vec![0x5A; 64];
+        let (_, requester, _, request, now) = start_session(response.len(), 1);
+        let local_peer = request.responder.clone();
+        let hub = peer(b"cached admission hub");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
+        let route = routes.mint_via(requester.clone(), hub);
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now)
+                .expect("admit one authenticated source")
+        );
+        server
+            .enqueue_response(request, Some(route), response, now)
+            .expect("materialize one cached response");
+        let post = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("drain cached response chunk");
+        let admission = reply_chunk_admission(&post);
+        let strong_count = Arc::strong_count(&post.message);
+
+        assert!(admission.matches_materialized_chunk(&post.message));
+        assert_eq!(
+            Arc::strong_count(&post.message),
+            strong_count,
+            "matching must borrow the cached carrier without retaining another owner"
+        );
+
+        let mut altered = post.message.as_ref().clone();
+        let CertifiedMergeSidecarMessage::Chunk(chunk) = &mut altered else {
+            panic!("response fixture must be a chunk")
+        };
+        chunk.bytes[0] ^= 0xFF;
+        assert!(!admission.matches_materialized_chunk(&Arc::new(altered)));
+        assert!(
+            server
+                .acknowledge_outbound_chunk(&admission, now)
+                .expect("acknowledge the cached response")
+        );
+        assert!(server.outbound.is_empty());
     }
 
     #[test]
@@ -3549,12 +3706,7 @@ mod tests {
                 .expect("source A starts exact shared materialization")
         );
         server
-            .enqueue_response(
-                request.clone(),
-                Some(route_a.clone()),
-                vec![0xA6; len],
-                now,
-            )
+            .enqueue_response(request.clone(), Some(route_a.clone()), vec![0xA6; len], now)
             .expect("materialize one shared two-chunk response");
         assert!(
             !server
@@ -3580,7 +3732,7 @@ mod tests {
             .expect("source B receives chunk zero");
         let admission_a = reply_chunk_admission(first_a);
         let admission_b = reply_chunk_admission(first_b);
-        assert_eq!(server.outbound[&key].bytes.len(), len);
+        assert_eq!(server.outbound[&key].response_len, len);
         assert_eq!(server.outbound[&key].attempts[&source_a].next_chunk, 0);
         assert_eq!(server.outbound[&key].attempts[&source_b].next_chunk, 0);
 
@@ -3702,7 +3854,7 @@ mod tests {
             .pop()
             .expect("hand source A its current chunk");
         assert!(matches!(
-            &in_flight.message,
+            in_flight.message.as_ref(),
             CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0
         ));
 
@@ -3761,9 +3913,10 @@ mod tests {
             &continued,
             MergeSidecarPost {
                 reply_route: Some(route),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            } if route.same_delivery(&route_a) && chunk.chunk_index == 1
+            } if route.same_delivery(&route_a)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 1)
         ));
         assert!(acknowledge_reply_chunk(&mut server, &continued, now));
         assert!(server.outbound.is_empty());
@@ -3792,7 +3945,7 @@ mod tests {
             .pop()
             .expect("hand chunk zero to exact output");
         assert!(matches!(
-            &first.message,
+            first.message.as_ref(),
             CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0
         ));
         assert!(acknowledge_reply_chunk(&mut server, &first, now));
@@ -3835,9 +3988,10 @@ mod tests {
             &continued,
             MergeSidecarPost {
                 reply_route: Some(route),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            } if route.same_delivery(&reconnected) && chunk.chunk_index == 1
+            } if route.same_delivery(&reconnected)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 1)
         ));
         assert!(acknowledge_reply_chunk(
             &mut server,
@@ -3876,9 +4030,9 @@ mod tests {
         assert!(matches!(
             &first,
             MergeSidecarPost {
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            } if chunk.chunk_index == 0
+            } if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0)
         ));
 
         let later_route = routes
@@ -3901,16 +4055,75 @@ mod tests {
             &continued,
             MergeSidecarPost {
                 reply_route: Some(route),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            } if route.same_delivery(&later_route) && chunk.chunk_index == 1
+            } if route.same_delivery(&later_route)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 1)
         ));
         assert!(acknowledge_reply_chunk(&mut server, &continued, now));
         assert!(server.outbound.is_empty());
     }
 
     #[test]
-    fn late_old_tenure_receipt_cannot_advance_reconnected_attempt() {
+    fn later_delivery_while_chunk_is_in_flight_waits_for_flush_before_next_emit() {
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 3);
+        let local_peer = request.responder.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(peer(b"in-flight delivery hub"));
+        let first_route = routes.mint(requester.clone());
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&first_route), &local_peer, now)
+                .expect("admit first delivery")
+        );
+        server
+            .enqueue_response(
+                request.clone(),
+                Some(first_route.clone()),
+                vec![0xD4; len],
+                now,
+            )
+            .expect("queue response bytes");
+        let first = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("hand chunk zero to exact output");
+
+        let later_route = routes
+            .redeliver(&first_route)
+            .expect("mint later delivery on the retained tenure");
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&later_route), &local_peer, now)
+                .expect("rebind only this source delivery")
+        );
+        assert!(
+            server.drain_outbound_chunks(1, now).is_empty(),
+            "a same-tenure redelivery cannot emit the in-flight current chunk twice"
+        );
+
+        assert!(acknowledge_reply_chunk(&mut server, &first, now));
+        let next = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("writer flush schedules the next fixed chunk");
+        assert!(matches!(
+            &next,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message,
+                ..
+            } if route.same_delivery(&later_route)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 1)
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, &next, now));
+        assert!(server.outbound.is_empty());
+        assert!(server.outbound_order.is_empty());
+    }
+
+    #[test]
+    fn late_old_exact_item_receipt_completes_reconnected_attempt_once() {
         let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
         let (_, requester, _, request, now) = start_session(len, 3);
         let local_peer = request.responder.clone();
@@ -3959,20 +4172,24 @@ mod tests {
             &new_one,
             MergeSidecarPost {
                 reply_route: Some(route),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            } if route.same_tenure(&reconnected) && chunk.chunk_index == 1
+            } if route.same_tenure(&reconnected)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 1)
         ));
         assert!(
-            !server
+            server
                 .acknowledge_outbound_chunk(&late_old_receipt, now)
-                .expect("late old-tenure receipt is a harmless no-op")
+                .expect("the old successful flush completes the same source item once")
         );
         assert!(
             server.drain_outbound_chunks(1, now).is_empty(),
-            "the retained current chunk remains in flight after the stale receipt"
+            "the old receipt cancels the queued reconnect retry"
         );
-        assert!(acknowledge_reply_chunk(&mut server, &new_one, now));
+        assert!(
+            !acknowledge_reply_chunk(&mut server, &new_one, now),
+            "the queued reconnect receipt is terminal after the old exact item wins"
+        );
         assert!(server.outbound.is_empty());
     }
 
@@ -4014,11 +4231,11 @@ mod tests {
             &post,
             MergeSidecarPost {
                 reply_route: Some(route),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
             } if route.same_delivery(&later_route)
-                && chunk.chunk_index == 0
-                && chunk.bytes.as_slice() == [0x7A]
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                    if chunk.chunk_index == 0 && chunk.bytes.as_slice() == [0x7A])
         ));
         assert!(acknowledge_reply_chunk(&mut server, &post, now));
         assert!(server.outbound.is_empty());
@@ -4077,11 +4294,11 @@ mod tests {
             &post,
             MergeSidecarPost {
                 reply_route: Some(route),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
             } if route.same_tenure(&reconnected)
-                && chunk.chunk_index == 0
-                && chunk.bytes.as_slice() == [0x6C]
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                    if chunk.chunk_index == 0 && chunk.bytes.as_slice() == [0x6C])
         ));
         assert!(acknowledge_reply_chunk(&mut server, &post, now));
     }
@@ -4249,9 +4466,11 @@ mod tests {
             &post,
             MergeSidecarPost {
                 reply_route: Some(route),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            } if route.same_delivery(&route_b) && chunk.bytes.as_slice() == [0x92]
+            } if route.same_delivery(&route_b)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                    if chunk.bytes.as_slice() == [0x92])
         ));
         assert!(acknowledge_reply_chunk(&mut server, &post, now));
         assert!(server.outbound.is_empty());
@@ -4347,9 +4566,11 @@ mod tests {
             sibling_only.as_slice(),
             [MergeSidecarPost {
                 reply_route: Some(sibling),
-                message: CertifiedMergeSidecarMessage::Chunk(sibling_chunk),
+                message,
                 ..
-            }] if sibling.same_delivery(&sibling_route) && sibling_chunk.chunk_index == 0
+            }] if sibling.same_delivery(&sibling_route)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                    if chunk.chunk_index == 0)
         ));
         assert!(acknowledge_reply_chunk(&mut server, &sibling_only[0], now));
         assert!(server.outbound.is_empty());
@@ -4475,6 +4696,13 @@ mod tests {
             server.admit_server_request(&requester, &request, Some(&route_b), &local_peer, now),
             Err(MergeSidecarError::Capacity("server request rate gate"))
         ));
+    }
+
+    #[test]
+    fn authenticated_source_limits_are_fixed_at_four_gates_two_sessions_and_sixteen_mibibytes() {
+        assert_eq!(MAX_SERVER_REQUEST_GATES_PER_SOURCE, 4);
+        assert_eq!(MAX_OUTBOUND_SESSIONS_PER_SOURCE, 2);
+        assert_eq!(MAX_OUTBOUND_BYTES_PER_SOURCE, 16 * 1024 * 1024);
     }
 
     #[test]
@@ -4663,7 +4891,12 @@ mod tests {
 
         let key = (requester, request.request_id);
         let transfer = &server.outbound[&key];
-        assert_eq!(transfer.bytes.as_ref(), &[0x82]);
+        assert!(matches!(
+            transfer.chunks.as_slice(),
+            [message]
+                if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                    if chunk.bytes.as_slice() == [0x82])
+        ));
         assert_eq!(transfer.attempts.len(), 1);
         assert!(!transfer.attempts.contains_key(&source_a));
         assert!(transfer.attempts.contains_key(&source_b));
@@ -4681,9 +4914,11 @@ mod tests {
                 post,
                 MergeSidecarPost {
                     reply_route: Some(route),
-                    message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                    message,
                     ..
-                } if route.same_delivery(&route_b) && chunk.request_id == request.request_id
+                } if route.same_delivery(&route_b)
+                    && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                        if chunk.request_id == request.request_id)
             )
         }));
     }
@@ -4752,7 +4987,12 @@ mod tests {
 
         let key = (requester, request.request_id);
         let transfer = &server.outbound[&key];
-        assert_eq!(transfer.bytes.as_ref(), &[0x92]);
+        assert!(matches!(
+            transfer.chunks.as_slice(),
+            [message]
+                if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                    if chunk.bytes.as_slice() == [0x92])
+        ));
         assert_eq!(transfer.attempts.len(), 1);
         assert!(!transfer.attempts.contains_key(&source_a));
         assert!(transfer.attempts.contains_key(&source_b));
@@ -4774,9 +5014,11 @@ mod tests {
                 post,
                 MergeSidecarPost {
                     reply_route: Some(route),
-                    message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                    message,
                     ..
-                } if route.same_delivery(&route_b) && chunk.request_id == request.request_id
+                } if route.same_delivery(&route_b)
+                    && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                        if chunk.request_id == request.request_id)
             )
         }));
     }
@@ -4819,9 +5061,11 @@ mod tests {
             first.as_slice(),
             [MergeSidecarPost {
                 reply_route: Some(route),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            }] if route.same_delivery(&route_a) && chunk.chunk_index == 0
+            }] if route.same_delivery(&route_a)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                    if chunk.chunk_index == 0)
         ));
         assert!(acknowledge_reply_chunk(&mut server, &first[0], now));
         assert_eq!(
@@ -4949,7 +5193,7 @@ mod tests {
         let posts = server.drain_outbound_chunks(usize::MAX, now);
         let mut released_fillers = 0usize;
         for post in &posts {
-            let CertifiedMergeSidecarMessage::Chunk(chunk) = &post.message else {
+            let CertifiedMergeSidecarMessage::Chunk(chunk) = post.message.as_ref() else {
                 continue;
             };
             if filler_ids.contains(&chunk.request_id) {
@@ -4976,9 +5220,11 @@ mod tests {
             resumed.as_slice(),
             [MergeSidecarPost {
                 reply_route: Some(route),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
-            }] if route.same_delivery(&exact_a) && chunk.chunk_index == 1
+            }] if route.same_delivery(&exact_a)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                    if chunk.chunk_index == 1)
         ));
         assert!(acknowledge_reply_chunk(&mut server, &resumed[0], now));
         assert!(server.drain_outbound_chunks(usize::MAX, now).is_empty());
@@ -5194,7 +5440,7 @@ mod tests {
         assert_eq!(posts.len(), 2);
         let request_ids = posts
             .into_iter()
-            .map(|post| match post.message {
+            .map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Chunk(chunk) => chunk.request_id,
                 CertifiedMergeSidecarMessage::Request(_) => panic!("response emitted a request"),
             })
@@ -5245,7 +5491,7 @@ mod tests {
             .pop()
             .expect("short response is the first FIFO owner");
         assert!(matches!(
-            &first.message,
+            first.message.as_ref(),
             CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.request_id == short.request_id
         ));
         assert!(acknowledge_reply_chunk(&mut server, &first, now));
@@ -5273,7 +5519,7 @@ mod tests {
             .pop()
             .expect("older long session must receive the next rank");
         assert!(matches!(
-            &next.message,
+            next.message.as_ref(),
             CertifiedMergeSidecarMessage::Chunk(chunk)
                 if chunk.request_id == long.request_id && chunk.chunk_index == 0
         ));
@@ -5328,7 +5574,10 @@ mod tests {
         for _ in 0..6 {
             let posts = transport.tick_bounded(&requester, timed_out_at, 1);
             assert_eq!(posts.len(), 1, "bounded tick must use its one slot");
-            let is_chunk = matches!(&posts[0].message, CertifiedMergeSidecarMessage::Chunk(_));
+            let is_chunk = matches!(
+                posts[0].message.as_ref(),
+                CertifiedMergeSidecarMessage::Chunk(_)
+            );
             if is_chunk {
                 assert!(acknowledge_reply_chunk(
                     &mut transport,
@@ -5407,7 +5656,9 @@ mod tests {
             .defer_block(honest_block, 2, 0, honest.clone(), &requester, 1, now)
             .expect("conflicting metadata cannot poison honest registration")
             .expect("honest registration emits a request");
-        let CertifiedMergeSidecarMessage::Request(honest_request) = honest_post.message else {
+        let CertifiedMergeSidecarMessage::Request(honest_request) =
+            Arc::unwrap_or_clone(honest_post.message)
+        else {
             panic!("honest registration emitted a response chunk")
         };
         assert_eq!(transport.inbound_len(), 2);
@@ -5503,7 +5754,7 @@ mod tests {
         let reissued = transport
             .tick_bounded(&requester, now, 1)
             .into_iter()
-            .find_map(|post| match post.message {
+            .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
                 CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
@@ -5514,7 +5765,7 @@ mod tests {
         let rotated = transport
             .tick_bounded(&requester, now + REQUEST_TIMEOUT, 1)
             .into_iter()
-            .find_map(|post| match post.message {
+            .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
                 CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
@@ -5552,7 +5803,7 @@ mod tests {
         let request = transport
             .tick_bounded(&requester, now + REQUEST_TIMEOUT, 1)
             .into_iter()
-            .find_map(|post| match post.message {
+            .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
                 CertifiedMergeSidecarMessage::Chunk(_) => None,
             })

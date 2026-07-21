@@ -23,6 +23,8 @@ CONSTANTS
   ReplyOwners,
   ReplySourceOrder,
   ReplySemantics,
+  ReplyTargets,
+  ReplySemanticTarget(_),
   ReplySourceCapacity,
   ReplyDeliveryOrdinalLimit,
   ReplyMessageCount,
@@ -40,9 +42,15 @@ ReplyRouteConfiguration ==
   /\ ReplySourceOrder \in Seq(ReplySources)
   /\ Len(ReplySourceOrder) > 0
   /\ Len(ReplySourceOrder) = Cardinality(ReplySources)
+  /\ \A left, right \in 1..Len(ReplySourceOrder):
+       ReplySourceOrder[left] = ReplySourceOrder[right] => left = right
   /\ ReplySourceCapacity = Len(ReplySourceOrder)
   /\ IsFiniteSet(ReplySemantics)
   /\ ReplySemantics # {}
+  /\ IsFiniteSet(ReplyTargets)
+  /\ ReplyTargets # {}
+  /\ \A semantic \in ReplySemantics:
+       ReplySemanticTarget(semantic) \in ReplyTargets
   /\ ReplyDeliveryOrdinalLimit \in Nat \ {0}
   /\ ReplyMessageCount \in Nat \ {0}
   /\ ReplyChunkCount \in Nat \ {0}
@@ -51,25 +59,48 @@ ReplyCapability(owner, source, target, semantic, deliveryOrdinal,
                 connectionTenure) ==
   [owner |-> owner, source |-> source, target |-> target,
    semantic |-> semantic, deliveryOrdinal |-> deliveryOrdinal,
-   connectionTenure |-> connectionTenure]
+   connectionTenure |-> connectionTenure,
+   sourceCapacity |-> ReplySourceCapacity,
+   bindingOwner |-> owner, bindingSource |-> source,
+   bindingTarget |-> target, bindingDeliveryOrdinal |-> deliveryOrdinal,
+   bindingConnectionTenure |-> connectionTenure,
+   bindingSourceCapacity |-> ReplySourceCapacity]
 
-ReplyTicket(owner, source, semantic, connectionTenure) ==
-  [owner |-> owner, source |-> source, semantic |-> semantic,
-   connectionTenure |-> connectionTenure]
+ReplyTicket(owner, source, semantic, target, connectionTenure,
+            messageCursor, chunkCursor) ==
+  [owner |-> owner, source |-> source,
+   semantic |-> {semantic}, target |-> {target},
+   connectionTenure |-> connectionTenure,
+   messageCursor |-> {messageCursor}, chunkCursor |-> {chunkCursor}]
 
 ReplyAttempt(owner, source, semantic, deliveryOrdinal, connectionTenure,
-             ticketTenure, messageCursor, chunkCursor) ==
+             retiredDeliveryOrdinal, retiredConnectionTenure,
+             ticketTenure, ticketSemantic, ticketTarget,
+             ticketMessageCursor, ticketChunkCursor,
+             messageCursor, chunkCursor) ==
   [owner |-> owner, source |-> source, semantic |-> semantic,
    deliveryOrdinal |-> deliveryOrdinal,
    connectionTenure |-> connectionTenure,
+   retiredDeliveryOrdinal |-> retiredDeliveryOrdinal,
+   retiredConnectionTenure |-> retiredConnectionTenure,
    ticketTenure |-> ticketTenure,
+   ticketSemantic |-> ticketSemantic,
+   ticketTarget |-> ticketTarget,
+   ticketMessageCursor |-> ticketMessageCursor,
+   ticketChunkCursor |-> ticketChunkCursor,
    messageCursor |-> messageCursor, chunkCursor |-> chunkCursor]
 
 ReplyAttemptSet ==
   [owner: ReplyOwners, source: ReplySources, semantic: ReplySemantics,
    deliveryOrdinal: ReplyDeliveryOrdinals,
    connectionTenure: ReplyConnectionTenures,
+   retiredDeliveryOrdinal: 0..ReplyDeliveryOrdinalLimit,
+   retiredConnectionTenure: 0..ReplyDeliveryOrdinalLimit,
    ticketTenure: 0..ReplyDeliveryOrdinalLimit,
+   ticketSemantic: SUBSET ReplySemantics,
+   ticketTarget: SUBSET ReplyTargets,
+   ticketMessageCursor: SUBSET (0..ReplyMessageCount),
+   ticketChunkCursor: SUBSET (0..ReplyChunkCount),
    messageCursor: 0..ReplyMessageCount,
    chunkCursor: 0..ReplyChunkCount]
 
@@ -97,6 +128,11 @@ ReplyAttemptsForSource(owner, semantic, source) ==
 ReplyAttemptSources(owner, semantic) ==
   {attempt.source: attempt \in ReplyAttemptsFor(owner, semantic)}
 
+ReplyRetiredDeliverySources(owner, semantic) ==
+  {attempt.source:
+     attempt \in {candidate \in ReplyAttemptsFor(owner, semantic):
+                    candidate.retiredDeliveryOrdinal # 0}}
+
 ReplyAttemptOwned(owner, semantic, source) ==
   ReplyAttemptsForSource(owner, semantic, source) # {}
 
@@ -119,22 +155,85 @@ ReplyAttemptCurrent(attempt) ==
        rrConnectionTenure[attempt.owner][attempt.source]
 
 ReplyTicketForAttempt(attempt) ==
-  ReplyTicket(attempt.owner, attempt.source, attempt.semantic,
-              attempt.ticketTenure)
+  [owner |-> attempt.owner, source |-> attempt.source,
+   semantic |-> attempt.ticketSemantic,
+   target |-> attempt.ticketTarget,
+   connectionTenure |-> attempt.ticketTenure,
+   messageCursor |-> attempt.ticketMessageCursor,
+   chunkCursor |-> attempt.ticketChunkCursor]
 
 ReplyTicketValidForAttempt(attempt) ==
   /\ ReplyAttemptCurrent(attempt)
   /\ attempt.ticketTenure = attempt.connectionTenure
   /\ ReplyTicketForAttempt(attempt) =
-       ReplyTicket(attempt.owner, attempt.source, attempt.semantic,
-                   rrConnectionTenure[attempt.owner][attempt.source])
+       ReplyTicket(
+         attempt.owner, attempt.source, attempt.semantic,
+         ReplySemanticTarget(attempt.semantic),
+         rrConnectionTenure[attempt.owner][attempt.source],
+         attempt.messageCursor, attempt.chunkCursor)
+
+ReplyAttemptHasNoTicket(attempt) ==
+  /\ attempt.ticketTenure = NoReplyTicketTenure
+  /\ attempt.ticketSemantic = {}
+  /\ attempt.ticketTarget = {}
+  /\ attempt.ticketMessageCursor = {}
+  /\ attempt.ticketChunkCursor = {}
+
+ReplyCapabilityIntrinsicBindingValid(capability) ==
+  /\ capability.bindingOwner = capability.owner
+  /\ capability.bindingSource = capability.source
+  /\ capability.bindingTarget = capability.target
+  /\ capability.bindingDeliveryOrdinal = capability.deliveryOrdinal
+  /\ capability.bindingConnectionTenure = capability.connectionTenure
+  /\ capability.bindingSourceCapacity = capability.sourceCapacity
+
+ReplyAttemptHasNoRetiredDelivery(attempt) ==
+  /\ attempt.retiredDeliveryOrdinal = 0
+  /\ attempt.retiredConnectionTenure = 0
+
+ReplyAttemptRetiredDeliveryWellFormed(attempt) ==
+  \/ ReplyAttemptHasNoRetiredDelivery(attempt)
+  \/ /\ attempt.retiredDeliveryOrdinal \in ReplyDeliveryOrdinals
+     /\ attempt.retiredDeliveryOrdinal < attempt.deliveryOrdinal
+     /\ attempt.retiredConnectionTenure \in ReplyConnectionTenures
+
+ReplyCapabilityIdentityMatchesAttempt(capability, attempt,
+                                      deliveryOrdinal,
+                                      connectionTenure) ==
+  /\ capability.owner = attempt.owner
+  /\ capability.source = attempt.source
+  /\ capability.target = ReplySemanticTarget(attempt.semantic)
+  /\ capability.semantic = attempt.semantic
+  /\ capability.deliveryOrdinal = deliveryOrdinal
+  /\ capability.connectionTenure = connectionTenure
+
+(***************************************************************************
+Delivery ordinals are actor-global.  A candidate which reuses a known ordinal
+must reproduce the complete source/target/semantic/tenure identity.  The
+latest retired delivery retained on every bounded source attempt preserves the
+same cross-source collision check after live-route pruning.
+***************************************************************************)
+ReplyCapabilityHasKnownOrdinalCollision(capability) ==
+  \E attempt \in rrAttempts:
+    /\ attempt.owner = capability.owner
+    /\ \/ /\ attempt.deliveryOrdinal = capability.deliveryOrdinal
+           /\ ~ReplyCapabilityIdentityMatchesAttempt(
+                capability, attempt, attempt.deliveryOrdinal,
+                attempt.connectionTenure)
+       \/ /\ attempt.retiredDeliveryOrdinal # 0
+           /\ attempt.retiredDeliveryOrdinal = capability.deliveryOrdinal
+           /\ ~ReplyCapabilityIdentityMatchesAttempt(
+                capability, attempt, attempt.retiredDeliveryOrdinal,
+                attempt.retiredConnectionTenure)
 
 ReplyCapabilityValidFor(capability, expectedOwner, expectedSource,
                         expectedSemantic) ==
+  /\ ReplyCapabilityIntrinsicBindingValid(capability)
   /\ capability.owner = expectedOwner
   /\ capability.source = expectedSource
-  /\ capability.target = expectedSource
+  /\ capability.target = ReplySemanticTarget(expectedSemantic)
   /\ capability.semantic = expectedSemantic
+  /\ capability.sourceCapacity = ReplySourceCapacity
   /\ expectedOwner \in ReplyOwners
   /\ expectedSource \in ReplySources
   /\ expectedSemantic \in ReplySemantics
@@ -142,14 +241,21 @@ ReplyCapabilityValidFor(capability, expectedOwner, expectedSource,
   /\ capability.connectionTenure =
        rrConnectionTenure[expectedOwner][expectedSource]
   /\ capability.deliveryOrdinal \in ReplyDeliveryOrdinals
+  /\ ~ReplyCapabilityHasKnownOrdinalCollision(capability)
 
 ReplyCapabilityRejection(capability, expectedOwner, expectedSource,
                          expectedSemantic) ==
-  CASE capability.owner # expectedOwner -> "ForeignOwner"
+  CASE ~ReplyCapabilityIntrinsicBindingValid(capability) ->
+         "EqualOrdinalDifferentTenure"
+    [] capability.owner # expectedOwner -> "ForeignOwner"
     [] capability.source # expectedSource -> "DifferentSource"
-    [] capability.target # expectedSource -> "Retargeted"
+    [] capability.target # ReplySemanticTarget(expectedSemantic) ->
+         "Retargeted"
     [] capability.semantic # expectedSemantic -> "Retargeted"
+    [] capability.sourceCapacity # ReplySourceCapacity -> "ForeignOwner"
     [] ~rrSourceActive[expectedOwner][expectedSource] -> "Inactive"
+    [] ReplyCapabilityHasKnownOrdinalCollision(capability) ->
+         "EqualOrdinalDifferentTenure"
     [] ReplyAttemptOwned(expectedOwner, expectedSemantic, expectedSource)
          /\ capability.deliveryOrdinal
               < ReplyAttemptFor(expectedOwner, expectedSemantic,
@@ -169,19 +275,105 @@ ReplaceReplyAttempt(oldAttempt, newAttempt) ==
 
 ReplyAttemptWithRoute(attempt, deliveryOrdinal, connectionTenure) ==
   IF connectionTenure = attempt.connectionTenure
-  THEN [attempt EXCEPT !.deliveryOrdinal = deliveryOrdinal]
+  THEN [attempt EXCEPT
+          !.deliveryOrdinal = deliveryOrdinal,
+          !.retiredDeliveryOrdinal = attempt.deliveryOrdinal,
+          !.retiredConnectionTenure = attempt.connectionTenure]
   ELSE [attempt EXCEPT
           !.deliveryOrdinal = deliveryOrdinal,
           !.connectionTenure = connectionTenure,
-          !.ticketTenure = NoReplyTicketTenure]
+          !.retiredDeliveryOrdinal = attempt.deliveryOrdinal,
+          !.retiredConnectionTenure = attempt.connectionTenure,
+          !.ticketTenure = NoReplyTicketTenure,
+          !.ticketSemantic = {},
+          !.ticketTarget = {},
+          !.ticketMessageCursor = {},
+          !.ticketChunkCursor = {}]
+
+ReplyAttemptWithoutTicket(attempt) ==
+  [attempt EXCEPT
+     !.ticketTenure = NoReplyTicketTenure,
+     !.ticketSemantic = {},
+     !.ticketTarget = {},
+     !.ticketMessageCursor = {},
+     !.ticketChunkCursor = {}]
+
+ReplySourceHasNoTickets(owner, source) ==
+  \A attempt \in rrAttempts:
+    (attempt.owner = owner /\ attempt.source = source) =>
+      ReplyAttemptHasNoTicket(attempt)
+
+(***************************************************************************
+A connection-tenure change invalidates every admission ticket minted by that
+source tenure.  Only the selected semantic attempt receives the new route;
+all sibling semantic attempts retain their route and cursors while losing
+their now-stale tickets.
+***************************************************************************)
+ReplyAttemptsAfterReconnect(oldAttempt, routedAttempt) ==
+  {IF attempt = oldAttempt
+   THEN routedAttempt
+   ELSE IF attempt.owner = oldAttempt.owner
+             /\ attempt.source = oldAttempt.source
+        THEN ReplyAttemptWithoutTicket(attempt)
+        ELSE attempt: attempt \in rrAttempts}
 
 ReplyAttemptWithTicket(attempt) ==
-  [attempt EXCEPT !.ticketTenure = attempt.connectionTenure]
+  [attempt EXCEPT
+     !.ticketTenure = attempt.connectionTenure,
+     !.ticketSemantic = {attempt.semantic},
+     !.ticketTarget = {ReplySemanticTarget(attempt.semantic)},
+     !.ticketMessageCursor = {attempt.messageCursor},
+     !.ticketChunkCursor = {attempt.chunkCursor}]
 
 ReplyAttemptAfterService(attempt) ==
   IF attempt.messageCursor < ReplyMessageCount
-  THEN [attempt EXCEPT !.messageCursor = @ + 1]
-  ELSE [attempt EXCEPT !.chunkCursor = @ + 1]
+  THEN [attempt EXCEPT
+          !.messageCursor = @ + 1,
+          !.ticketTenure = NoReplyTicketTenure,
+          !.ticketSemantic = {},
+          !.ticketTarget = {},
+          !.ticketMessageCursor = {},
+          !.ticketChunkCursor = {}]
+  ELSE [attempt EXCEPT
+          !.chunkCursor = @ + 1,
+          !.ticketTenure = NoReplyTicketTenure,
+          !.ticketSemantic = {},
+          !.ticketTarget = {},
+          !.ticketMessageCursor = {},
+          !.ticketChunkCursor = {}]
+
+(***************************************************************************
+Shared exact-attempt terminal kernel.  The bounded pipeline supplies its own
+source/class FIFO and exact ticket authority before invoking this action; the
+kernel advances only the named live attempt and clears any route ticket.
+***************************************************************************)
+ReplyAttemptServiceKernelValid(oldAttempt, serviced) ==
+  /\ serviced \in ReplyAttemptSet
+  /\ serviced.owner = oldAttempt.owner
+  /\ serviced.source = oldAttempt.source
+  /\ serviced.semantic = oldAttempt.semantic
+  /\ serviced.deliveryOrdinal = oldAttempt.deliveryOrdinal
+  /\ serviced.connectionTenure = oldAttempt.connectionTenure
+  /\ serviced.retiredDeliveryOrdinal =
+       oldAttempt.retiredDeliveryOrdinal
+  /\ serviced.retiredConnectionTenure =
+       oldAttempt.retiredConnectionTenure
+  /\ ReplyAttemptHasNoTicket(serviced)
+
+AdvanceCurrentReplyAttempt(owner, semantic, source) ==
+  LET oldAttempt == ReplyAttemptFor(owner, semantic, source)
+      serviced == ReplyAttemptAfterService(oldAttempt)
+  IN /\ owner \in ReplyOwners
+     /\ semantic \in ReplySemantics
+     /\ source \in ReplySources
+     /\ ReplyAttemptOwned(owner, semantic, source)
+     /\ ReplyAttemptCurrent(oldAttempt)
+     /\ ~ReplyAttemptComplete(oldAttempt)
+     /\ ReplyAttemptServiceKernelValid(oldAttempt, serviced)
+     /\ rrAttempts' = ReplaceReplyAttempt(oldAttempt, serviced)
+     /\ UNCHANGED <<rrPayloads, rrNextDeliveryOrdinal,
+                    rrConnectionTenure, rrSourceActive,
+                    rrNextServiceIndex>>
 
 NextReplySourceIndex(index) ==
   IF index = Len(ReplySourceOrder) THEN 1 ELSE index + 1
@@ -190,6 +382,17 @@ ReplySourceCyclicDistance(startIndex, candidateIndex) ==
   IF candidateIndex >= startIndex
   THEN candidateIndex - startIndex
   ELSE Len(ReplySourceOrder) - startIndex + candidateIndex
+
+ReplySourceIndices(source) ==
+  {index \in 1..Len(ReplySourceOrder):
+     ReplySourceOrder[index] = source}
+
+ReplySourceIndex(source) ==
+  CHOOSE index \in ReplySourceIndices(source): TRUE
+
+ReplySourceRoundRobinRank(owner, semantic, source) ==
+  ReplySourceCyclicDistance(
+    rrNextServiceIndex[owner][semantic], ReplySourceIndex(source))
 
 ReplyPendingSourceIndices(owner, semantic) ==
   {index \in 1..Len(ReplySourceOrder):
@@ -230,11 +433,13 @@ ObserveNewReplySource(owner, semantic, source) ==
   LET deliveryOrdinal == rrNextDeliveryOrdinal[owner]
       connectionTenure == rrConnectionTenure[owner][source]
       capability ==
-        ReplyCapability(owner, source, source, semantic, deliveryOrdinal,
-                        connectionTenure)
+        ReplyCapability(
+          owner, source, ReplySemanticTarget(semantic), semantic,
+          deliveryOrdinal, connectionTenure)
       attempt ==
         ReplyAttempt(owner, source, semantic, deliveryOrdinal,
-                     connectionTenure, NoReplyTicketTenure, 0, 0)
+                     connectionTenure, 0, 0, NoReplyTicketTenure,
+                     {}, {}, {}, {}, 0, 0)
   IN /\ owner \in ReplyOwners
      /\ semantic \in ReplySemantics
      /\ source \in ReplySources
@@ -263,8 +468,9 @@ ObserveLaterReplyDelivery(owner, semantic, source) ==
       deliveryOrdinal == rrNextDeliveryOrdinal[owner]
       connectionTenure == rrConnectionTenure[owner][source]
       capability ==
-        ReplyCapability(owner, source, source, semantic, deliveryOrdinal,
-                        connectionTenure)
+        ReplyCapability(
+          owner, source, ReplySemanticTarget(semantic), semantic,
+          deliveryOrdinal, connectionTenure)
       routed ==
         ReplyAttemptWithRoute(oldAttempt, deliveryOrdinal,
                               connectionTenure)
@@ -291,7 +497,7 @@ changing its route, ticket, service rank, or either cursor.
 RetryExactReplySource(owner, semantic, source) ==
   LET attempt == ReplyAttemptFor(owner, semantic, source)
       capability ==
-        ReplyCapability(owner, source, source, semantic,
+        ReplyCapability(owner, source, ReplySemanticTarget(semantic), semantic,
                         attempt.deliveryOrdinal,
                         attempt.connectionTenure)
   IN /\ owner \in ReplyOwners
@@ -312,8 +518,9 @@ RetireReplySource(owner, source) ==
   /\ rrSourceActive[owner][source]
   /\ rrAttempts' =
        {IF attempt.owner = owner /\ attempt.source = source
-        THEN [attempt EXCEPT !.ticketTenure = NoReplyTicketTenure]
+        THEN ReplyAttemptWithoutTicket(attempt)
         ELSE attempt: attempt \in rrAttempts}
+  /\ ReplySourceHasNoTickets(owner, source)'
   /\ rrSourceActive' =
        [rrSourceActive EXCEPT ![owner][source] = FALSE]
   /\ UNCHANGED <<rrPayloads, rrNextDeliveryOrdinal,
@@ -322,16 +529,23 @@ RetireReplySource(owner, source) ==
 (***************************************************************************
 Reconnect is a new delivery under a new connection tenure.  The new writer
 has no flush continuity, so the selected attempt retries its retained current
-message/chunk and must acquire a fresh admission ticket.  Other attempts are
-untouched.
+message/chunk and must acquire a fresh admission ticket.  Every sibling
+semantic attempt for the same authenticated source retains its route and
+cursors but atomically loses any ticket minted by the retired tenure.
+
+The production refinement linearizes a successful old-writer flush before
+this reconnect action even when its receipt is observed later.  That mapping
+is valid only while the reconnect retry is still queued and has not been
+actor-admitted; it never authorizes service through an inactive capability.
 ***************************************************************************)
 ReconnectReplySource(owner, semantic, source) ==
   LET oldAttempt == ReplyAttemptFor(owner, semantic, source)
       deliveryOrdinal == rrNextDeliveryOrdinal[owner]
       connectionTenure == rrConnectionTenure[owner][source] + 1
       capability ==
-        ReplyCapability(owner, source, source, semantic, deliveryOrdinal,
-                        connectionTenure)
+        ReplyCapability(
+          owner, source, ReplySemanticTarget(semantic), semantic,
+          deliveryOrdinal, connectionTenure)
       routed ==
         ReplyAttemptWithRoute(oldAttempt, deliveryOrdinal,
                               connectionTenure)
@@ -344,9 +558,10 @@ ReconnectReplySource(owner, semantic, source) ==
      /\ deliveryOrdinal \in ReplyDeliveryOrdinals
      /\ capability.owner = owner
      /\ capability.source = source
-     /\ capability.target = source
+     /\ capability.target = ReplySemanticTarget(semantic)
      /\ capability.semantic = semantic
-     /\ rrAttempts' = ReplaceReplyAttempt(oldAttempt, routed)
+     /\ rrAttempts' = ReplyAttemptsAfterReconnect(oldAttempt, routed)
+     /\ ReplySourceHasNoTickets(owner, source)'
      /\ rrConnectionTenure' =
           [rrConnectionTenure EXCEPT
              ![owner][source] = connectionTenure]
@@ -364,12 +579,20 @@ AcquireReplyTicket(owner, semantic, source) ==
      /\ source \in ReplySources
      /\ ReplyAttemptOwned(owner, semantic, source)
      /\ ReplyAttemptCurrent(oldAttempt)
-     /\ oldAttempt.ticketTenure = NoReplyTicketTenure
+     /\ ReplyAttemptHasNoTicket(oldAttempt)
      /\ rrAttempts' = ReplaceReplyAttempt(oldAttempt, ticketed)
      /\ UNCHANGED <<rrPayloads, rrNextDeliveryOrdinal,
                     rrConnectionTenure, rrSourceActive,
                     rrNextServiceIndex>>
 
+(***************************************************************************
+Terminal exact-item linearization.  For ordinary reliable output this action
+maps to actor FIFO admission.  For certified sidecar output, actor admission
+and writer work are hidden stutters and this action maps to the exact writer
+flush receipt.  The abstract ticket is therefore a ghost reservation witness
+until this terminal event; it cannot authorize another payload or an inactive
+route.  This avoids treating mere sidecar actor admission as chunk progress.
+***************************************************************************)
 ServiceReplyRoute(owner, semantic) ==
   LET selectedIndex == ReplySelectedSourceIndex(owner, semantic)
       source == ReplySourceOrder[selectedIndex]
@@ -436,14 +659,17 @@ ReplyRouteOwnershipInvariant ==
   /\ \A owner \in ReplyOwners, semantic \in ReplySemantics:
        /\ Cardinality(ReplyAttemptSources(owner, semantic))
             <= ReplySourceCapacity
+       /\ Cardinality(ReplyRetiredDeliverySources(owner, semantic))
+            <= ReplySourceCapacity
        /\ (ReplyAttemptsFor(owner, semantic) # {} =>
              semantic \in rrPayloads)
   /\ \A attempt \in rrAttempts:
        /\ attempt.deliveryOrdinal
             < rrNextDeliveryOrdinal[attempt.owner]
-       /\ (attempt.ticketTenure # NoReplyTicketTenure =>
-             /\ ReplyAttemptCurrent(attempt)
-             /\ ReplyTicketValidForAttempt(attempt))
+       /\ ReplyAttemptRetiredDeliveryWellFormed(attempt)
+       /\ IF attempt.ticketTenure = NoReplyTicketTenure
+          THEN ReplyAttemptHasNoTicket(attempt)
+          ELSE ReplyTicketValidForAttempt(attempt)
 
 (***************************************************************************
 This transition predicate is the tenure-aware retry contract consumed by both
@@ -452,27 +678,34 @@ and source-scoped.  A same-tenure update cannot regress its delivery ordinal or
 either cursor.  A reconnect must advance both tenure and delivery ordinal,
 discard its old admission ticket, and preserve its source-owned cursor.
 ***************************************************************************)
+ReplySourceTenureInvalidationStep ==
+  \A owner \in ReplyOwners, source \in ReplySources:
+    rrConnectionTenure'[owner][source]
+      > rrConnectionTenure[owner][source] =>
+        ReplySourceHasNoTickets(owner, source)'
+
 ReplyTenureAwareReplayStep ==
-  \A oldAttempt \in rrAttempts:
-    LET afterAttempts ==
-          {newAttempt \in rrAttempts':
-             /\ newAttempt.owner = oldAttempt.owner
-             /\ newAttempt.semantic = oldAttempt.semantic
-             /\ newAttempt.source = oldAttempt.source}
-    IN afterAttempts # {} =>
-         LET newAttempt == CHOOSE attempt \in afterAttempts: TRUE
-         IN IF newAttempt.connectionTenure = oldAttempt.connectionTenure
-            THEN /\ newAttempt.deliveryOrdinal
-                       >= oldAttempt.deliveryOrdinal
-                 /\ newAttempt.messageCursor >= oldAttempt.messageCursor
-                 /\ newAttempt.chunkCursor >= oldAttempt.chunkCursor
-            ELSE /\ newAttempt.connectionTenure
-                       > oldAttempt.connectionTenure
-                 /\ newAttempt.deliveryOrdinal
-                       > oldAttempt.deliveryOrdinal
-                 /\ newAttempt.ticketTenure = NoReplyTicketTenure
-                 /\ ReplyAttemptCursor(newAttempt) =
-                      ReplyAttemptCursor(oldAttempt)
+  /\ \A oldAttempt \in rrAttempts:
+       LET afterAttempts ==
+             {newAttempt \in rrAttempts':
+                /\ newAttempt.owner = oldAttempt.owner
+                /\ newAttempt.semantic = oldAttempt.semantic
+                /\ newAttempt.source = oldAttempt.source}
+       IN afterAttempts # {} =>
+            LET newAttempt == CHOOSE attempt \in afterAttempts: TRUE
+            IN IF newAttempt.connectionTenure = oldAttempt.connectionTenure
+               THEN /\ newAttempt.deliveryOrdinal
+                          >= oldAttempt.deliveryOrdinal
+                    /\ newAttempt.messageCursor >= oldAttempt.messageCursor
+                    /\ newAttempt.chunkCursor >= oldAttempt.chunkCursor
+               ELSE /\ newAttempt.connectionTenure
+                          > oldAttempt.connectionTenure
+                    /\ newAttempt.deliveryOrdinal
+                          > oldAttempt.deliveryOrdinal
+                    /\ ReplyAttemptHasNoTicket(newAttempt)
+                    /\ ReplyAttemptCursor(newAttempt) =
+                         ReplyAttemptCursor(oldAttempt)
+  /\ ReplySourceTenureInvalidationStep
 
 ReplyTenureAwareReplay ==
   [][ReplyTenureAwareReplayStep]_ReplyRouteVars
@@ -515,22 +748,28 @@ ReplyRouteSafetyInvariant ==
   /\ ReplyRouteOwnershipInvariant
 
 (***************************************************************************
-This is an explicit liveness obligation, not a proved consequence of the
-safety invariant.  The premise excludes permanent source loss, ticket loss,
-and tenure churn.  Its conclusion requires a strictly larger cursor rank or
-completion; merely retiring the route or invalidating its ticket cannot satisfy
-the leads-to target.
+This is an explicit liveness obligation, not a safety shorthand.  Stability
+requires only that the source-owned attempt eventually remains active under a
+single current connection tenure; it deliberately does not pre-assume an
+admission ticket.  Weak fairness must first acquire that ticket and then serve
+the finite round-robin distance.  The conclusion requires a strictly larger
+cursor rank or completion; merely retiring the route, reconnecting it, or
+invalidating its ticket cannot satisfy the leads-to target.
 ***************************************************************************)
 ReplySourceServiceEligible(owner, semantic, source) ==
   /\ ReplyAttemptOwned(owner, semantic, source)
   /\ LET attempt == ReplyAttemptFor(owner, semantic, source)
      IN ReplyTicketValidForAttempt(attempt)
 
+ReplySourceRouteStable(owner, semantic, source) ==
+  /\ ReplyAttemptOwned(owner, semantic, source)
+  /\ ReplyAttemptCurrent(ReplyAttemptFor(owner, semantic, source))
+
 ReplySourceStableResponsive(owner, semantic, source) ==
-  <>[] ReplySourceServiceEligible(owner, semantic, source)
+  <>[] ReplySourceRouteStable(owner, semantic, source)
 
 ReplySourceAtCursor(owner, semantic, source, messageCursor, chunkCursor) ==
-  /\ ReplySourceServiceEligible(owner, semantic, source)
+  /\ ReplyAttemptOwned(owner, semantic, source)
   /\ LET attempt == ReplyAttemptFor(owner, semantic, source)
      IN /\ ~ReplyAttemptComplete(attempt)
         /\ attempt.messageCursor = messageCursor
@@ -538,7 +777,7 @@ ReplySourceAtCursor(owner, semantic, source, messageCursor, chunkCursor) ==
 
 ReplySourceAdvancedFrom(owner, semantic, source,
                         messageCursor, chunkCursor) ==
-  /\ ReplySourceServiceEligible(owner, semantic, source)
+  /\ ReplyAttemptOwned(owner, semantic, source)
   /\ LET attempt == ReplyAttemptFor(owner, semantic, source)
          oldRank == messageCursor * (ReplyChunkCount + 1) + chunkCursor
      IN \/ ReplyAttemptComplete(attempt)

@@ -2671,6 +2671,16 @@ PROOF
        DEF ProposalValidFor, LocalProposalFor, Proposal
   <1> QED BY <1>1
 
+THEOREM BeginLocalProposalReproposesExactJustifiedHigh ==
+  \A node, subject:
+    BeginLocalProposal(node, subject)
+      => LET justification == LocalProposalJustification(node)
+         IN \/ justification.rank = NoRank
+            \/ subject = justification.subject
+BY SMT
+   DEF BeginLocalProposal, LocalProposalReproposesJustifiedHigh,
+       LocalProposalFor, LocalProposalJustification, Proposal
+
 THEOREM BeginPrepareProposalValidityIsDerived ==
   \A node, proposal:
     StrongInductiveInvariant /\ BeginPrepare(node, proposal)

@@ -15,7 +15,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::v2_core::{EventTag, Generation};
+use super::v2_core::{
+    CanonicalIdentityProjection, EventTag, Generation, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+    IDENTITY_KIND_FINALITY_ARTIFACT, ProductionSuccessorPredecessorBindingProjection,
+    ProductionSuccessorStartupLifecycleProjection,
+    ProductionTerminalApplicationWithoutSuccessorActivationProjection,
+    SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+    SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP, SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP,
+    SUCCESSOR_STAGE_NONE, production_startup_failure_and_restart_refines_indexed_lifecycle_kernel,
+    production_successor_predecessor_binding_kernel,
+    production_terminal_application_without_successor_activation_kernel,
+};
 #[cfg(test)]
 use iroha_config::parameters::actual::SUMERAGI_V2_CONFIG_FORMAT_VERSION;
 use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config, sumeragi_v2_timing_ms};
@@ -58,9 +68,14 @@ use super::{
         MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
         V2LaneWorkError, V2LaneWorkLimits, require_validator_storage_platform,
     },
-    v2_recovery::{build_verified_successor, recover_active_height},
+    v2_recovery::{
+        DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
+        RecoveredSuccessorActivationAuthority, SnapshotSuccessorActivationAuthority,
+        build_verified_successor, recover_active_height, successor_block_refinement_projection,
+        successor_context_refinement_projection,
+    },
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
-    v2_worker::{ProductionV2Services, V2CleanupSupervisor},
+    v2_worker::{ExactFanoutOwnership, ProductionV2Services, V2CleanupSupervisor},
 };
 use crate::{
     block::BlockBuilder, kura::Kura, merge_sidecar::CertifiedMergeSidecarMessage,
@@ -114,20 +129,36 @@ struct CandidateWorkWait {
 /// can bind this token into [`PendingSuccessorActivation`].
 #[derive(Debug)]
 struct PendingSuccessorConstruction {
-    finalized_height: u64,
+    predecessor: DurableV2PredecessorIdentity,
 }
 
 impl PendingSuccessorConstruction {
-    fn begin(finalized_height: u64) -> Result<Self, V2RunnerError> {
-        super::status::begin_v2_successor_activation(finalized_height)?;
-        Ok(Self { finalized_height })
+    fn begin(predecessor: DurableV2PredecessorIdentity) -> Result<Self, V2RunnerError> {
+        super::status::begin_v2_successor_activation(predecessor)?;
+        Ok(Self { predecessor })
     }
 
-    const fn bind(self, successor_context_id: wire::HeightContextId) -> PendingSuccessorActivation {
-        PendingSuccessorActivation::Applied {
-            finalized_height: self.finalized_height,
-            successor_context_id,
+    fn bind(
+        self,
+        authority: DurableSuccessorActivationAuthority,
+    ) -> Result<PendingSuccessorActivation, V2RunnerError> {
+        let binding = ProductionSuccessorPredecessorBindingProjection {
+            expected_predecessor: self.predecessor.refinement_projection(),
+            authority_predecessor: authority.predecessor().refinement_projection(),
+            successor_context_id: super::v2_recovery::successor_context_refinement_projection(
+                authority.successor_context_id(),
+            ),
+        };
+        if !production_successor_predecessor_binding_kernel(binding) {
+            return Err(V2RunnerError::SuccessorPredecessorAuthorityMismatch {
+                expected: self.predecessor,
+                actual: authority.predecessor(),
+            });
         }
+        Ok(PendingSuccessorActivation::Applied {
+            expected_predecessor: self.predecessor,
+            authority,
+        })
     }
 }
 
@@ -141,46 +172,77 @@ enum PendingSuccessorActivation {
     /// Uninterrupted rollover whose published Applied predecessor owns the
     /// Running handoff.
     Applied {
-        finalized_height: u64,
-        successor_context_id: wire::HeightContextId,
+        expected_predecessor: DurableV2PredecessorIdentity,
+        authority: DurableSuccessorActivationAuthority,
     },
-    /// Process restart after recovery authenticated a complete durable tip;
-    /// the process-local predecessor registry was intentionally cleared.
-    Recovered {
-        finalized_height: u64,
-        successor_context_id: wire::HeightContextId,
+    /// Process restart after recovery authenticated an exact complete durable
+    /// tip; the process-local predecessor registry was intentionally cleared.
+    RecoveredCompleteTip {
+        authority: DurableSuccessorActivationAuthority,
+    },
+    /// First executable height derived from an authenticated audited snapshot.
+    /// This carries no historical CommitQC or Kura finality receipt.
+    SnapshotBootstrap {
+        authority: SnapshotSuccessorActivationAuthority,
     },
 }
 
 impl PendingSuccessorActivation {
-    const fn recovered(finalized_height: u64, successor_context_id: wire::HeightContextId) -> Self {
-        Self::Recovered {
-            finalized_height,
-            successor_context_id,
+    fn recovered(authority: RecoveredSuccessorActivationAuthority) -> Result<Self, V2RunnerError> {
+        let (transition, authority_kind, status_height) = match &authority {
+            RecoveredSuccessorActivationAuthority::CompleteTip(authority) => (
+                SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP,
+                SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
+                authority.predecessor().height(),
+            ),
+            RecoveredSuccessorActivationAuthority::SnapshotBootstrap(authority) => (
+                SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP,
+                SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+                authority.snapshot_anchor_height(),
+            ),
+        };
+        let published_height = super::status::v2_status().map_or(0, |status| status.height);
+        let lifecycle = ProductionSuccessorStartupLifecycleProjection {
+            transition_kind: transition,
+            authority_kind,
+            status_height,
+            stage_before: SUCCESSOR_STAGE_NONE,
+            stage_after: SUCCESSOR_STAGE_NONE,
+            published_height_before: published_height,
+            published_height_after: published_height,
+            restart_required_before: false,
+            restart_required_after: false,
+        };
+        if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle) {
+            return Err(V2RunnerError::SuccessorRefinementRejected);
         }
+        Ok(match authority {
+            RecoveredSuccessorActivationAuthority::CompleteTip(authority) => {
+                Self::RecoveredCompleteTip { authority }
+            }
+            RecoveredSuccessorActivationAuthority::SnapshotBootstrap(authority) => {
+                Self::SnapshotBootstrap { authority }
+            }
+        })
     }
 
     fn publish(self, successor: wire::SumeragiV2Status) -> Result<(), V2RunnerError> {
         match self {
             Self::Applied {
-                finalized_height,
-                successor_context_id,
+                expected_predecessor,
+                authority,
             } => {
                 super::status::activate_v2_successor_height(
-                    finalized_height,
-                    successor_context_id,
+                    expected_predecessor,
+                    authority,
                     successor,
                 )?;
             }
-            Self::Recovered {
-                finalized_height,
-                successor_context_id,
-            } => {
-                super::status::activate_recovered_v2_successor_height(
-                    finalized_height,
-                    successor_context_id,
-                    successor,
-                )?;
+            Self::RecoveredCompleteTip { authority } => {
+                super::status::activate_recovered_v2_successor_height(authority, successor)?;
+            }
+            Self::SnapshotBootstrap { authority } => {
+                super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;
             }
         }
         Ok(())
@@ -546,11 +608,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     )?;
     recovery.complete();
     let mut pending_kura_apply = recovered.pending_kura_apply();
-    let recovered_successor_activation_parent = recovered.successor_activation_parent();
     let (
         mut verified_context,
         context_store,
         mut signature_policy,
+        recovered_successor_activation,
         mut staged_genesis_nexus_amx_context,
     ) = recovered.into_parts();
     let reservation_recovery = output_guard
@@ -589,9 +651,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     validate_deadline_duration(retransmit_interval)?;
     let post_finality_cleanup_timeout = round_timeout;
     let mut cleanup_supervisor = V2CleanupSupervisor::default();
-    let mut pending_successor_activation = recovered_successor_activation_parent.map(|parent| {
-        PendingSuccessorActivation::recovered(parent, verified_context.context().id())
-    });
+    let mut pending_successor_activation = recovered_successor_activation
+        .map(PendingSuccessorActivation::recovered)
+        .transpose()?;
     let mut liveness_watchdog = super::status::V2LivenessWatchdog::default();
     let deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(0);
 
@@ -1124,14 +1186,46 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         };
 
         let (receipt, artifact) = finality;
-        let activation = PendingSuccessorConstruction::begin(receipt.height())?;
+        let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)?;
+        let artifact_hash = HashOf::new(&artifact);
+        let terminal_application =
+            ProductionTerminalApplicationWithoutSuccessorActivationProjection {
+                context_id: successor_context_refinement_projection(context.id()),
+                context_height: context.height,
+                receipt_context_id: successor_context_refinement_projection(receipt.context_id()),
+                receipt_height: receipt.height(),
+                receipt_block_hash: successor_block_refinement_projection(receipt.block_hash()),
+                receipt_artifact_hash: CanonicalIdentityProjection::from_bytes(
+                    IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                    IDENTITY_KIND_FINALITY_ARTIFACT,
+                    *receipt.artifact_hash().as_ref(),
+                ),
+                artifact_context_id: successor_context_refinement_projection(artifact.context_id()),
+                artifact_height: artifact.height,
+                artifact_block_hash: successor_block_refinement_projection(artifact.block_hash),
+                artifact_hash: CanonicalIdentityProjection::from_bytes(
+                    IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                    IDENTITY_KIND_FINALITY_ARTIFACT,
+                    *artifact_hash.as_ref(),
+                ),
+                predecessor: predecessor.refinement_projection(),
+                pending_successor_activation_present: pending_successor_activation.is_some(),
+            };
+        if !production_terminal_application_without_successor_activation_kernel(
+            terminal_application,
+        ) {
+            return Err(V2RunnerError::SuccessorRefinementRejected);
+        }
+        let activation = PendingSuccessorConstruction::begin(predecessor)?;
         let successor_construction = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2RunnerError::RestartRequired)?;
-        verified_context =
+        let successor =
             build_verified_successor(state.as_ref(), &context_store, &artifact, &receipt)?;
         successor_construction.complete();
-        pending_successor_activation = Some(activation.bind(verified_context.context().id()));
+        let (next_verified_context, successor_authority) = successor.into_parts();
+        pending_successor_activation = Some(activation.bind(successor_authority)?);
+        verified_context = next_verified_context;
         signature_policy = BlockSignaturePolicy::RotatingLeader;
         first_height_genesis = None;
         staged_genesis_nexus_amx_context = None;
@@ -1556,6 +1650,7 @@ fn drain_v2_ingress(
         })?;
         if !ingress_ownership.validate_exact()
             || !ingress_ownership.matches_message(inbound.message())
+            || !ingress_ownership.matches_semantic_origin(inbound.sender())
         {
             return Err(V2RunnerError::Service(
                 "global Sumeragi v2 ingress carried altered fair ownership".to_owned(),
@@ -1697,8 +1792,12 @@ fn drain_v2_ingress(
                 let Some(sender) = sender else {
                     continue;
                 };
-                drop(ingress_ownership);
-                match executor.accept_certified_body_response(response, &sender, services) {
+                match executor.accept_certified_body_response_with_ingress_ownership(
+                    response,
+                    &sender,
+                    ingress_ownership,
+                    services,
+                ) {
                     Ok(_) => {}
                     Err(EffectTransportError::FailClosed(reason)) => {
                         return Err(V2RunnerError::Service(reason));
@@ -1759,9 +1858,7 @@ fn drain_v2_ingress(
                     }
                 };
                 let admission = block_sync.enqueue_and_complete(discovered, |message| {
-                    executor
-                        .enqueue_network_with_ingress_ownership(message, ingress_ownership)
-                        .map(|_| ())
+                    executor.enqueue_discovered_commit_certificate(message, ingress_ownership)
                 });
                 if commit_certificate_admission_completed(admission)? {
                     *block_sync_request = None;
@@ -1793,7 +1890,12 @@ fn v2_ingress_head_can_drain(
     if message.validate_version().is_err() {
         return true;
     }
-    if !executor.can_admit_network_message(message) {
+    let Some(ingress_ownership) = inbound.ingress_ownership() else {
+        // Drain the malformed local carrier so the mutating seam can reject it
+        // instead of blocking the fair queue forever.
+        return true;
+    };
+    if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership) {
         return false;
     }
     match &message.payload {
@@ -1891,8 +1993,19 @@ fn commit_certificate_admission_completed(
             iroha_logger::debug!(%error, "deferred authenticated CommitQC response");
             Ok(false)
         }
+        Err(CommitCertificateAdmissionError::MismatchedReducerAdmission) => {
+            Err(V2RunnerError::RuntimeAdmissionInvariant(
+                "authenticated CommitQC discovery received foreign reducer admission ownership"
+                    .to_owned(),
+            ))
+        }
         Err(CommitCertificateAdmissionError::RequestDisappeared) => {
             Err(V2RunnerError::BlockSyncRequestDisappeared)
+        }
+        Err(CommitCertificateAdmissionError::RefinementRejected) => {
+            Err(V2RunnerError::RuntimeAdmissionInvariant(
+                "authenticated CommitQC discovery failed exact historical refinement".to_owned(),
+            ))
         }
     }
 }
@@ -2217,8 +2330,19 @@ fn dispatch_lane_work_effects(
             break;
         };
         drop(effect);
-        dispatched = dispatched.saturating_add(1);
-        dispatch_lane_work_effect(services, next_effect)?;
+        match dispatch_lane_work_effect(services, next_effect)? {
+            LaneWorkEffectDispatch::Complete => {
+                dispatched = dispatched.saturating_add(1);
+            }
+            LaneWorkEffectDispatch::SourceRetained(effect) => {
+                if !lane_work.requeue_effect(effect) {
+                    return Err(V2RunnerError::Service(
+                        "lane-work scheduler could not retain a source-backpressured sidecar effect"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
         apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     }
     Ok(())
@@ -2255,9 +2379,9 @@ fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
         } => reply_routes,
         V2LaneWorkEffect::PostCertifiedMergeSidecar {
             reply_routes,
-            message: CertifiedMergeSidecarMessage::Chunk(_),
+            message,
             ..
-        } => reply_routes,
+        } if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(_)) => reply_routes,
         V2LaneWorkEffect::PostLaneBlock { .. }
         | V2LaneWorkEffect::PostDurableLaneCertificate { .. }
         | V2LaneWorkEffect::PostNativeAmx { .. }
@@ -2269,10 +2393,16 @@ fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
         .is_none_or(|routes| routes.retain_active() != 0)
 }
 
+#[derive(Debug)]
+enum LaneWorkEffectDispatch {
+    Complete,
+    SourceRetained(V2LaneWorkEffect),
+}
+
 fn dispatch_lane_work_effect(
     services: &ProductionV2Services,
     effect: V2LaneWorkEffect,
-) -> Result<(), V2RunnerError> {
+) -> Result<LaneWorkEffectDispatch, V2RunnerError> {
     match effect {
         V2LaneWorkEffect::PostLaneBlock { peer, message } => services
             .post_lane_block(peer, message)
@@ -2326,7 +2456,7 @@ fn dispatch_lane_work_effect(
             reply_routes,
             message,
         } => {
-            let route_shape_is_valid = match &message {
+            let route_shape_is_valid = match message.as_ref() {
                 CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
                 CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
             };
@@ -2336,10 +2466,25 @@ fn dispatch_lane_work_effect(
                         .to_owned(),
                 ));
             }
-            services.post_certified_merge_sidecar_with_reply_routes(peer, reply_routes, message);
+            let ownership = services
+                .post_certified_merge_sidecar_with_reply_routes(
+                    peer.clone(),
+                    reply_routes.clone(),
+                    Arc::clone(&message),
+                )
+                .map_err(V2RunnerError::Service)?;
+            if ownership == ExactFanoutOwnership::SourceRetained {
+                return Ok(LaneWorkEffectDispatch::SourceRetained(
+                    V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                        peer,
+                        reply_routes,
+                        message,
+                    },
+                ));
+            }
         }
     }
-    Ok(())
+    Ok(LaneWorkEffectDispatch::Complete)
 }
 
 fn drive_merge_sidecar_recovery(
@@ -2432,6 +2577,19 @@ pub(super) enum V2RunnerError {
     /// Runner/status activation ownership was inconsistent.
     #[error(transparent)]
     SuccessorActivation(#[from] super::status::V2SuccessorActivationError),
+    /// Successor construction returned authority for another same-height predecessor.
+    #[error(
+        "Sumeragi v2 successor predecessor authority changed during construction: expected {expected:?}, actual {actual:?}"
+    )]
+    SuccessorPredecessorAuthorityMismatch {
+        /// Exact predecessor identity which began the Running handoff.
+        expected: DurableV2PredecessorIdentity,
+        /// Exact predecessor identity returned by verified construction.
+        actual: DurableV2PredecessorIdentity,
+    },
+    /// A typed successor lifecycle transition failed the shared pure refinement kernel.
+    #[error("Sumeragi v2 successor lifecycle failed the production refinement kernel")]
+    SuccessorRefinementRejected,
     /// Reducer/WAL adapter failed.
     #[error(transparent)]
     Adapter(#[from] super::v2::AdapterError),
@@ -2553,7 +2711,11 @@ pub(super) enum V2RunnerError {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, collections::VecDeque, sync::Mutex};
+    use std::{
+        cell::Cell,
+        collections::VecDeque,
+        sync::{Mutex, atomic::AtomicUsize},
+    };
 
     use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
     use iroha_crypto::{Algorithm, KeyPair};
@@ -2650,6 +2812,20 @@ mod tests {
             },
             keys,
         )
+    }
+
+    fn test_predecessor(
+        context: &wire::HeightContext,
+        label: &[u8],
+    ) -> DurableV2PredecessorIdentity {
+        DurableV2PredecessorIdentity::for_test(context.height, label)
+    }
+
+    fn test_successor_authority(
+        predecessor: DurableV2PredecessorIdentity,
+        successor_context_id: wire::HeightContextId,
+    ) -> DurableSuccessorActivationAuthority {
+        DurableSuccessorActivationAuthority::for_test(predecessor, successor_context_id)
     }
 
     fn valid_ingress_probe() -> BlockMessage {
@@ -2967,7 +3143,7 @@ mod tests {
             V2LaneWorkEffect::PostCertifiedMergeSidecar {
                 peer: requester,
                 reply_routes: Some(reply_routes),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message: Arc::new(CertifiedMergeSidecarMessage::Chunk(chunk)),
             },
         )
         .expect("runner hands the certified chunk to exact output");
@@ -3007,11 +3183,11 @@ mod tests {
         let effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
             peer: requester.clone(),
             reply_routes: Some(reply_routes),
-            message: CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
+            message: Arc::new(CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
                 local,
                 requester,
                 b"runner prune retired source",
-            )),
+            ))),
         };
         let (mut lane_work, _) =
             super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
@@ -3031,6 +3207,186 @@ mod tests {
                 .retains_reply_route_for_test(&route_b)
                 .expect("inspect live sibling ownership")
         );
+    }
+
+    #[test]
+    fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens() {
+        let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+        let local_peer = fixture.request.responder.clone();
+        let mut lane_work = fixture.adapter;
+        let mut services =
+            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
+                fixture.kura,
+                fixture.context,
+                &fixture.validators,
+                fixture.local_validator,
+            );
+        services
+            .set_exact_output_shared_unit_capacity_for_test(1)
+            .expect("install one shared race slot plus frozen target reservations");
+
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+        // The lane fixture's production seam is configured for eight
+        // authenticated reply sources. Route capabilities advertise that
+        // exact geometry, even though this race uses only three sources.
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let actual_route = routes.mint_via(fixture.requester.clone(), hub_a);
+        assert_eq!(
+            lane_work
+                .accept_certified_merge_sidecar_for_test(
+                    fixture.requester.clone(),
+                    actual_route.clone(),
+                    fixture.request,
+                )
+                .expect("materialize the source-owned sidecar effect"),
+            V2LaneIngressOutcome::Inserted
+        );
+        let actual_effect = lane_work
+            .next_effect()
+            .expect("materialized chunk enters the lane queue");
+        assert!(
+            services
+                .can_retain_lane_work_effect(&actual_effect)
+                .expect("race preflight validates the empty corridor")
+        );
+        let _ = lane_work
+            .drain_effects(1)
+            .pop()
+            .expect("take the exact effect after successful preflight");
+
+        services.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 5,
+            })
+        });
+        let filler_a = routes.mint_via(fixture.requester.clone(), hub_b);
+        let filler_b = routes.mint_via(fixture.requester.clone(), hub_c);
+        for (route, label) in [
+            (filler_a.clone(), b"runner race filler A".as_slice()),
+            (filler_b.clone(), b"runner race filler B".as_slice()),
+        ] {
+            let reply_routes =
+                NetworkReplyRoutes::try_from_route(route).expect("live filler source route");
+            assert!(matches!(
+                dispatch_lane_work_effect(
+                    &services,
+                    V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                        peer: fixture.requester.clone(),
+                        reply_routes: Some(reply_routes),
+                        message: Arc::new(CertifiedMergeSidecarMessage::Chunk(
+                            runner_sidecar_chunk(
+                                local_peer.clone(),
+                                fixture.requester.clone(),
+                                label,
+                            )
+                        )),
+                    },
+                )
+                .expect("fill exact target/class ownership after preflight"),
+                LaneWorkEffectDispatch::Complete
+            ));
+        }
+
+        let retained_effect = match dispatch_lane_work_effect(&services, actual_effect)
+            .expect("the enqueue race is bounded source backpressure")
+        {
+            LaneWorkEffectDispatch::SourceRetained(effect) => effect,
+            LaneWorkEffectDispatch::Complete => {
+                panic!("post-preflight capacity race must return the exact source owner")
+            }
+        };
+        assert!(!services.exact_output_restart_required_for_test());
+
+        let filler_controls = Arc::new(Mutex::new(Vec::new()));
+        let filler_controls_for_hook = Arc::clone(&filler_controls);
+        let mut filler_routes = vec![
+            (Hash::new(b"runner race filler A"), filler_a),
+            (Hash::new(b"runner race filler B"), filler_b),
+        ];
+        services.set_exact_output_flush_admission_hook(move |post, ticket| {
+            assert!(ticket.is_none());
+            let request_id = match &post.data {
+                NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
+                    CertifiedMergeSidecarMessage::Chunk(chunk) => &chunk.request_id,
+                    CertifiedMergeSidecarMessage::Request(_) => {
+                        panic!("retained sidecar filler changed into a request")
+                    }
+                },
+                _ => panic!("retained sidecar filler changed its network message kind"),
+            };
+            let index = filler_routes
+                .iter()
+                .position(|(expected, _)| expected == request_id)
+                .expect("retained filler preserves its immutable request identity");
+            let (_, route) = filler_routes.remove(index);
+            let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, &route);
+            filler_controls_for_hook
+                .lock()
+                .expect("retain filler writer controls")
+                .push(control);
+            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(ack))
+        });
+        services
+            .retry_pending_exact_output()
+            .expect("responsive filler writers release exact ownership capacity");
+        {
+            let mut controls = filler_controls.lock().expect("close filler controls");
+            assert_eq!(controls.len(), 2);
+            for control in controls.iter_mut() {
+                assert!(control.close());
+            }
+        }
+        assert!(
+            !services
+                .retry_pending_exact_output()
+                .expect("closed filler writers release their control receipts")
+        );
+
+        let actual_admissions = Arc::new(AtomicUsize::new(0));
+        let actual_admissions_for_hook = Arc::clone(&actual_admissions);
+        let actual_route_for_hook = actual_route.clone();
+        let actual_control = Arc::new(Mutex::new(None));
+        let actual_control_for_hook = Arc::clone(&actual_control);
+        services.set_exact_output_flush_admission_hook(move |post, ticket| {
+            assert!(ticket.is_none());
+            actual_admissions_for_hook.fetch_add(1, Ordering::Relaxed);
+            let (control, ack) =
+                NetworkReplyFlushAckTestFixture::for_reply(&post, &actual_route_for_hook);
+            assert!(
+                actual_control_for_hook
+                    .lock()
+                    .expect("retain actual writer control")
+                    .replace(control)
+                    .is_none()
+            );
+            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(ack))
+        });
+        assert!(lane_work.requeue_effect(retained_effect));
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("retained source dispatches after capacity reopens");
+        assert_eq!(lane_work.effect_count(), 0);
+        assert_eq!(actual_admissions.load(Ordering::Relaxed), 1);
+        assert!(
+            actual_control
+                .lock()
+                .expect("lock actual writer control")
+                .as_mut()
+                .expect("actual source reached writer admission")
+                .flush()
+        );
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("actual writer flush advances the source exactly once");
+        assert_eq!(actual_admissions.load(Ordering::Relaxed), 1);
+        assert!(
+            !services
+                .has_pending_exact_output()
+                .expect("actual source receipt is fully applied")
+        );
+        assert!(!services.exact_output_restart_required_for_test());
     }
 
     #[test]
@@ -3066,7 +3422,7 @@ mod tests {
             V2LaneWorkEffect::PostCertifiedMergeSidecar {
                 peer: requester,
                 reply_routes: Some(reply_routes),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message: Arc::new(CertifiedMergeSidecarMessage::Chunk(chunk)),
             },
         )
         .expect("runner hands the certified chunk to exact output");
@@ -3142,11 +3498,11 @@ mod tests {
             V2LaneWorkEffect::PostCertifiedMergeSidecar {
                 peer: requester.clone(),
                 reply_routes: Some(reply_routes),
-                message: CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
+                message: Arc::new(CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
                     local,
                     requester,
                     b"runner closed sidecar request",
-                )),
+                ))),
             },
         )
         .expect("runner retains a second sidecar completion");
@@ -3193,11 +3549,11 @@ mod tests {
             V2LaneWorkEffect::PostCertifiedMergeSidecar {
                 peer: requester.clone(),
                 reply_routes: Some(reply_routes),
-                message: CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
+                message: Arc::new(CertifiedMergeSidecarMessage::Chunk(runner_sidecar_chunk(
                     local,
                     requester,
                     b"runner retired admission race",
-                )),
+                ))),
             },
         )
         .expect("tenure cancellation retires only the exact occurrence");
@@ -3238,11 +3594,12 @@ mod tests {
                 .expect("materialize the first Kura-backed chunk"),
             V2LaneIngressOutcome::Inserted
         );
-        let first_chunk = match lane_work.next_effect() {
-            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
-                ..
-            }) => chunk,
+        let first_message = match lane_work.next_effect() {
+            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. })
+                if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(_)) =>
+            {
+                message
+            }
             other => panic!("expected first Kura-backed sidecar chunk, got {other:?}"),
         };
 
@@ -3265,22 +3622,6 @@ mod tests {
         dispatch_lane_work_effects(&mut lane_work, &services, 1)
             .expect("dispatch first chunk without advancing its cursor");
         assert!(routes.retire(&first_route));
-        assert!(
-            close_control
-                .lock()
-                .expect("lock first exact sidecar control")
-                .as_mut()
-                .expect("first chunk admission minted its exact closed control")
-                .close()
-        );
-        dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("closed writer completion emits no cursor receipt");
-        assert!(
-            !services
-                .has_pending_exact_output()
-                .expect("closed completion releases worker ownership")
-        );
-
         let reconnected_route = routes.mint(fixture.requester.clone());
         assert_eq!(
             lane_work
@@ -3295,10 +3636,17 @@ mod tests {
         match lane_work.next_effect() {
             Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
                 reply_routes: Some(reply_routes),
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message,
                 ..
             }) => {
-                assert_eq!(chunk, first_chunk);
+                assert!(matches!(
+                    message.as_ref(),
+                    CertifiedMergeSidecarMessage::Chunk(_)
+                ));
+                assert!(
+                    Arc::ptr_eq(&message, &first_message),
+                    "reconnect must preserve the exact cached chunk carrier"
+                );
                 assert!(
                     reply_routes
                         .iter()
@@ -3307,6 +3655,19 @@ mod tests {
             }
             other => panic!("expected reconnected current sidecar chunk, got {other:?}"),
         }
+
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("pending old writer keeps the reconnect's exact lane owner");
+        assert_eq!(
+            lane_work.effect_count(),
+            1,
+            "the reconnect must remain queued until the old writer is terminal"
+        );
+        assert!(
+            services
+                .has_pending_exact_output()
+                .expect("old writer flush remains process-locally owned")
+        );
 
         let reconnected_route_for_hook = reconnected_route.clone();
         let flush_control = Arc::new(Mutex::new(None));
@@ -3324,8 +3685,17 @@ mod tests {
             );
             Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(flush_ack))
         });
+        assert!(
+            close_control
+                .lock()
+                .expect("lock first exact sidecar control")
+                .as_mut()
+                .expect("first chunk admission minted its exact closed control")
+                .close()
+        );
         dispatch_lane_work_effects(&mut lane_work, &services, 1)
-            .expect("dispatch the reconnected current chunk");
+            .expect("closed old writer releases the retained reconnect current chunk");
+        assert_eq!(lane_work.effect_count(), 0);
         assert!(
             flush_control
                 .lock()
@@ -3345,6 +3715,94 @@ mod tests {
     }
 
     #[test]
+    fn runner_old_flushed_sidecar_receipt_cancels_queued_reconnect_retry() {
+        let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+        let mut lane_work = fixture.adapter;
+        let mut services =
+            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
+                fixture.kura,
+                fixture.context,
+                &fixture.validators,
+                fixture.local_validator,
+            );
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(hub);
+        let first_route = routes.mint(fixture.requester.clone());
+        assert_eq!(
+            lane_work
+                .accept_certified_merge_sidecar_for_test(
+                    fixture.requester.clone(),
+                    first_route.clone(),
+                    fixture.request.clone(),
+                )
+                .expect("materialize the first exact sidecar chunk"),
+            V2LaneIngressOutcome::Inserted
+        );
+
+        let first_route_for_hook = first_route.clone();
+        let flush_control = Arc::new(Mutex::new(None));
+        let flush_control_for_hook = Arc::clone(&flush_control);
+        services.set_exact_output_flush_admission_hook(move |post, _| {
+            let (control, ack) =
+                NetworkReplyFlushAckTestFixture::for_reply(&post, &first_route_for_hook);
+            assert!(
+                flush_control_for_hook
+                    .lock()
+                    .expect("lock old exact writer control")
+                    .replace(control)
+                    .is_none()
+            );
+            Ok(super::super::v2_worker::ExactOutputTestAdmission::SidecarFlush(ack))
+        });
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("dispatch the first route chunk");
+
+        assert!(routes.retire(&first_route));
+        let reconnected_route = routes.mint(fixture.requester.clone());
+        assert_eq!(
+            lane_work
+                .accept_certified_merge_sidecar_for_test(
+                    fixture.requester.clone(),
+                    reconnected_route.clone(),
+                    fixture.request,
+                )
+                .expect("reconnect retains the old current chunk"),
+            V2LaneIngressOutcome::Inserted
+        );
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("pending old writer retains the reconnect effect");
+        assert_eq!(lane_work.effect_count(), 1);
+
+        assert!(
+            flush_control
+                .lock()
+                .expect("lock old exact writer control")
+                .as_mut()
+                .expect("first admission installed its writer control")
+                .flush()
+        );
+        dispatch_lane_work_effects(&mut lane_work, &services, 1)
+            .expect("late old flush advances the rebound source without identity mismatch");
+
+        assert_eq!(
+            lane_work.effect_count(),
+            0,
+            "the terminal old flush must remove the queued reconnect current chunk"
+        );
+        assert!(
+            !services
+                .retains_reply_route_for_test(&reconnected_route)
+                .expect("reconnect was never transferred into worker ownership")
+        );
+        assert!(
+            !services
+                .has_pending_exact_output()
+                .expect("the terminal receipt is fully applied exactly once")
+        );
+        assert!(!services.exact_output_restart_required_for_test());
+    }
+
+    #[test]
     fn runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route() {
         let (services, keys) = super::super::v2_worker::tests::fixture();
         let local = PeerId::new(keys[0].public_key().clone());
@@ -3356,7 +3814,7 @@ mod tests {
             V2LaneWorkEffect::PostCertifiedMergeSidecar {
                 peer: requester,
                 reply_routes: None,
-                message: CertifiedMergeSidecarMessage::Chunk(chunk),
+                message: Arc::new(CertifiedMergeSidecarMessage::Chunk(chunk)),
             },
         )
         .expect_err("runner must reject a sidecar response without local reply authority");
@@ -3846,8 +4304,9 @@ mod tests {
         let context = super::super::v2_worker::tests::production_output_handoff_with_dead_target();
         publish_applied_runner_status(&context);
 
+        let predecessor = test_predecessor(&context, b"dead target rollover");
         let construction =
-            PendingSuccessorConstruction::begin(context.height).expect("begin successor handoff");
+            PendingSuccessorConstruction::begin(predecessor).expect("begin successor handoff");
         let ready = AtomicBool::new(false);
         let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
         ingress
@@ -3868,7 +4327,12 @@ mod tests {
             transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
             age_ms: 0,
         });
-        let activation = construction.bind(successor.height_context_id);
+        let activation = construction
+            .bind(test_successor_authority(
+                predecessor,
+                successor.height_context_id,
+            ))
+            .expect("bind exact predecessor authority");
         let output_guard = ConsensusOutputGuard::isolated();
 
         open_ingress_for_active_height(
@@ -3900,8 +4364,9 @@ mod tests {
         super::super::status::clear_v2_status();
         let (context, _) = context();
         publish_applied_runner_status(&context);
+        let predecessor = test_predecessor(&context, b"live ingress rollover");
         let construction =
-            PendingSuccessorConstruction::begin(context.height).expect("begin successor handoff");
+            PendingSuccessorConstruction::begin(predecessor).expect("begin successor handoff");
         let ready = AtomicBool::new(false);
         let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
         ingress
@@ -3945,7 +4410,12 @@ mod tests {
             transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
             age_ms: 0,
         });
-        let activation = construction.bind(successor.height_context_id);
+        let activation = construction
+            .bind(test_successor_authority(
+                predecessor,
+                successor.height_context_id,
+            ))
+            .expect("bind exact predecessor authority");
         let output_guard = ConsensusOutputGuard::isolated();
         open_ingress_for_active_height(
             output_guard.as_ref(),
@@ -3976,13 +4446,16 @@ mod tests {
         super::super::status::clear_v2_status();
 
         publish_applied_runner_status(&context);
-        let construction = PendingSuccessorConstruction::begin(context.height)
+        let predecessor = test_predecessor(&context, b"foreign successor context");
+        let construction = PendingSuccessorConstruction::begin(predecessor)
             .expect("begin mismatched-context handoff");
         let foreign_context_id =
             wire::HeightContextId(HashOf::<wire::HeightContext>::from_untyped_unchecked(
                 Hash::new(b"foreign successor context"),
             ));
-        let activation = construction.bind(foreign_context_id);
+        let activation = construction
+            .bind(test_successor_authority(predecessor, foreign_context_id))
+            .expect("bind the exact predecessor but foreign successor context");
         let rejected_ready = AtomicBool::new(false);
         let rejected_ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
         rejected_ingress
@@ -4055,8 +4528,14 @@ mod tests {
             wire::HeightContextId(HashOf::<wire::HeightContext>::from_untyped_unchecked(
                 Hash::new(b"foreign recovered successor context"),
             ));
-        let foreign_activation =
-            PendingSuccessorActivation::recovered(parent_context.height, foreign_context_id);
+        let predecessor = test_predecessor(&parent_context, b"complete tip recovery");
+        let foreign_activation = PendingSuccessorActivation::recovered(
+            RecoveredSuccessorActivationAuthority::CompleteTip(test_successor_authority(
+                predecessor,
+                foreign_context_id,
+            )),
+        )
+        .expect("authenticate complete-tip retry lifecycle");
         assert!(
             open_ingress_for_active_height(
                 output_guard.as_ref(),
@@ -4074,9 +4553,12 @@ mod tests {
         );
 
         let activation = PendingSuccessorActivation::recovered(
-            parent_context.height,
-            successor.height_context_id,
-        );
+            RecoveredSuccessorActivationAuthority::CompleteTip(test_successor_authority(
+                predecessor,
+                successor.height_context_id,
+            )),
+        )
+        .expect("authenticate complete-tip retry lifecycle");
         open_ingress_for_active_height(
             output_guard.as_ref(),
             &ready,
@@ -4101,13 +4583,49 @@ mod tests {
     }
 
     #[test]
+    fn successor_construction_rejects_foreign_same_height_predecessor_authority() {
+        let _guard = super::super::status::rbc_status_test_guard();
+        super::super::status::clear_v2_status();
+        let (context, _) = context();
+        publish_applied_runner_status(&context);
+        let expected = test_predecessor(&context, b"expected predecessor");
+        let foreign = test_predecessor(&context, b"foreign same-height predecessor");
+        assert_eq!(expected.height(), foreign.height());
+        assert_ne!(expected, foreign);
+
+        let construction =
+            PendingSuccessorConstruction::begin(expected).expect("begin exact predecessor handoff");
+        let mut successor_context = context.clone();
+        successor_context.height += 1;
+        let error = construction
+            .bind(test_successor_authority(foreign, successor_context.id()))
+            .expect_err("same-height foreign predecessor must not bind activation");
+        assert!(matches!(
+            error,
+            V2RunnerError::SuccessorPredecessorAuthorityMismatch {
+                expected: actual_expected,
+                actual,
+            } if actual_expected == expected && actual == foreign
+        ));
+        let predecessor = super::super::status::v2_status().expect("predecessor remains visible");
+        assert_eq!(
+            predecessor.liveness.work.successor_height,
+            wire::SumeragiV2LocalWorkStage::Running
+        );
+        super::super::status::clear_v2_status();
+    }
+
+    #[test]
     fn successor_startup_failure_stays_running_and_fails_closed_without_activation() {
         let _guard = super::super::status::rbc_status_test_guard();
         super::super::status::clear_v2_status();
         let (context, keys) = context();
         publish_applied_runner_status(&context);
-        let activation =
-            PendingSuccessorConstruction::begin(context.height).expect("begin successor handoff");
+        let activation = PendingSuccessorConstruction::begin(test_predecessor(
+            &context,
+            b"failed successor startup",
+        ))
+        .expect("begin successor handoff");
         let ready = Arc::new(AtomicBool::new(false));
         let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
         ingress

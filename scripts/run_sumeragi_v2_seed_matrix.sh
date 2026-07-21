@@ -236,7 +236,10 @@ for scenario_spec in "${scenarios[@]}"; do
     localnet_dir="${evidence_dir}/${localnet_output}"
     rm -rf -- "$localnet_dir"
     mkdir -p -- "$localnet_dir"
-    command="IROHA_RELEASE_SOURCE_MANIFEST_SHA256=${source_manifest_sha256} IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_NETWORK_START_ATTEMPTS=1 IROHA_TEST_SKIP_BUILD=0 IROHA_TEST_ALLOW_REENTRANT_BUILD=1 IROHA_TEST_BUILD_TIMEOUT_MS=3600 IROHA_TEST_PROCESS_TIMEOUT_MS=300 IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300 IROHA_TEST_NETWORK_BASE_SEED=${seed} TEST_NETWORK_TMP_DIR=${localnet_dir} IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test --locked -p integration_tests --test ${target} ${module}::${test_name} -- ${test_args[*]}"
+    # Record a canonical replay command. The placeholder keeps the receipt
+    # independent of the invocation's incidental absolute archive path; the
+    # adjacent `localnet` field binds it to the exact retained directory.
+    command="IROHA_RELEASE_SOURCE_MANIFEST_SHA256=${source_manifest_sha256} IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_NETWORK_START_ATTEMPTS=1 IROHA_TEST_SKIP_BUILD=0 IROHA_TEST_ALLOW_REENTRANT_BUILD=1 IROHA_TEST_BUILD_TIMEOUT_MS=3600 IROHA_TEST_PROCESS_TIMEOUT_MS=300 IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300 IROHA_TEST_NETWORK_BASE_SEED=${seed} TEST_NETWORK_TMP_DIR=\${SEED_MATRIX_EVIDENCE_DIRECTORY}/${localnet_output} IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test --locked -p integration_tests --test ${target} ${module}::${test_name} -- ${test_args[*]}"
     ((run_index += 1))
 
     set +e

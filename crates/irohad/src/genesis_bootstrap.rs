@@ -6,7 +6,7 @@ use std::{
     num::NonZeroUsize,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -30,7 +30,9 @@ use iroha_p2p::{
     Post, Priority, UpdatePeers, UpdateTopology,
     network::{
         NetworkActorAdmissionError, NetworkActorAdmissionTicket, NetworkReplyRoute,
-        SubscriberFilter,
+        RELIABLE_PROGRESS_GENESIS_FETCH_PRODUCERS_PER_SOURCE,
+        RELIABLE_PROGRESS_GENESIS_REPLY_LISTENER_PRODUCERS, SubscriberFilter,
+        genesis_reply_waiters_per_source,
         message::{SubscriberRoute, Topic},
     },
     peer::message::PeerMessage,
@@ -43,6 +45,9 @@ use tokio::{
 };
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+const _: () = assert!(RELIABLE_PROGRESS_GENESIS_REPLY_LISTENER_PRODUCERS == 1);
+const _: () = assert!(RELIABLE_PROGRESS_GENESIS_FETCH_PRODUCERS_PER_SOURCE == 1);
 
 fn genesis_message_filter() -> SubscriberFilter {
     // Requests are small control messages, while responses may carry the full
@@ -228,6 +233,8 @@ pub struct FetchResult {
 pub enum BootstrapError {
     /// No peer responded within the allotted window.
     NoResponse,
+    /// Another clone already owns the single bounded fetch producer.
+    FetchAlreadyActive,
     /// Conflicting genesis hashes were observed across peers.
     ConflictingHashes,
     /// Peer advertised a hash that did not match the expected one.
@@ -261,6 +268,9 @@ impl fmt::Display for BootstrapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoResponse => write!(f, "no genesis response from trusted peers"),
+            Self::FetchAlreadyActive => {
+                write!(f, "another genesis bootstrap fetch is already active")
+            }
             Self::ConflictingHashes => write!(f, "peers returned conflicting genesis hashes"),
             Self::HashMismatch { expected, got } => write!(
                 f,
@@ -294,6 +304,31 @@ impl fmt::Display for BootstrapError {
 
 impl std::error::Error for BootstrapError {}
 
+struct GenesisProducerPermit {
+    active: Arc<AtomicBool>,
+}
+
+impl GenesisProducerPermit {
+    fn try_acquire(active: &Arc<AtomicBool>) -> Option<Self> {
+        active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()?;
+        Some(Self {
+            active: Arc::clone(active),
+        })
+    }
+}
+
+impl Drop for GenesisProducerPermit {
+    fn drop(&mut self) {
+        let was_active = self.active.swap(false, Ordering::Release);
+        debug_assert!(
+            was_active,
+            "exclusive genesis producer permit released twice"
+        );
+    }
+}
+
 /// Request/response orchestration for genesis bootstrap.
 #[derive(Clone)]
 pub struct GenesisBootstrapper<N: GenesisNetwork = IrohaNetwork> {
@@ -312,6 +347,8 @@ pub struct GenesisBootstrapper<N: GenesisNetwork = IrohaNetwork> {
     responder: Arc<Mutex<ResponderState>>,
     pending: Arc<Mutex<HashMap<u64, mpsc::Sender<InboundResponse>>>>,
     response_queue_cap: NonZeroUsize,
+    listener_active: Arc<AtomicBool>,
+    fetch_active: Arc<AtomicBool>,
 }
 
 struct ResponderState {
@@ -381,7 +418,8 @@ where
         let capacity = capacity.get();
         // Preserve capacity for several independent authenticated sources while
         // still allowing a trusted hub to carry more than one bootstrap client.
-        let per_source_capacity = capacity.div_ceil(4).max(1);
+        let per_source_capacity = genesis_reply_waiters_per_source(capacity)
+            .expect("non-zero subscriber queue has an exact per-source genesis reply share");
         const REPLY_ENVELOPE_ALLOWANCE: u64 = 64 * 1024;
         let encoded_byte_capacity_per_source =
             max_payload_bytes.saturating_add(REPLY_ENVELOPE_ALLOWANCE);
@@ -541,10 +579,12 @@ struct GenesisRequestFanout {
 
 impl GenesisRequestFanout {
     fn new(peers: &[PeerId], request: GenesisRequest) -> Self {
+        let mut seen_targets = HashSet::with_capacity(peers.len());
         Self {
             message: NetworkMessage::GenesisRequest(Box::new(request)),
             targets: peers
                 .iter()
+                .filter(|peer_id| seen_targets.insert((**peer_id).clone()))
                 .cloned()
                 .map(|peer_id| GenesisRequestTarget {
                     peer_id,
@@ -626,6 +666,8 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
             })),
             pending: Arc::new(Mutex::new(HashMap::new())),
             response_queue_cap,
+            listener_active: Arc::new(AtomicBool::new(false)),
+            fetch_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -642,6 +684,13 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
 
     /// Spawn a listener that handles inbound genesis requests/responses.
     pub async fn spawn_listener(&self) {
+        let Some(listener_permit) = GenesisProducerPermit::try_acquire(&self.listener_active)
+        else {
+            iroha_logger::warn!(
+                "genesis bootstrap listener is already active; refusing to multiply its bounded reply producer"
+            );
+            return;
+        };
         let (mut sender, mut rx) = mpsc::channel(self.network.subscriber_queue_cap().get());
         let filter = genesis_message_filter();
         let mut backoff_ms = 50;
@@ -664,6 +713,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
         let network = self.network.clone();
         let retry_period = self.retry_interval.max(Duration::from_millis(1));
         tokio::spawn(async move {
+            let _listener_permit = listener_permit;
             let mut pending_replies = PendingGenesisReplies::new(reply_queue_cap, max_bytes);
             let mut retry_tick = time::interval(retry_period);
             retry_tick.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
@@ -819,6 +869,9 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
         if !self.enabled {
             return Err(BootstrapError::NoResponse);
         }
+        let Some(_fetch_permit) = GenesisProducerPermit::try_acquire(&self.fetch_active) else {
+            return Err(BootstrapError::FetchAlreadyActive);
+        };
         let expected_hash = expected_hash.or(self.expected_hash);
         let mut no_response_windows = 0_u32;
         loop {
@@ -1462,6 +1515,7 @@ mod tests {
         posted: Arc<Mutex<Vec<Post<NetworkMessage>>>>,
         backpressure_remaining: Arc<std::sync::atomic::AtomicUsize>,
         blocked_reply_peers: Arc<Mutex<HashSet<PeerId>>>,
+        subscriptions: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl Default for MockNetwork {
@@ -1471,6 +1525,7 @@ mod tests {
                 posted: Arc::new(Mutex::new(Vec::new())),
                 backpressure_remaining: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 blocked_reply_peers: Arc::new(Mutex::new(HashSet::new())),
+                subscriptions: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
     }
@@ -1566,6 +1621,8 @@ mod tests {
             &self,
             sender: mpsc::Sender<PeerMessage<NetworkMessage>>,
         ) -> Result<(), mpsc::Sender<PeerMessage<NetworkMessage>>> {
+            self.subscriptions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             *self.sender.lock().expect("sender mutex") = Some(sender);
             Ok(())
         }
@@ -1633,6 +1690,11 @@ mod tests {
         let second = sample_peer().id().clone();
         let mut pending =
             PendingGenesisReplies::new(NonZeroUsize::new(8).expect("non-zero queue"), 0);
+        assert_eq!(
+            pending.per_source_capacity,
+            genesis_reply_waiters_per_source(8).expect("non-zero shared reply geometry"),
+            "the runtime queue and actor waiter reserve must use one source-share derivation"
+        );
         assert!(
             pending
                 .push(first.clone(), pending_reply(first.clone(), 40_000))
@@ -1652,6 +1714,150 @@ mod tests {
         );
         assert_eq!(pending.len, 2);
         assert_eq!(pending.encoded_bytes, 80_000);
+    }
+
+    #[test]
+    fn pending_reply_count_uses_shared_per_source_waiter_geometry() {
+        let source_a = sample_peer().id().clone();
+        let source_b = sample_peer().id().clone();
+        let mut pending =
+            PendingGenesisReplies::new(NonZeroUsize::new(8).expect("non-zero queue"), 1_048_576);
+        let per_source =
+            genesis_reply_waiters_per_source(8).expect("non-zero shared genesis reply geometry");
+        assert_eq!(per_source, 2);
+        for request in 0..per_source {
+            assert!(
+                pending
+                    .push(
+                        source_a.clone(),
+                        pending_reply(
+                            source_a.clone(),
+                            u64::try_from(request + 1).expect("small fixture size"),
+                        ),
+                    )
+                    .is_ok()
+            );
+        }
+        assert!(
+            pending
+                .push(source_a.clone(), pending_reply(source_a, 1))
+                .is_err(),
+            "one source cannot exceed the exact actor waiter share"
+        );
+        assert!(
+            pending
+                .push(source_b.clone(), pending_reply(source_b, 1))
+                .is_ok(),
+            "the saturated source cannot consume another source's share"
+        );
+    }
+
+    #[test]
+    fn genesis_request_fanout_deduplicates_same_source_targets() {
+        let target = sample_peer().id().clone();
+        let signer = checked_genesis_bootstrap_key_fixture();
+        let request = GenesisRequest {
+            request_id: 17,
+            chain_id: ChainId::from("deduplicated-genesis-fanout"),
+            expected_hash: None,
+            expected_pubkey: Some(signer.public_key().clone()),
+            kind: GenesisRequestKind::Preflight,
+        };
+        let fanout =
+            GenesisRequestFanout::new(&[target.clone(), target.clone(), target.clone()], request);
+
+        assert_eq!(fanout.targets.len(), 1);
+        assert_eq!(fanout.targets[0].peer_id, target);
+    }
+
+    #[tokio::test]
+    async fn bootstrapper_clones_cannot_multiply_listener_producers() {
+        let network = MockNetwork::default();
+        let chain_id = ChainId::from("single-genesis-listener");
+        let signer = checked_genesis_bootstrap_key_fixture();
+        let cfg = GenesisConfig {
+            public_key: signer.public_key().clone(),
+            file: None,
+            manifest_json: None,
+            expected_hash: None,
+            bootstrap_allowlist: Vec::new(),
+            bootstrap_max_bytes: 1_048_576,
+            bootstrap_response_throttle: Duration::ZERO,
+            bootstrap_request_timeout: Duration::from_secs(1),
+            bootstrap_retry_interval: Duration::from_millis(10),
+            bootstrap_max_attempts: 1,
+            bootstrap_enabled: true,
+        };
+        let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id);
+        let clone = bootstrapper.clone();
+
+        bootstrapper.spawn_listener().await;
+        clone.spawn_listener().await;
+
+        assert_eq!(
+            network
+                .subscriptions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "all clones must share one listener and one bounded reply scheduler"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrapper_clones_cannot_multiply_fetch_fanouts() {
+        let network = MockNetwork::default();
+        let chain_id = ChainId::from("single-genesis-fetch");
+        let signer = checked_genesis_bootstrap_key_fixture();
+        let target = sample_peer();
+        let cfg = GenesisConfig {
+            public_key: signer.public_key().clone(),
+            file: None,
+            manifest_json: None,
+            expected_hash: None,
+            bootstrap_allowlist: vec![target.id().clone()],
+            bootstrap_max_bytes: 1_048_576,
+            bootstrap_response_throttle: Duration::ZERO,
+            bootstrap_request_timeout: Duration::from_secs(5),
+            bootstrap_retry_interval: Duration::from_secs(1),
+            bootstrap_max_attempts: 1,
+            bootstrap_enabled: true,
+        };
+        let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id);
+        let clone = bootstrapper.clone();
+        let genesis_account = AccountId::new(signer.public_key().clone());
+
+        {
+            let first_fetch = bootstrapper.fetch_genesis(
+                std::slice::from_ref(target.id()),
+                &genesis_account,
+                None,
+            );
+            tokio::pin!(first_fetch);
+            tokio::select! {
+                _ = &mut first_fetch => {
+                    panic!("the first fetch must remain active without a responder")
+                }
+                () = wait_for_posts(&network, 1) => {}
+            }
+            assert_eq!(network.posted.lock().expect("posted").len(), 1);
+
+            let second = clone
+                .fetch_genesis(std::slice::from_ref(target.id()), &genesis_account, None)
+                .await;
+            assert!(matches!(second, Err(BootstrapError::FetchAlreadyActive)));
+            assert_eq!(
+                network.posted.lock().expect("posted").len(),
+                1,
+                "a rejected clone must not create another target fanout"
+            );
+        }
+
+        assert!(
+            !bootstrapper
+                .fetch_active
+                .load(std::sync::atomic::Ordering::Acquire),
+            "cancelling the owning fetch future must release the single producer"
+        );
     }
 
     async fn wait_for_posts(network: &MockNetwork, expected: usize) {

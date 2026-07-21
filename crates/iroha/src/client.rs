@@ -9138,7 +9138,7 @@ mod evidence_http_tests {
             .expect("response build")
     }
 
-    fn empty_response(status: StatusCode) -> HttpResponse<Vec<u8>> {
+    pub(super) fn empty_response(status: StatusCode) -> HttpResponse<Vec<u8>> {
         HttpResponse::builder()
             .status(status)
             .body(Vec::new())
@@ -24133,7 +24133,7 @@ mod tests {
         default_alias_policy,
         evidence_http_tests::{
             SnapshotStore, assert_single_accept_header, base_url, client_with_base_url,
-            json_response, respond_with, with_mock_http, with_mock_sorafs_fetch,
+            empty_response, json_response, respond_with, with_mock_http, with_mock_sorafs_fetch,
         },
         *,
     };

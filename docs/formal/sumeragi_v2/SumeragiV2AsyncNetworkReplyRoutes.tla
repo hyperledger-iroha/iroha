@@ -11,7 +11,14 @@ neither component can manufacture progress for the other's weak fairness.
 Exact retries and later same-tenure deliveries preserve reply progress.  A new
 connection tenure invalidates the old ticket while preserving the affected
 attempt's current cursor and every independent source attempt.
+
+`AsyncReplySemanticTarget` is the production refinement's semantic-origin
+projection for a canonical request identity.  It is deliberately independent
+of the authenticated delivery source: a hub occupies the source lane while the
+reply remains addressed to the request origin.
 ***************************************************************************)
+
+CONSTANT AsyncReplySemanticTarget(_)
 
 VARIABLES
   asyncReplyAttempts,
@@ -26,6 +33,8 @@ AsyncReplyRoute ==
     ReplyOwners <- ValidatorIds,
     ReplySourceOrder <- AsyncReplySourceOrder,
     ReplySemantics <- AsyncReplySemanticIdentities,
+    ReplyTargets <- ValidatorIds,
+    ReplySemanticTarget <- AsyncReplySemanticTarget,
     ReplySourceCapacity <- AsyncReplySourceCapacity,
     ReplyDeliveryOrdinalLimit <- AsyncIngressCapacity,
     ReplyMessageCount <- 2,
@@ -147,8 +156,14 @@ AsyncReplySourceIsolationStep ==
   AsyncReplyRoute!ReplySourceIsolationStep
 AsyncReplySourceIsolation ==
   AsyncReplyRoute!ReplySourceIsolation
+AsyncReplySourceRouteStable(owner, semantic, source) ==
+  AsyncReplyRoute!ReplySourceRouteStable(owner, semantic, source)
 AsyncReplySourceStableResponsive(owner, semantic, source) ==
   AsyncReplyRoute!ReplySourceStableResponsive(owner, semantic, source)
+AsyncReplySourceIndex(source) ==
+  AsyncReplyRoute!ReplySourceIndex(source)
+AsyncReplySourceRoundRobinRank(owner, semantic, source) ==
+  AsyncReplyRoute!ReplySourceRoundRobinRank(owner, semantic, source)
 AsyncReplySourceEventuallyProgresses(owner, semantic, source) ==
   AsyncReplyRoute!ReplySourceEventuallyProgresses(owner, semantic, source)
 
