@@ -7,17 +7,22 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         XCTAssertTrue(IrohaPeerWireLimitsV1.areValid(
             maximumCanonicalBytes: 32 * 1_024,
             maximumOfflineNoteEncodedBytes: 24_576,
-            maximumKagemushaEncodedBytes: 12_288
+            maximumKagemushaEncodedBytes: 24_576
         ))
         XCTAssertFalse(IrohaPeerWireLimitsV1.areValid(
             maximumCanonicalBytes: 32 * 1_024 + 1,
             maximumOfflineNoteEncodedBytes: 24_576,
-            maximumKagemushaEncodedBytes: 12_288
+            maximumKagemushaEncodedBytes: 24_576
         ))
         XCTAssertFalse(IrohaPeerWireLimitsV1.areValid(
             maximumCanonicalBytes: 32 * 1_024,
             maximumOfflineNoteEncodedBytes: 24_577,
-            maximumKagemushaEncodedBytes: 12_289
+            maximumKagemushaEncodedBytes: 24_576
+        ))
+        XCTAssertFalse(IrohaPeerWireLimitsV1.areValid(
+            maximumCanonicalBytes: 32 * 1_024,
+            maximumOfflineNoteEncodedBytes: 24_576,
+            maximumKagemushaEncodedBytes: 24_577
         ))
     }
 
@@ -200,7 +205,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
 
     func testProfileAndCanonicalLimitsAreEnforcedBeforeAllocation() throws {
         XCTAssertEqual(IrohaPeerWireLimitsV1.peerV1.maximumOfflineNoteEncodedBytes, 24_576)
-        XCTAssertEqual(IrohaPeerWireLimitsV1.peerV1.maximumKagemushaEncodedBytes, 12_288)
+        XCTAssertEqual(IrohaPeerWireLimitsV1.peerV1.maximumKagemushaEncodedBytes, 24_576)
         let retailBoundary = try IrohaPeerWireMessageV1(
             profile: .offlineNote,
             kind: .payment,
@@ -313,7 +318,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         XCTAssertEqual(canonical.count, 49)
         XCTAssertEqual(
             canonical.hexEncodedString(),
-            "4e5254300000136f80655378267532a71119f46e6f0a000100000000000000de8130dd3f67aeb502000000000000000051"
+            "4e5254300000bfd427e87daf1d5cfa39b7fb60a76859000100000000000000de8130dd3f67aeb502000000000000000051"
         )
         let message = try IrohaPeerWireMessageV1(
             profile: .kagemusha,

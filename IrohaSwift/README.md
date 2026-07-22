@@ -296,7 +296,8 @@ canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 `IrohaPeerWireMessageV1` is the only first-release request/payment/ACK envelope.
 Profile `1` requires schema `1` and allows a 24,576-byte encoded body; profile
-`2` requires schema `0x0102` and allows a 12,288-byte bounded handoff. Canonical
+`2` requires schema `0x0102` and allows a 24,576-byte bounded whole-offer body
+(24,660 bytes including the fixed 84-byte IPM1 header). Canonical
 bytes are capped at 32 KiB. Offline Note bytes remain opaque. Its text-based
 apps can use `IrohaPeerCanonicalTextPayloadCodecV1` for an exact UTF-8 round
 trip; the codec rejects profile `2`, whose bytes must instead be a kind-matched
@@ -342,7 +343,7 @@ installs the ACK-bearing ISC1 before CONFIRM_ACK. Failure at either durability
 boundary emits neither the command it gates nor a replacement debit.
 
 Wire limits are hard-capped at 32 KiB canonical, 24,576 Offline Note encoded,
-and 12,288 bounded Kagemusha encoded bytes. NFC messages cannot exceed 24,660
+and 24,576 bounded Kagemusha encoded bytes. NFC messages cannot exceed 24,660
 bytes. Nearby timeouts must be finite, positive, and at most 300 seconds; its
 receive budget admits the four-record V1 transcript and fails closed on a
 fifth. Epoch invalidation suppresses callbacks not yet admitted; an
@@ -364,7 +365,9 @@ The application entry points are:
   `IrohaPeerQRCodecV1.staticCompleteTextCandidate(...)` or
   `animatedFrameTexts(...)`; feed scanner text to
   `IrohaPeerQRScanSessionV1.ingest(...)`, and call `reset()` when the camera
-  session or expected kind changes.
+  session or expected kind changes. The producer preflights the exact Base45
+  length before building a complete frame and emits animated strings directly,
+  reusing each repeated header string without changing the V1 wire sequence.
 - Nearby: authenticate records with `IrohaPeerNearbySessionV1`, and own radio
   lifecycle through `IrohaPeerNearbyConnectionsTransportV1.startAdvertising`,
   `startDiscovering`, `send`, and `stop`. A `send` completion means delivery
@@ -395,10 +398,12 @@ The application entry points are:
 
 The bounded Retail V1 Kagemusha handoff uses profile `2` and only schema `0x0102`.
 `IrohaPeerKagemushaAdapterV1` rejects every other schema before invoking the
-native archive decoder, and its IPM1 adapter fails explicitly above the 12,288
-byte encoded-body ceiling. The independent ABI21 APIs remain
+native archive decoder, and its IPM1 adapter fails explicitly above the 24,576
+byte whole-offer body ceiling (24,660 bytes with the IPM1 header). The
+independent ABI21 APIs remain
 `KagemushaQRStreamCodec`, `KagemushaNFCProtocol`, and
-`KagemushaNearbyExchange`, with distinct `PKK2*`/`PKKQ1`, F050, and
+`KagemushaNearbyExchange`, with distinct `PKK2*`/`PKKQ1`, the canonical
+`F049524F48415045455201` SDK NFC AID, and
 Bonjour/Multipeer identifiers. They are never negotiated, reinterpreted, or
 used as fallback for Retail V1. Full QR, NFC, and native ABI21 archives up to
 32 MiB continue to use those rails; Kagemusha Nearby's JSON/text envelope has

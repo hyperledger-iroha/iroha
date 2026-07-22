@@ -283,8 +283,8 @@ final class TxBuilderTests: XCTestCase {
                                  amount: amount,
                                  noteCommitment: noteCommitment,
                                  payload: payload,
-                                 ttlMs: ttlMs,
-                                 feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                 feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                 ttlMs: ttlMs)
     }
 
     private func makeProofAttachment() throws -> ProofAttachment {
@@ -312,8 +312,8 @@ final class TxBuilderTests: XCTestCase {
                                    inputs: inputs,
                                    proof: proof,
                                    rootHint: rootHint,
-                                   ttlMs: ttlMs,
-                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                   ttlMs: ttlMs)
     }
 
     private func hexEncoded(_ data: Data) -> String {
@@ -369,8 +369,8 @@ final class TxBuilderTests: XCTestCase {
                                       transferVerifyingKey: transferVk,
                                       unshieldVerifyingKey: unshieldVk,
                                       shieldVerifyingKey: nil,
-                                      ttlMs: ttlMs,
-                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                      ttlMs: ttlMs)
     }
 
     private func makeClaimIdentifierRequest(authority: String,
@@ -436,8 +436,8 @@ final class TxBuilderTests: XCTestCase {
                                       authority: authority,
                                       accountId: claimAccountId,
                                       receipt: receipt,
-                                      ttlMs: ttlMs,
-                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                      ttlMs: ttlMs)
     }
 
     func testBuildSignedTransferProducesEnvelope() throws {
@@ -1502,8 +1502,8 @@ final class TxBuilderTests: XCTestCase {
                                   assetDefinitionId: Self.fixtureAssetDefinition,
                                   quantity: "3.14",
                                   destination: authority,
-                                  ttlMs: 45,
-                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                  ttlMs: 45)
 
         let swift = try SwiftTransactionEncoder.encodeMint(request: request,
                                                            keypair: keypair,
@@ -1516,6 +1516,7 @@ final class TxBuilderTests: XCTestCase {
                                                                      assetDefinitionId: request.assetDefinitionId,
                                                                      quantity: request.quantity,
                                                                      destination: request.destination,
+                                                                     feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                                      privateKey: keypair.privateKeyBytes) else {
             XCTFail("Expected native bridge mint encoding")
             return
@@ -1537,8 +1538,8 @@ final class TxBuilderTests: XCTestCase {
                                   assetDefinitionId: Self.fixtureAssetDefinition,
                                   quantity: "2",
                                   destination: authority,
-                                  ttlMs: 120,
-                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                  ttlMs: 120)
 
         let swift = try SwiftTransactionEncoder.encodeBurn(request: request,
                                                            keypair: keypair,
@@ -1551,6 +1552,7 @@ final class TxBuilderTests: XCTestCase {
                                                                      assetDefinitionId: request.assetDefinitionId,
                                                                      quantity: request.quantity,
                                                                      destination: request.destination,
+                                                                     feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                                      privateKey: keypair.privateKeyBytes) else {
             XCTFail("Expected native bridge burn encoding")
             return
@@ -1574,8 +1576,8 @@ final class TxBuilderTests: XCTestCase {
                                          target: .account(authority),
                                          key: "display_name",
                                          value: value,
-                                         ttlMs: 30,
-                                         feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                         feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                         ttlMs: 30)
 
         let swift = try SwiftTransactionEncoder.encodeSetMetadata(request: request,
                                                                   keypair: keypair,
@@ -1590,6 +1592,7 @@ final class TxBuilderTests: XCTestCase {
             objectId: request.target.objectId,
             key: request.key,
             valueJson: value.data,
+            feePaymentJSON: try request.feePayment.canonicalJSONData(),
             privateKey: keypair.privateKeyBytes
         ) else {
             XCTFail("Expected native bridge set metadata encoding")
@@ -1622,6 +1625,7 @@ final class TxBuilderTests: XCTestCase {
             ttlMs: request.ttlMs,
             accountId: request.accountId,
             receiptJSON: receiptJSON,
+            feePaymentJSON: try request.feePayment.canonicalJSONData(),
             privateKey: keypair.privateKeyBytes,
             algorithm: .ed25519
         ) else {
@@ -1652,8 +1656,8 @@ final class TxBuilderTests: XCTestCase {
                                                    abiVersion: "1",
                                                    window: window,
                                                    mode: .plain,
-                                                   ttlMs: 20,
-                                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                                   ttlMs: 20)
 
         let swift = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
                                                                     keypair: keypair,
@@ -1670,6 +1674,7 @@ final class TxBuilderTests: XCTestCase {
             abiVersion: request.abiVersion,
             window: request.window.map { ($0.lower, $0.upper) },
             modeCode: request.mode?.rawValue,
+            feePaymentJSON: try request.feePayment.canonicalJSONData(),
             privateKey: keypair.privateKeyBytes
         ) else {
             XCTFail("Expected native bridge governance encoding")
@@ -1694,8 +1699,8 @@ final class TxBuilderTests: XCTestCase {
                                             members: [authority],
                                             candidatesCount: 1,
                                             derivedBy: .vrf,
-                                            ttlMs: 15,
-                                            feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                            ttlMs: 15)
 
         let swift = try SwiftTransactionEncoder.encodePersistCouncil(request: request,
                                                                      keypair: keypair,
@@ -1711,6 +1716,7 @@ final class TxBuilderTests: XCTestCase {
             candidatesCount: request.candidatesCount,
             derivedBy: request.derivedBy.rawValue,
             membersJson: membersJson,
+            feePaymentJSON: try request.feePayment.canonicalJSONData(),
             privateKey: keypair.privateKeyBytes
         ) else {
             XCTFail("Expected native bridge persist council encoding")
@@ -1828,6 +1834,10 @@ final class TxBuilderTests: XCTestCase {
                                                                      assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                                                      quantity: "42",
                                                                      destination: destination,
+                                                                     feePaymentJSON: try FeePaymentIntent.authority(
+                                                                         chargeLimits: [],
+                                                                         gasLimit: nil
+                                                                     ).canonicalJSONData(),
                                                                      privateKey: keypair.privateKeyBytes) else {
             XCTFail("Expected native bridge to encode mint")
             return
@@ -1848,8 +1858,8 @@ final class TxBuilderTests: XCTestCase {
                                              target: .domain(Self.fixtureDomain),
                                              key: "label",
                                              value: .string("wonderland"),
-                                             ttlMs: nil,
-                                             feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                             feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                             ttlMs: nil)
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         let envelope = try SwiftTransactionEncoder.encodeSetMetadata(request: request,
                                                                      signingKey: signingKey,
@@ -1872,8 +1882,8 @@ final class TxBuilderTests: XCTestCase {
                                                    abiVersion: "1",
                                                    window: GovernanceWindow(lower: 1, upper: 5),
                                                    mode: .zk,
-                                                   ttlMs: nil,
-                                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                                   ttlMs: nil)
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         let envelope = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
                                                                        signingKey: signingKey,
@@ -1895,8 +1905,8 @@ final class TxBuilderTests: XCTestCase {
                                   assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                   quantity: "3.14",
                                   destination: destination,
-                                  ttlMs: 45,
-                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                  ttlMs: 45)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         XCTAssertThrowsError(try sdk.buildMint(mint: request, keypair: keypair)) { error in
             guard case SwiftTransactionEncoderError.nativeBridgeUnavailable = error else {
@@ -1917,8 +1927,8 @@ final class TxBuilderTests: XCTestCase {
                                              target: .domain(Self.fixtureDomain),
                                              key: "label",
                                              value: .string("wonderland"),
-                                             ttlMs: nil,
-                                             feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                             feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                             ttlMs: nil)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         XCTAssertThrowsError(try sdk.buildSetMetadata(request: request, keypair: keypair)) { error in
             guard case SwiftTransactionEncoderError.nativeBridgeUnavailable = error else {
@@ -1940,8 +1950,8 @@ final class TxBuilderTests: XCTestCase {
                                   assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                   quantity: "2",
                                   destination: destination,
-                                  ttlMs: 120,
-                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                  ttlMs: 120)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         XCTAssertThrowsError(try sdk.buildBurn(burn: request, keypair: keypair)) { error in
             guard case SwiftTransactionEncoderError.nativeBridgeUnavailable = error else {
@@ -1965,8 +1975,8 @@ final class TxBuilderTests: XCTestCase {
                               amount: "1",
                               noteCommitment: Data(repeating: 0x00, count: 16),
                               payload: payload,
-                              ttlMs: 10,
-                              feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                              feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                              ttlMs: 10)
         ) { error in
             guard case ShieldRequestError.invalidNoteCommitmentLength = error else {
                 return XCTFail("Unexpected error: \(error)")
@@ -2011,6 +2021,7 @@ final class TxBuilderTests: XCTestCase {
                                                                        payloadEphemeral: request.payload.ephemeralPublicKey,
                                                                        payloadNonce: request.payload.nonce,
                                                                        payloadCiphertext: request.payload.ciphertext,
+                                                                       feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                                        privateKey: keypair.privateKeyBytes) else {
             XCTFail("Expected native shield encoding")
             return
@@ -2120,6 +2131,7 @@ final class TxBuilderTests: XCTestCase {
                                                                          inputs: request.flattenedInputs,
                                                                          proofJSON: try request.proof.encodedJSON(),
                                                                          rootHint: request.rootHint,
+                                                                         feePaymentJSON: try request.feePayment.canonicalJSONData(),
                                                                          privateKey: keypair.privateKeyBytes) else {
             XCTFail("Expected native unshield encoding")
             return

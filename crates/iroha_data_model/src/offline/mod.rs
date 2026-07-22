@@ -3,6 +3,10 @@
 //! The module exposes one lifecycle: exact online top-up, recursive
 //! offline split/spend, and exact online redemption.
 
+mod receiver_snapshot;
+
+pub use receiver_snapshot::*;
+
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -356,6 +360,10 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 3;
 /// Maximum configured columns of any one class in a phase.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 256;
+/// Reviewed first-release advice-column profile for degree-20 generation.
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 3] = [8, 1, 1];
+/// Reviewed first-release lookup-column profile for degree-20 generation.
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 3] = [1, 0, 0];
 /// Domain separator for canonical V4 circuit-parameter identities.
 pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_SHA256_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:step-circuit-params:v4";
@@ -415,6 +423,21 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4: &[u8; 8] = b"KRV4KEY\
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4: u16 = 4;
 /// Defensive upper bound for the canonical Norito header preceding a V4 payload.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4: u32 = 64 * 1024;
+/// Inner framing magic for a processed proving key and its pinned row breakpoints.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_MAGIC_V4: &[u8; 8] = b"KPKBPV4\0";
+/// Exact canonical inner proving-key header layout version.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_VERSION_V4: u16 = 1;
+/// Defensive upper bound for the canonical Norito breakpoint header.
+///
+/// At most three phases with 255 column transitions each fit comfortably in
+/// this corridor. The processed proving key follows the header as raw bytes and
+/// is therefore never duplicated by Norito decoding.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_HEADER_MAX_BYTES_V4: u32 = 8 * 1024;
+/// Number of adjacent rows consumed by one current Halo2 base-gate rotation.
+///
+/// A key-generation breakpoint can occur only in the final three usable rows
+/// because the current gate occupies four consecutive rows.
+pub const KAGEMUSHA_RECURSIVE_SPEND_BASE_GATE_ROTATIONS_V4: u32 = 4;
 /// Maximum size of any one V4 content-addressed artifact file.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4: u64 = 256 * 1024 * 1024;
 /// Canonical Eq `ParamsIPA` package file name for V4 releases.
@@ -471,12 +494,14 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4: &str = "topup-finality-r
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Production-promotion gate for the ABI-21/V4 paired recursive backend.
 ///
-/// This remains false for candidate code and may become true only in the final
-/// signed promotion commit backed by authenticated review, benchmark, and
-/// physical-device evidence. Runtime readiness additionally requires an
-/// installed, authenticated V4 release with the exact verifier and prover
-/// inventory; this gate never substitutes for release authentication.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE: bool = false;
+/// This is false in default and candidate builds. It becomes true only when
+/// the non-default `kagemusha-production-enabled` Cargo feature is selected by
+/// an explicitly promoted bridge build. Runtime readiness additionally
+/// requires an installed, authenticated V4 release with the exact verifier and
+/// prover inventory; this compile-time gate never substitutes for release
+/// authentication.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE: bool =
+    cfg!(feature = "kagemusha-production-enabled");
 /// Canonical verifier-record namespace for Kagemusha proof admission.
 pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Transparent backend used by the independent confidential transfer circuits.
@@ -1521,6 +1546,31 @@ mod model {
         /// Raw SHA-256 of the following unframed payload.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub payload_sha256: [u8; 32],
+    }
+
+    /// Canonical bounded header inside one V4 processed-proving-key payload.
+    ///
+    /// On disk this canonical Norito value follows the eight-byte
+    /// `KPKBPV4\0` magic and a little-endian `u32` header length. The raw
+    /// `SerdeFormat::Processed` proving-key bytes occupy the remainder of the
+    /// already authenticated outer KRV4 payload. Keeping those bytes out of
+    /// this type permits a runtime loader to parse them directly from a bounded
+    /// reader without allocating a second full proving-key buffer.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaPastaCycleProvingKeyHeaderV4 {
+        /// Exact inner proving-key header version.
+        pub version: u16,
+        /// Pasta parity whose processed proving key follows this header.
+        pub parity: KagemushaPastaCycleParityV1,
+        /// Domain-separated identity of the authenticated circuit parameters.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub circuit_params_sha256: [u8; 32],
+        /// Keygen-derived row offsets, one vector per configured challenge phase.
+        pub break_points: Vec<Vec<u32>>,
     }
 
     /// V4 reference to the unchanged canonical top-up finality roster type.
@@ -4665,6 +4715,31 @@ impl KagemushaStepCircuitParamsV4 {
         Ok(layout)
     }
 
+    /// Validate the reviewed first-release profile used for full key generation.
+    ///
+    /// General artifact decoding intentionally accepts every structurally valid
+    /// V4 profile. Expensive release generation is narrower: degree 20 is only
+    /// a rejection floor, so callers must not manufacture an uncalibrated
+    /// single-column profile and discover the mismatch after allocating the
+    /// complete virtual trace.
+    pub fn validate_release_generation_profile(
+        &self,
+    ) -> Result<KagemushaPastaPublicLayoutV4, KagemushaValidationError> {
+        let layout = self.validate()?;
+        if self.k != KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4
+            || self.num_advice_per_phase != KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4
+            || self.num_lookup_advice_per_phase != KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4
+            || self.num_fixed != 1
+            || self.lookup_bits != self.k - 1
+            || self.minimum_unusable_rows != KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.circuit_params.release_generation_profile",
+            });
+        }
+        Ok(layout)
+    }
+
     /// Domain-separated identity of the canonical authenticated parameters.
     pub fn sha256(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate()?;
@@ -4677,6 +4752,75 @@ impl KagemushaStepCircuitParamsV4 {
         hasher.update([0]);
         hasher.update(encoded);
         Ok(hasher.finalize().into())
+    }
+}
+
+impl KagemushaPastaCycleProvingKeyHeaderV4 {
+    /// Validate the portable breakpoint header against one authenticated
+    /// circuit configuration and expected Pasta parity.
+    ///
+    /// Breakpoint offsets are deliberately not required to be unique or
+    /// ordered: Halo2 resets the row offset on every advice-column transition,
+    /// so adjacent columns commonly produce the same offset.
+    pub fn validate(
+        &self,
+        expected_parity: KagemushaPastaCycleParityV1,
+        circuit_params: &KagemushaStepCircuitParamsV4,
+    ) -> Result<(), KagemushaValidationError> {
+        circuit_params.validate()?;
+        let expected_params_sha256 = circuit_params.sha256()?;
+        let usable_rows = 1_u32
+            .checked_shl(circuit_params.k)
+            .and_then(|rows| rows.checked_sub(circuit_params.minimum_unusable_rows))
+            .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.proving_key_header.usable_rows",
+            })?;
+        let first_breakpoint_row = usable_rows
+            .checked_sub(KAGEMUSHA_RECURSIVE_SPEND_BASE_GATE_ROTATIONS_V4 - 1)
+            .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.proving_key_header.usable_rows",
+            })?;
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_VERSION_V4
+            || self.parity != expected_parity
+            || self.circuit_params_sha256 != expected_params_sha256
+            || self.break_points.len() != circuit_params.num_advice_per_phase.len()
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.proving_key_header",
+            });
+        }
+        for (break_points, advice_columns) in self
+            .break_points
+            .iter()
+            .zip(&circuit_params.num_advice_per_phase)
+        {
+            let maximum_breakpoints = advice_columns.checked_sub(1).ok_or(
+                KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "pasta_cycle.v4.proving_key_header.break_points",
+                },
+            )?;
+            if u32::try_from(break_points.len())
+                .ok()
+                .is_none_or(|count| count > maximum_breakpoints)
+                || break_points
+                    .iter()
+                    .any(|row| !(first_breakpoint_row..usable_rows).contains(row))
+            {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "pasta_cycle.v4.proving_key_header.break_points",
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Bind this header to one exact validated V4 parity profile.
+    pub fn validate_against_profile(
+        &self,
+        profile: &KagemushaPastaCycleProofProfileV4,
+    ) -> Result<(), KagemushaValidationError> {
+        profile.validate()?;
+        self.validate(profile.parity, &profile.circuit_params)
     }
 }
 
@@ -6874,6 +7018,37 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 
     #[test]
+    fn v4_release_generation_profile_rejects_uncalibrated_single_column_geometry() {
+        let reviewed = circuit_params();
+        reviewed
+            .validate_release_generation_profile()
+            .expect("reviewed degree-20 generation profile");
+
+        let mut uncalibrated = reviewed.clone();
+        uncalibrated.num_advice_per_phase = vec![1];
+        uncalibrated.num_lookup_advice_per_phase = vec![1];
+        assert!(uncalibrated.validate().is_ok());
+        assert!(
+            uncalibrated.validate_release_generation_profile().is_err(),
+            "structural validity must not authorize expensive release generation"
+        );
+
+        let mut unreviewed_degree = reviewed;
+        unreviewed_degree.k = KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4;
+        unreviewed_degree.lookup_bits = unreviewed_degree.k - 1;
+        unreviewed_degree.public_input_limbs =
+            KagemushaPastaPublicLayoutV4::for_ipa_round_count(unreviewed_degree.k)
+                .expect("supported upper-bound layout")
+                .instance_column_limbs;
+        assert!(unreviewed_degree.validate().is_ok());
+        assert!(
+            unreviewed_degree
+                .validate_release_generation_profile()
+                .is_err()
+        );
+    }
+
+    #[test]
     fn v4_public_input_schema_tracks_the_authenticated_dynamic_layout() {
         assert_eq!(
             KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4,
@@ -7076,6 +7251,46 @@ mod kagemusha_v4_artifact_contract_tests {
                 "rejected V4 artifact contract marker is present: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn v4_proving_key_breakpoint_header_is_profile_bound_and_bounded() {
+        let params = circuit_params();
+        let usable_rows = (1_u32 << params.k) - params.minimum_unusable_rows;
+        let mut header = KagemushaPastaCycleProvingKeyHeaderV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_VERSION_V4,
+            parity: KagemushaPastaCycleParityV1::StepEq,
+            circuit_params_sha256: params.sha256().expect("test circuit-parameter digest"),
+            // Repeated row offsets are canonical: each transition resets the
+            // physical row before assigning the next advice column.
+            break_points: vec![vec![usable_rows - 1; 7], vec![], vec![]],
+        };
+        header
+            .validate(KagemushaPastaCycleParityV1::StepEq, &params)
+            .expect("bounded repeated breakpoints");
+
+        header.break_points[0].push(usable_rows - 1);
+        assert!(
+            header
+                .validate(KagemushaPastaCycleParityV1::StepEq, &params)
+                .is_err()
+        );
+        header.break_points[0].pop();
+
+        header.break_points[0][0] = usable_rows - 4;
+        assert!(
+            header
+                .validate(KagemushaPastaCycleParityV1::StepEq, &params)
+                .is_err()
+        );
+        header.break_points[0][0] = usable_rows - 1;
+
+        header.circuit_params_sha256[0] ^= 1;
+        assert!(
+            header
+                .validate(KagemushaPastaCycleParityV1::StepEq, &params)
+                .is_err()
+        );
     }
 
     #[test]

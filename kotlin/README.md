@@ -158,22 +158,23 @@ smaller caller-supplied budget can fail hostile tiny-chunk peers before value
 creation. One NFC profile policy binds request, payment, and acknowledgement to
 the same profile; mixed-profile sessions fail closed. A complete NFC IPM1 value
 is capped at 24,660 bytes. That is a hard constructor ceiling. Wire policies
-likewise cannot exceed 32 KiB canonical, 24,576 Offline Note encoded, or 12,288
-bounded Kagemusha encoded bytes.
+likewise cannot exceed 32 KiB canonical or 24,576 encoded bytes for either
+Offline Note or the bounded Kagemusha handoff.
 
 Profile `1` requires schema `1` and a maximum 24,576-byte encoded body. Profile
-`2` requires schema `0x0102` and is a 12,288-byte bounded handoff for a mainline
+`2` requires schema `0x0102` and is a 24,576-byte bounded handoff for a mainline
 typed Kagemusha native archive. Generic IPM validates its exact ABI21 envelope
 without native code; `IrohaPeerKagemushaAdapterV1` then performs deeper typed
 semantic decoding. Full ABI21
 QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStreamCodec`, `KagemushaNfcProtocol`, and
-`KagemushaNearbyEnvelopeCodec` rails, with distinct `PKK2*`/`PKKQ1`, F050, and
-Bonjour identifiers. Kagemusha Nearby's JSON/text envelope has its own smaller
-bound. Those rails are never negotiated, reinterpreted, or used as fallback
-for Retail Offline Peer V1. Only `IrohaPeer*V1` has no old AID,
-unauthenticated Nearby, raw-text, or alternate profile-2 representation
-fallback.
+`KagemushaNearbyEnvelopeCodec` rails. Kagemusha retains its distinct
+`PKK2*`/`PKKQ1` text and Bonjour identifiers, while NFC uses the sole canonical
+AID `F049524F48415045455201`. Nearby uses the authenticated binary `PKNB1`
+envelope and its own smaller bound. Those rails are never negotiated,
+reinterpreted, or used as fallback for Retail Offline Peer V1. Only
+`IrohaPeer*V1` has no unauthenticated Nearby, raw-text, or alternate profile-2
+representation fallback.
 
 These transport changes are client-side and require no backend API change.
 

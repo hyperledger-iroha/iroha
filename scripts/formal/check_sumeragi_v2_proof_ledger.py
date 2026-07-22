@@ -1846,6 +1846,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_source=_GENERAL_VERUS_SOURCE,
                 production_sources=(
                     "crates/iroha_core/src/sumeragi/status.rs",
+                    "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
                 ),
             ),
@@ -1857,6 +1858,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_source=_GENERAL_VERUS_SOURCE,
                 production_sources=(
                     "crates/iroha_core/src/sumeragi/status.rs",
+                    "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
                     "crates/iroha_core/src/sumeragi/v2_recovery.rs",
                     "crates/iroha_core/src/sumeragi/v2_runner.rs",
                 ),
@@ -2909,7 +2911,27 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 438
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 444
+_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
+    "1c1bb3bc1ec30704e2944707db653e53519695712cbdd0f0670468e45f891512"
+)
+_GENESIS_HEADER_BINDING_TEST_SHA256 = (
+    "bfbd01d093f38fa8c96fb17fe38b6ec1132e6ffbb0d09367a298299394bdce4f"
+)
+_RESTART_VIEW_ZERO_DEADLINE_TEST_SHA256 = (
+    "13c1cd988856a8c4ee4d20cfc176c4111352ba7262d07bb417de5a4056cf8b1f"
+)
+_SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
+    "successor_core_context_preserves_the_parent_certificate_binding": (
+        "ee773b00e696822c6d2ba998fb88201bb6e2a06eac749a2c700edec70dbbdf74"
+    ),
+    "successor_context_requires_the_durable_cryptographic_parent": (
+        "1cb4736b2e4b499403c870cc3dd5ab8ccd361d51887efad4178ed7d39a9e0225"
+    ),
+}
+_LATE_LANE_RECOVERY_TEST_SHA256 = (
+    "ae4bca0b785e6d7d5db41dd5516ce2859464f0f0526d5d7d3a52a3c930f6025e"
+)
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-kura-progress-durability", "kura::tests", 12),
     ("production-kura-lane-geometry", "kura::lane_geometry::tests", 8),
@@ -2934,15 +2956,15 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::evidence::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 41),
+    ("production-v2-adapter", "sumeragi::v2::tests", 42),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 56),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 29),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 30),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 34),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
-    ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 23),
+    ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 24),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 49),
     (
         "production-v2-watchdog",
@@ -2957,7 +2979,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-data-model-v2-finality",
         "block::consensus_v2::finality::tests",
-        1,
+        2,
     ),
     (
         "production-data-model-offline-compact-qc",
@@ -2969,7 +2991,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "block::consensus_v2::tests",
         1,
     ),
-    ("production-v2-integration-runner", "sumeragi_v2_runner", 4),
+    ("production-v2-integration-runner", "sumeragi_v2_runner", 5),
     ("production-p2p-peer-reliable-flush", "peer::run::tests", 9),
     ("production-p2p-network-reliable-actor", "network::tests", 45),
     (
@@ -3189,8 +3211,14 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_transport::tests::later_commit_qc_authenticates_the_exact_locked_body_origin",
     "zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin",
     "block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification",
+    "block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin",
     "offline::kagemusha_v4_topup_provenance_tests::compact_qc_rejects_foreign_or_future_proposal_origin",
     "block::consensus_v2::tests::height_context_identity_authenticates_the_parent_proposal_origin",
+    "sumeragi_v2_runner::prepare_qc_split_tests::restart_scenario_uses_a_contention_tolerant_view_zero_deadline",
+    "sumeragi::v2::tests::successor_core_context_preserves_the_parent_certificate_binding",
+    "sumeragi::v2_lane_work::tests::decided_lane_ownership_blocks_rollover_until_its_session_is_durable",
+    "sumeragi::v2_recovery::tests::finality_complete_tip_with_incomplete_lane_completion_reopens_same_height",
+    "sumeragi::v2_runner::tests::terminal_ingress_discards_commit_discovery_and_losing_current_body_requests",
 )
 
 # The retained executor queue is the concrete FIFO consumer for reducer
@@ -3286,7 +3314,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
     "V2LaneWorkAdapter::drain_effects": "5c81ff34454e28928de8f9181efc51e316b7be73b19c034bc314856fa8aca88a",
     "V2LaneWorkAdapter::push_effect": "cc9f8f5b9469904d0ba6584db2ef13b8aa9ce2f6ed941b5b34e8b7eec3e7717e",
-    "V2LaneWorkAdapter::schedule_retransmission": "b1b7c1bb130db777772674866fca634243162c525d79e87611945ed36735c834",
+    "V2LaneWorkAdapter::schedule_retransmission": "7125d354416c495c61823e0d24e55a9bb7638f5752a0410350ef24f63e13b14e",
     "V2LaneWorkAdapter::prune_finalized_merge_sidecars": "c317de07d30e9a73ae021981d7d6eabf75d40eabceebc52c274917af5cd8cad1",
     "V2LaneWorkAdapter::sidecar_effect_slots": "cb0582cbb1c5a95bfb4a0777208cdb0db3a0d4aece920d3c0f1ee6544bdf5d8e",
     "V2LaneWorkAdapter::push_merge_sidecar_post": "ae20b174b0777d554f1bfe731c025b24b2cd41cd3ff5bbba89ab6fdf52e33a7c",
@@ -3296,7 +3324,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "05ad5a213422b6f69e76855e1fdd4ea53b1a560dcb3fd009eb77c10dba6f89a0",
+    "run_inner": "ae318062ea9770dff408e72813736c70e3880d976f81b218692872ced35020a1",
     "lane_work_limits": "d2846fa9b0853f4db6a2c5abac5f764f415ccd1bd27050cd8133133b6a3b8b31",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
     "apply_certified_merge_sidecar_chunk_admissions": "0243d1f22247947cc44ac474293a9c852c63509fd46f9357e4ce56b3fd0be518",
@@ -3525,8 +3553,20 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
     "validate_superseded_lane_output": (
         "ec480ca71d859f5b27fcc31731a1bc2ebb02ee8d5002475d53d3ed14109c94c2"
     ),
+    "persist_anchored_sessions": (
+        "629ac7e4bff7adc9d6d86f77afd9ee78696965042d58849922b468dbf0dae19b"
+    ),
+    "hydrate_canonical_lane_artifacts": (
+        "562366ff24139ea646ffe663efb1528e6a24e72053e8fdcd3ef6dddaffbd6189"
+    ),
     "durable_lane_rollover_authority": (
-        "1109194f99b88c00567cde139cbd07ed63513b8540c0ba4e1fb7ec5cb53cd496"
+        "322029453c62fc1fda83576a03f3d0d77df3e3cd30b6d1450777aab4b579d5ec"
+    ),
+    "durable_lane_completion_matches_finality": (
+        "833a701e981931e7cfca7277f6ecb0a13064da897f95ce5dbc2b582f15660eb6"
+    ),
+    "canonical_v2_lane_payload_matches_kura": (
+        "dc25de76cbe332ac437433ac44a2fc1763a1aa7fa4e24ab2cb2c063d31a3231f"
     ),
     "serve_durable_lane_certificate": (
         "4e1588c726a9e0fecc42e988096c1f499cbdf9c1e71ba03d24dec6ef1ece6391"
@@ -3556,16 +3596,40 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "05ad5a213422b6f69e76855e1fdd4ea53b1a560dcb3fd009eb77c10dba6f89a0"
+        "ae318062ea9770dff408e72813736c70e3880d976f81b218692872ced35020a1"
     ),
     "drain_v2_ingress": (
-        "9e1431117e7180be83b41c1432440f01b318b0ede7410e8626cfed442a6c4b1d"
+        "d411d815b3e760821de0769ec2085ac0e10f6b36441332a1baaa85ebc3e4f59a"
+    ),
+    "drain_decided_lane_recovery_ingress": (
+        "0ba9b977184eb9c94fdad4db3353eee668d484af36f9cb45601d03b3fad593eb"
+    ),
+    "v2_ingress_head_can_drain": (
+        "dad5b434f3c155d8f38c634e775d410e85964faac17eb1c38e7cece64013bc98"
+    ),
+    "certified_body_request_is_superseded_after_decision": (
+        "db8d8ffda76854092579e413720cf2f940507f877580aa83544ebeec169fecd7"
+    ),
+    "v2_payload_is_terminal_reducer_control": (
+        "7f9d96e63b59dfa03ff0cce2fb0ec84e70422884fed8bdccd5087ec8debf978b"
     ),
     "dispatch_lane_work_effects": (
         "411d170cafd9a9a3283759386b13865d77948adb06cb53d87293bb08931af1c1"
     ),
     "dispatch_lane_work_effect": (
         "442b4366eddc49209081a585b4628b18444367cec26051a47c4146b957513b48"
+    ),
+}
+
+# Exact comment/literal-free token digests for recovery-scoped eager CommitQC
+# discovery. These are production source-fidelity seals, not machine proofs:
+# the corresponding starvation-freedom obligation remains specified_unproved.
+_PRODUCTION_RECOVERY_EAGER_BLOCK_SYNC_ITEM_SHA256 = {
+    "initial_block_sync_deadline": (
+        "b3455d656ecac4787561951ec55cc8cde44e2a2c90a3330ad3fe0c65e96c2185"
+    ),
+    "retain_eager_block_sync": (
+        "b5ed7336da6088907bcd26f1b21d2e0bd91a972e8bce68a6e190f238d4c2b56d"
     ),
 }
 
@@ -22103,6 +22167,26 @@ for post in sidecar_posts {
     )
     _require_rust_token_sequence(
         lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::schedule_retransmission"),
+        """
+if self.decision_pending() {
+    self.collect_committed_lane_sessions();
+    if let Some((_, _, Some(decided))) = self.retained_merge_carrier_state {
+        self.retain_committed_lane_outputs_for_subject(decided);
+    }
+    self.purge_queued_global_body_effects_except_committed_outputs();
+    self.drive_lane_sessions();
+    self.schedule_lane_artifact_retransmissions();
+    self.schedule_committed_lane_outputs();
+    operation.complete();
+    return Ok(());
+}
+""",
+        "terminal retransmission must retain and drive only exact decided-lane recovery",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::prune_finalized_merge_sidecars"),
         """
 self.merge_entries.clear();
@@ -22366,7 +22450,24 @@ let _ = lane_work.service_next_historical_recovery()?;
         runner_path,
         runner_ack_items.get("run_inner"),
         """
+lane_work.persist_anchored_sessions()?;
+let Some(durable_lane_authority) =
+    lane_work.durable_lane_rollover_authority(&durable_artifact)?
+else {
+    dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
+    continue;
+};
+close_ingress_for_rollover(&ingress_ready, &block_rx);
 lane_work.prune_finalized_merge_sidecars()?;
+""",
+        "durable finalization must keep ingress open until every canonical lane winner is durable",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_ack_items.get("run_inner"),
+        """
 services
     .handoff_applied_height_output_to_durable_reconstruction(
         &durable_receipt,
@@ -22374,9 +22475,7 @@ services
         &durable_lane_authority,
     )
     .map_err(V2RunnerError::Service)?;
-if !recovering_interrupted_tip {
-    dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
-}
+dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
 let _ = retry_exact_output_and_apply_sidecar_admissions(
     &mut lane_work,
     &services,
@@ -22391,7 +22490,7 @@ services
     .map_err(V2RunnerError::Service)?;
 if lane_work.has_pending_committed_output_handoff() {
 """,
-        "durable finalization must perform receipt-aware retry, dispatch, and exact handoff before successor activation",
+        "durable finalization must unconditionally dispatch receipt-aware exact lane handoff before successor activation",
         errors,
     )
     fanout_items = {
@@ -23300,6 +23399,8 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
         elif item_name == "persistent":
             expected_context = (("impl", "DurableLaneSessionSource"),)
         elif item_name in {
+            "persist_anchored_sessions",
+            "hydrate_canonical_lane_artifacts",
             "durable_lane_rollover_authority",
             "serve_durable_lane_certificate",
             "reconstruct_durable_lane_certificate",
@@ -23836,6 +23937,56 @@ let durable_source_hash = Hash::new_from_chunks(&[
     )
     _require_rust_token_sequence(
         lane_path,
+        lane_items.get("persist_anchored_sessions"),
+        """
+self.hydrate_canonical_lane_artifacts();
+self.collect_committed_lane_sessions();
+""",
+        "late canonical lane hydration must precede committed-session collection",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("hydrate_canonical_lane_artifacts"),
+        """
+.canonical_lane_block_artifacts_at_proposal_height_matching(
+    self.context.height,
+    self.limits.session_capacity.get(),
+""",
+        "lane hydration must reconstruct only the bounded current-height canonical sidecars",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("hydrate_canonical_lane_artifacts"),
+        """
+let pending = self
+    .state
+    .unapplied_lane_block_artifact_heights_snapshot_cached();
+for ((lane_id, dataspace_id), lane_block_height) in
+    pending.into_iter().take(self.limits.session_capacity.get())
+""",
+        "lane hydration must scan only the bounded canonical unapplied frontier",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("hydrate_canonical_lane_artifacts"),
+        """
+let Some(proposal) =
+    proposal_from_ownership(&artifact.ownership, artifact.proposal_block_hash)
+else {
+    continue;
+};
+let _ = self
+    .lane_sessions
+    .insert_recovered_proposal_replacing_uncommitted_conflict(proposal);
+""",
+        "lane hydration must retain the exact canonical proposal as bounded recovery work",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
         lane_items.get("durable_lane_rollover_authority"),
         """
 finality_artifact
@@ -23846,14 +23997,88 @@ if finality_artifact.height_context != self.context {
         "lane rollover finality authority differs from the frozen height context".to_owned(),
     ));
 }
-
-let winning_proposal_hashes = self
-    .committed_lane_outputs
-    .iter()
-    .map(|output| output.session.proposal.proposal_hash)
-    .collect::<BTreeSet<_>>();
 """,
-        "lane authority builder must use the validated exact finality context and full winner set",
+        "lane authority builder must validate the exact finality context",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        """
+let block = self.kura.get_block(height).ok_or_else(|| {
+    V2LaneWorkError::Persistence(
+        "lane rollover finality authority has no canonical block body".to_owned(),
+    )
+})?;
+if block.header().height().get() != finality_artifact.height
+    || block.hash() != finality_artifact.block_hash
+{
+    return Err(V2LaneWorkError::Persistence(
+        "lane rollover finality authority differs from the canonical block body".to_owned(),
+    ));
+}
+""",
+        "lane authority builder must source its finalized body from the exact "
+        "canonical Kura block without treating external-only bodies as lane plans",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        """
+let ownerships = block
+    .execution_context()
+    .map_or(&[][..], |bundle| bundle.lane_payload_ownerships.as_slice());
+if ownerships.len() > self.limits.session_capacity.get() {
+    return Err(V2LaneWorkError::Persistence(
+        "canonical lane payload exceeds the frozen session capacity".to_owned(),
+    ));
+}
+let mut winning_proposals = BTreeMap::new();
+for ownership in ownerships {
+    let proposal = proposal_from_ownership(ownership, finality_artifact.block_hash)
+        .ok_or_else(|| {
+            V2LaneWorkError::Persistence(
+                "canonical lane ownership cannot reconstruct its exact proposal".to_owned(),
+            )
+        })?;
+    if winning_proposals
+        .insert(proposal.proposal_hash, proposal)
+        .is_some()
+    {
+        return Err(V2LaneWorkError::Persistence(
+            "canonical lane payload contains a duplicate winning proposal".to_owned(),
+        ));
+    }
+}
+let winning_proposal_hashes = winning_proposals.keys().copied().collect::<BTreeSet<_>>();
+""",
+        "lane authority builder must reconstruct the complete bounded winner set from Kura ownerships",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("durable_lane_rollover_authority"),
+        """
+let mut retained_proposal_hashes = BTreeSet::new();
+for output in &self.committed_lane_outputs {
+    let proposal = &output.session.proposal;
+    if winning_proposals.get(&proposal.proposal_hash) != Some(proposal)
+        || !retained_proposal_hashes.insert(proposal.proposal_hash)
+    {
+        return Err(V2LaneWorkError::Persistence(
+            "retained lane CommitQC is not an exact unique winner of the applied block"
+                .to_owned(),
+        ));
+    }
+}
+if !durable_lane_completion_matches_finality(self.kura.as_ref(), finality_artifact)
+    .map_err(V2LaneWorkError::Persistence)?
+{
+    return Ok(None);
+}
+""",
+        "lane authority builder must reject volatile non-winners and keep the height open until every winner is durable",
         errors,
     )
     _require_rust_token_sequence(
@@ -23885,9 +24110,8 @@ let application_receipt = self
         lane_path,
         lane_items.get("durable_lane_rollover_authority"),
         """
-if durable.proposal != session.proposal
-    || !same_commit_decision
-    || application_receipt.proposal != session.proposal
+if durable.proposal != *proposal
+    || application_receipt.proposal != *proposal
     || descriptor.proposal_height != finality_artifact.height
     || hint.proposal_height != finality_artifact.height
     || hint.proposal_block_hash != finality_artifact.block_hash
@@ -23913,7 +24137,7 @@ let source = DurableLaneSessionSource::persistent(
     signer_pops,
 );
 if durable_sessions
-    .insert(session.proposal.proposal_hash, source)
+    .insert(proposal.proposal_hash, source)
     .is_some()
 {
     return Err(V2LaneWorkError::Persistence(
@@ -24140,6 +24364,50 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
         runner_path,
         runner,
         """
+let terminal_decision = directive.decided_subject().is_some();
+if !terminal_decision {
+    drive_block_sync(
+        Instant::now(),
+        &mut next_block_sync_attempt,
+        retransmit_interval,
+        &mut block_sync_request,
+        &mut block_sync,
+        &common_config.key_pair,
+        output_guard.as_ref(),
+        &services,
+    )?;
+}
+let discovery_was_outstanding = block_sync_request.is_some();
+drain_v2_ingress(
+""",
+        "live terminal heights must stop CommitQC discovery before draining bounded ingress",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner,
+        """
+} else {
+    let directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
+    lane_work.retain_merge_sidecars_for_global_view(
+        directive.tag().view(),
+        directive.locked_subject(),
+        directive.decided_subject(),
+    )?;
+    drain_decided_lane_recovery_ingress(
+        &block_rx,
+        &mut lane_work,
+        executor.current_tag().view(),
+    )?;
+    drain_lane_relay_ingress(
+""",
+        "interrupted terminal tips must drain only exact decided-lane recovery ingress",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner,
+        """
 let _ = retry_exact_output_and_apply_sidecar_admissions(
     &mut lane_work,
     &services,
@@ -24158,10 +24426,15 @@ let (durable_receipt, durable_artifact) = executor
             "ready Sumeragi v2 executor has no durable finality authority".to_owned(),
         )
     })?;
-close_ingress_for_rollover(&ingress_ready, &block_rx);
 lane_work.persist_anchored_sessions()?;
-let durable_lane_authority =
-    lane_work.durable_lane_rollover_authority(&durable_artifact)?;
+let Some(durable_lane_authority) =
+    lane_work.durable_lane_rollover_authority(&durable_artifact)?
+else {
+    dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
+    continue;
+};
+close_ingress_for_rollover(&ingress_ready, &block_rx);
 lane_work.prune_finalized_merge_sidecars()?;
 services
     .handoff_applied_height_output_to_durable_reconstruction(
@@ -24170,9 +24443,7 @@ services
         &durable_lane_authority,
     )
     .map_err(V2RunnerError::Service)?;
-if !recovering_interrupted_tip {
-    dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
-}
+dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
 let _ = retry_exact_output_and_apply_sidecar_admissions(
     &mut lane_work,
     &services,
@@ -24206,6 +24477,97 @@ if services
         runner_path,
         runner_items.get("drain_v2_ingress"),
         """
+let was_terminal = executor
+    .local_proposal_directive()?
+    .decided_subject()
+    .is_some();
+advance_executor(executor, services, 1)?;
+let is_terminal = executor
+    .local_proposal_directive()?
+    .decided_subject()
+    .is_some();
+if !was_terminal && is_terminal {
+    return Ok(());
+}
+""",
+        "ingress service must publish a newly installed Decision before admitting another occurrence",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
+let terminal_subject = executor.local_proposal_directive()?.decided_subject();
+let terminal_decision = terminal_subject.is_some();
+let Some(mut inbound) = receiver.try_recv_if(|inbound| {
+    v2_ingress_head_can_drain(inbound, executor, services, terminal_subject)
+}) else {
+    break;
+};
+""",
+        "each ingress occurrence must classify terminal ownership from the current reducer state",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
+if !terminal_decision {
+    enqueue_control(
+""",
+        "Decision must suppress every reducer-producing global control class",
+        errors,
+        count=5,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
+if terminal_decision
+    && services
+        .fetch_work_for_manifest(chunk.manifest_hash)
+        .is_none()
+{
+    drop(ingress_ownership);
+    continue;
+}
+""",
+        "terminal ingress must discard chunks without an active decided-body fetch",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
+if certified_body_request_is_superseded_after_decision(
+    &request,
+    terminal_subject,
+    executor.context().height,
+) {
+    drop(ingress_ownership);
+    continue;
+}
+""",
+        "terminal ingress must discard current-height body requests for losing subjects",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
+wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
+    if terminal_decision {
+        drop(ingress_ownership);
+        continue;
+    }
+""",
+        "terminal ingress must not unwrap another CommitQC into the decided reducer",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
 block_sync_server.serve_historical_body(
     kura,
     context_store,
@@ -24224,6 +24586,7 @@ block_sync_server.serve_historical_body(
 services.post_durable_history_response_on_reply_routes_with_permit(
     response_peer,
     reply_routes,
+    ingress_ownership,
     response,
     permit,
 )
@@ -24628,6 +24991,111 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
         "crates/iroha_core/src/sumeragi/v2_runner.rs"
     )
     if runner_source:
+        for item_name, expected_sha256 in (
+            _PRODUCTION_RECOVERY_EAGER_BLOCK_SYNC_ITEM_SHA256.items()
+        ):
+            item = _require_rust_item(
+                runner_path,
+                runner_source,
+                item_name,
+                errors,
+            )
+            _require_rust_item_context(
+                runner_path,
+                item,
+                (),
+                f"recovery-scoped eager block-sync {item_name} production item",
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runner_path,
+                item,
+                expected_sha256,
+                f"recovery-scoped eager block-sync {item_name}",
+                errors,
+            )
+
+        run_inner_item = _require_rust_item(
+            runner_path,
+            runner_source,
+            "run_inner",
+            errors,
+        )
+        _require_rust_item_context(
+            runner_path,
+            run_inner_item,
+            (),
+            "recovery-scoped eager block-sync run_inner production item",
+            errors,
+            expected_attributes=("#[allow(clippy::too_many_lines)]",),
+        )
+        _require_rust_token_sequence(
+            runner_path,
+            run_inner_item,
+            """
+let mut pending_kura_apply = recovered.pending_kura_apply();
+let recovered_successor_activation_parent = recovered.successor_activation_parent();
+let mut eager_block_sync =
+    recovered_successor_activation_parent.is_some() || pending_kura_apply.is_some();
+""",
+            "durable recovered ownership must initialize eager block-sync",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runner_path,
+            run_inner_item,
+            """
+let mut next_block_sync_attempt = initial_block_sync_deadline(
+    height_started_at, round_timeout, eager_block_sync
+);
+""",
+            "height startup must derive its first block-sync deadline from the recovery hint",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runner_path,
+            run_inner_item,
+            """
+let discovery_was_outstanding = block_sync_request.is_some();
+drain_v2_ingress(
+    &block_rx,
+    &mut executor,
+    &mut services,
+    &mut lane_work,
+    output_guard.as_ref(),
+    kura.as_ref(),
+    &context_store,
+    &common_config.key_pair,
+    block_sync_server
+        .as_mut()
+        .expect("block-sync server initialized before ingress"),
+    &mut block_sync,
+    &mut block_sync_request,
+    body_queue_capacity,
+)?;
+if discovery_was_outstanding && block_sync_request.is_none() {
+    admitted_discovered_commit_qc = true;
+}
+""",
+            "only authenticated discovered CommitQC admission/coalescing with "
+            "serialized reducer ownership may turn an outstanding request from "
+            "Some to None and retain eager block-sync",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runner_path,
+            run_inner_item,
+            """
+let (receipt, artifact) = finality;
+eager_block_sync =
+    retain_eager_block_sync(recovering_interrupted_tip, admitted_discovered_commit_qc);
+let activation = PendingSuccessorConstruction::begin(receipt.height())?;
+""",
+            "successor startup must carry interrupted-tip or admitted discovered "
+            "CommitQC recovery and clear ordinary live finality",
+            errors,
+        )
+
         construction = region(
             runner_path,
             runner_source,
@@ -24734,7 +25202,7 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "block_sync_server.serve_historical_body( kura, context_store, request, &sender, local_key, )",
                 "executor.accept_certified_body_response(response, &sender, services)",
                 "block_sync.authenticate_response(response, &sender)",
-                "block_sync.enqueue_and_complete(discovered, |message| { executor.enqueue_network(message).map(|_| ()) })",
+                "block_sync.enqueue_and_complete(discovered, |message| { executor .enqueue_network_with_ingress_ownership(message, ingress_ownership) .map(|_| ()) })",
             ),
         )
 
@@ -27025,8 +27493,8 @@ def _production_liveness_release_inventory_errors(
             f"{release_path}: production liveness source count must be sealed as "
             f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
         )
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 207:
-        errors.append("internal release-regression seal must contain exactly 207 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 213:
+        errors.append("internal release-regression seal must contain exactly 213 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -27035,12 +27503,238 @@ def _production_liveness_release_inventory_errors(
                 f"must be pinned exactly once; found {occurrences}"
             )
 
+    genesis_finality_path = (
+        repo_root
+        / "crates"
+        / "iroha_data_model"
+        / "src"
+        / "block"
+        / "consensus_v2"
+        / "finality.rs"
+    )
+    if not genesis_finality_path.is_file() or genesis_finality_path.is_symlink():
+        errors.append(
+            f"{genesis_finality_path}: genesis header-binding regression source "
+            "must be a regular file"
+        )
+    else:
+        genesis_finality_source = genesis_finality_path.read_text(encoding="utf-8")
+        genesis_test = _require_rust_item(
+            genesis_finality_path,
+            genesis_finality_source,
+            "genesis_header_binding_accepts_a_later_first_proposal_origin",
+            errors,
+        )
+        _require_rust_item_context(
+            genesis_finality_path,
+            genesis_test,
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "genesis header-binding release regression",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        if genesis_test is not None:
+            observed_sha256 = _rust_item_token_sha256(genesis_test)
+            if observed_sha256 != _GENESIS_HEADER_BINDING_TEST_SHA256:
+                errors.append(
+                    f"{genesis_finality_path}:{genesis_test.line}: genesis "
+                    "header-binding release regression must match exact reviewed "
+                    f"token digest {_GENESIS_HEADER_BINDING_TEST_SHA256}; found "
+                    f"{observed_sha256}"
+                )
+
+    restart_runner_path = (
+        repo_root / "integration_tests" / "tests" / "sumeragi_v2_runner.rs"
+    )
+    if not restart_runner_path.is_file() or restart_runner_path.is_symlink():
+        errors.append(
+            f"{restart_runner_path}: contention-tolerant restart regression source "
+            "must be a regular file"
+        )
+    else:
+        restart_runner_source = restart_runner_path.read_text(encoding="utf-8")
+        restart_deadline_test = _require_rust_item(
+            restart_runner_path,
+            restart_runner_source,
+            "restart_scenario_uses_a_contention_tolerant_view_zero_deadline",
+            errors,
+        )
+        _require_rust_item_context(
+            restart_runner_path,
+            restart_deadline_test,
+            (
+                (
+                    "#",
+                    "[",
+                    "cfg",
+                    "(",
+                    "test",
+                    ")",
+                    "]",
+                    "mod",
+                    "prepare_qc_split_tests",
+                ),
+            ),
+            "contention-tolerant restart release regression",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        if restart_deadline_test is not None:
+            observed_sha256 = _rust_item_token_sha256(restart_deadline_test)
+            if observed_sha256 != _RESTART_VIEW_ZERO_DEADLINE_TEST_SHA256:
+                errors.append(
+                    f"{restart_runner_path}:{restart_deadline_test.line}: "
+                    "contention-tolerant restart release regression must match "
+                    "exact reviewed token digest "
+                    f"{_RESTART_VIEW_ZERO_DEADLINE_TEST_SHA256}; found "
+                    f"{observed_sha256}"
+                )
+
+    successor_adapter_path = (
+        repo_root / "crates" / "iroha_core" / "src" / "sumeragi" / "v2.rs"
+    )
+    if not successor_adapter_path.is_file() or successor_adapter_path.is_symlink():
+        errors.append(
+            f"{successor_adapter_path}: successor parent-binding regression source "
+            "must be a regular file"
+        )
+    else:
+        successor_adapter_source = successor_adapter_path.read_text(encoding="utf-8")
+        for test_name, expected_sha256 in _SUCCESSOR_PARENT_BINDING_TEST_SHA256.items():
+            successor_test = _require_rust_item(
+                successor_adapter_path,
+                successor_adapter_source,
+                test_name,
+                errors,
+            )
+            expected_context = (
+                ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+            )
+            if test_name == "successor_context_requires_the_durable_cryptographic_parent":
+                expected_attributes = ("#[cfg(feature = \"bls\")]", "#[test]")
+                if successor_test is not None:
+                    if successor_test.brace_context != expected_context:
+                        errors.append(
+                            f"{successor_adapter_path}:{successor_test.line}: "
+                            "cryptographic successor parent-binding regression must "
+                            f"have reviewed brace context {expected_context!r}; found "
+                            f"{successor_test.brace_context!r}"
+                        )
+                    expected_delimiters = tuple(
+                        ("{", header) for header in expected_context
+                    )
+                    delimiter_context = tuple(
+                        (opener, header)
+                        for opener, _position, header in successor_test.delimiter_context
+                    )
+                    if delimiter_context != expected_delimiters:
+                        errors.append(
+                            f"{successor_adapter_path}:{successor_test.line}: "
+                            "cryptographic successor parent-binding regression must "
+                            "have reviewed all-delimiter context "
+                            f"{expected_delimiters!r}; found {delimiter_context!r}"
+                        )
+                    if successor_test.ancestor_inner_attributes:
+                        errors.append(
+                            f"{successor_adapter_path}:{successor_test.line}: "
+                            "cryptographic successor parent-binding regression may "
+                            "not be suppressed by ancestor inner cfg/cfg_attr "
+                            f"attributes: {successor_test.ancestor_inner_attributes!r}"
+                        )
+                    if successor_test.attributes != expected_attributes:
+                        errors.append(
+                            f"{successor_adapter_path}:{successor_test.line}: "
+                            "cryptographic successor parent-binding regression must "
+                            f"have exact reviewed attributes {expected_attributes!r}; "
+                            f"found {successor_test.attributes!r}"
+                        )
+            else:
+                _require_rust_item_context(
+                    successor_adapter_path,
+                    successor_test,
+                    expected_context,
+                    "successor parent-binding release regression",
+                    errors,
+                    expected_attributes=("#[test]",),
+                )
+            if successor_test is not None:
+                observed_sha256 = _rust_item_token_sha256(successor_test)
+                if observed_sha256 != expected_sha256:
+                    errors.append(
+                        f"{successor_adapter_path}:{successor_test.line}: successor "
+                        "parent-binding release regression "
+                        f"{test_name} must match exact reviewed token digest "
+                        f"{expected_sha256}; found {observed_sha256}"
+                    )
+
+    late_lane_recovery_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_lane_work.rs"
+    )
+    if not late_lane_recovery_path.is_file() or late_lane_recovery_path.is_symlink():
+        errors.append(
+            f"{late_lane_recovery_path}: late canonical lane-recovery regression "
+            "source must be a regular file"
+        )
+    else:
+        late_lane_recovery_source = late_lane_recovery_path.read_text(encoding="utf-8")
+        late_lane_recovery_test = _require_rust_item(
+            late_lane_recovery_path,
+            late_lane_recovery_source,
+            "globally_applied_lane_body_without_certificate_remains_recoverable",
+            errors,
+        )
+        _require_rust_item_context(
+            late_lane_recovery_path,
+            late_lane_recovery_test,
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "late canonical lane-recovery release regression",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        if late_lane_recovery_test is not None:
+            observed_sha256 = _rust_item_token_sha256(late_lane_recovery_test)
+            if observed_sha256 != _LATE_LANE_RECOVERY_TEST_SHA256:
+                errors.append(
+                    f"{late_lane_recovery_path}:{late_lane_recovery_test.line}: "
+                    "late canonical lane-recovery release regression must match "
+                    "exact reviewed token digest "
+                    f"{_LATE_LANE_RECOVERY_TEST_SHA256}; found {observed_sha256}"
+                )
+
     modules = shell_array("production_liveness_modules")
     if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
         errors.append(
             f"{release_path}: production liveness modules must equal the reviewed "
             f"ordered thirty-two-module inventory; found {modules}"
         )
+    inventory_rows = ["module\ttest"]
+    inventory_has_exact_modules = True
+    for test_name in inventory:
+        matching_modules = [
+            module for module in modules if test_name.startswith(f"{module}::")
+        ]
+        if len(matching_modules) != 1:
+            inventory_has_exact_modules = False
+            errors.append(
+                f"{release_path}: production test {test_name} must map to exactly "
+                f"one reviewed module; found {matching_modules}"
+            )
+            continue
+        inventory_rows.append(f"{matching_modules[0]}\t{test_name}")
+    if inventory_has_exact_modules:
+        inventory_bytes = ("\n".join(inventory_rows) + "\n").encode("utf-8")
+        observed_inventory_sha256 = hashlib.sha256(inventory_bytes).hexdigest()
+        if observed_inventory_sha256 != _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256:
+            errors.append(
+                f"{release_path}: canonical module/test inventory SHA-256 must be "
+                f"{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}; found "
+                f"{observed_inventory_sha256}"
+            )
     leg_ids = shell_array("production_liveness_leg_ids")
     expected_leg_ids = [
         leg_id for leg_id, _, _ in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -27243,17 +27937,23 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "inventories 438 named tests\nacross 32 Rust modules",
-            "all 55 pre-network legs and the exact\n438-test inventory",
+            "inventories 444 named tests\nacross 32 Rust modules",
+            "all 55 pre-network legs and the exact\n444-test inventory",
+            "canonical module/test TSV inventory SHA-256 is\n"
+            f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "release inventory names 438 tests across thirty-two Rust\nmodules",
+            "release inventory names 444 tests across thirty-two Rust\nmodules",
             "pre-network corridor\nnow has 55 legs",
+            "canonical module/test TSV\ninventory SHA-256 is\n"
+            f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
             "module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic\n"
             "lane-certificate contracts bring the aggregate pre-network corridor to 55\n"
             "legs",
+            "canonical module/test TSV inventory SHA-256\nis "
+            f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
     }
     for path, claims in documentation_claims.items():

@@ -49,7 +49,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
             )
         )
 
-        XCTAssertThrowsError(try receiver.handle(.beginPayment(
+        XCTAssertThrowsError(try receiver.preparePaymentAdmission(.beginPayment(
             sessionID: sessionID,
             requestCanonicalHash: request.canonicalHash,
             paymentHeader: acknowledgement.header.bytes
@@ -67,11 +67,19 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
             XCTAssertEqual($0 as? IrohaPeerNfcErrorV1, .invalidOffset)
         }
 
-        _ = try receiver.handle(.beginPayment(
+        let beginPayment = IrohaPeerNfcCommandV1.beginPayment(
             sessionID: sessionID,
             requestCanonicalHash: request.canonicalHash,
             paymentHeader: payment.header.bytes
-        ))
+        )
+        guard case let .requiresDurableAdmission(context) = try receiver.preparePaymentAdmission(
+            beginPayment
+        ) else {
+            return XCTFail("fresh payment must require a durable admission record")
+        }
+        try receiver.installPaymentAdmission(
+            IrohaPeerNfcDurablePaymentAdmissionV1(context: context)
+        )
         _ = try receiver.handle(.write(
             sessionID: sessionID,
             paymentWireHash: payment.wireHash,

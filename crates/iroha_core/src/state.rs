@@ -44056,6 +44056,41 @@ impl<'state> StateBlock<'state> {
         }
         if self.exec_witness.is_none() {
             let mut witness = crate::sumeragi::witness::drain_exec_witness();
+            // Bind the complete end-of-block Kagemusha receiver routing state
+            // into the ordinary-write root authenticated by Sumeragi v2. This
+            // synthetic write is derived only after every external transaction
+            // and trigger has executed, and its evaluation time is the signed
+            // block header creation time rather than local wall-clock time.
+            let receiver_height = self._curr_block.height().get();
+            let receiver_evaluated_at_ms =
+                u64::try_from(self._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
+            let receiver_snapshot =
+                crate::smartcontracts::isi::offline::isi::derive_kagemusha_active_receiver_snapshot_v1(
+                    &self.world,
+                    receiver_height,
+                    receiver_evaluated_at_ms,
+                )
+                .or_else(|error| {
+                    iroha_data_model::offline::KagemushaActiveReceiverSnapshotV1::unavailable(
+                        receiver_height,
+                        receiver_evaluated_at_ms,
+                        error.as_bytes(),
+                    )
+                })
+                .expect("a committed block has a valid receiver snapshot height");
+            let receiver_value = norito::to_bytes(&receiver_snapshot.commitment)
+                .expect("active-receiver snapshot commitment must encode");
+            let receiver_key = iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1;
+            witness
+                .writes
+                .retain(|entry| entry.key.as_slice() != receiver_key);
+            witness.writes.push(crate::sumeragi::consensus::ExecKv {
+                key: receiver_key.to_vec(),
+                value: receiver_value,
+            });
+            witness
+                .writes
+                .sort_by(|left, right| left.key.cmp(&right.key));
             let entry_dsid_bytes: BTreeMap<Hash, [u8; 16]> = self
                 .fastpq_entry_dataspaces
                 .iter()
@@ -110327,7 +110362,11 @@ seiyaku SequentialNfts {
 
         state_block.capture_exec_witness();
         let witness = state_block.take_exec_witness().expect("witness captured");
-        assert_eq!(witness.writes.len(), 1);
+        assert_eq!(witness.writes.len(), 2);
+        assert!(witness.writes.iter().any(|write| {
+            write.key.as_slice()
+                == iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1
+        }));
         assert!(state_block.take_exec_witness().is_none());
     }
 

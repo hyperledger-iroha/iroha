@@ -734,6 +734,24 @@ public struct ConfigureAliasAutoRenew: Codable, Equatable, Sendable {
         self.config = config
     }
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        target = try container.decode(AliasTargetV1.self, forKey: .target)
+        expectedRevision = try container.decode(UInt64.self, forKey: .expectedRevision)
+        config = try container.decodeIfPresent(AliasAutoRenewConfigV1.self, forKey: .config)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(target, forKey: .target)
+        try container.encode(expectedRevision, forKey: .expectedRevision)
+        if let config {
+            try container.encode(config, forKey: .config)
+        } else {
+            try container.encodeNil(forKey: .config)
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case target
         case expectedRevision = "expected_revision"

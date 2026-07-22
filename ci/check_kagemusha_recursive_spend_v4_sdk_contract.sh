@@ -74,12 +74,12 @@ texts: dict[str, str] = {}
 for label, relative in paths.items():
     absolute = root / relative
     if not absolute.is_file():
-        raise SystemExit(f"required ABI20 contract file is missing: {relative}")
+        raise SystemExit(f"required ABI21 contract file is missing: {relative}")
     texts[label] = absolute.read_text(encoding="utf-8")
 
-# The check is dormant on branches that have no ABI20 SDK work. As soon as a
+# The check is dormant on branches that have no ABI21 SDK work. As soon as a
 # V4 lifecycle method or carrier is introduced, the entire boundary must land
-# atomically instead of relying on symbol presence or an ABI19 fallback.
+# atomically instead of relying on symbol presence or an ABI20 fallback.
 v4_markers = (
     "nativeInitSpendV4",
     "KagemushaRecursiveSpendInitLocalRequestV4",
@@ -90,7 +90,7 @@ if not any(
     for marker in v4_markers
     for label in ("rust", "header", "swift_v4", "kotlin", "java")
 ):
-    print("Kagemusha ABI20 SDK contract is not exposed; fail-closed pre-V4 state accepted.")
+    print("Kagemusha ABI21 SDK contract is not exposed; fail-closed pre-V4 state accepted.")
     raise SystemExit(0)
 
 errors: list[str] = []
@@ -444,7 +444,7 @@ for method, native_call, result_type in (
     require_regex(
         "swift_v4",
         rf"static\s+func\s+{method}\s*\([\s\S]{{0,1800}}?\.{native_call}\s*\([\s\S]{{0,900}}?{result_type}\s*\(",
-        f"direct Swift ABI20 lifecycle {method}",
+        f"direct Swift ABI21 lifecycle {method}",
     )
 
 if texts["swift_v4"].count(
@@ -455,7 +455,7 @@ if texts["swift_v4"].count(
     )
 if "kagemushaRecursiveSpendV2Unavailable" in texts["swift_v4"]:
     errors.append(
-        f"{paths['swift_v4']}: V4 lifecycle must not catch the ABI19 unavailable error"
+        f"{paths['swift_v4']}: V4 lifecycle must not catch the ABI20 unavailable error"
     )
 for needle in (
     "case kagemushaRecursiveSpendV4Unavailable",
@@ -497,7 +497,7 @@ for label in ("rust", "kotlin", "java"):
     for forbidden in ("nativeWrapInitRequestV4", "nativeWrapAppendRequestV4",
                       "nativeWrapVerifyRequestV4", "nativeWrapRedeemRequestV4"):
         if forbidden in texts[label]:
-            errors.append(f"{paths[label]}: forbidden ABI19-to-ABI20 wrapper {forbidden!r}")
+            errors.append(f"{paths[label]}: forbidden ABI20-to-ABI21 wrapper {forbidden!r}")
 
 for label in ("swift", "swift_v4", "swift_v4_codecs", "swift_native"):
     for forbidden in (
@@ -526,7 +526,7 @@ if re.search(
     texts["swift"],
 ):
     errors.append(
-        f"{paths['swift']}: frozen Swift lifecycle must not invoke an ABI20 symbol"
+        f"{paths['swift']}: frozen Swift lifecycle must not invoke an ABI21 symbol"
     )
 
 for label in ("kotlin", "java"):
@@ -576,7 +576,7 @@ for label in ("kotlin", "java"):
 require_regex(
     "kotlin",
     r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*:\s*Int\s*=\s*21\b",
-    "exact ABI20 Kotlin constant",
+    "exact ABI21 Kotlin constant",
 )
 require_regex(
     "kotlin",
@@ -726,7 +726,7 @@ release_pairs = tuple(re.findall(
 ))
 if release_pairs != tuple(zip(v4_roles, v4_files)):
     errors.append(
-        f"{paths['xcframework_build']}: ABI20 release artifact metadata is not canonical: "
+        f"{paths['xcframework_build']}: ABI21 release artifact metadata is not canonical: "
         f"{release_pairs!r}"
     )
 
@@ -775,12 +775,12 @@ require("header", "domain-separated digest")
 require_regex(
     "header",
     r"exact\s+eight-artifact\s+KRV4\s+inventory",
-    "exact-eight ABI20 inventory documentation",
+    "exact-eight ABI21 inventory documentation",
 )
 require_regex(
     "java",
     r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*=\s*21\s*;",
-    "exact ABI20 Java constant",
+    "exact ABI21 Java constant",
 )
 require_regex(
     "java",
@@ -842,6 +842,8 @@ base_bridge_symbols = (
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",
+    "connect_norito_encode_account_onboarding_plan_body_v1",
+    "connect_norito_alias_instruction_round_trip_v1",
 )
 c_symbols = (
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
@@ -876,6 +878,12 @@ c_symbols = (
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_create_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_project_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
     "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
@@ -884,6 +892,7 @@ c_symbols = (
     "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
@@ -926,7 +935,7 @@ def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
 actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
 if actual_kagemusha_symbols != c_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 43-symbol Kagemusha C inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 50-symbol Kagemusha C inventory mismatch "
         f"(found {len(actual_kagemusha_symbols)})"
     )
 
@@ -938,7 +947,7 @@ for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS")
         actual_required_bridge_symbols.append(value)
 if tuple(actual_required_bridge_symbols) != required_bridge_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 51-symbol required bridge inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 59-symbol required bridge inventory mismatch "
         f"(found {len(actual_required_bridge_symbols)})"
     )
 
@@ -946,7 +955,7 @@ for label in ("xcframework_build", "mobile_check_test"):
     actual_manifest_symbols = parse_manifest_symbol_inventory(label)
     if actual_manifest_symbols != required_bridge_symbols:
         errors.append(
-            f"{paths[label]}: exact ordered 51-symbol required bridge inventory mismatch "
+            f"{paths[label]}: exact ordered 59-symbol required bridge inventory mismatch "
             f"(found {len(actual_manifest_symbols)})"
         )
 
@@ -1024,7 +1033,7 @@ for macro in (
     require("header", macro)
 
 if errors:
-    print("Kagemusha ABI20 SDK contract failed:", file=sys.stderr)
+    print("Kagemusha ABI21 SDK contract failed:", file=sys.stderr)
     for error in errors:
         print(f" - {error}", file=sys.stderr)
     raise SystemExit(1)
@@ -1064,13 +1073,13 @@ if mode == "--self-test":
                 )
 
     run_negative(
-        "ABI20 cannot regress to ABI19",
+        "ABI21 cannot regress to ABI20",
         lambda fixture: replace_once(
             fixture / paths["kotlin"],
             "V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 21",
             "V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 20",
         ),
-        "exact ABI20 Kotlin constant",
+        "exact ABI21 Kotlin constant",
     )
     run_negative(
         "promotion record cannot be removed from SDK authentication",
@@ -1138,7 +1147,7 @@ if mode == "--self-test":
             '    "connect_norito_encode_transfer_signed_transaction",\n'
             '    "connect_norito_free",',
         ),
-        "exact ordered 51-symbol required bridge inventory mismatch",
+        "exact ordered 59-symbol required bridge inventory mismatch",
     )
 
     def inject_v3_alias(fixture: Path) -> None:
@@ -1156,7 +1165,7 @@ if mode == "--self-test":
     )
 
 print(
-    "Kagemusha ABI20 SDK contract passed: exact8 DM/Kagami/bundle inventory and "
+    "Kagemusha ABI21 SDK contract passed: exact8 DM/Kagami/bundle inventory and "
     "promotion-record-bound direct C/JNI/Swift/Kotlin/Java lifecycle parity are complete"
     + ("; negative self-tests passed." if mode == "--self-test" else ".")
 )

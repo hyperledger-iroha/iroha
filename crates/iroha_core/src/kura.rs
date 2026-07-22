@@ -72,9 +72,9 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
     offline::{
-        KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2, KagemushaTopUpAnchorMerkleProofV2,
-        KagemushaTopUpFinalityCompactQcV2, KagemushaTopUpFinalityHeightContextV2,
-        KagemushaTopUpFinalityProofV2,
+        KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2, KagemushaActiveReceiverWitnessProofV1,
+        KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
+        KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
     },
     peer::PeerId,
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
@@ -149,7 +149,11 @@ const RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME: &str = "retained_blocks_rewrite_s
 const V2_FINALITY_ARTIFACTS_DIR_NAME: &str = "v2_finality";
 const KAGEMUSHA_TOPUP_FINALITY_STAGING_DIR_NAME: &str = "kagemusha_topup_finality_staging";
 const KAGEMUSHA_TOPUP_FINALITY_SIDECARS_DIR_NAME: &str = "kagemusha_topup_finality";
+const KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME: &str =
+    "kagemusha_active_receiver_finality_staging";
+const KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME: &str = "kagemusha_active_receiver_finality";
 const MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES: usize = 64 * 1024;
+const MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES: usize = 32 * 1024;
 /// Hard limit for one immutable canonical block-retention record.
 ///
 /// The 512-message first-release cap and 4 KiB canonical payload cap require a
@@ -1636,6 +1640,41 @@ struct StagedKagemushaTopUpFinalitySidecar {
     topup_anchor_root: Hash,
     post_state_root: Hash,
     leaves: Vec<KagemushaTopUpFinalityLeaf>,
+}
+
+/// Immutable Kura proof that one block's receiver snapshot synthetic write is
+/// included in the ordinary-write root authenticated by its exact finality artifact.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct KagemushaActiveReceiverFinalitySidecarV1 {
+    /// Sidecar version.
+    pub version: u16,
+    /// Canonical block height.
+    pub height: u64,
+    /// Canonical block hash.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Root of all non-top-up execution writes.
+    pub ordinary_writes_root: Hash,
+    /// Final post-state root, including top-up composition when present.
+    pub post_state_root: Hash,
+    /// Hash of the exact durable finality artifact.
+    pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    /// Fixed-key sparse-SMT proof and exact encoded receiver commitment.
+    pub witness_proof: KagemushaActiveReceiverWitnessProofV1,
+}
+
+impl KagemushaActiveReceiverFinalitySidecarV1 {
+    /// Current sidecar version.
+    pub const VERSION: u16 = 1;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct StagedKagemushaActiveReceiverFinalitySidecarV1 {
+    version: u16,
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    ordinary_writes_root: Hash,
+    post_state_root: Hash,
+    witness_proof: KagemushaActiveReceiverWitnessProofV1,
 }
 
 impl CommitManifest {
@@ -13327,6 +13366,49 @@ impl Kura {
         Self::kagemusha_topup_finality_sidecar_path_for(&self.active_blocks_dir.lock(), height)
     }
 
+    fn kagemusha_active_receiver_staging_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME)
+    }
+
+    fn kagemusha_active_receiver_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
+        Self::kagemusha_active_receiver_staging_dir_for(blocks_dir)
+            .join(format!("{height:020}.norito"))
+    }
+
+    fn kagemusha_active_receiver_staging_dir(&self) -> PathBuf {
+        Self::kagemusha_active_receiver_staging_dir_for(&self.active_blocks_dir.lock())
+    }
+
+    fn kagemusha_active_receiver_staging_path(&self, height: u64) -> PathBuf {
+        Self::kagemusha_active_receiver_staging_path_for(&self.active_blocks_dir.lock(), height)
+    }
+
+    fn kagemusha_active_receiver_sidecar_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME)
+    }
+
+    fn kagemusha_active_receiver_sidecar_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
+        Self::kagemusha_active_receiver_sidecar_dir_for(blocks_dir)
+            .join(format!("{height:020}.norito"))
+    }
+
+    fn kagemusha_active_receiver_sidecar_dir(&self) -> PathBuf {
+        Self::kagemusha_active_receiver_sidecar_dir_for(&self.active_blocks_dir.lock())
+    }
+
+    fn kagemusha_active_receiver_sidecar_path(&self, height: u64) -> PathBuf {
+        Self::kagemusha_active_receiver_sidecar_path_for(&self.active_blocks_dir.lock(), height)
+    }
+
+    fn kagemusha_finality_sidecar_dirs_for(blocks_dir: &Path) -> [PathBuf; 4] {
+        [
+            Self::kagemusha_topup_finality_staging_dir_for(blocks_dir),
+            Self::kagemusha_topup_finality_sidecar_dir_for(blocks_dir),
+            Self::kagemusha_active_receiver_staging_dir_for(blocks_dir),
+            Self::kagemusha_active_receiver_sidecar_dir_for(blocks_dir),
+        ]
+    }
+
     fn v2_finality_cache_hit(
         &self,
         height: u64,
@@ -14079,6 +14161,364 @@ impl Kura {
         Ok(Some((sidecar, snapshot)))
     }
 
+    fn validate_staged_kagemusha_active_receiver_finality(
+        staged: &StagedKagemushaActiveReceiverFinalitySidecarV1,
+        artifact: &V2FinalityArtifact,
+    ) -> Result<()> {
+        let commitment = artifact.commit_qc.execution_commitment;
+        let snapshot = staged
+            .witness_proof
+            .commitment()
+            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+        if staged.version != KagemushaActiveReceiverFinalitySidecarV1::VERSION
+            || staged.height != artifact.height
+            || staged.block_hash != artifact.block_hash
+            || staged.ordinary_writes_root != commitment.ordinary_writes_root
+            || staged.post_state_root != commitment.post_state_root
+            || snapshot.evaluated_height != staged.height
+            || !staged.witness_proof.verify(commitment.ordinary_writes_root)
+        {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "active-receiver witness stage differs from the exact finality artifact".to_owned(),
+            ));
+        }
+        commitment.validate().map_err(|error| {
+            Error::KagemushaActiveReceiverFinalitySidecar(format!(
+                "active-receiver finality execution commitment is invalid: {error}"
+            ))
+        })?;
+        Ok(())
+    }
+
+    fn validate_kagemusha_active_receiver_finality_sidecar(
+        sidecar: &KagemushaActiveReceiverFinalitySidecarV1,
+        artifact: &V2FinalityArtifact,
+    ) -> Result<()> {
+        Self::validate_staged_kagemusha_active_receiver_finality(
+            &StagedKagemushaActiveReceiverFinalitySidecarV1 {
+                version: sidecar.version,
+                height: sidecar.height,
+                block_hash: sidecar.block_hash,
+                ordinary_writes_root: sidecar.ordinary_writes_root,
+                post_state_root: sidecar.post_state_root,
+                witness_proof: sidecar.witness_proof.clone(),
+            },
+            artifact,
+        )?;
+        if sidecar.finality_artifact_hash != HashOf::new(artifact) {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "active-receiver sidecar is bound to another finality artifact".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn decode_staged_kagemusha_active_receiver_finality(
+        &self,
+        path: &Path,
+    ) -> Result<
+        Option<(
+            StagedKagemushaActiveReceiverFinalitySidecarV1,
+            StableSidecarRead,
+        )>,
+    > {
+        let directory = self.kagemusha_active_receiver_staging_dir();
+        let Some(snapshot) = self.read_regular_sidecar_snapshot(
+            path,
+            &directory,
+            MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let mut cursor = snapshot.bytes.as_slice();
+        let sidecar = StagedKagemushaActiveReceiverFinalitySidecarV1::decode_all(&mut cursor)
+            .map_err(Error::NoritoFrame)?;
+        if sidecar.encode() != snapshot.bytes {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "staged active-receiver sidecar is not canonical Norito",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(Some((sidecar, snapshot)))
+    }
+
+    fn decode_kagemusha_active_receiver_finality_sidecar(
+        &self,
+        path: &Path,
+    ) -> Result<Option<(KagemushaActiveReceiverFinalitySidecarV1, StableSidecarRead)>> {
+        let directory = self.kagemusha_active_receiver_sidecar_dir();
+        let Some(snapshot) = self.read_regular_sidecar_snapshot(
+            path,
+            &directory,
+            MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let mut cursor = snapshot.bytes.as_slice();
+        let sidecar = KagemushaActiveReceiverFinalitySidecarV1::decode_all(&mut cursor)
+            .map_err(Error::NoritoFrame)?;
+        if sidecar.encode() != snapshot.bytes {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "final active-receiver sidecar is not canonical Norito",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(Some((sidecar, snapshot)))
+    }
+
+    fn stage_kagemusha_active_receiver_finality_sidecar(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        witness: &ExecWitness,
+        expected: ExecutionCommitment,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
+        let (witness_proof, ordinary_writes_root) =
+            crate::receiver_snapshot::active_receiver_witness_proof_v1(witness)
+                .map_err(Error::KagemushaActiveReceiverFinalitySidecar)?;
+        if ordinary_writes_root != expected.ordinary_writes_root
+            || !witness_proof.verify(expected.ordinary_writes_root)
+        {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "witness-derived active-receiver proof differs from the signed ordinary-write root"
+                    .to_owned(),
+            ));
+        }
+        let snapshot = witness_proof
+            .commitment()
+            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+        if snapshot.evaluated_height != height {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "active-receiver snapshot height differs from its block".to_owned(),
+            ));
+        }
+        let staged = StagedKagemushaActiveReceiverFinalitySidecarV1 {
+            version: KagemushaActiveReceiverFinalitySidecarV1::VERSION,
+            height,
+            block_hash,
+            ordinary_writes_root,
+            post_state_root: expected.post_state_root,
+            witness_proof,
+        };
+        let bytes = staged.encode();
+        if bytes.len() > MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecarTooLarge {
+                actual: bytes.len(),
+                max: MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES,
+            });
+        }
+        let _guard = self.sidecar_lock.lock();
+        let directory = self.kagemusha_active_receiver_staging_dir();
+        create_dir_all_with_context(&directory)?;
+        if let Some(parent) = directory.parent() {
+            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        }
+        let path = self.kagemusha_active_receiver_staging_path(height);
+        if let Some((existing, identity)) =
+            self.decode_staged_kagemusha_active_receiver_finality(&path)?
+        {
+            if existing == staged
+                && identity.bytes == bytes
+                && identity.bytes_hash == Hash::new(&bytes)
+            {
+                return Ok(());
+            }
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "conflicting staged active-receiver sidecar at one height".to_owned(),
+            ));
+        }
+        if !self.write_atomic_synced_noclobber(&path, &bytes)? {
+            let Some((existing, _)) =
+                self.decode_staged_kagemusha_active_receiver_finality(&path)?
+            else {
+                return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                    "staged active-receiver sidecar disappeared during publication".to_owned(),
+                ));
+            };
+            if existing != staged {
+                return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                    "no-clobber race published a conflicting active-receiver stage".to_owned(),
+                ));
+            }
+        }
+        let Some((persisted, identity)) =
+            self.decode_staged_kagemusha_active_receiver_finality(&path)?
+        else {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "staged active-receiver sidecar disappeared after publication".to_owned(),
+            ));
+        };
+        if persisted != staged
+            || identity.bytes != bytes
+            || identity.bytes_hash != Hash::new(&bytes)
+        {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "staged active-receiver sidecar changed during readback".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn remove_exact_staged_kagemusha_active_receiver_finality(
+        &self,
+        path: &Path,
+        read_identity: &StableSidecarRead,
+    ) -> Result<()> {
+        let directory = self.kagemusha_active_receiver_staging_dir();
+        let Some(current) = self.regular_sidecar_metadata(path, &directory)? else {
+            return Ok(());
+        };
+        if !Self::stable_sidecar_metadata_unchanged(&read_identity.metadata, &current) {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "staged active-receiver sidecar changed before cleanup".to_owned(),
+            ));
+        }
+        std::fs::remove_file(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
+        Ok(())
+    }
+
+    fn promote_kagemusha_active_receiver_finality_sidecar(
+        &self,
+        artifact: &V2FinalityArtifact,
+        receipt: &KuraV2CommitReceipt,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
+        if receipt.height != artifact.height
+            || receipt.block_hash != artifact.block_hash
+            || receipt.context_id != artifact.context_id()
+            || receipt.subject != artifact.subject
+            || receipt.certificate != artifact.commit_qc.as_ref()
+            || receipt.artifact_hash != HashOf::new(artifact)
+        {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "finality receipt does not identify the active-receiver artifact".to_owned(),
+            ));
+        }
+        let durable = self.v2_finality_artifact(artifact.height)?.ok_or_else(|| {
+            Error::KagemushaActiveReceiverFinalitySidecar(
+                "active-receiver promotion has no durable finality artifact".to_owned(),
+            )
+        })?;
+        if durable != *artifact || HashOf::new(&durable) != receipt.artifact_hash {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "durable finality differs from active-receiver promotion receipt".to_owned(),
+            ));
+        }
+
+        let _guard = self.sidecar_lock.lock();
+        let final_path = self.kagemusha_active_receiver_sidecar_path(artifact.height);
+        let staged_path = self.kagemusha_active_receiver_staging_path(artifact.height);
+        if let Some((existing, _)) =
+            self.decode_kagemusha_active_receiver_finality_sidecar(&final_path)?
+        {
+            Self::validate_kagemusha_active_receiver_finality_sidecar(&existing, artifact)?;
+            if let Some((staged, identity)) =
+                self.decode_staged_kagemusha_active_receiver_finality(&staged_path)?
+            {
+                Self::validate_staged_kagemusha_active_receiver_finality(&staged, artifact)?;
+                self.remove_exact_staged_kagemusha_active_receiver_finality(
+                    &staged_path,
+                    &identity,
+                )?;
+            }
+            return Ok(());
+        }
+        let Some((staged, staged_identity)) =
+            self.decode_staged_kagemusha_active_receiver_finality(&staged_path)?
+        else {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "finality is durable but its active-receiver witness stage is missing".to_owned(),
+            ));
+        };
+        Self::validate_staged_kagemusha_active_receiver_finality(&staged, artifact)?;
+        let final_sidecar = KagemushaActiveReceiverFinalitySidecarV1 {
+            version: staged.version,
+            height: staged.height,
+            block_hash: staged.block_hash,
+            ordinary_writes_root: staged.ordinary_writes_root,
+            post_state_root: staged.post_state_root,
+            finality_artifact_hash: receipt.artifact_hash,
+            witness_proof: staged.witness_proof,
+        };
+        Self::validate_kagemusha_active_receiver_finality_sidecar(&final_sidecar, artifact)?;
+        let bytes = final_sidecar.encode();
+        if bytes.len() > MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecarTooLarge {
+                actual: bytes.len(),
+                max: MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES,
+            });
+        }
+        let directory = self.kagemusha_active_receiver_sidecar_dir();
+        create_dir_all_with_context(&directory)?;
+        if let Some(parent) = directory.parent() {
+            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        }
+        if !self.write_atomic_synced_noclobber(&final_path, &bytes)? {
+            let Some((existing, _)) =
+                self.decode_kagemusha_active_receiver_finality_sidecar(&final_path)?
+            else {
+                return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                    "final active-receiver sidecar disappeared during publication".to_owned(),
+                ));
+            };
+            if existing != final_sidecar {
+                return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                    "no-clobber race published a conflicting active-receiver sidecar".to_owned(),
+                ));
+            }
+        }
+        let Some((persisted, identity)) =
+            self.decode_kagemusha_active_receiver_finality_sidecar(&final_path)?
+        else {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "final active-receiver sidecar disappeared after publication".to_owned(),
+            ));
+        };
+        if persisted != final_sidecar
+            || identity.bytes != bytes
+            || identity.bytes_hash != Hash::new(&bytes)
+        {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "final active-receiver sidecar changed during readback".to_owned(),
+            ));
+        }
+        self.remove_exact_staged_kagemusha_active_receiver_finality(
+            &staged_path,
+            &staged_identity,
+        )?;
+        Ok(())
+    }
+
+    /// Return the finalized fixed-key receiver snapshot witness proof for one block.
+    pub fn kagemusha_active_receiver_witness_proof_v1(
+        &self,
+        height: u64,
+    ) -> Result<Option<KagemushaActiveReceiverWitnessProofV1>> {
+        let Some(artifact) = self.v2_finality_artifact(height)? else {
+            return Ok(None);
+        };
+        let _guard = self.sidecar_lock.lock();
+        let path = self.kagemusha_active_receiver_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_active_receiver_finality_sidecar(&path)?
+        else {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "finality artifact has no active-receiver witness sidecar".to_owned(),
+            ));
+        };
+        Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
+        Ok(Some(sidecar.witness_proof))
+    }
+
     /// Durably stage the bounded top-up leaf/path projection before WSV commit.
     ///
     /// A block without top-ups creates no file. An existing exact stage is an
@@ -14090,6 +14530,9 @@ impl Kura {
         witness: &ExecWitness,
         expected: ExecutionCommitment,
     ) -> Result<()> {
+        self.stage_kagemusha_active_receiver_finality_sidecar(
+            height, block_hash, witness, expected,
+        )?;
         self.durable_mutation_authorized()?;
         let Some(staged) = Self::staged_kagemusha_topup_finality_from_witness(
             height, block_hash, witness, expected,
@@ -14178,6 +14621,7 @@ impl Kura {
         artifact: &V2FinalityArtifact,
         receipt: &KuraV2CommitReceipt,
     ) -> Result<()> {
+        self.promote_kagemusha_active_receiver_finality_sidecar(artifact, receipt)?;
         self.durable_mutation_authorized()?;
         if receipt.height != artifact.height
             || receipt.block_hash != artifact.block_hash
@@ -16336,6 +16780,10 @@ impl Kura {
             RETAINED_BLOCKS_DIR_NAME,
             RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME,
             V2_FINALITY_ARTIFACTS_DIR_NAME,
+            KAGEMUSHA_TOPUP_FINALITY_STAGING_DIR_NAME,
+            KAGEMUSHA_TOPUP_FINALITY_SIDECARS_DIR_NAME,
+            KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME,
+            KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME,
         ] {
             total = total.saturating_add(Self::dir_file_bytes(&blocks_dir.join(directory))?);
         }
@@ -17135,6 +17583,9 @@ impl Kura {
         Self::prune_wsv_checkpoints_above_in_dir(&self.wsv_checkpoint_dir(), retained_height)?;
         Self::prune_commit_manifests_above_in_dir(&self.commit_manifest_dir(), retained_height)?;
         self.prune_v2_finality_artifacts_above(retained_height)?;
+        for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
+            Self::prune_commit_manifests_above_in_dir(&directory, retained_height)?;
+        }
         self.append_debug_block_dump(&block);
         Ok(())
     }
@@ -17870,6 +18321,14 @@ impl Kura {
                 intent.target_height,
                 "Sumeragi v2 finality directory",
             )?;
+            let blocks_dir = self.active_blocks_dir.lock().clone();
+            for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
+                Self::validate_no_numbered_sidecar_suffix(
+                    &directory,
+                    intent.target_height,
+                    "Kagemusha finality sidecar directory",
+                )?;
+            }
             self.validate_pipeline_sidecars_for_prune(intent.target_height, true)?;
         }
         Ok(())
@@ -17988,6 +18447,14 @@ impl Kura {
                 )));
             }
         }
+        for dir in Self::kagemusha_finality_sidecar_dirs_for(blocks_root) {
+            if Self::directory_contains_height_above(&dir, intent.target_height)? {
+                return Err(invalid(format!(
+                    "rollback Kagemusha metadata remains above target in {}",
+                    dir.display()
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -18023,6 +18490,9 @@ impl Kura {
             Self::prune_commit_manifests_above_in_dir(&manifest_dir, intent.target_height)?;
             let finality_dir = self.v2_finality_artifact_dir();
             Self::prune_v2_finality_artifacts_above_in_dir(&finality_dir, intent.target_height)?;
+            for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
+                Self::prune_commit_manifests_above_in_dir(&directory, intent.target_height)?;
+            }
             self.truncate_pipeline_sidecars_for_prune(intent.target_height)?;
         }
         self.validate_completed_prune_intent(intent)?;
@@ -18089,6 +18559,9 @@ impl Kura {
             &Self::retained_block_record_dir_for(blocks_root),
             intent.target_height,
         )?;
+        for directory in Self::kagemusha_finality_sidecar_dirs_for(blocks_root) {
+            Self::prune_commit_manifests_above_in_dir(&directory, intent.target_height)?;
+        }
         rollback_fault_point(RollbackFaultPoint::ManifestsPruned)?;
         Self::truncate_roster_metadata_above_at(blocks_root, intent.target_height)?;
         rollback_fault_point(RollbackFaultPoint::RosterSidecarsPruned)?;
@@ -18356,6 +18829,13 @@ impl Kura {
             "Sumeragi v2 finality suffix",
             Self::prune_v2_finality_artifacts_above_in_dir(&finality_dir, height)
         );
+
+        for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
+            forward_or_stop!(
+                "Kagemusha finality sidecar suffix",
+                Self::prune_commit_manifests_above_in_dir(&directory, height)
+            );
+        }
 
         forward_or_stop!(
             "pipeline and roster sidecar suffixes",
@@ -37720,6 +38200,15 @@ pub enum Error {
         /// Hard persistence/read limit.
         max: usize,
     },
+    /// Invalid or conflicting Kagemusha active-receiver finality sidecar: {0}
+    KagemushaActiveReceiverFinalitySidecar(String),
+    /// Encoded Kagemusha active-receiver sidecar is {actual} bytes; hard maximum is {max}
+    KagemushaActiveReceiverFinalitySidecarTooLarge {
+        /// Encoded sidecar size.
+        actual: usize,
+        /// Hard persistence/read limit.
+        max: usize,
+    },
     /// Conflicting immutable Sumeragi v2 finality artifact at height `{height}`
     ConflictingV2FinalityArtifact {
         /// Height whose finality path already contains a different artifact.
@@ -38863,12 +39352,27 @@ mod tests {
     ) -> (ExecWitness, ExecutionCommitment) {
         let mut key = vec![crate::sumeragi::smt::KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG];
         key.extend_from_slice(&operation_id);
+        let receiver_snapshot =
+            iroha_data_model::offline::KagemushaActiveReceiverSnapshotV1::unavailable(
+                1,
+                1,
+                b"Kura top-up fixture has no governed receiver policy",
+            )
+            .expect("valid unavailable receiver snapshot");
         let witness = ExecWitness {
             reads: Vec::new(),
-            writes: vec![ExecKv {
-                key,
-                value: anchor_digest.to_vec(),
-            }],
+            writes: vec![
+                ExecKv {
+                    key,
+                    value: anchor_digest.to_vec(),
+                },
+                ExecKv {
+                    key: iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1
+                        .to_vec(),
+                    value: norito::to_bytes(&receiver_snapshot.commitment)
+                        .expect("encode receiver snapshot commitment"),
+                },
+            ],
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };
@@ -38877,6 +39381,35 @@ mod tests {
             Hash::new(b"Kura top-up fixture executed block wire placeholder"),
         )
         .expect("derive top-up execution commitment");
+        (witness, commitment)
+    }
+
+    fn kagemusha_receiver_only_witness(
+        height: u64,
+        evaluated_at_ms: u64,
+    ) -> (ExecWitness, ExecutionCommitment) {
+        let receiver_snapshot =
+            iroha_data_model::offline::KagemushaActiveReceiverSnapshotV1::unavailable(
+                height,
+                evaluated_at_ms,
+                b"Kura fixture has no governed receiver policy",
+            )
+            .expect("valid unavailable receiver snapshot");
+        let witness = ExecWitness {
+            reads: Vec::new(),
+            writes: vec![ExecKv {
+                key: iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1.to_vec(),
+                value: norito::to_bytes(&receiver_snapshot.commitment)
+                    .expect("encode receiver snapshot commitment"),
+            }],
+            fastpq_transcripts: Vec::new(),
+            fastpq_batches: Vec::new(),
+        };
+        let commitment = crate::sumeragi::exec::execution_commitment_from_witness(
+            &witness,
+            Hash::new(b"Kura receiver-only fixture executed block wire placeholder"),
+        )
+        .expect("derive receiver-only execution commitment");
         (witness, commitment)
     }
 
@@ -39185,6 +39718,51 @@ mod tests {
     }
 
     #[test]
+    fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
+        let temp_dir = TempDir::new().expect("create persistent Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent Kura");
+        let block = DummyBlocks::new().next();
+        let (witness, mut execution_commitment) = kagemusha_topup_witness([0xC1; 32], [0xC2; 32]);
+        execution_commitment.executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("canonical receiver fixture executed wire");
+        let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
+
+        kura.stage_kagemusha_topup_finality_sidecar(
+            artifact.height,
+            artifact.block_hash,
+            &witness,
+            execution_commitment,
+        )
+        .expect("stage receiver witness before finality");
+        kura.store_block(Arc::clone(&block))
+            .expect("persist authoritative block");
+        let receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist authoritative finality artifact");
+        kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
+            .expect("promote receiver witness after finality");
+        let expected = kura
+            .kagemusha_active_receiver_witness_proof_v1(artifact.height)
+            .expect("read promoted receiver witness")
+            .expect("receiver witness exists");
+        assert!(expected.verify(execution_commitment.ordinary_writes_root));
+        kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
+            .expect("exact promotion retry is idempotent");
+        drop(kura);
+
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent Kura");
+        let recovered = reopened
+            .kagemusha_active_receiver_witness_proof_v1(artifact.height)
+            .expect("read receiver witness after restart")
+            .expect("receiver witness survives restart");
+        assert_eq!(recovered, expected);
+        assert!(recovered.verify(execution_commitment.ordinary_writes_root));
+    }
+
+    #[test]
     fn kagemusha_topup_stage_rejects_commitment_and_path_substitution() {
         let kura = Kura::blank_kura_for_testing();
         let block = DummyBlocks::new().next();
@@ -39197,7 +39775,7 @@ mod tests {
         mismatched.ordinary_writes_root = Hash::new(b"substituted ordinary root");
         assert!(matches!(
             kura.stage_kagemusha_topup_finality_sidecar(1, block.hash(), &witness, mismatched,),
-            Err(Error::KagemushaTopUpFinalitySidecar(_))
+            Err(Error::KagemushaActiveReceiverFinalitySidecar(_))
         ));
         assert!(
             !kura.kagemusha_topup_finality_staging_path(1).exists(),
@@ -39258,9 +39836,21 @@ mod tests {
     fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
         let kura = Kura::blank_kura_for_testing();
         let block = DummyBlocks::new().next();
+        let (receiver_witness, mut execution_commitment) =
+            kagemusha_receiver_only_witness(block.header().height().get(), 1);
+        execution_commitment.executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("canonical receiver-only fixture executed wire");
+        let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
+        kura.stage_kagemusha_topup_finality_sidecar(
+            artifact.height,
+            artifact.block_hash,
+            &receiver_witness,
+            execution_commitment,
+        )
+        .expect("stage mandatory receiver witness for non-top-up block");
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
-        let artifact = v2_finality_artifact_for_block(&block);
         let receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("persist non-top-up finality");

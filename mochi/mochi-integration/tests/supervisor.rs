@@ -8,7 +8,7 @@ use std::{
 };
 
 use color_eyre::{Result, eyre::eyre};
-use iroha_data_model::events::EventBox;
+use iroha_data_model::{block::stream::BlockMessage, events::EventBox};
 use mochi_core::{
     ProfilePreset, Supervisor, SupervisorBuilder,
     torii::{BlockStreamEvent, EventCategory, EventStreamEvent},
@@ -208,8 +208,12 @@ async fn supervisor_replays_torii_fixture_streams() -> Result<()> {
     let query = client.submit_query(&[0xCA, 0xFE]).await?;
     assert_eq!(query, vec![0x13, 0x37]);
 
-    let block_fixture = fs::read(fixture_dir.join("block.bin"))?;
-    let event_fixture = fs::read(fixture_dir.join("event.bin"))?;
+    let stream_data = MockToriiData::from_fixture_dir(&fixture_dir)?;
+    let expected_block: BlockMessage = norito::decode_from_bytes(&stream_data.block_frame)?;
+    let expected_event: EventBox = norito::decode_from_bytes::<
+        iroha_data_model::events::stream::EventMessage,
+    >(&stream_data.event_frame)?
+    .into();
 
     let handle = tokio::runtime::Handle::current();
     let block_stream = supervisor
@@ -232,16 +236,11 @@ async fn supervisor_replays_torii_fixture_streams() -> Result<()> {
             block,
             raw_len,
         } => {
-            assert_eq!(raw_len, block_fixture.len());
-            let canonical = block
-                .canonical_wire()
-                .expect("canonical wire")
-                .as_framed()
-                .to_vec();
-            assert_eq!(canonical, block_fixture);
+            assert_eq!(raw_len, stream_data.block_frame.len());
+            assert_eq!(block.as_ref(), &expected_block.0);
             assert_eq!(summary.hash_hex, block.hash().to_string());
             assert_eq!(summary.height, block.header().height().get());
-            assert_eq!(summary.transaction_count, block.transactions_vec().len());
+            assert_eq!(summary.transaction_count, block.external_entrypoint_count());
         }
         other => panic!("unexpected block stream event: {other:?}"),
     }
@@ -256,9 +255,9 @@ async fn supervisor_replays_torii_fixture_streams() -> Result<()> {
             event,
             raw_len,
         } => {
-            assert_eq!(raw_len, event_fixture.len());
-            assert_eq!(summary.category, EventCategory::Time);
-            assert!(matches!(event.as_ref(), EventBox::Time(_)));
+            assert_eq!(raw_len, stream_data.event_frame.len());
+            assert_eq!(summary.category, EventCategory::Pipeline);
+            assert_eq!(event.as_ref(), &expected_event);
         }
         other => panic!("unexpected event stream event: {other:?}"),
     }

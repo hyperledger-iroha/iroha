@@ -5785,11 +5785,8 @@ impl WireRegistry {
         let parent_commit = context
             .parent_commit_qc
             .as_ref()
-            .map(|certificate| self.qc_reference_to_core(&certificate.as_ref()))
+            .map(|certificate| self.register_parent_qc(certificate))
             .transpose()?;
-        if let Some(certificate) = &context.parent_commit_qc {
-            self.register_qc(certificate)?;
-        }
         let roster = context
             .roster
             .iter()
@@ -6024,8 +6021,16 @@ impl WireRegistry {
                 wire::ValidationError::WrongHeightContext,
             ));
         };
-        if reference.round.context_id != wire_context_id
-            || reference.proposal_round.context_id != wire_context_id
+        self.qc_reference_to_core_for_context(reference, wire_context_id)
+    }
+
+    fn qc_reference_to_core_for_context(
+        &mut self,
+        reference: &wire::QuorumCertificateRef,
+        expected_context_id: wire::HeightContextId,
+    ) -> Result<reducer::CertificateRef, AdapterError> {
+        if reference.round.context_id != expected_context_id
+            || reference.proposal_round.context_id != expected_context_id
             || reference.proposal_round.height != reference.round.height
         {
             return Err(AdapterError::WireValidation(
@@ -6052,6 +6057,31 @@ impl WireRegistry {
         ))
     }
 
+    /// Register the predecessor CommitQC frozen into a successor context.
+    ///
+    /// This is the sole certificate conversion that does not target the active
+    /// registry context. The certificate remains bound to the predecessor and
+    /// must name the same committed decision as the successor's immutable
+    /// parent anchor; ordinary QCs continue through [`Self::qc_reference_to_core`].
+    fn register_parent_qc(
+        &mut self,
+        certificate: &wire::QuorumCertificate,
+    ) -> Result<reducer::CertificateRef, AdapterError> {
+        let frozen = self
+            .wire_context
+            .as_ref()
+            .and_then(|context| context.parent_commit_qc.as_ref())
+            .map(wire::QuorumCertificate::as_ref)
+            .ok_or(AdapterError::ParentContextMismatch)?;
+        let reference = certificate.as_ref();
+        if !reference.same_commit_decision(frozen) {
+            return Err(AdapterError::ParentContextMismatch);
+        }
+        let core = self.qc_reference_to_core_for_context(&reference, frozen.round.context_id)?;
+        self.certificates.insert(core, certificate.clone());
+        Ok(core)
+    }
+
     fn qc_to_core(
         &mut self,
         certificate: &wire::QuorumCertificate,
@@ -6073,15 +6103,6 @@ impl WireRegistry {
         let core = reducer::QuorumCertificate::new(reference, signatures);
         self.certificates.insert(reference, certificate.clone());
         Ok(core)
-    }
-
-    fn register_qc(
-        &mut self,
-        certificate: &wire::QuorumCertificate,
-    ) -> Result<reducer::CertificateRef, AdapterError> {
-        let reference = self.qc_reference_to_core(&certificate.as_ref())?;
-        self.certificates.insert(reference, certificate.clone());
-        Ok(reference)
     }
 
     fn qc_to_wire(
@@ -6359,7 +6380,7 @@ impl WireRegistry {
                 let reference = parent
                     .certificate
                     .as_ref()
-                    .map(|certificate| self.register_qc(certificate))
+                    .map(|certificate| self.register_parent_qc(certificate))
                     .transpose()?;
                 Ok(reducer::ProposalJustification::ParentCommit(reference))
             }
@@ -7267,6 +7288,59 @@ mod tests {
         }
     }
 
+    #[test]
+    fn successor_core_context_preserves_the_parent_certificate_binding() {
+        let parent_context = context();
+        let parent_round = wire::ConsensusRound {
+            context_id: parent_context.id(),
+            height: parent_context.height,
+            view: 3,
+        };
+        let proposal_round = wire::ConsensusRound {
+            view: 1,
+            ..parent_round
+        };
+        let parent_qc = wire::QuorumCertificate {
+            round: parent_round,
+            proposal_round,
+            phase: wire::GlobalPhase::Commit,
+            subject: subject(0x6d),
+            execution_commitment: execution_commitment(0x6d),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x6d; 48],
+        };
+        let mut successor = parent_context.clone();
+        successor.height += 1;
+        successor.parent_commit_qc = Some(parent_qc);
+        successor.validate().expect("structural successor context");
+        let successor_id = successor.id();
+
+        let mut registry = WireRegistry::new(&successor).expect("successor wire registry");
+        let core_context = registry
+            .core_context(&successor)
+            .expect("parent-bound successor context");
+        let core_parent = core_context
+            .parent_commit()
+            .expect("successor retains its parent CommitQC");
+
+        assert_eq!(core_parent.context_id(), context_id(parent_context.id()));
+        assert_ne!(core_parent.context_id(), context_id(successor_id));
+        assert_eq!(core_parent.round().height(), parent_context.height);
+        assert_eq!(core_parent.proposal_round().view(), proposal_round.view);
+
+        let parent_reference = successor
+            .parent_commit_qc
+            .as_ref()
+            .expect("successor parent CommitQC")
+            .as_ref();
+        assert!(matches!(
+            registry.qc_reference_to_core(&parent_reference),
+            Err(AdapterError::WireValidation(
+                wire::ValidationError::WrongHeightContext
+            ))
+        ));
+    }
+
     #[cfg(feature = "bls")]
     fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) {
         let mut keys = (1_u8..=4)
@@ -7591,7 +7665,7 @@ mod tests {
         .payload()
         .to_vec();
         let directory = TempDir::new().expect("temporary directory");
-        let (adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
+        let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
             directory.path().join("successor-safety.wal"),
             verified_successor.clone(),
             None,
@@ -7603,11 +7677,19 @@ mod tests {
         )
         .expect("open successor adapter");
         assert!(startup.is_empty());
-        adapter
+        let authenticated = adapter
             .authenticate(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
             ))
             .expect("alternate-view parent CommitQC is cryptographically verified");
+        let admitted = adapter
+            .receive_authenticated(authenticated)
+            .expect("parent CommitQC remains bound to the predecessor during conversion");
+        assert!(matches!(
+            admitted.effects(),
+            [AdapterEffect::FetchBody { manifest: Some(manifest), .. }]
+                if manifest.round == proposal.round && manifest.subject == proposal.subject
+        ));
         assert!(matches!(
             verify_authenticated_message(
                 &successor,

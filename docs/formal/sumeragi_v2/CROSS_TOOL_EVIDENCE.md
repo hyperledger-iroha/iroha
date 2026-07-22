@@ -177,7 +177,8 @@ source-manifest-bound release evidence set. The current boundary is:
   transition system; and
 - successor verification has no Verus model of the status adapter, runner
   publication, startup failure, historical block-sync pipeline, crash/restart,
-  or epoch-boundary action mapping.
+  recovery-scoped eager CommitQC-discovery scheduling, late canonical
+  lane-ownership rehydration at rollover, or epoch-boundary action mapping.
 
 The pinned `--no-cheating --rlimit 60` run verifies 1,690 dependency and 126
 root obligations with zero errors after splitting the largest EnterView query.

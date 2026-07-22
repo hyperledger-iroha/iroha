@@ -8,24 +8,34 @@ use std::{
     convert::TryFrom,
     future::Future,
     io::Cursor,
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use futures::SinkExt;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     Identifiable,
     block::{
-        self, SignedBlock, consensus::SumeragiDiagnosticsStatus, consensus_v2::SumeragiV2Status,
+        SignedBlock,
+        consensus::SumeragiDiagnosticsStatus,
+        consensus_v2::SumeragiV2Status,
+        stream::{BlockMessage, BlockSubscriptionRequest},
     },
     events::{
-        EventBox,
-        data::{DataEvent, prelude::*, sorafs},
-        pipeline::PipelineEventBox,
-        stream::EventMessage,
+        EventBox, EventFilterBox,
+        data::{DataEvent, DataEventFilter, prelude::*, sorafs},
+        execute_trigger::ExecuteTriggerEventFilter,
+        pipeline::{
+            BlockEventFilter, MergeLedgerEventFilter, PipelineEventBox, TransactionEventFilter,
+            WitnessEventFilter,
+        },
+        stream::{EventMessage, EventSubscriptionRequest},
+        time::{ExecutionTime, TimeEventFilter},
+        trigger_completed::TriggerCompletedEventFilter,
     },
     isi::{SetKeyValue, SetParameter},
     nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1},
@@ -37,11 +47,14 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use iroha_telemetry::metrics::Status as TelemetryStatus;
 pub use iroha_telemetry::metrics::{GovernanceStatus, Uptime};
-use iroha_version::{codec::EncodeVersioned, error::Error as VersionError};
+use iroha_torii_shared::{
+    NORITO_V1_WEBSOCKET_SUBPROTOCOL, route_catalog as torii_routes, uri as torii_uri,
+};
+use iroha_version::codec::EncodeVersioned;
 use norito::json;
 use reqwest::{
     Client, StatusCode,
-    header::{HeaderMap, HeaderName, HeaderValue},
+    header::{HeaderMap, HeaderName, HeaderValue, SEC_WEBSOCKET_PROTOCOL},
 };
 use tokio::{
     net::TcpStream,
@@ -563,20 +576,6 @@ impl LocalMcpProbeResult {
                 "raw torii.* tools must stay hidden for local Mochi sandboxes",
             ));
         }
-        for required in [
-            "iroha.status",
-            "iroha.sumeragi.status",
-            "iroha.transactions.submit",
-            "iroha.transactions.submit_and_wait",
-        ] {
-            if !tool_names.iter().any(|name| name == required) {
-                return Err(decode_error(
-                    "mcp tools/list result",
-                    format!("missing required curated tool `{required}`"),
-                ));
-            }
-        }
-
         Ok(Self {
             protocol_version,
             toolset_version: tools_result
@@ -2274,6 +2273,19 @@ pub struct ToriiClient {
     default_headers: HeaderMap,
 }
 
+fn canonical_event_filters() -> Vec<EventFilterBox> {
+    vec![
+        EventFilterBox::Pipeline(TransactionEventFilter::default().into()),
+        EventFilterBox::Pipeline(BlockEventFilter::default().into()),
+        EventFilterBox::Pipeline(MergeLedgerEventFilter::default().into()),
+        EventFilterBox::Pipeline(WitnessEventFilter::default().into()),
+        EventFilterBox::Data(DataEventFilter::Any),
+        EventFilterBox::Time(TimeEventFilter::new(ExecutionTime::PreCommit)),
+        EventFilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new()),
+        EventFilterBox::TriggerCompleted(TriggerCompletedEventFilter::new()),
+    ]
+}
+
 impl ToriiClient {
     /// Construct a client pointing at the supplied Torii HTTP base URL.
     pub fn new(base_url: impl AsRef<str>) -> ToriiResult<Self> {
@@ -2290,24 +2302,24 @@ impl ToriiClient {
         self.http_base.as_str()
     }
 
-    /// URL of the `/transaction` endpoint.
+    /// URL of the canonical `/v1/pipeline/transactions` endpoint.
     pub fn transaction_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint("transaction")
+        self.http_endpoint(torii_uri::TRANSACTION)
     }
 
-    /// URL of the `/query` endpoint.
+    /// URL of the canonical `/v1/query` endpoint.
     pub fn query_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint("query")
+        self.http_endpoint(torii_uri::QUERY)
     }
 
-    /// URL of the `/block/stream` WebSocket endpoint.
+    /// URL of the canonical `/v1/blocks/stream` WebSocket endpoint.
     pub fn block_stream_endpoint(&self) -> ToriiResult<Url> {
-        self.ws_endpoint("block/stream")
+        self.ws_endpoint(torii_uri::BLOCKS_STREAM)
     }
 
-    /// URL of the `/events` WebSocket endpoint.
+    /// URL of the canonical `/v1/events/ws` WebSocket endpoint.
     pub fn events_stream_endpoint(&self) -> ToriiResult<Url> {
-        self.ws_endpoint("events")
+        self.ws_endpoint(torii_uri::SUBSCRIPTION)
     }
 
     /// URL of the `/status` endpoint.
@@ -2377,7 +2389,7 @@ impl ToriiClient {
 
     /// URL of the `/v1/pipeline/transactions/status` endpoint.
     pub fn pipeline_transaction_status_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint("v1/pipeline/transactions/status")
+        self.http_endpoint(torii_routes::pipeline::TRANSACTION_STATUS.path())
     }
 
     /// URL of the `/v1/triggers` endpoint.
@@ -2485,9 +2497,9 @@ impl ToriiClient {
         })
     }
 
-    /// URL of the `/configuration` endpoint.
+    /// URL of the canonical `/v1/configuration` endpoint.
     pub fn configuration_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint("configuration")
+        self.http_endpoint(torii_uri::CONFIGURATION)
     }
 
     /// URL of the read-only `/v1/nexus/lifecycle` status endpoint.
@@ -2602,7 +2614,7 @@ impl ToriiClient {
                     message = block_rx.recv() => {
                         match message {
                             Ok(BlockStreamEvent::Block { block, .. }) => {
-                                if block.transactions_vec().iter().any(|tx| tx.hash() == tx_hash) {
+                                if block.external_transactions().any(|tx| tx.hash() == tx_hash) {
                                     return Ok(block.header().height().get());
                                 }
                             }
@@ -3339,33 +3351,49 @@ impl ToriiClient {
         }
     }
 
-    /// Establish a WebSocket connection to `/block/stream`.
+    /// Establish a canonical WebSocket connection to `/v1/blocks/stream`.
     pub async fn connect_block_stream(&self) -> ToriiResult<ToriiWebSocket> {
         self.connect_ws(self.block_stream_endpoint()?).await
     }
 
-    /// Establish a WebSocket connection to `/events`.
+    /// Establish a canonical WebSocket connection to `/v1/events/ws`.
     pub async fn connect_events_stream(&self) -> ToriiResult<ToriiWebSocket> {
         self.connect_ws(self.events_stream_endpoint()?).await
     }
 
-    /// Subscribe to the `/block/stream` endpoint and forward frames to a broadcast channel.
+    /// Subscribe to blocks from height one on `/v1/blocks/stream`.
     pub async fn subscribe_block_stream(&self) -> ToriiResult<WsSubscription> {
-        self.subscribe_ws(self.block_stream_endpoint()?).await
+        self.subscribe_block_stream_from(NonZeroU64::MIN).await
     }
 
-    /// Subscribe to the `/events` endpoint and forward frames to a broadcast channel.
+    /// Subscribe to blocks from the requested one-indexed height.
+    pub async fn subscribe_block_stream_from(
+        &self,
+        height: NonZeroU64,
+    ) -> ToriiResult<WsSubscription> {
+        let request = BlockSubscriptionRequest::new(height);
+        let first_message =
+            norito::to_bytes(&request).expect("canonical block subscription request must encode");
+        self.subscribe_ws(self.block_stream_endpoint()?, first_message)
+            .await
+    }
+
+    /// Subscribe to all Explorer-facing event categories on `/v1/events/ws`.
     pub async fn subscribe_events_stream(&self) -> ToriiResult<WsSubscription> {
-        self.subscribe_ws(self.events_stream_endpoint()?).await
+        let request = EventSubscriptionRequest::new(canonical_event_filters());
+        let first_message =
+            norito::to_bytes(&request).expect("canonical event subscription request must encode");
+        self.subscribe_ws(self.events_stream_endpoint()?, first_message)
+            .await
     }
 
-    /// Subscribe to `/block/stream` and publish decoded [`SignedBlock`] events.
+    /// Subscribe to `/v1/blocks/stream` and publish decoded [`SignedBlock`] events.
     pub async fn block_stream(&self) -> ToriiResult<BlockStream> {
         let subscription = self.subscribe_block_stream().await?;
         Ok(BlockStream::new(subscription))
     }
 
-    /// Subscribe to `/events` and publish decoded [`EventBox`] events.
+    /// Subscribe to `/v1/events/ws` and publish decoded [`EventBox`] events.
     pub async fn events_stream(&self) -> ToriiResult<EventStream> {
         let subscription = self.subscribe_events_stream().await?;
         Ok(EventStream::new(subscription))
@@ -3490,13 +3518,31 @@ impl ToriiClient {
             for (name, value) in self.default_headers.iter() {
                 headers.insert(name.clone(), value.clone());
             }
+            headers.insert(
+                SEC_WEBSOCKET_PROTOCOL,
+                HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
+            );
         }
-        let (stream, _response) = connect_async(request).await?;
+        let (stream, response) = connect_async(request).await?;
+        let selected_protocol = response
+            .headers()
+            .get(SEC_WEBSOCKET_PROTOCOL)
+            .and_then(|value| value.to_str().ok());
+        if selected_protocol != Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL) {
+            return Err(ToriiError::InvalidWebSocketRequest(format!(
+                "Torii WebSocket did not select required subprotocol `{NORITO_V1_WEBSOCKET_SUBPROTOCOL}`"
+            )));
+        }
         Ok(stream)
     }
 
-    async fn subscribe_ws(&self, endpoint: Url) -> ToriiResult<WsSubscription> {
+    async fn subscribe_ws(
+        &self,
+        endpoint: Url,
+        first_message: Vec<u8>,
+    ) -> ToriiResult<WsSubscription> {
         let mut stream = self.connect_ws(endpoint).await?;
+        stream.send(Message::Binary(first_message.into())).await?;
         let (sender, _receiver) = broadcast::channel(128);
         let forwarder = sender.clone();
 
@@ -3508,7 +3554,10 @@ impl ToriiClient {
                         let _ = forwarder.send(WsFrame::Binary(data.to_vec()));
                     }
                     Ok(Message::Text(text)) => {
-                        let _ = forwarder.send(WsFrame::Text(text.to_string()));
+                        let _ = forwarder.send(WsFrame::Error(format!(
+                            "Torii canonical Norito WebSocket sent an unexpected text frame: {text}"
+                        )));
+                        break;
                     }
                     Ok(Message::Close(_)) => {
                         let _ = forwarder.send(WsFrame::Closed);
@@ -3552,7 +3601,7 @@ where
                 message = block_rx.recv() => {
                     match message {
                         Ok(BlockStreamEvent::Block { block, .. }) => {
-                            if block.transactions_vec().iter().any(|tx| tx.hash() == tx_hash) {
+                            if block.external_transactions().any(|tx| tx.hash() == tx_hash) {
                                 return Ok(block.header().height().get());
                             }
                         }
@@ -3711,14 +3760,11 @@ pub struct BlockSummary {
 impl BlockSummary {
     fn from_block(block: &SignedBlock) -> Self {
         let header = block.header();
-        let transaction_count = block.transactions_vec().len();
+        let transaction_count = block.external_entrypoint_count();
         let (time_trigger_count, rejected_transaction_count) = if block.has_results() {
             let time_triggers = block.time_triggers();
-            let rejected = block
-                .transactions_vec()
-                .iter()
-                .enumerate()
-                .filter(|(idx, _)| block.error(*idx).is_some())
+            let rejected = (0..transaction_count)
+                .filter(|idx| block.error(*idx).is_some())
                 .count();
             (time_triggers.len(), rejected)
         } else {
@@ -3785,21 +3831,9 @@ impl BlockStream {
                 match receiver.recv().await {
                     Ok(WsFrame::Binary(frame)) => {
                         let raw_len = frame.len();
-                        let decoded =
-                            block::decode_framed_signed_block(&frame).or_else(|framed_err| {
-                                match block::decode_versioned_signed_block(&frame) {
-                                    Ok(block) => Ok(block),
-                                    Err(versioned_err) => {
-                                        if matches!(framed_err, VersionError::NotVersioned) {
-                                            Err(versioned_err)
-                                        } else {
-                                            Err(framed_err)
-                                        }
-                                    }
-                                }
-                            });
-                        match decoded {
-                            Ok(block) => {
+                        match norito::decode_from_bytes::<BlockMessage>(&frame) {
+                            Ok(message) => {
+                                let block: SignedBlock = message.into();
                                 let block = Arc::<SignedBlock>::new(block);
                                 let summary = BlockSummary::from_block(block.as_ref());
                                 let event = BlockStreamEvent::Block {
@@ -3810,15 +3844,9 @@ impl BlockStream {
                                 let _ = forwarder.send(event);
                             }
                             Err(err) => {
-                                let stage = match &err {
-                                    VersionError::NoritoCodec(_) | VersionError::NotVersioned => {
-                                        BlockDecodeStage::Frame
-                                    }
-                                    _ => BlockDecodeStage::Block,
-                                };
                                 let _ = forwarder.send(BlockStreamEvent::DecodeError {
                                     error: BlockStreamDecodeError::new(
-                                        stage,
+                                        BlockDecodeStage::Frame,
                                         raw_len,
                                         err.to_string(),
                                     ),
@@ -4392,7 +4420,7 @@ impl EventStream {
                 match receiver.recv().await {
                     Ok(WsFrame::Binary(frame)) => {
                         let raw_len = frame.len();
-                        match decode_norito_with_alignment::<EventMessage>(&frame) {
+                        match norito::decode_from_bytes::<EventMessage>(&frame) {
                             Ok(message) => {
                                 let event_box: EventBox = message.into();
                                 let summary = EventSummary::from_event(&event_box);
@@ -4499,7 +4527,7 @@ pub struct ManagedBlockStream {
 }
 
 impl ManagedBlockStream {
-    /// Spawn a reconnection loop for the `/block/stream` endpoint using the provided runtime handle.
+    /// Spawn a reconnection loop for `/v1/blocks/stream` using the provided runtime handle.
     ///
     /// The `alias` is used for diagnostics so UI layers can attribute log messages
     /// and reconnection notices to the originating peer.
@@ -4675,7 +4703,7 @@ pub struct ManagedEventStream {
 }
 
 impl ManagedEventStream {
-    /// Spawn a reconnection loop for the `/events` endpoint using the provided runtime handle.
+    /// Spawn a reconnection loop for `/v1/events/ws` using the provided runtime handle.
     pub fn spawn(handle: &Handle, alias: String, client: ToriiClient) -> Self {
         Self::spawn_with_factory(handle, alias, move || {
             let client = client.clone();
@@ -5211,6 +5239,55 @@ mod tests {
             Err(err) => panic!("{context}: {err}"),
         }
     }
+
+    async fn accept_canonical_norito_websocket(stream: TcpStream) -> WebSocketStream<TcpStream> {
+        tokio_tungstenite::accept_hdr_async(
+            stream,
+            |request: &WsHandshakeRequest, mut response: WsHandshakeResponse| {
+                assert_eq!(
+                    request
+                        .headers()
+                        .get(SEC_WEBSOCKET_PROTOCOL)
+                        .and_then(|value| value.to_str().ok()),
+                    Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL)
+                );
+                response.headers_mut().insert(
+                    SEC_WEBSOCKET_PROTOCOL,
+                    HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
+                );
+                Ok(response)
+            },
+        )
+        .await
+        .expect("canonical Norito WebSocket handshake")
+    }
+
+    #[test]
+    fn stream_endpoints_and_default_event_filters_match_torii_contract() {
+        let client = ToriiClient::new("http://127.0.0.1:8080").expect("client");
+        assert_eq!(
+            client
+                .block_stream_endpoint()
+                .expect("block endpoint")
+                .path(),
+            torii_uri::BLOCKS_STREAM
+        );
+        assert_eq!(
+            client
+                .events_stream_endpoint()
+                .expect("events endpoint")
+                .path(),
+            torii_uri::SUBSCRIPTION
+        );
+
+        let filters = canonical_event_filters();
+        assert_eq!(filters.len(), 8);
+        let request = EventSubscriptionRequest::new(filters.clone());
+        let encoded = norito::to_bytes(&request).expect("encode event subscription");
+        let decoded: EventSubscriptionRequest =
+            norito::decode_from_bytes(&encoded).expect("decode event subscription");
+        assert_eq!(decoded.filters, filters);
+    }
     use std::iter;
 
     use tokio::{
@@ -5422,7 +5499,7 @@ mod tests {
         let client = ToriiClient::new("http://127.0.0.1:8080").expect("valid url");
         assert_eq!(
             client.transaction_endpoint().unwrap().as_str(),
-            "http://127.0.0.1:8080/transaction"
+            "http://127.0.0.1:8080/v1/pipeline/transactions"
         );
     }
 
@@ -5522,8 +5599,8 @@ mod tests {
                     "result": {
                         "toolsetVersion": "demo-v1",
                         "tools": [
-                            { "name": "iroha.status" },
-                            { "name": "iroha.sumeragi.status" },
+                            { "name": "iroha.health" },
+                            { "name": "iroha.parameters.get" },
                             { "name": "iroha.transactions.submit" },
                             { "name": "iroha.transactions.submit_and_wait" }
                         ]
@@ -5609,9 +5686,9 @@ mod tests {
                     "id": 1,
                     "result": {
                         "tools": [
-                            { "name": "iroha.status" },
+                            { "name": "iroha.health" },
                             { "name": "torii.get_v1_accounts" },
-                            { "name": "iroha.sumeragi.status" },
+                            { "name": "iroha.parameters.get" },
                             { "name": "iroha.transactions.submit" },
                             { "name": "iroha.transactions.submit_and_wait" }
                         ]
@@ -5646,7 +5723,7 @@ mod tests {
             return;
         };
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/transaction");
+            when.method(POST).path("/v1/pipeline/transactions");
             then.status(503);
         });
 
@@ -5777,7 +5854,7 @@ mod tests {
             return;
         };
         let mock = server.mock(|when, then| {
-            when.method(GET).path("/configuration");
+            when.method(GET).path("/v1/configuration");
             then.status(404);
         });
 
@@ -5802,7 +5879,7 @@ mod tests {
             return;
         };
         let mock = server.mock(|when, then| {
-            when.method(GET).path("/configuration");
+            when.method(GET).path("/v1/configuration");
             then.status(200).body("not-json");
         });
 
@@ -5856,7 +5933,7 @@ mod tests {
         };
         let response_body = vec![0xAA, 0xBB, 0xCC];
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(response_body.clone());
         });
 
@@ -5904,7 +5981,7 @@ mod tests {
             return;
         };
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(500);
         });
 
@@ -5944,7 +6021,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept ws stream");
             let mut tx = Some(header_tx);
-            let callback = move |req: &WsHandshakeRequest, response: WsHandshakeResponse| {
+            let callback = move |req: &WsHandshakeRequest, mut response: WsHandshakeResponse| {
                 if let Some(sender) = tx.take() {
                     let value = req
                         .headers()
@@ -5953,6 +6030,16 @@ mod tests {
                         .map(str::to_owned);
                     let _ = sender.send(value);
                 }
+                assert_eq!(
+                    req.headers()
+                        .get(SEC_WEBSOCKET_PROTOCOL)
+                        .and_then(|value| value.to_str().ok()),
+                    Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL)
+                );
+                response.headers_mut().insert(
+                    SEC_WEBSOCKET_PROTOCOL,
+                    HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
+                );
                 Ok(response)
             };
             let mut ws = tokio_tungstenite::accept_hdr_async(stream, callback)
@@ -5974,6 +6061,39 @@ mod tests {
 
         let header = header_rx.await.expect("header observed");
         assert_eq!(header.as_deref(), Some("secret-token"));
+
+        server.await.expect("server join");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn websocket_rejects_missing_selected_norito_subprotocol() {
+        let listener =
+            match handle_bind_result(TcpListener::bind("127.0.0.1:0").await, "bind ws listener") {
+                Some(listener) => listener,
+                None => return,
+            };
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept ws stream");
+            let mut ws = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("handshake without selected subprotocol");
+            ws.close(None).await.expect("server close");
+        });
+
+        let client = ToriiClient::new(format!("http://{addr}")).expect("client");
+        let error = client
+            .connect_block_stream()
+            .await
+            .expect_err("missing selected subprotocol must fail closed");
+        assert!(matches!(
+            error,
+            ToriiError::WebSocket(WebSocketError::Protocol(
+                tokio_tungstenite::tungstenite::error::ProtocolError::SecWebSocketSubProtocolError(
+                    tokio_tungstenite::tungstenite::error::SubProtocolError::NoSubProtocol
+                )
+            ))
+        ));
 
         server.await.expect("server join");
     }
@@ -6027,6 +6147,10 @@ mod tests {
     const DATA_EVENT_MESSAGE_FIXTURE: &[u8] =
         include_bytes!("../tests/fixtures/canonical_data_event_message.bin");
 
+    fn block_stream_frame(block: &SignedBlock) -> Vec<u8> {
+        norito::to_bytes(&BlockMessage(block.clone())).expect("encode block stream message")
+    }
+
     fn sample_block() -> SignedBlock {
         let chain: ChainId = "mochi-block-stream".parse().expect("chain id");
         let mut builder = TransactionBuilder::new(
@@ -6049,6 +6173,15 @@ mod tests {
             .expect("sample block tx")
             .hash();
         let expected_height = block.header().height().get();
+        let block: SignedBlock =
+            norito::decode_from_bytes::<BlockMessage>(&block_stream_frame(&block))
+                .expect("round-trip sample block through the Torii stream envelope")
+                .into();
+        assert!(
+            block.transactions_vec().is_empty(),
+            "decoded blocks deliberately omit the legacy transaction cache"
+        );
+        assert_eq!(block.external_transactions().len(), 1);
 
         let (block_tx, block_rx) = broadcast::channel(8);
         let (_event_tx, event_rx) = broadcast::channel(8);
@@ -6410,6 +6543,7 @@ mod tests {
     async fn block_stream_decodes_block_events() {
         let expected_block = sample_block();
         let expected_summary = BlockSummary::from_block(&expected_block);
+        let frame = block_stream_frame(&expected_block);
         let (sender, _) = broadcast::channel(8);
         let handle = tokio::spawn(async {});
         let subscription = WsSubscription {
@@ -6420,7 +6554,7 @@ mod tests {
         let mut receiver = stream.subscribe();
 
         sender
-            .send(WsFrame::Binary(BLOCK_WIRE_FIXTURE.to_vec()))
+            .send(WsFrame::Binary(frame.clone()))
             .expect("send frame");
         sender.send(WsFrame::Closed).expect("send close");
 
@@ -6434,7 +6568,7 @@ mod tests {
                 block,
                 raw_len,
             } => {
-                assert_eq!(raw_len, BLOCK_WIRE_FIXTURE.len());
+                assert_eq!(raw_len, frame.len());
                 assert_eq!(summary.height, expected_summary.height);
                 assert_eq!(
                     summary.transaction_count,
@@ -6481,10 +6615,20 @@ mod tests {
         let addr = listener.local_addr().expect("listener addr");
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept block stream");
-            let mut ws = tokio_tungstenite::accept_async(stream)
+            let mut ws = accept_canonical_norito_websocket(stream).await;
+            let subscription = ws
+                .next()
                 .await
-                .expect("handshake for block stream");
-            ws.send(WsMessage::Binary(BLOCK_WIRE_FIXTURE.to_vec().into()))
+                .expect("block subscription frame")
+                .expect("valid block subscription frame");
+            let WsMessage::Binary(subscription) = subscription else {
+                panic!("expected binary block subscription request");
+            };
+            let request: BlockSubscriptionRequest =
+                norito::decode_from_bytes(&subscription).expect("decode block subscription");
+            assert_eq!(request.0, NonZeroU64::MIN);
+            let frame = block_stream_frame(&sample_block());
+            ws.send(WsMessage::Binary(frame.into()))
                 .await
                 .expect("send block fixture");
             ws.send(WsMessage::Close(None))
@@ -6512,7 +6656,7 @@ mod tests {
                 block,
                 raw_len,
             } => {
-                assert_eq!(raw_len, BLOCK_WIRE_FIXTURE.len());
+                assert_eq!(raw_len, block_stream_frame(&expected_block).len());
                 assert_eq!(summary.hash_hex, expected_summary.hash_hex);
                 assert_eq!(summary.height, expected_summary.height);
                 assert_eq!(summary.signature_count, expected_summary.signature_count);
@@ -6537,6 +6681,33 @@ mod tests {
 
         stream.abort();
         server.await.expect("server task finished");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn block_stream_rejects_unwrapped_signed_block_wire() {
+        let (sender, _) = broadcast::channel(8);
+        let handle = tokio::spawn(async {});
+        let subscription = WsSubscription {
+            sender: sender.clone(),
+            handle,
+        };
+        let stream = BlockStream::new(subscription);
+        let mut receiver = stream.subscribe();
+
+        sender
+            .send(WsFrame::Binary(BLOCK_WIRE_FIXTURE.to_vec()))
+            .expect("send unwrapped block wire");
+
+        let event = timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .expect("timely decode result")
+            .expect("decode result");
+        assert!(
+            matches!(&event, BlockStreamEvent::DecodeError { error } if error.stage == BlockDecodeStage::Frame),
+            "raw SignedBlock wire must not be accepted as a Torii BlockMessage: {event:?}"
+        );
+
+        stream.abort();
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -6704,6 +6875,11 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn events_stream_end_to_end_decodes_pipeline_event() {
+        let expected_event_box = sample_pipeline_event_box();
+        let frame = norito::to_bytes(&sample_pipeline_event_message())
+            .expect("encode canonical pipeline event message");
+        let expected_frame_len = frame.len();
+        let server_frame = frame.clone();
         let listener = match handle_bind_result(
             TcpListener::bind("127.0.0.1:0").await,
             "bind events listener",
@@ -6714,14 +6890,21 @@ mod tests {
         let addr = listener.local_addr().expect("events listener addr");
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept events stream");
-            let mut ws = tokio_tungstenite::accept_async(stream)
+            let mut ws = accept_canonical_norito_websocket(stream).await;
+            let subscription = ws
+                .next()
                 .await
-                .expect("handshake for events stream");
-            ws.send(WsMessage::Binary(
-                PIPELINE_EVENT_MESSAGE_FIXTURE.to_vec().into(),
-            ))
-            .await
-            .expect("send pipeline event fixture");
+                .expect("event subscription frame")
+                .expect("valid event subscription frame");
+            let WsMessage::Binary(subscription) = subscription else {
+                panic!("expected binary event subscription request");
+            };
+            let request: EventSubscriptionRequest =
+                norito::decode_from_bytes(&subscription).expect("decode event subscription");
+            assert_eq!(request.filters, canonical_event_filters());
+            ws.send(WsMessage::Binary(server_frame.into()))
+                .await
+                .expect("send canonical pipeline event");
             ws.send(WsMessage::Close(None))
                 .await
                 .expect("send events close");
@@ -6739,7 +6922,6 @@ mod tests {
             .expect("timely pipeline event")
             .expect("pipeline event value");
 
-        let expected_event_box = pipeline_event_fixture_event();
         let expected_summary = EventSummary::from_event(&expected_event_box);
         match event {
             EventStreamEvent::Event {
@@ -6747,7 +6929,7 @@ mod tests {
                 event,
                 raw_len,
             } => {
-                assert_eq!(raw_len, PIPELINE_EVENT_MESSAGE_FIXTURE.len());
+                assert_eq!(raw_len, expected_frame_len);
                 assert_eq!(emitted_summary.category, EventCategory::Pipeline);
                 assert_eq!(emitted_summary.label, expected_summary.label);
                 assert_eq!(emitted_summary.detail, expected_summary.detail);
@@ -7607,7 +7789,7 @@ mod tests {
         let guard = recorded.lock().await;
         let (request_line, body) = guard.clone().expect("captured request");
         assert!(
-            request_line.starts_with("POST /transaction"),
+            request_line.starts_with("POST /v1/pipeline/transactions"),
             "unexpected request line: {request_line}"
         );
         assert_eq!(body, versioned);
@@ -7626,7 +7808,7 @@ mod tests {
         let encoded = norito::to_bytes(&query_output).expect("encode query output");
 
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
         });
 
@@ -7656,7 +7838,7 @@ mod tests {
             return;
         };
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(500);
         });
 
@@ -7689,7 +7871,7 @@ mod tests {
             return;
         };
         let mock = server.mock(|when, then| {
-            when.method(POST).path("/query");
+            when.method(POST).path("/v1/query");
             then.status(200).body(vec![0, 1, 2, 3]);
         });
 
@@ -8050,7 +8232,7 @@ mod tests {
             return;
         };
         let mock = server.mock(|when, then| {
-            when.method(GET).path("/configuration");
+            when.method(GET).path("/v1/configuration");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(&b"{not-json}"[..]);
@@ -8097,7 +8279,7 @@ mod tests {
             return;
         };
         let mock = server.mock(|when, then| {
-            when.method(GET).path("/configuration");
+            when.method(GET).path("/v1/configuration");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(r#"{"chain_id":"mochi"}"#);

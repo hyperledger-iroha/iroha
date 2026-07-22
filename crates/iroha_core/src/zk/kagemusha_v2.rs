@@ -1376,8 +1376,10 @@ impl KagemushaPastaCycleOpaqueProverV4 {
     }
 }
 
-/// Opaque ABI-20 terminal-verifier facade. Public verification accepts only a
-/// complete V4 bundle; recursion-specific pair internals remain private.
+/// Opaque ABI-20 terminal-verifier facade. Spend acceptance requires a
+/// complete V4 bundle; the separate unbound-pair method exists only for
+/// authenticated release qualification. Recursion-specific pair internals
+/// remain private.
 pub struct KagemushaPastaCycleOpaqueVerifierV4 {
     inner: super::kagemusha_recursion_adapter::KagemushaPastaCycleTerminalVerifierV4,
     manifest: KagemushaRecursiveSpendArtifactManifestV4,
@@ -1439,6 +1441,20 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
     ) -> Result<(), String> {
         ensure_bundle_operation_v4(bundle, expected_operation)?;
         self.verify_bundle_binding_v4(bundle, expected_operation)
+    }
+
+    /// Terminally verify the generator's opaque live-pair calibration vector.
+    ///
+    /// This is a release-qualification boundary, not a spend-acceptance API:
+    /// the calibration pair has no lifecycle statement to authorize. It exists
+    /// so an installer or release gate can prove that the exact authenticated
+    /// Eq/Ep verifier artifacts execute both backend-native verification
+    /// branches before declaring the release usable. Normal offline-cash
+    /// verification must continue to call [`Self::verify_bundle_v4`] or
+    /// [`Self::verify_bundle_operation_v4`], which additionally bind the
+    /// canonical public statement and semantic operation.
+    pub fn verify_release_qualification_pair_v4(&self, encoded_pair: &[u8]) -> Result<(), String> {
+        self.inner.verify_encoded_pair_qualification(encoded_pair)
     }
 
     fn verify_bundle_binding_v4(

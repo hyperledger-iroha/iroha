@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-21
+Last updated: 2026-07-22
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -143,6 +143,15 @@ production promotion corridor before publishing an authenticated V4 release.
 The review schema and native fail-closed validator do not substitute for that
 external review evidence. Until then, authoritative production availability
 stays false.
+The degree-20 release-generation workflow must also remain fail-closed outside
+the Kagemusha staged resource supervisor. The 2026-07-22 host incident proved
+that a structurally valid but uncalibrated single-column profile can build an
+enormous virtual trace before late layout rejection. Release generation now
+targets the reviewed `[8,1,1]` advice and `[1,0,0]` lookup profile and is capped
+at 16 GiB with reserved host headroom. Promotion remains blocked until a clean,
+signed-checkout run completes under that ceiling and produces a successful
+resource receipt; a cap stop is diagnostic evidence, not permission to raise
+the limit or publish partial artifacts.
 The historical ABI-19/V3 path had a 1,600-byte per-step limit and 21,764-byte
 proof payload cap. Its degree-18 prototype produced 7,296-byte ordinary and
 7,328-byte augmented proofs even before full confidential/output-membership
@@ -25517,12 +25526,30 @@ still-live matching logical request registration releases capacity. The gate
 pins 378 required tests
 across 24 modules, including exact composite
 replay-FIFO ordering, its source-linked refinement projection, and
-recovery-derived successor identity plus sequential historical CommitQC/body
-catch-up. Post-decision regressions reject new durable timeout and TC formation
-after a local decision. Capacity regressions bind the real serialized-runtime
-Proposal-A/distinct-PrepareQC-B/TimeoutVote trace, bounded causal effect
-dispatch, deterministic reconstructible-Fetch preemption, full-capacity Fetch
-reconstruction, Decision filtering, and the canonical `EffectDispatch`
+recovery-derived successor identity plus sequential missing-height discovery
+and catch-up. A four-validator restart diagnostic showed that the recovering
+validator paid the complete 20-second quiet-round deadline at each missing
+height before starting CommitQC discovery. Recovery now seeds immediate
+discovery from durable v2 startup or an interrupted applied tip, carries that
+urgency only when an authenticated Commit-certificate response yields a
+discovered CommitQC which is admitted to, or coalesced with, serialized reducer
+ownership, and clears it after ordinary live finality. The outstanding
+request's `Some`-to-`None` transition proves only that ownership handoff, not
+reducer execution, Decision, durability, or historical-Kura provenance. This
+retains the existing request authentication, exact
+frozen-context and certificate checks, reducer ordering, and ordinary-height
+deadline; it does not add permanent normal-height fanout. The existing
+four-validator restart regression owns this sequential catch-up seam. Its
+fresh exact run,
+`sumeragi_v2_runner::authoritative_v2_finalizes_through_validator_restart`,
+passed 1/1 in 79.82 seconds; all four peers shut down gracefully with empty
+stderr. This focused result does not promote a formal obligation or complete
+the broader release matrix. Post-decision regressions reject new durable
+timeout and TC formation after a local decision. Capacity regressions
+bind the real serialized-runtime Proposal-A/distinct-PrepareQC-B/TimeoutVote
+trace, bounded causal effect dispatch, deterministic reconstructible-Fetch
+preemption, full-capacity Fetch reconstruction, Decision filtering, and the
+canonical `EffectDispatch`
 watchdog lane. The timeout watchdog regression distinguishes a remote partial timeout
 pool, a durable local current-view timeout path, and exact same-/older-view
 locked Commit recovery. Before the three-corridor expansion, all
@@ -25778,17 +25805,30 @@ remains false. Outstanding release work:
   7,826-obligation induction and 565-obligation downstream Core receipt is
   historical evidence for the superseded transition relation and cannot
   promote the current source;
-- execute the fresh source-sealed 438-test, 32-module, 55-leg pre-network
-  corridor. Its eight newly sealed regressions cover strict same-round TC
-  upgrade/replay and exact locked-Commit recovery ownership; inventory presence
+- execute the fresh source-sealed 444-test, 32-module, 55-leg pre-network
+  corridor. Its fourteen newly sealed regressions cover strict same-round TC
+  upgrade/replay, exact locked-Commit recovery ownership, and canonical
+  view-zero genesis bytes first proposed in a later round, plus the
+  contention-tolerant restart view-zero deadline and the successor's frozen
+  predecessor CommitQC binding, plus Kura-first lane rollover, incomplete-tip
+  recovery, and terminal ingress filtering; inventory presence
   is not execution evidence;
 - mechanize the complete typed applied-height handoff rather than promoting its
   source tests to a liveness proof. Production independently rereads exact Kura
   sources for historical CommitQC, body, and lane-certificate responses; binds
   current-height global V2 output to the finality artifact; binds winning lane
   output to its durable Kura certificate/application receipt while revalidating
-  alternate proofs and superseding valid same-height losers; and binds Native
-  AMX, merge-share, and certified-sidecar traffic to their typed scopes and
+  alternate proofs and superseding valid same-height losers. The winning set is
+  now reconstructed from canonical finalized-block ownership, and missing tip
+  evidence keeps the same terminal height active instead of authorizing a
+  successor. Rollover rehydrates exact bounded ownership which block sync
+  installs after adapter construction, preserving the proposal request source
+  for a missing certificate. A canonical empty ownership set is already
+  complete even for result-bearing genesis or external-only blocks; external
+  entries alone are not lane obligations.
+  Formalize that Kura-first rollover and tip-only recovery rule. The
+  production handoff also binds Native AMX, merge-share, and certified-sidecar
+  traffic to their typed scopes and
   exact identities. Finalized-sidecar pruning retains winning data in the
   committed merge log and supersedes losing pending work. Manual, wrong-source,
   substituted, or otherwise untyped `Exact` output must remain owned and fail
@@ -25905,8 +25945,10 @@ remains false. Outstanding release work:
   by
   machine-checking the Rust trace mapping for full-context Applied/Recovered
   tokens, fail-closed complete-tip recovery, ordered startup prerequisites,
-  kind-specific publication, exact Async CommitQC import and ordinary reducer
-  body recovery, and terminal
+  kind-specific publication, recovery-scoped eager discovery with
+  ordinary-finality reset, exact Async CommitQC import and ordinary reducer
+  body recovery, Kura-first canonical lane-completion gating with tip-only
+  reopening plus late block-sync ownership rehydration, and terminal
   observer application without successor activation. The fail-closed static
   source mapping and its four mutation checks now bind the concrete runner,
   status, runtime, effect, and block-sync order, but the exact deductive

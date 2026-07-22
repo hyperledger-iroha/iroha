@@ -158,7 +158,7 @@ public enum KagemushaNFCError: Error, Equatable, LocalizedError, Sendable {
 public enum KagemushaNFCEvent: Equatable, Sendable {
     case sessionStarted
     case peerConnected
-    case receiveRequestRead(KagemushaRecipientPaymentRequest)
+    case receiveRequestRead(KagemushaRecipientReceiveOfferV2)
     case paymentPrepared(KagemushaRecursiveSpendPeerPaymentV4)
     case paymentCommitted(KagemushaRecursiveSpendPeerPaymentV4)
     case acknowledgementReady(KagemushaReceiverAcknowledgement)
@@ -651,7 +651,7 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
 
     public init(
         applicationIdentifier: Data = KagemushaNFCProtocol.defaultApplicationIdentifier,
-        receiveRequest: KagemushaRecipientPaymentRequest
+        receiveRequest: KagemushaRecipientReceiveOfferV2
     ) throws {
         self.applicationIdentifier = try KagemushaNFCProtocol
             .validateApplicationIdentifier(applicationIdentifier)
@@ -971,7 +971,7 @@ public final class KagemushaNFCReader: NSObject, @unchecked Sendable {
     public func sendPayment(
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void = { _ in },
         createPayment: @escaping @Sendable (
-            KagemushaRecipientPaymentRequest
+            KagemushaRecipientReceiveOfferV2
         ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
         let connection = KagemushaNFCTagConnection()
@@ -1249,7 +1249,7 @@ public final class KagemushaNFCCardSession: @unchecked Sendable {
     }
 
     public func receivePayment(
-        receiveRequest: KagemushaRecipientPaymentRequest,
+        receiveRequest: KagemushaRecipientReceiveOfferV2,
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void = { _ in },
         acceptPayment: @escaping @Sendable (
             KagemushaRecursiveSpendPeerPaymentV4
@@ -1284,7 +1284,7 @@ private final class KagemushaNFCCardRuntime {
 
     init(
         configuration: KagemushaNFCConfiguration,
-        receiveRequest: KagemushaRecipientPaymentRequest,
+        receiveRequest: KagemushaRecipientReceiveOfferV2,
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void,
         acceptPayment: @escaping @Sendable (
             KagemushaRecursiveSpendPeerPaymentV4
@@ -1381,7 +1381,7 @@ public final class KagemushaNFCReader: @unchecked Sendable {
     public func sendPayment(
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void = { _ in },
         createPayment: @escaping @Sendable (
-            KagemushaRecipientPaymentRequest
+            KagemushaRecipientReceiveOfferV2
         ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
         _ = onEvent
@@ -1400,7 +1400,7 @@ public final class KagemushaNFCCardSession: @unchecked Sendable {
     }
     public func cancel() {}
     public func receivePayment(
-        receiveRequest: KagemushaRecipientPaymentRequest,
+        receiveRequest: KagemushaRecipientReceiveOfferV2,
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void = { _ in },
         acceptPayment: @escaping @Sendable (
             KagemushaRecursiveSpendPeerPaymentV4

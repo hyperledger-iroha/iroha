@@ -1188,10 +1188,22 @@ impl KagemushaStepOperationVectorV4 {
 /// Assigned canonical operation values reconstructed from the exact public limbs.
 #[derive(Clone, Debug)]
 pub struct AssignedKagemushaStepOperationV4<F: BigPrimeField> {
-    /// The original public cells; no limb is re-assigned by this module.
-    pub limbs: [AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V4],
-    /// Canonically reconstructed native values in existing V2 row order.
-    pub fields: [AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
+    /// The original public cells; no limb is re-assigned by this module. The
+    /// exact array is boxed because carrying 1,080 `AssignedValue`s by value
+    /// makes nested circuit-construction frames exceed mobile thread stacks.
+    pub limbs: Box<[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V4]>,
+    /// Canonically reconstructed native values in existing V2 row order. This
+    /// array is boxed for the same bounded-stack guarantee as `limbs`.
+    pub fields: Box<[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4]>,
+}
+
+fn boxed_assigned_values_exact<F: BigPrimeField, const N: usize>(
+    values: Vec<AssignedValue<F>>,
+) -> Box<[AssignedValue<F>; N]> {
+    let actual_len = values.len();
+    values.into_boxed_slice().try_into().unwrap_or_else(|_| {
+        panic!("assigned-value length mismatch: expected {N}, got {actual_len}")
+    })
 }
 
 fn assert_equal<F: BigPrimeField>(
@@ -1321,14 +1333,18 @@ pub fn assign_kagemusha_step_operation_v4<F: BigPrimeField>(
     for limb in operation_limbs {
         range.range_check(ctx, *limb, 32);
     }
-    let fields = std::array::from_fn(|field| {
-        let limbs = &operation_limbs[field_limb_range(field)];
-        enforce_fp_canonical_limbs(ctx, range, limbs);
-        reconstruct_u32_limbs(ctx, range, limbs)
-    });
-    constrain_typed_operation_fields(ctx, range, &fields);
+    let fields = boxed_assigned_values_exact(
+        (0..KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4)
+            .map(|field| {
+                let limbs = &operation_limbs[field_limb_range(field)];
+                enforce_fp_canonical_limbs(ctx, range, limbs);
+                reconstruct_u32_limbs(ctx, range, limbs)
+            })
+            .collect(),
+    );
+    constrain_typed_operation_fields(ctx, range, fields.as_ref());
     AssignedKagemushaStepOperationV4 {
-        limbs: *operation_limbs,
+        limbs: boxed_assigned_values_exact(operation_limbs.to_vec()),
         fields,
     }
 }
@@ -3012,6 +3028,14 @@ mod tests {
         noncanonical.limbs[field_limb_range(O_CHAIN_TAG)]
             .copy_from_slice(&KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V4);
         assert!(noncanonical.to_fields().is_err());
+    }
+
+    #[test]
+    fn assigned_operation_keeps_large_exact_arrays_off_stack() {
+        assert_eq!(
+            std::mem::size_of::<AssignedKagemushaStepOperationV4<Fp>>(),
+            2 * std::mem::size_of::<usize>()
+        );
     }
 
     #[test]

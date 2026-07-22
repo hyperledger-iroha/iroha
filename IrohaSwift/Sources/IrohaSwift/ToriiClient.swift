@@ -23471,6 +23471,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @discardableResult
     public func getKagemushaRecipientRegistrationLineage(
+        query: KagemushaRecipientLineageQueryV2,
+        completion: @escaping (Result<Data, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getKagemushaRecipientRegistrationLineage(query: query)
+        }
+    }
+
+    @discardableResult
+    public func getKagemushaRecipientRegistrationLineage(
         request: KagemushaRecipientPaymentRequest,
         readiness: ToriiKagemushaReadiness,
         verifiedAtMilliseconds: UInt64,
@@ -26939,6 +26949,30 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return readiness
     }
 
+    public func getKagemushaRecipientRegistrationLineage(
+        query queryBody: KagemushaRecipientLineageQueryV2
+    ) async throws -> Data {
+        let request = try makeRequest(
+            path: KagemushaToriiAPI.Endpoint.receiverLineage.path,
+            method: .post,
+            body: queryBody.noritoArchive,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            ]
+        )
+        let (responseData, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "Kagemusha receiver registration lineage",
+            maximumBytes: KagemushaRecipientRegistrationLineage.maximumArchiveBytes
+        )
+        try ensureStatus(response, equals: 200, responseBody: responseData)
+        try ensureResponseMediaType(response, equals: "application/x-norito")
+        guard !responseData.isEmpty else { throw ToriiClientError.emptyBody }
+        return responseData
+    }
+
+    @available(*, deprecated, message: "Use the request-independent V2 lineage query and whole receive offer")
     public func getKagemushaRecipientRegistrationLineage(
         request requestBody: KagemushaRecipientPaymentRequest,
         readiness: ToriiKagemushaReadiness,

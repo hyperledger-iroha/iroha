@@ -147,8 +147,31 @@ CARGO_BUILD_DIR_SIM_ARM="$CARGO_BUILD_DIR_BASE/$SIM_ARM_TRIPLE"
 CARGO_BUILD_DIR_SIM_X64="$CARGO_BUILD_DIR_BASE/$SIM_X64_TRIPLE"
 CARGO_BUILD_DIR_MACOS="$CARGO_BUILD_DIR_BASE/$MACOS_TRIPLE"
 
+stage_cargo_library() {
+  local cargo_target_dir="$1"
+  local target_triple="$2"
+  local label="$3"
+  local source_library="$cargo_target_dir/$target_triple/release/lib${LIB_CRATE_NAME}.a"
+  local staged_library="$STAGE_DIR/cargo-libraries/$target_triple/lib${LIB_CRATE_NAME}.a"
+  if [[ ! -f "$source_library" ]]; then
+    echo "[-] Missing $label static library after Cargo build: $source_library" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$staged_library")"
+  cp "$source_library" "$staged_library"
+  if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" != "1" ]]; then
+    echo "[+] Reclaiming generated $label Cargo intermediates after staging its library" >&2
+    rm -rf "$cargo_target_dir"
+  fi
+  printf '%s\n' "$staged_library"
+}
+
 if [[ "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
   echo "[+] Skipping Rust static library builds; using existing target artifacts" >&2
+  LIB_DEV="$CARGO_BUILD_DIR_DEVICE/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
+  LIB_SIM_ARM="$CARGO_BUILD_DIR_SIM_ARM/$SIM_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
+  LIB_SIM_X64="$CARGO_BUILD_DIR_SIM_X64/$SIM_X64_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
+  LIB_MAC="$CARGO_BUILD_DIR_MACOS/$MACOS_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
 else
   echo "[+] Building Rust static libraries (release)" >&2
   echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_TRIPLE" >&2
@@ -163,6 +186,7 @@ else
     cargo build --locked -p "$LIB_CRATE_NAME" --lib --release --target "$DEVICE_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the iOS device build"
+  LIB_DEV=$(stage_cargo_library "$CARGO_BUILD_DIR_DEVICE" "$DEVICE_TRIPLE" "iOS device")
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
@@ -170,6 +194,7 @@ else
     cargo build --locked -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_ARM_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the arm64 simulator build"
+  LIB_SIM_ARM=$(stage_cargo_library "$CARGO_BUILD_DIR_SIM_ARM" "$SIM_ARM_TRIPLE" "arm64 simulator")
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
@@ -177,20 +202,17 @@ else
     cargo build --locked -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_X64_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the x86_64 simulator build"
+  LIB_SIM_X64=$(stage_cargo_library "$CARGO_BUILD_DIR_SIM_X64" "$SIM_X64_TRIPLE" "x86_64 simulator")
   env MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_MACOS" \
     cargo build --locked -p "$LIB_CRATE_NAME" --lib --release --target "$MACOS_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the macOS build"
+  LIB_MAC=$(stage_cargo_library "$CARGO_BUILD_DIR_MACOS" "$MACOS_TRIPLE" "macOS")
 fi
 
 assert_bridge_source_seal "Apple slice staging"
-
-LIB_DEV="$CARGO_BUILD_DIR_DEVICE/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
-LIB_SIM_ARM="$CARGO_BUILD_DIR_SIM_ARM/$SIM_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
-LIB_SIM_X64="$CARGO_BUILD_DIR_SIM_X64/$SIM_X64_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
-LIB_MAC="$CARGO_BUILD_DIR_MACOS/$MACOS_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
 
 if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" || ! -f "$LIB_MAC" ]]; then
   echo "[-] Missing built libraries. Did the cargo builds succeed?" >&2
@@ -228,10 +250,20 @@ LIB_MAC_STAGED="$STAGE_DIR/macos/${STATIC_LIB_NAME}"
 
 mkdir -p "$HEADERS_DEV" "$HEADERS_SIM" "$HEADERS_MAC" "$(dirname "$LIB_DEV_STAGED")" "$(dirname "$LIB_SIM_STAGED")" "$(dirname "$LIB_MAC_STAGED")"
 
-# Stage iOS static libraries.
-cp "$LIB_DEV" "$LIB_DEV_STAGED"
-cp "$SIM_UNI" "$LIB_SIM_STAGED"
-cp "$LIB_MAC" "$LIB_MAC_STAGED"
+# Stage iOS static libraries. The normal production path moves the already
+# staged raw libraries and drops the two simulator inputs after `lipo`, keeping
+# only one copy of each final slice while xcodebuild packages the XCFramework.
+if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" != "1" \
+    && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" != "1" ]]; then
+  mv "$LIB_DEV" "$LIB_DEV_STAGED"
+  mv "$SIM_UNI" "$LIB_SIM_STAGED"
+  mv "$LIB_MAC" "$LIB_MAC_STAGED"
+  rm -f "$LIB_SIM_ARM" "$LIB_SIM_X64"
+else
+  cp "$LIB_DEV" "$LIB_DEV_STAGED"
+  cp "$SIM_UNI" "$LIB_SIM_STAGED"
+  cp "$LIB_MAC" "$LIB_MAC_STAGED"
+fi
 
 # Copy headers for static-library slices. xcodebuild copies this directory as the
 # slice's Headers bundle, so the modulemap lives at Headers/module.modulemap.
@@ -394,8 +426,10 @@ if [[ -n "$SOURCE_STATUS_START" ]]; then
 fi
 SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
 PRIVACY_PRODUCTION_JSON=false
+CARGO_FEATURES_JSON='[]'
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
+  CARGO_FEATURES_JSON='["privacy-production-enabled"]'
 fi
 
 cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
@@ -403,6 +437,7 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
   "version": "$BRIDGE_VERSION",
   "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
+  "cargo_features": $CARGO_FEATURES_JSON,
   "source_commit": "$SOURCE_COMMIT",
   "source_tree_dirty": $SOURCE_TREE_DIRTY,
   "source_fingerprint_sha256": "$SOURCE_FINGERPRINT",
@@ -449,6 +484,12 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_create_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_project_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
     "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
@@ -457,6 +498,7 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
     "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
@@ -612,4 +654,9 @@ if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
 else
   bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+fi
+if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" != "1" \
+    && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" != "1" ]]; then
+  echo "[+] Removing generated Apple Cargo/staging intermediates after artifact verification" >&2
+  rm -rf "$CARGO_BUILD_DIR_BASE" "$STAGE_DIR"
 fi

@@ -56,6 +56,11 @@ const DISTINCT_PREPARE_QC_BLOCK_CADENCE: Duration = Duration::from_secs(8);
 const DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT: Duration = Duration::from_secs(120);
 const DISTINCT_PREPARE_QC_A_SELECTION_TIMEOUT: Duration = Duration::from_secs(25);
 const DISTINCT_PREPARE_QC_A_RELEASE_BUDGET: Duration = Duration::from_secs(40);
+// The restart scenario exercises durable recovery, not the localnet's
+// accelerated 333 ms cadence. Its debug-build genesis validation runs on four
+// real peers, so use a signed cadence whose view-zero deadline remains useful
+// under ordinary shared-CI contention.
+const RESTART_BLOCK_CADENCE: Duration = Duration::from_secs(2);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(90);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -1681,6 +1686,17 @@ mod prepare_qc_split_tests {
     }
 
     #[test]
+    fn restart_scenario_uses_a_contention_tolerant_view_zero_deadline() {
+        let cadence_ms = u64::try_from(RESTART_BLOCK_CADENCE.as_millis())
+            .expect("restart cadence fits the canonical millisecond width");
+        let (base_round_timeout_ms, _) =
+            iroha_config::parameters::actual::sumeragi_v2_timing_ms(cadence_ms)
+                .expect("restart cadence derives valid v2 timing");
+
+        assert_eq!(base_round_timeout_ms, 20_000);
+    }
+
+    #[test]
     fn distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one() {
         let cadence_ms = u64::try_from(DISTINCT_PREPARE_QC_BLOCK_CADENCE.as_millis())
             .expect("scenario cadence fits the canonical millisecond width");
@@ -2100,6 +2116,7 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
+        .with_block_cadence(RESTART_BLOCK_CADENCE)
         .with_sync_timeout(Duration::from_secs(180));
     let context = stringify!(authoritative_v2_finalizes_through_validator_restart);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;

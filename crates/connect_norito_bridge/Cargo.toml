@@ -17,7 +17,7 @@ packed-struct = []
 schema-structural = []
 # Enable real halo2/ipa proving and verification for confidential-transfer-v2 and unshield.
 # OFF by default; flip on only when all production gates have passed.
-privacy-production-enabled = []
+privacy-production-enabled = ["iroha_data_model/kagemusha-production-enabled"]
 # Non-shipping physical-device evidence harness. Candidate symbols, state, and
 # JNI exports are absent unless this feature is selected explicitly; enabling
 # it does not change the production Kagemusha capability gate.

@@ -65,9 +65,12 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val MAX_RELEASE_ATTESTATION_BYTES: Int = 1024 * 1024
         const val MAX_RELEASE_EVIDENCE_BYTES: Int = 16 * 1024 * 1024
         const val MAX_PROMOTION_RECORD_BYTES: Int = 1024 * 1024
-        const val MAX_PEER_TEXT_ENVELOPE_BYTES: Int = 12 * 1024
-        const val MAX_PEER_TEXT_ARCHIVE_BYTES: Int = 9_211
+        const val MAX_PEER_TEXT_ENVELOPE_BYTES: Int = 32_774
+        const val MAX_PEER_TEXT_ARCHIVE_BYTES: Int = 24_576
         const val MAX_PEER_ARCHIVE_BYTES_V2: Int = 32 * 1024
+        const val MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2: Int = 24_576
+        const val MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1: Int = 2 * 1024
+        const val PROMOTED_FINALITY_CHECKPOINT_BYTES_V2: Int = 40
         /** Consensus ceiling for one canonical recipient-only ABI-21 peer archive. */
         const val MAX_PEER_ARCHIVE_BYTES_V4: Int = 32 * 1024 * 1024
         const val MAX_PEER_ARCHIVE_BYTES: Int = MAX_PEER_ARCHIVE_BYTES_V4
@@ -129,6 +132,17 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun isArtifactStreamingAvailable(): Boolean = artifactBridgeAvailable
 
+        /**
+         * True only when the linked bridge was compiled with the non-default production
+         * Kagemusha capability. Unlike [isProofBackendAvailable], this remains true before an
+         * authenticated artifact set is installed and is therefore safe for setup bootstrapping.
+         */
+        @JvmStatic
+        fun isProductionProofBackendCompiled(): Boolean =
+            artifactBridgeAvailable && detectProductionProofBackendCompilation {
+                nativeArtifactBeginV4(byteArrayOf(0), ByteArray(32), ByteArray(32))
+            }
+
         @JvmStatic
         fun isProofBackendAvailable(): Boolean =
             artifactBridgeAvailable && runCatching { nativePastaCycleV4BackendAvailable() }
@@ -177,6 +191,20 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun decodeRecipientPaymentRequest(archive: ByteArray): RecipientPaymentRequest =
             RecipientPaymentRequest(archive)
+
+        @JvmStatic
+        fun decodeRecipientRegistrationLineageV2(
+            archive: ByteArray,
+        ): RecipientRegistrationLineage = RecipientRegistrationLineage(archive)
+
+        @JvmStatic
+        fun decodeRecipientReceiveOfferV2(archive: ByteArray): RecipientReceiveOfferV2 =
+            RecipientReceiveOfferV2(archive).also(::projectRecipientReceiveOfferV2)
+
+        /** Restore an exact persisted readiness archive and force native canonical validation. */
+        @JvmStatic
+        fun decodeReadiness(archive: ByteArray): Readiness =
+            Readiness(archive).also(::projectReadiness)
 
         @JvmStatic
         fun decodePeerPayment(archive: ByteArray): PeerPayment = PeerPayment(archive)
@@ -1057,47 +1085,138 @@ class KagemushaRecursiveSpendProver private constructor() {
             )
         }
 
-        /**
-         * Verify a proof-bearing receiver registration lineage against the exact signed request.
-         *
-         * Native authenticates the registration tuple and lifetime, admitting transaction and
-         * Merkle paths, policy continuity, block header, and historical V2 finality certificate.
-         */
+        /** Create the request-independent selector used to prefetch portable receiver lineage. */
         @JvmStatic
-        fun verifyRecipientRegistrationLineage(
+        fun createRecipientLineageQueryV2(
+            chainId: String,
+            recipientAccountId: String,
+            receiverDeviceId: String,
+            assetDefinitionId: String,
+            trustedCheckpointHeight: Long,
+        ): RecipientLineageQueryV2 {
+            requireArtifactBridge()
+            require(trustedCheckpointHeight > 0) { "trustedCheckpointHeight must be positive" }
+            return RecipientLineageQueryV2(
+                nativeCreateRecipientLineageQueryV2(
+                    utf8(chainId, "chainId"),
+                    utf8(recipientAccountId, "recipientAccountId"),
+                    utf8(receiverDeviceId, "receiverDeviceId"),
+                    utf8(assetDefinitionId, "assetDefinitionId"),
+                    trustedCheckpointHeight,
+                ),
+            )
+        }
+
+        /** Verify signed request, active-state lineage and a bounded finality suffix locally. */
+        @JvmStatic
+        fun verifyRecipientRegistrationLineageV2(
             request: RecipientPaymentRequest,
-            lineageArchive: ByteArray,
+            lineage: RecipientRegistrationLineage,
             verifiedAtMilliseconds: Long,
-            expectedEvaluatedBlockHeight: Long,
-            expectedEvaluatedBlockHash: ByteArray,
-        ): RecipientRegistrationLineage {
+            trustedCheckpointHeight: Long,
+            trustedCheckpointContextId: ByteArray,
+        ): VerifiedRecipientRegistrationLineageV2 {
             requireArtifactBridge()
             require(verifiedAtMilliseconds > 0) { "verifiedAtMilliseconds must be positive" }
-            require(expectedEvaluatedBlockHeight > 0) {
-                "expectedEvaluatedBlockHeight must be positive"
+            require(trustedCheckpointHeight > 0) {
+                "trustedCheckpointHeight must be positive"
             }
-            val expectedHash = requireDigest(
-                expectedEvaluatedBlockHash,
-                "expectedEvaluatedBlockHash",
-            )
-            val bounded = requireBoundedBytes(
-                lineageArchive,
-                "lineageArchive",
-                MAX_TORII_RESPONSE_BYTES,
+            val trustedContext = requireFinalityCheckpointContext(
+                trustedCheckpointContextId,
+                "trustedCheckpointContextId",
             )
             return try {
-                RecipientRegistrationLineage(
-                    nativeVerifyRecipientRegistrationLineageV1(
+                val fields = nativeVerifyRecipientRegistrationLineageV2(
+                    request.noritoEncoded(),
+                    lineage.noritoEncoded(),
+                    verifiedAtMilliseconds,
+                    trustedCheckpointHeight,
+                    trustedContext,
+                )
+                requireFieldCount(fields, 2, "verified recipient lineage")
+                VerifiedRecipientRegistrationLineageV2(
+                    RecipientRegistrationLineage(fields[0]),
+                    FinalityCheckpointPromotionV2(fields[1]),
+                )
+            } finally {
+                trustedContext.fill(0)
+            }
+        }
+
+        /** Build one canonical receive offer carrying request, lineage and publisher envelope. */
+        @JvmStatic
+        fun createRecipientReceiveOfferV2(
+            request: RecipientPaymentRequest,
+            lineage: RecipientRegistrationLineage,
+            publisherCheckpointEnvelope: ByteArray,
+        ): RecipientReceiveOfferV2 {
+            requireArtifactBridge()
+            val envelope = requireBoundedBytes(
+                publisherCheckpointEnvelope,
+                "publisherCheckpointEnvelope",
+                MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1,
+            )
+            return try {
+                RecipientReceiveOfferV2(
+                    nativeCreateRecipientReceiveOfferV2(
                         request.noritoEncoded(),
-                        bounded,
-                        verifiedAtMilliseconds,
-                        expectedEvaluatedBlockHeight,
-                        expectedHash,
+                        lineage.noritoEncoded(),
+                        envelope,
                     ),
                 )
             } finally {
-                expectedHash.fill(0)
-                bounded.fill(0)
+                envelope.fill(0)
+            }
+        }
+
+        @JvmStatic
+        fun projectRecipientReceiveOfferV2(
+            offer: RecipientReceiveOfferV2,
+        ): RecipientReceiveOfferProjectionV2 {
+            requireArtifactBridge()
+            val fields = nativeProjectRecipientReceiveOfferV2(offer.noritoEncoded())
+            requireFieldCount(fields, 3, "recipient receive offer projection")
+            return RecipientReceiveOfferProjectionV2(
+                request = RecipientPaymentRequest(fields[0]),
+                lineage = RecipientRegistrationLineage(fields[1]),
+                publisherCheckpointEnvelope = fields[2],
+            )
+        }
+
+        /** Verify the exact whole offer locally against one durable trusted checkpoint. */
+        @JvmStatic
+        fun verifyRecipientReceiveOfferV2(
+            offer: RecipientReceiveOfferV2,
+            verifiedAtMilliseconds: Long,
+            trustedCheckpointHeight: Long,
+            trustedCheckpointContextId: ByteArray,
+        ): VerifiedRecipientReceiveOfferV2 {
+            requireArtifactBridge()
+            require(verifiedAtMilliseconds > 0) { "verifiedAtMilliseconds must be positive" }
+            require(trustedCheckpointHeight > 0) {
+                "trustedCheckpointHeight must be positive"
+            }
+            val trustedContext = requireFinalityCheckpointContext(
+                trustedCheckpointContextId,
+                "trustedCheckpointContextId",
+            )
+            return try {
+                val fields = nativeVerifyRecipientReceiveOfferV2(
+                    offer.noritoEncoded(),
+                    verifiedAtMilliseconds,
+                    trustedCheckpointHeight,
+                    trustedContext,
+                )
+                requireFieldCount(fields, 4, "verified recipient receive offer")
+                VerifiedRecipientReceiveOfferV2(
+                    request = RecipientPaymentRequest(fields[0]),
+                    lineage = RecipientRegistrationLineage(fields[1]),
+                    publisherCheckpointEnvelope = fields[2],
+                    promotedCheckpoint = FinalityCheckpointPromotionV2(fields[3]),
+                    verifiedAtMilliseconds = verifiedAtMilliseconds,
+                )
+            } finally {
+                trustedContext.fill(0)
             }
         }
 
@@ -1715,17 +1834,39 @@ class KagemushaRecursiveSpendProver private constructor() {
                 loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
                 abiVersion = { nativeBridgeAbiVersion() },
                 symbolProbe = {
-                    expectIllegalArgumentProbe {
+                    expectRejectedSymbolProbe {
                         nativeArtifactBeginV4(byteArrayOf(0), ByteArray(32), ByteArray(32))
                     }
                 },
             )
 
-        private fun expectIllegalArgumentProbe(probe: () -> Unit): Boolean = try {
+        /*
+         * The symbol exists in both lifecycle states. Before production promotion native rejects
+         * the probe as unavailable; after promotion it rejects the malformed manifest. Either
+         * typed rejection proves linkage. Only an absent JNI symbol must make the bridge false.
+         */
+        private fun expectRejectedSymbolProbe(probe: () -> Unit): Boolean = try {
             probe()
             false
         } catch (_: IllegalArgumentException) {
             true
+        } catch (_: IllegalStateException) {
+            true
+        }
+
+        internal fun detectProductionProofBackendCompilation(probe: () -> Unit): Boolean = try {
+            probe()
+            false
+        } catch (_: IllegalArgumentException) {
+            // Production promotion passed and native reached malformed-artifact validation.
+            true
+        } catch (_: IllegalStateException) {
+            // The symbol is linked, but the default/candidate build rejected production use.
+            false
+        } catch (_: UnsatisfiedLinkError) {
+            false
+        } catch (_: SecurityException) {
+            false
         }
 
         private fun requireArtifactBridge() {
@@ -2025,6 +2166,14 @@ class KagemushaRecursiveSpendProver private constructor() {
             return value.copyOf()
         }
 
+        private fun requireFinalityCheckpointContext(value: ByteArray?, name: String): ByteArray =
+            requireDigest(value, name).also { context ->
+                if (context.last().toInt() and 1 != 1) {
+                    context.fill(0)
+                    throw IllegalArgumentException("$name must preserve the Iroha hash marker")
+                }
+            }
+
         private fun requireBoundedBytes(
             value: ByteArray?,
             name: String,
@@ -2078,6 +2227,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         private fun peerArchivePadding(schema: String): Int = when (schema) {
             "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
+            "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2",
             "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" -> 8
             "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2" -> 0
             else -> 0
@@ -2174,7 +2324,11 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic private external fun nativeCreateRecipientRequestV2(payload: ByteArray, signature: ByteArray): ByteArray
         @JvmStatic private external fun nativeVerifyRecipientRequestV2(request: ByteArray, verifiedAtMilliseconds: Long): ByteArray
-        @JvmStatic private external fun nativeVerifyRecipientRegistrationLineageV1(request: ByteArray, lineage: ByteArray, verifiedAtMilliseconds: Long, expectedEvaluatedBlockHeight: Long, expectedEvaluatedBlockHash: ByteArray): ByteArray
+        @JvmStatic private external fun nativeCreateRecipientLineageQueryV2(chainId: ByteArray, recipient: ByteArray, receiverDeviceId: ByteArray, asset: ByteArray, trustedCheckpointHeight: Long): ByteArray
+        @JvmStatic private external fun nativeVerifyRecipientRegistrationLineageV2(request: ByteArray, lineage: ByteArray, verifiedAtMilliseconds: Long, trustedCheckpointHeight: Long, trustedCheckpointContextId: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativeCreateRecipientReceiveOfferV2(request: ByteArray, lineage: ByteArray, publisherCheckpointEnvelope: ByteArray): ByteArray
+        @JvmStatic private external fun nativeProjectRecipientReceiveOfferV2(offer: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativeVerifyRecipientReceiveOfferV2(offer: ByteArray, verifiedAtMilliseconds: Long, trustedCheckpointHeight: Long, trustedCheckpointContextId: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBuildOutputMembershipFrontierV4(leafIndex: Int, flattenedSiblings: ByteArray, directions: ByteArray, root: ByteArray): ByteArray
         @JvmStatic private external fun nativeDeriveOutputMembershipPathsV4(frontier: ByteArray, recipientCommitment: ByteArray, changeCommitment: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeValidateSpendableBranchV4(bundle: ByteArray, provenance: ByteArray, membershipWitness: ByteArray, opening: ByteArray, blockHeight: Long): ByteArray
@@ -2307,12 +2461,26 @@ class KagemushaRecursiveSpendProver private constructor() {
         MAX_PEER_ARCHIVE_BYTES_V2,
     )
 
-    /** Native-verified proof that the request's exact receiver registration is finalized. */
+    class RecipientLineageQueryV2 internal constructor(archive: ByteArray) : CanonicalArchive(
+        archive,
+        "iroha_torii_shared::offline_api::OfflineRecipientLineageRequest",
+        "recipientLineageQuery",
+        MAX_PEER_ARCHIVE_BYTES_V2,
+    )
+
+    /** Portable proof material; it becomes trusted only through a V2 native verifier result. */
     class RecipientRegistrationLineage internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
         "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage",
         "recipientRegistrationLineage",
         MAX_TORII_RESPONSE_BYTES,
+    )
+
+    class RecipientReceiveOfferV2 internal constructor(archive: ByteArray) : CanonicalArchive(
+        archive,
+        "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2",
+        "recipientReceiveOffer",
+        MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2,
     )
 
     class PeerPayment internal constructor(archive: ByteArray) : CanonicalArchive(
@@ -2491,17 +2659,42 @@ class KagemushaRecursiveSpendProver private constructor() {
         spendNullifier: ByteArray,
         val amount: KagemushaScaledAmount,
     ) : AutoCloseable {
-        private var openingValue: NoteOpening? = opening
-        private val rhoValue = requireDigest(rho, "rho")
-        private val diversifierValue = requireDigest(diversifier, "diversifier")
-        private val commitmentValue = requireDigest(commitment, "commitment")
-        private val spendNullifierValue = requireDigest(spendNullifier, "spendNullifier")
+        private var openingValue: NoteOpening? = null
+        private val rhoValue: ByteArray
+        private val diversifierValue: ByteArray
+        private val commitmentValue: ByteArray
+        private val spendNullifierValue: ByteArray
         private var closed = false
 
         init {
-            check(!opening.isDestroyed()) { "opening has already been destroyed" }
-            check(!rhoValue.contentEquals(diversifierValue)) {
-                "native Kagemusha peer-split opening coordinates collide"
+            var rhoCopy: ByteArray? = null
+            var diversifierCopy: ByteArray? = null
+            var commitmentCopy: ByteArray? = null
+            var nullifierCopy: ByteArray? = null
+            try {
+                check(!opening.isDestroyed()) { "opening has already been destroyed" }
+                val checkedRho = requireDigest(rho, "rho").also { rhoCopy = it }
+                val checkedDiversifier = requireDigest(diversifier, "diversifier")
+                    .also { diversifierCopy = it }
+                val checkedCommitment = requireDigest(commitment, "commitment")
+                    .also { commitmentCopy = it }
+                val checkedNullifier = requireDigest(spendNullifier, "spendNullifier")
+                    .also { nullifierCopy = it }
+                check(!checkedRho.contentEquals(checkedDiversifier)) {
+                    "native Kagemusha peer-split opening coordinates collide"
+                }
+                openingValue = opening
+                rhoValue = checkedRho
+                diversifierValue = checkedDiversifier
+                commitmentValue = checkedCommitment
+                spendNullifierValue = checkedNullifier
+            } catch (failure: Throwable) {
+                nullifierCopy?.fill(0)
+                commitmentCopy?.fill(0)
+                diversifierCopy?.fill(0)
+                rhoCopy?.fill(0)
+                opening.destroy()
+                throw failure
             }
         }
 
@@ -3203,6 +3396,77 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun digest(): ByteArray = digestValue.copyOf()
     }
 
+    class FinalityCheckpointPromotionV2 internal constructor(bytes: ByteArray) {
+        private val encodedValue: ByteArray
+        val height: Long
+
+        init {
+            require(bytes.size == PROMOTED_FINALITY_CHECKPOINT_BYTES_V2) {
+                "promoted checkpoint must contain exactly 40 bytes"
+            }
+            require(bytes[0].toInt() and 0x80 == 0) {
+                "promoted checkpoint height exceeds the signed-64-bit client bound"
+            }
+            var parsedHeight = 0L
+            repeat(8) { index ->
+                parsedHeight = (parsedHeight shl 8) or (bytes[index].toLong() and 0xffL)
+            }
+            require(parsedHeight > 0) { "promoted checkpoint height must be positive" }
+            val context = bytes.copyOfRange(8, bytes.size)
+            try {
+                requireFinalityCheckpointContext(context, "promotedCheckpointContextId")
+                    .fill(0)
+            } finally {
+                context.fill(0)
+            }
+            encodedValue = bytes.copyOf()
+            height = parsedHeight
+        }
+
+        fun encoded(): ByteArray = encodedValue.copyOf()
+
+        fun contextId(): ByteArray = encodedValue.copyOfRange(8, encodedValue.size)
+    }
+
+    class VerifiedRecipientRegistrationLineageV2 internal constructor(
+        val lineage: RecipientRegistrationLineage,
+        val promotedCheckpoint: FinalityCheckpointPromotionV2,
+    )
+
+    class RecipientReceiveOfferProjectionV2 internal constructor(
+        val request: RecipientPaymentRequest,
+        val lineage: RecipientRegistrationLineage,
+        publisherCheckpointEnvelope: ByteArray,
+    ) {
+        private val publisherEnvelopeValue = requireBoundedBytes(
+            publisherCheckpointEnvelope,
+            "publisherCheckpointEnvelope",
+            MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1,
+        )
+
+        fun publisherCheckpointEnvelope(): ByteArray = publisherEnvelopeValue.copyOf()
+    }
+
+    class VerifiedRecipientReceiveOfferV2 internal constructor(
+        val request: RecipientPaymentRequest,
+        val lineage: RecipientRegistrationLineage,
+        publisherCheckpointEnvelope: ByteArray,
+        val promotedCheckpoint: FinalityCheckpointPromotionV2,
+        val verifiedAtMilliseconds: Long,
+    ) {
+        private val publisherEnvelopeValue = requireBoundedBytes(
+            publisherCheckpointEnvelope,
+            "publisherCheckpointEnvelope",
+            MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1,
+        )
+
+        init {
+            require(verifiedAtMilliseconds > 0)
+        }
+
+        fun publisherCheckpointEnvelope(): ByteArray = publisherEnvelopeValue.copyOf()
+    }
+
     class RecipientRequestProjection internal constructor(
         val chainId: String,
         val assetDefinitionId: String,
@@ -3700,35 +3964,19 @@ class KagemushaRecursiveSpendProver private constructor() {
         }
 
         fun getRecipientRegistrationLineage(
-            request: RecipientPaymentRequest,
-            readiness: Readiness,
-            verifiedAtMilliseconds: Long,
+            query: RecipientLineageQueryV2,
         ): CompletableFuture<RecipientRegistrationLineage> {
-            require(verifiedAtMilliseconds > 0) { "verifiedAtMilliseconds must be positive" }
-            val readinessProjection = projectReadiness(readiness)
-            val requestProjection = projectRecipientPaymentRequest(request)
-            require(readinessProjection.assetDefinitionId == requestProjection.assetDefinitionId) {
-                "readiness asset must match the recipient request asset"
-            }
             return execute(
                 TransportRequest.builder()
                     .setMethod("POST")
                     .setUri(URI.create("$baseUri$RECEIVER_LINEAGE_PATH"))
                     .addHeader("Accept", NORITO_MEDIA_TYPE)
                     .addHeader("Content-Type", NORITO_MEDIA_TYPE)
-                    .setBody(request.noritoEncoded())
+                    .setBody(query.noritoEncoded())
                     .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
                     .build(),
                 200,
-            ).thenApply {
-                verifyRecipientRegistrationLineage(
-                    request,
-                    it.body,
-                    verifiedAtMilliseconds,
-                    readinessProjection.evaluatedBlockHeight,
-                    readinessProjection.evaluatedBlockHash(),
-                )
-            }
+            ).thenApply { RecipientRegistrationLineage(it.body) }
         }
 
         fun submitTopUp(

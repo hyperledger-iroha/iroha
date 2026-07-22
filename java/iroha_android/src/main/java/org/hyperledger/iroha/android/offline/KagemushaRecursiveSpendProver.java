@@ -68,9 +68,12 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024;
   public static final int MAX_RELEASE_EVIDENCE_BYTES = 16 * 1024 * 1024;
   public static final int MAX_PROMOTION_RECORD_BYTES = 1024 * 1024;
-  public static final int MAX_PEER_TEXT_ENVELOPE_BYTES = 12 * 1024;
-  public static final int MAX_PEER_TEXT_ARCHIVE_BYTES = 9_211;
+  public static final int MAX_PEER_TEXT_ENVELOPE_BYTES = 32_774;
+  public static final int MAX_PEER_TEXT_ARCHIVE_BYTES = 24_576;
   public static final int MAX_PEER_ARCHIVE_BYTES_V2 = 32 * 1024;
+  public static final int MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2 = 24_576;
+  public static final int MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1 = 2 * 1024;
+  public static final int PROMOTED_FINALITY_CHECKPOINT_BYTES_V2 = 40;
   /** Consensus ceiling for one canonical recipient-only ABI-21 peer archive. */
   public static final int MAX_PEER_ARCHIVE_BYTES_V4 = 32 * 1024 * 1024;
   public static final int MAX_PEER_ARCHIVE_BYTES = MAX_PEER_ARCHIVE_BYTES_V4;
@@ -230,6 +233,16 @@ public final class KagemushaRecursiveSpendProver {
     return ARTIFACT_BRIDGE_AVAILABLE;
   }
 
+  /**
+   * Returns whether the linked bridge was compiled with the non-default production Kagemusha
+   * capability, independently of whether an authenticated artifact set has been installed yet.
+   */
+  public static boolean isProductionProofBackendCompiled() {
+    if (!ARTIFACT_BRIDGE_AVAILABLE) return false;
+    return detectProductionProofBackendCompilation(
+        () -> nativeArtifactBeginV4(new byte[] {0}, new byte[32], new byte[32]));
+  }
+
   public static boolean isProofBackendAvailable() {
     if (!ARTIFACT_BRIDGE_AVAILABLE) return false;
     try {
@@ -278,6 +291,24 @@ public final class KagemushaRecursiveSpendProver {
 
   public static RecipientPaymentRequest decodeRecipientPaymentRequest(final byte[] archive) {
     return new RecipientPaymentRequest(archive);
+  }
+
+  public static RecipientRegistrationLineage decodeRecipientRegistrationLineageV2(
+      final byte[] archive) {
+    return new RecipientRegistrationLineage(archive);
+  }
+
+  public static RecipientReceiveOfferV2 decodeRecipientReceiveOfferV2(final byte[] archive) {
+    final RecipientReceiveOfferV2 offer = new RecipientReceiveOfferV2(archive);
+    projectRecipientReceiveOfferV2(offer);
+    return offer;
+  }
+
+  /** Restores an exact persisted readiness archive and forces native canonical validation. */
+  public static Readiness decodeReadiness(final byte[] archive) {
+    final Readiness readiness = new Readiness(archive);
+    projectReadiness(readiness);
+    return readiness;
   }
 
   public static PeerPayment decodePeerPayment(final byte[] archive) {
@@ -1112,40 +1143,122 @@ public final class KagemushaRecursiveSpendProver {
         projection);
   }
 
-  /**
-   * Verifies a proof-bearing receiver registration lineage against the exact signed request.
-   * Native authenticates the tuple/lifetime, admitting transaction and Merkle paths, policy,
-   * header, and historical V2 finality certificate before returning the owned archive.
-   */
-  public static RecipientRegistrationLineage verifyRecipientRegistrationLineage(
-      final RecipientPaymentRequest request,
-      final byte[] lineageArchive,
-      final long verifiedAtMilliseconds,
-      final long expectedEvaluatedBlockHeight,
-      final byte[] expectedEvaluatedBlockHash) {
+  /** Create the request-independent selector used to prefetch portable receiver lineage. */
+  public static RecipientLineageQueryV2 createRecipientLineageQueryV2(
+      final String chainId,
+      final String recipientAccountId,
+      final String receiverDeviceId,
+      final String assetDefinitionId,
+      final long trustedCheckpointHeight) {
     requireArtifactBridge();
-    Objects.requireNonNull(request, "request");
+    if (trustedCheckpointHeight <= 0) {
+      throw new IllegalArgumentException("trustedCheckpointHeight must be positive");
+    }
+    return new RecipientLineageQueryV2(
+        nativeCreateRecipientLineageQueryV2(
+            utf8(chainId, "chainId"),
+            utf8(recipientAccountId, "recipientAccountId"),
+            utf8(receiverDeviceId, "receiverDeviceId"),
+            utf8(assetDefinitionId, "assetDefinitionId"),
+            trustedCheckpointHeight));
+  }
+
+  /** Verify signed request, active-state lineage and a bounded finality suffix locally. */
+  public static VerifiedRecipientRegistrationLineageV2 verifyRecipientRegistrationLineageV2(
+      final RecipientPaymentRequest request,
+      final RecipientRegistrationLineage lineage,
+      final long verifiedAtMilliseconds,
+      final long trustedCheckpointHeight,
+      final byte[] trustedCheckpointContextId) {
+    requireArtifactBridge();
     if (verifiedAtMilliseconds <= 0) {
       throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
     }
-    if (expectedEvaluatedBlockHeight <= 0) {
-      throw new IllegalArgumentException("expectedEvaluatedBlockHeight must be positive");
+    if (trustedCheckpointHeight <= 0) {
+      throw new IllegalArgumentException("trustedCheckpointHeight must be positive");
     }
-    final byte[] expectedHash =
-        requireDigest(expectedEvaluatedBlockHash, "expectedEvaluatedBlockHash");
-    final byte[] bounded =
-        requireBoundedBytes(lineageArchive, "lineageArchive", MAX_TORII_RESPONSE_BYTES);
+    final byte[] trustedContext =
+        requireFinalityCheckpointContext(
+            trustedCheckpointContextId, "trustedCheckpointContextId");
     try {
-      return new RecipientRegistrationLineage(
-          nativeVerifyRecipientRegistrationLineageV1(
-              request.noritoEncoded(),
-              bounded,
+      final byte[][] fields = nativeVerifyRecipientRegistrationLineageV2(
+              Objects.requireNonNull(request, "request").noritoEncoded(),
+              Objects.requireNonNull(lineage, "lineage").noritoEncoded(),
               verifiedAtMilliseconds,
-              expectedEvaluatedBlockHeight,
-              expectedHash));
+              trustedCheckpointHeight,
+              trustedContext);
+      requireFieldCount(fields, 2, "verified recipient lineage");
+      return new VerifiedRecipientRegistrationLineageV2(
+          new RecipientRegistrationLineage(fields[0]),
+          new FinalityCheckpointPromotionV2(fields[1]));
     } finally {
-      Arrays.fill(expectedHash, (byte) 0);
-      Arrays.fill(bounded, (byte) 0);
+      Arrays.fill(trustedContext, (byte) 0);
+    }
+  }
+
+  /** Build one canonical receive offer carrying request, lineage and publisher envelope. */
+  public static RecipientReceiveOfferV2 createRecipientReceiveOfferV2(
+      final RecipientPaymentRequest request,
+      final RecipientRegistrationLineage lineage,
+      final byte[] publisherCheckpointEnvelope) {
+    requireArtifactBridge();
+    final byte[] envelope = requireBoundedBytes(
+        publisherCheckpointEnvelope,
+        "publisherCheckpointEnvelope",
+        MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1);
+    try {
+      return new RecipientReceiveOfferV2(
+          nativeCreateRecipientReceiveOfferV2(
+              Objects.requireNonNull(request, "request").noritoEncoded(),
+              Objects.requireNonNull(lineage, "lineage").noritoEncoded(),
+              envelope));
+    } finally {
+      Arrays.fill(envelope, (byte) 0);
+    }
+  }
+
+  public static RecipientReceiveOfferProjectionV2 projectRecipientReceiveOfferV2(
+      final RecipientReceiveOfferV2 offer) {
+    requireArtifactBridge();
+    final byte[][] fields = nativeProjectRecipientReceiveOfferV2(
+        Objects.requireNonNull(offer, "offer").noritoEncoded());
+    requireFieldCount(fields, 3, "recipient receive offer projection");
+    return new RecipientReceiveOfferProjectionV2(
+        new RecipientPaymentRequest(fields[0]),
+        new RecipientRegistrationLineage(fields[1]),
+        fields[2]);
+  }
+
+  /** Verify the exact whole offer locally against one durable trusted checkpoint. */
+  public static VerifiedRecipientReceiveOfferV2 verifyRecipientReceiveOfferV2(
+      final RecipientReceiveOfferV2 offer,
+      final long verifiedAtMilliseconds,
+      final long trustedCheckpointHeight,
+      final byte[] trustedCheckpointContextId) {
+    requireArtifactBridge();
+    if (verifiedAtMilliseconds <= 0) {
+      throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
+    }
+    if (trustedCheckpointHeight <= 0) {
+      throw new IllegalArgumentException("trustedCheckpointHeight must be positive");
+    }
+    final byte[] trustedContext = requireFinalityCheckpointContext(
+        trustedCheckpointContextId, "trustedCheckpointContextId");
+    try {
+      final byte[][] fields = nativeVerifyRecipientReceiveOfferV2(
+          Objects.requireNonNull(offer, "offer").noritoEncoded(),
+          verifiedAtMilliseconds,
+          trustedCheckpointHeight,
+          trustedContext);
+      requireFieldCount(fields, 4, "verified recipient receive offer");
+      return new VerifiedRecipientReceiveOfferV2(
+          new RecipientPaymentRequest(fields[0]),
+          new RecipientRegistrationLineage(fields[1]),
+          fields[2],
+          new FinalityCheckpointPromotionV2(fields[3]),
+          verifiedAtMilliseconds);
+    } finally {
+      Arrays.fill(trustedContext, (byte) 0);
     }
   }
 
@@ -1732,16 +1845,31 @@ public final class KagemushaRecursiveSpendProver {
         () -> System.loadLibrary(LIBRARY_NAME),
         KagemushaRecursiveSpendProver::nativeBridgeAbiVersion,
         () ->
-            expectIllegalArgumentProbe(
+            expectRejectedSymbolProbe(
                 () -> nativeArtifactBeginV4(new byte[] {0}, new byte[32], new byte[32])));
   }
 
-  private static boolean expectIllegalArgumentProbe(final NativeProbe probe) {
+  /* Native returns unavailable before promotion and malformed-artifact after promotion. */
+  private static boolean expectRejectedSymbolProbe(final NativeProbe probe) {
     try {
       probe.run();
       return false;
-    } catch (final IllegalArgumentException expected) {
+    } catch (final IllegalArgumentException | IllegalStateException expected) {
       return true;
+    }
+  }
+
+  static boolean detectProductionProofBackendCompilation(final NativeProbe probe) {
+    Objects.requireNonNull(probe, "probe");
+    try {
+      probe.run();
+      return false;
+    } catch (final IllegalArgumentException productionMalformedArtifact) {
+      return true;
+    } catch (final IllegalStateException defaultOrCandidateBuild) {
+      return false;
+    } catch (final UnsatisfiedLinkError | SecurityException absentBridge) {
+      return false;
     }
   }
 
@@ -2073,6 +2201,16 @@ public final class KagemushaRecursiveSpendProver {
     return Arrays.copyOf(value, value.length);
   }
 
+  private static byte[] requireFinalityCheckpointContext(
+      final byte[] value, final String name) {
+    final byte[] context = requireDigest(value, name);
+    if ((context[context.length - 1] & 1) != 1) {
+      Arrays.fill(context, (byte) 0);
+      throw new IllegalArgumentException(name + " must preserve the Iroha hash marker");
+    }
+    return context;
+  }
+
   private static byte[] requireBoundedBytes(
       final byte[] value, final String name, final int maximumBytes) {
     if (value == null || value.length == 0 || value.length > maximumBytes) {
@@ -2124,6 +2262,7 @@ public final class KagemushaRecursiveSpendProver {
   private static int peerArchivePadding(final String schema) {
     return switch (schema) {
       case "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
+          "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2",
           "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" -> 8;
       case "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2" -> 0;
       default -> 0;
@@ -2189,7 +2328,17 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Native-verified proof that the request's exact receiver registration is finalized. */
+  public static final class RecipientLineageQueryV2 extends CanonicalArchive {
+    private RecipientLineageQueryV2(final byte[] archive) {
+      super(
+          archive,
+          "iroha_torii_shared::offline_api::OfflineRecipientLineageRequest",
+          "recipientLineageQuery",
+          MAX_PEER_ARCHIVE_BYTES_V2);
+    }
+  }
+
+  /** Portable proof material; it becomes trusted only through a V2 native verifier result. */
   public static final class RecipientRegistrationLineage extends CanonicalArchive {
     private RecipientRegistrationLineage(final byte[] archive) {
       super(
@@ -2197,6 +2346,16 @@ public final class KagemushaRecursiveSpendProver {
           "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage",
           "recipientRegistrationLineage",
           MAX_TORII_RESPONSE_BYTES);
+    }
+  }
+
+  public static final class RecipientReceiveOfferV2 extends CanonicalArchive {
+    private RecipientReceiveOfferV2(final byte[] archive) {
+      super(
+          archive,
+          "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2",
+          "recipientReceiveOffer",
+          MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2);
     }
   }
 
@@ -3155,6 +3314,116 @@ public final class KagemushaRecursiveSpendProver {
     public byte[] digest() { return Arrays.copyOf(digest, digest.length); }
     public long verifiedAtMilliseconds() { return verifiedAtMilliseconds; }
     public RecipientRequestProjection projection() { return projection; }
+  }
+
+  public static final class FinalityCheckpointPromotionV2 {
+    private final byte[] encoded;
+    private final long height;
+
+    private FinalityCheckpointPromotionV2(final byte[] value) {
+      if (value == null || value.length != PROMOTED_FINALITY_CHECKPOINT_BYTES_V2) {
+        throw new IllegalArgumentException("promoted checkpoint must contain exactly 40 bytes");
+      }
+      if ((value[0] & 0x80) != 0) {
+        throw new IllegalArgumentException(
+            "promoted checkpoint height exceeds the signed-64-bit client bound");
+      }
+      long parsedHeight = 0;
+      for (int index = 0; index < 8; index++) {
+        parsedHeight = (parsedHeight << 8) | (value[index] & 0xffL);
+      }
+      if (parsedHeight <= 0) {
+        throw new IllegalArgumentException("promoted checkpoint height must be positive");
+      }
+      final byte[] context = Arrays.copyOfRange(value, 8, value.length);
+      try {
+        final byte[] checked = requireFinalityCheckpointContext(
+            context, "promotedCheckpointContextId");
+        Arrays.fill(checked, (byte) 0);
+      } finally {
+        Arrays.fill(context, (byte) 0);
+      }
+      this.encoded = Arrays.copyOf(value, value.length);
+      this.height = parsedHeight;
+    }
+
+    public byte[] encoded() { return Arrays.copyOf(encoded, encoded.length); }
+    public long height() { return height; }
+    public byte[] contextId() { return Arrays.copyOfRange(encoded, 8, encoded.length); }
+  }
+
+  public static final class VerifiedRecipientRegistrationLineageV2 {
+    private final RecipientRegistrationLineage lineage;
+    private final FinalityCheckpointPromotionV2 promotedCheckpoint;
+
+    private VerifiedRecipientRegistrationLineageV2(
+        final RecipientRegistrationLineage lineage,
+        final FinalityCheckpointPromotionV2 promotedCheckpoint) {
+      this.lineage = Objects.requireNonNull(lineage, "lineage");
+      this.promotedCheckpoint = Objects.requireNonNull(promotedCheckpoint, "promotedCheckpoint");
+    }
+
+    public RecipientRegistrationLineage lineage() { return lineage; }
+    public FinalityCheckpointPromotionV2 promotedCheckpoint() { return promotedCheckpoint; }
+  }
+
+  public static final class RecipientReceiveOfferProjectionV2 {
+    private final RecipientPaymentRequest request;
+    private final RecipientRegistrationLineage lineage;
+    private final byte[] publisherCheckpointEnvelope;
+
+    private RecipientReceiveOfferProjectionV2(
+        final RecipientPaymentRequest request,
+        final RecipientRegistrationLineage lineage,
+        final byte[] publisherCheckpointEnvelope) {
+      this.request = Objects.requireNonNull(request, "request");
+      this.lineage = Objects.requireNonNull(lineage, "lineage");
+      this.publisherCheckpointEnvelope = requireBoundedBytes(
+          publisherCheckpointEnvelope,
+          "publisherCheckpointEnvelope",
+          MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1);
+    }
+
+    public RecipientPaymentRequest request() { return request; }
+    public RecipientRegistrationLineage lineage() { return lineage; }
+    public byte[] publisherCheckpointEnvelope() {
+      return Arrays.copyOf(publisherCheckpointEnvelope, publisherCheckpointEnvelope.length);
+    }
+  }
+
+  public static final class VerifiedRecipientReceiveOfferV2 {
+    private final RecipientPaymentRequest request;
+    private final RecipientRegistrationLineage lineage;
+    private final byte[] publisherCheckpointEnvelope;
+    private final FinalityCheckpointPromotionV2 promotedCheckpoint;
+    private final long verifiedAtMilliseconds;
+
+    private VerifiedRecipientReceiveOfferV2(
+        final RecipientPaymentRequest request,
+        final RecipientRegistrationLineage lineage,
+        final byte[] publisherCheckpointEnvelope,
+        final FinalityCheckpointPromotionV2 promotedCheckpoint,
+        final long verifiedAtMilliseconds) {
+      if (verifiedAtMilliseconds <= 0) {
+        throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
+      }
+      this.request = Objects.requireNonNull(request, "request");
+      this.lineage = Objects.requireNonNull(lineage, "lineage");
+      this.publisherCheckpointEnvelope = requireBoundedBytes(
+          publisherCheckpointEnvelope,
+          "publisherCheckpointEnvelope",
+          MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1);
+      this.promotedCheckpoint = Objects.requireNonNull(promotedCheckpoint, "promotedCheckpoint");
+      this.verifiedAtMilliseconds = verifiedAtMilliseconds;
+    }
+
+    public RecipientPaymentRequest request() { return request; }
+    public RecipientRegistrationLineage lineage() { return lineage; }
+    public byte[] publisherCheckpointEnvelope() {
+      return Arrays.copyOf(publisherCheckpointEnvelope, publisherCheckpointEnvelope.length);
+    }
+    public FinalityCheckpointPromotionV2 promotedCheckpoint() { return promotedCheckpoint; }
+    public long verifiedAtMilliseconds() { return verifiedAtMilliseconds; }
   }
 
   public static final class RecipientRequestProjection {
@@ -4130,39 +4399,18 @@ public final class KagemushaRecursiveSpendProver {
     }
 
     public CompletableFuture<RecipientRegistrationLineage> getRecipientRegistrationLineage(
-        final RecipientPaymentRequest request,
-        final Readiness readiness,
-        final long verifiedAtMilliseconds) {
-      final RecipientPaymentRequest requiredRequest = Objects.requireNonNull(request, "request");
-      if (verifiedAtMilliseconds <= 0) {
-        throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
-      }
-      final ReadinessProjection readinessProjection =
-          projectReadiness(Objects.requireNonNull(readiness, "readiness"));
-      final RecipientRequestProjection requestProjection =
-          projectRecipientPaymentRequest(requiredRequest);
-      if (!readinessProjection.assetDefinitionId().equals(requestProjection.assetDefinitionId())) {
-        throw new IllegalArgumentException(
-            "readiness asset must match the recipient request asset");
-      }
+        final RecipientLineageQueryV2 query) {
       return execute(
               TransportRequest.builder()
                   .setMethod("POST")
                   .setUri(URI.create(baseUri + RECEIVER_LINEAGE_PATH))
                   .addHeader("Accept", NORITO_MEDIA_TYPE)
                   .addHeader("Content-Type", NORITO_MEDIA_TYPE)
-                  .setBody(requiredRequest.noritoEncoded())
+                  .setBody(Objects.requireNonNull(query, "query").noritoEncoded())
                   .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
                   .build(),
               200)
-          .thenApply(
-              response ->
-                  verifyRecipientRegistrationLineage(
-                      requiredRequest,
-                      response.body(),
-                      verifiedAtMilliseconds,
-                      readinessProjection.evaluatedBlockHeight(),
-                      readinessProjection.evaluatedBlockHash()));
+          .thenApply(response -> new RecipientRegistrationLineage(response.body()));
     }
 
     public CompletableFuture<OperationReference> submitTopUp(
@@ -4589,12 +4837,26 @@ public final class KagemushaRecursiveSpendProver {
       byte[] diversifier);
   private static native byte[] nativeCreateRecipientRequestV2(byte[] payload, byte[] signature);
   private static native byte[] nativeVerifyRecipientRequestV2(byte[] request, long verifiedAtMilliseconds);
-  private static native byte[] nativeVerifyRecipientRegistrationLineageV1(
+  private static native byte[] nativeCreateRecipientLineageQueryV2(
+      byte[] chainId,
+      byte[] recipient,
+      byte[] receiverDeviceId,
+      byte[] asset,
+      long trustedCheckpointHeight);
+  private static native byte[][] nativeVerifyRecipientRegistrationLineageV2(
       byte[] request,
       byte[] lineage,
       long verifiedAtMilliseconds,
-      long expectedEvaluatedBlockHeight,
-      byte[] expectedEvaluatedBlockHash);
+      long trustedCheckpointHeight,
+      byte[] trustedCheckpointContextId);
+  private static native byte[] nativeCreateRecipientReceiveOfferV2(
+      byte[] request, byte[] lineage, byte[] publisherCheckpointEnvelope);
+  private static native byte[][] nativeProjectRecipientReceiveOfferV2(byte[] offer);
+  private static native byte[][] nativeVerifyRecipientReceiveOfferV2(
+      byte[] offer,
+      long verifiedAtMilliseconds,
+      long trustedCheckpointHeight,
+      byte[] trustedCheckpointContextId);
   private static native byte[] nativeBuildOutputMembershipFrontierV4(
       int leafIndex, byte[] flattenedSiblings, byte[] directions, byte[] root);
   private static native byte[][] nativeDeriveOutputMembershipPathsV4(

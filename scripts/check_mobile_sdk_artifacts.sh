@@ -152,6 +152,12 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2
   connect_norito_kagemusha_recipient_payment_request_create_v2
   connect_norito_kagemusha_recipient_payment_request_verify_v2
+  connect_norito_kagemusha_recipient_lineage_query_create_v2
+  connect_norito_kagemusha_recipient_registration_lineage_verify_v1
+  connect_norito_kagemusha_recipient_registration_lineage_verify_v2
+  connect_norito_kagemusha_recipient_receive_offer_create_v2
+  connect_norito_kagemusha_recipient_receive_offer_project_v2
+  connect_norito_kagemusha_recipient_receive_offer_verify_v2
   connect_norito_kagemusha_request_authorization_signing_bytes_v2
   connect_norito_kagemusha_request_authorization_create_v2
   connect_norito_kagemusha_request_authorization_finalize_hardware_v2
@@ -160,6 +166,7 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2
   connect_norito_kagemusha_receiver_acknowledgement_create_v2
   connect_norito_kagemusha_receiver_acknowledgement_verify_v2
+  connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4
   connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4
   connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4
   connect_norito_kagemusha_recursive_spend_bundle_summary_v4
@@ -1289,6 +1296,37 @@ check_xcframework() {
       elif [[ -e "$privacy_marker" ]]; then
         fail "default privacy artifact must not carry the privacy-production-enabled XCFramework marker"
       fi
+      if ! python3 - "$manifest" "$privacy_value" <<'PY'
+import json
+import sys
+
+
+def reject_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON member")
+        result[key] = value
+    return result
+
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        payload = json.load(handle, object_pairs_hook=reject_duplicates)
+    privacy_production_enabled = sys.argv[2] == "true"
+    expected = ["privacy-production-enabled"] if privacy_production_enabled else []
+    valid = isinstance(payload, dict) and payload.get("cargo_features") == expected
+except (OSError, UnicodeError, ValueError, TypeError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PY
+      then
+        if [[ "$privacy_value" == "true" ]]; then
+          fail 'privacy-production NoritoBridge artifact cargo_features must be exactly ["privacy-production-enabled"]'
+        else
+          fail "default NoritoBridge artifact cargo_features must be exactly []"
+        fi
+      fi
     fi
     require_regex "$manifest" '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "NoritoBridge artifact version"
     for slice in "${slices[@]}"; do
@@ -1551,7 +1589,7 @@ retired_or_extra = sorted(actual - expected)
 if missing:
     print(
         f"[mobile-sdk-artifacts] ERROR: client-android {abi} bridge is missing "
-        "ABI20/V4 symbols: " + ", ".join(missing),
+        "ABI21/V4 symbols: " + ", ".join(missing),
         file=sys.stderr,
     )
 if retired_or_extra:

@@ -156,3 +156,10 @@ lowercase 64-hex `Idempotency-Key` equals the signed operation id. Identical
 retries return the same operation; reuse with different bytes conflicts. The
 wallet retains pending state until the operation-status route reports final
 chain finality.
+
+## Mobile production acceptance bundle
+
+The deterministic Android/iOS restart and no-network acceptance bundle,
+including its authenticated SBD release, finalized top-up, initialized sender
+branch, fresh receiver request, and assertion-only payment/ACK outputs, is
+specified in [Kagemusha SBD mobile acceptance bundle](kagemusha_sbd_mobile_acceptance_bundle.md).

@@ -4450,6 +4450,33 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
             "open_ingress_for_active_height must preserve exact production order",
         ),
         (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn initial_block_sync_deadline(",
+            "if eager_recovery {\n        height_started_at\n    } else {",
+            "if eager_recovery {\n"
+            "        deadline_after(height_started_at, round_timeout)\n"
+            "    } else {",
+            "recovery-scoped eager block-sync initial_block_sync_deadline "
+            "declaration and complete control flow",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "admitted_discovered_commit_qc = true;",
+            "admitted_discovered_commit_qc = false;",
+            "only authenticated discovered CommitQC admission/coalescing with "
+            "serialized reducer ownership may turn an outstanding request from "
+            "Some to None and retain eager block-sync",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "const fn retain_eager_block_sync(",
+            "recovering_interrupted_tip || admitted_discovered_commit_qc",
+            "{ let _ = admitted_discovered_commit_qc; recovering_interrupted_tip }",
+            "recovery-scoped eager block-sync retain_eager_block_sync "
+            "declaration and complete control flow",
+        ),
+        (
             "crates/iroha_core/src/sumeragi/status.rs",
             "fn activate_recovered_v2_successor_height_at(",
             "set_v2_status_at(successor, now);",
@@ -4494,6 +4521,8 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         destination = tmp_path / source_name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / source_name, destination)
+
+    assert module._successor_production_source_fidelity_errors(tmp_path) == []
 
     path = tmp_path / relative_path
     source = path.read_text(encoding="utf-8")
@@ -5193,6 +5222,15 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "pub(crate) fn durable_lane_rollover_authority(",
+            "block.header().height().get() != finality_artifact.height\n"
+            "            || block.hash() != finality_artifact.block_hash",
+            "false",
+            "lane authority builder must source its finalized body from the exact "
+            "canonical Kura block without treating external-only bodies as lane plans",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn durable_lane_rollover_authority(",
             "|| application_receipt.application_block_hash != finality_artifact.block_hash",
             "|| false",
             "lane authority builder must bind every winner to the exact applied artifact",
@@ -5291,6 +5329,22 @@ def test_exact_output_production_source_is_bound() -> None:
             "                )?;",
             "let _ = services.retry_pending_exact_output();",
             "durable finalization must perform receipt-aware retry, dispatch, and exact handoff before successor activation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn persist_anchored_sessions(",
+            "self.hydrate_canonical_lane_artifacts();",
+            "let _ = &self.lane_sessions;",
+            "late canonical lane hydration must precede committed-session collection",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn hydrate_canonical_lane_artifacts(",
+            "let _ = self\n"
+            "                .lane_sessions\n"
+            "                .insert_recovered_proposal_replacing_uncommitted_conflict(proposal);",
+            "let _ = proposal;",
+            "late canonical lane hydration must retain the exact proposal as bounded recovery work",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -13831,7 +13885,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::run::tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 438 tests",
+            "must contain exactly 444 tests",
         ),
         (
             "  peer::run::tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -13839,9 +13893,16 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=438",
-            "readonly expected_production_liveness_test_count=436",
-            "production liveness source count must be sealed as 438",
+            "readonly expected_production_liveness_test_count=444",
+            "readonly expected_production_liveness_test_count=442",
+            "production liveness source count must be sealed as 444",
+        ),
+        (
+            "  block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification\n"
+            "  block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin\n",
+            "  block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin\n"
+            "  block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification\n",
+            "canonical module/test inventory SHA-256",
         ),
         (
             'production_p2p_unit_list="$(cargo test --locked -p iroha_p2p --lib -- --list)"',
@@ -13863,6 +13924,9 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -13877,6 +13941,144 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
     assert any(expected_error in error for error in errors), errors
 
 
+def test_production_release_inventory_seals_later_genesis_proposal_origin(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    required_paths = (
+        Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("scripts/write_sumeragi_v2_release_receipt.py"),
+        Path("docs/formal/sumeragi_v2/README.md"),
+        Path("docs/formal/sumeragi_v2/PROOF.md"),
+        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+    )
+    for relative in required_paths:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+
+    assert module._production_liveness_release_inventory_errors(tmp_path) == []
+
+    finality_path = (
+        tmp_path
+        / "crates"
+        / "iroha_data_model"
+        / "src"
+        / "block"
+        / "consensus_v2"
+        / "finality.rs"
+    )
+    source = finality_path.read_text(encoding="utf-8")
+    exact_call = "artifact_bound_to_header(0, 3, 5)"
+    assert source.count(exact_call) == 1
+    finality_path.write_text(
+        source.replace(exact_call, "artifact_bound_to_header(0, 2, 5)", 1),
+        encoding="utf-8",
+    )
+
+    errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert any(
+        "genesis header-binding release regression must match exact reviewed "
+        "token digest" in error
+        for error in errors
+    ), errors
+
+
+def test_production_release_inventory_seals_contention_tolerant_restart_deadline(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    required_paths = (
+        Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("scripts/write_sumeragi_v2_release_receipt.py"),
+        Path("docs/formal/sumeragi_v2/README.md"),
+        Path("docs/formal/sumeragi_v2/PROOF.md"),
+        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+    )
+    for relative in required_paths:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+
+    assert module._production_liveness_release_inventory_errors(tmp_path) == []
+
+    runner_path = tmp_path / "integration_tests" / "tests" / "sumeragi_v2_runner.rs"
+    source = runner_path.read_text(encoding="utf-8")
+    exact_assertion = "assert_eq!(base_round_timeout_ms, 20_000);"
+    assert source.count(exact_assertion) == 1
+    runner_path.write_text(
+        source.replace(
+            exact_assertion,
+            "assert_eq!(base_round_timeout_ms, 19_999);",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert any(
+        "contention-tolerant restart release regression must match exact "
+        "reviewed token digest" in error
+        for error in errors
+    ), errors
+
+
+def test_production_release_inventory_seals_successor_parent_binding(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    required_paths = (
+        Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("scripts/write_sumeragi_v2_release_receipt.py"),
+        Path("docs/formal/sumeragi_v2/README.md"),
+        Path("docs/formal/sumeragi_v2/PROOF.md"),
+        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+    )
+    for relative in required_paths:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+
+    assert module._production_liveness_release_inventory_errors(tmp_path) == []
+
+    adapter_path = tmp_path / "crates" / "iroha_core" / "src" / "sumeragi" / "v2.rs"
+    canonical_source = adapter_path.read_text(encoding="utf-8")
+    mutations = (
+        (
+            "successor_core_context_preserves_the_parent_certificate_binding",
+            "assert_ne!(core_parent.context_id(), context_id(successor_id));",
+            "assert_eq!(core_parent.context_id(), context_id(successor_id));",
+        ),
+            (
+                "successor_context_requires_the_durable_cryptographic_parent",
+                "let admitted = adapter\n            .receive_authenticated(authenticated)",
+                "let admitted = adapter\n            .receive_authenticated(proposal)",
+            ),
+    )
+    for test_name, old, new in mutations:
+        assert canonical_source.count(old) == 1, old
+        adapter_path.write_text(
+            canonical_source.replace(old, new, 1),
+            encoding="utf-8",
+        )
+        errors = module._production_liveness_release_inventory_errors(tmp_path)
+        assert any(
+            "successor parent-binding release regression "
+            f"{test_name} must match exact reviewed token digest" in error
+            for error in errors
+        ), errors
+        adapter_path.write_text(canonical_source, encoding="utf-8")
+
+
 def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     tmp_path: Path,
 ) -> None:
@@ -13887,6 +14089,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -13914,9 +14119,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 438",
-            "_PRODUCTION_TEST_COUNT = 436",
-            "production test count must equal the exact shell inventory count 438",
+            "_PRODUCTION_TEST_COUNT = 444",
+            "_PRODUCTION_TEST_COUNT = 442",
+            "production test count must equal the exact shell inventory count 444",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -13956,6 +14161,9 @@ def test_production_release_inventory_rejects_receipt_and_command_drift(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
     )
     for required in required_paths:
         destination = tmp_path / required
@@ -14338,6 +14546,16 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "sumeragi_v2_runner::prepare_qc_split_tests::",
             "distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one",
             integration_runner_source,
+        ),
+        (
+            "sumeragi_v2_runner::prepare_qc_split_tests::",
+            "restart_scenario_uses_a_contention_tolerant_view_zero_deadline",
+            integration_runner_source,
+        ),
+        (
+            "sumeragi::v2::tests::",
+            "successor_core_context_preserves_the_parent_certificate_binding",
+            adapter_source,
         ),
     )
     macro_step_production_inventory_additions = (
@@ -14918,10 +15136,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 438
-    assert len(set(production_inventory)) == 438
-    assert "readonly expected_production_liveness_test_count=438" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 438" in receipt_source
+    assert len(production_inventory) == 444
+    assert len(set(production_inventory)) == 444
+    assert "readonly expected_production_liveness_test_count=444" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 444" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -14931,7 +15149,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 438
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 444
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -14980,6 +15198,18 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "network::tests::reconnecting_peer_cannot_multiply_retained_source_credits",
         "tests::relay_fairness::"
         "seventeen_and_thousands_of_origins_cannot_multiply_one_authenticated_via",
+        "block::consensus_v2::finality::tests::"
+        "genesis_header_binding_accepts_a_later_first_proposal_origin",
+        "sumeragi_v2_runner::prepare_qc_split_tests::"
+        "restart_scenario_uses_a_contention_tolerant_view_zero_deadline",
+        "sumeragi::v2::tests::"
+        "successor_core_context_preserves_the_parent_certificate_binding",
+        "sumeragi::v2_lane_work::tests::"
+        "decided_lane_ownership_blocks_rollover_until_its_session_is_durable",
+        "sumeragi::v2_recovery::tests::"
+        "finality_complete_tip_with_incomplete_lane_completion_reopens_same_height",
+        "sumeragi::v2_runner::tests::"
+        "terminal_ingress_discards_commit_discovery_and_losing_current_body_requests",
     ):
         assert required_test in production_inventory
     assert (
@@ -15041,8 +15271,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_modules) == 24
-    assert len(set(production_modules)) == 24
+    assert len(production_modules) == 28
+    assert len(set(production_modules)) == 28
     assert "kura::tests" in production_modules
     assert "kura::lane_geometry::tests" in production_modules
     assert "sumeragi::authoritative_runtime_gate_tests" in production_modules
@@ -15096,7 +15326,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner" in release_source
     assert "blocker_classifier_has_stable_specific_precedence" in release_source
     assert (
-        "current_view_timeout_path_supersedes_prepare_but_not_any_locked_commit"
+        "current_view_timeout_path_yields_only_to_an_exact_locked_commit_owner"
         in release_source
     )
     assert "missing required production Sumeragi v2 liveness test" in release_source

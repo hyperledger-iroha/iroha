@@ -2709,7 +2709,7 @@ final class ToriiClientTests: XCTestCase {
 
             await XCTAssertThrowsErrorAsync(
                 try await makeClient().resolveAccountAlias("alice@universal")
-            )
+            ) { _ in }
         }
     }
 

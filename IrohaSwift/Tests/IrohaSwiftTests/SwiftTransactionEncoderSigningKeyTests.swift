@@ -85,8 +85,8 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
                                   assetDefinitionId: Self.fixtureAssetDefinitionId,
                                   quantity: "42",
                                   destination: authority,
-                                  ttlMs: 90,
-                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                  feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                  ttlMs: 90)
         let envelope = try SwiftTransactionEncoder.encodeMint(request: request,
                                                               signingKey: signingKey,
                                                               creationTimeMs: 1_717_000_000)

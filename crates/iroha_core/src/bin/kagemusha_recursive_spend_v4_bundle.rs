@@ -160,6 +160,106 @@ const CANDIDATE_VALIDATION_REPORT_SCHEMA_V1: &str =
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MAX_ATTESTATION_BYTES: u64 = 1024 * 1024;
+const KAGEMUSHA_V4_GUARD_FD_ENV: &str = "IROHA_KAGEMUSHA_V4_GUARD_FD";
+
+/// Write-only channel inherited from the Kagemusha resource supervisor.
+///
+/// Candidate generation deliberately refuses to rely on an environment-only
+/// marker: opening and writing the inherited pipe proves that the supervising
+/// process is still alive before the first production-sized allocation.
+#[derive(Debug)]
+struct KagemushaV4GuardChannel {
+    channel: File,
+}
+
+impl KagemushaV4GuardChannel {
+    fn require(initial_phase: &str) -> Result<Self, Box<dyn Error>> {
+        let descriptor = env::var_os(KAGEMUSHA_V4_GUARD_FD_ENV);
+        let mut guard = Self::from_descriptor_value(descriptor.as_deref()).map_err(|error| {
+            format!(
+                "Kagemusha V4 candidate generation requires the resource supervisor ({KAGEMUSHA_V4_GUARD_FD_ENV}): {error}"
+            )
+        })?;
+        guard.write_phase(initial_phase)?;
+        Ok(guard)
+    }
+
+    #[cfg(unix)]
+    fn from_descriptor_value(value: Option<&std::ffi::OsStr>) -> io::Result<Self> {
+        use std::os::unix::fs::FileTypeExt as _;
+
+        let value = value.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "resource-supervisor descriptor is absent",
+            )
+        })?;
+        let descriptor = value
+            .to_str()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "descriptor is not UTF-8"))?
+            .parse::<i32>()
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "descriptor is not an integer")
+            })?;
+        if descriptor < 3 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "descriptor must not alias standard input or output",
+            ));
+        }
+
+        // Opening the descriptor pseudo-file duplicates it without taking
+        // ownership of an unvalidated raw integer. Linux/Android expose
+        // `/proc/self/fd`; macOS exposes `/dev/fd`.
+        let mut last_error = None;
+        for path in [
+            format!("/proc/self/fd/{descriptor}"),
+            format!("/dev/fd/{descriptor}"),
+        ] {
+            match std::fs::OpenOptions::new().write(true).open(path) {
+                Ok(channel) => {
+                    if !channel.metadata()?.file_type().is_fifo() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "resource-supervisor descriptor is not a pipe",
+                        ));
+                    }
+                    return Ok(Self { channel });
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "resource-supervisor descriptor is not open",
+            )
+        }))
+    }
+
+    #[cfg(not(unix))]
+    fn from_descriptor_value(_value: Option<&std::ffi::OsStr>) -> io::Result<Self> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "resource-supervised generation requires a POSIX host",
+        ))
+    }
+
+    fn write_phase(&mut self, phase: &str) -> io::Result<()> {
+        if phase.is_empty()
+            || !phase.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "resource-supervisor phase is not canonical ASCII",
+            ));
+        }
+        writeln!(self.channel, "stage={phase}")?;
+        self.channel.flush()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpec {
@@ -721,6 +821,12 @@ fn prepare_bundle_metadata(
         decode_canonical_circuit_params(step_eq_params_input, "--step-eq-circuit-params")?;
     let requested_step_ep_params =
         decode_canonical_circuit_params(step_ep_params_input, "--step-ep-circuit-params")?;
+    requested_step_eq_params
+        .validate_release_generation_profile()
+        .map_err(|error| format!("Eq release-generation profile is not reviewed: {error}"))?;
+    requested_step_ep_params
+        .validate_release_generation_profile()
+        .map_err(|error| format!("Ep release-generation profile is not reviewed: {error}"))?;
     let generated = generate_kagemusha_pasta_cycle_artifacts_v4(
         requested_step_eq_params,
         requested_step_ep_params,
@@ -1165,6 +1271,9 @@ fn validate_current_source(
 }
 
 fn build_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+    let mut resource_guard =
+        KagemushaV4GuardChannel::require("bundle.generate-candidate.admitted")?;
+
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err(
         "Kagemusha V4 bundle publication requires Linux, Android, or macOS atomic directory publication"
@@ -1192,11 +1301,13 @@ fn build_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Err
             1024 * 1024,
             "Ep inline circuit parameters",
         )?;
+        resource_guard.write_phase("bundle.generate-candidate.artifact-generation.begin")?;
         let (metadata, generated_artifacts) = prepare_bundle_metadata(
             options,
             &mut step_eq_params_input,
             &mut step_ep_params_input,
         )?;
+        resource_guard.write_phase("bundle.generate-candidate.artifact-generation.complete")?;
         let prepared = generated_artifacts
             .into_iter()
             .map(|artifact| prepare_artifact(artifact, &metadata))
@@ -2702,6 +2813,19 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
     use super::*;
+
+    #[test]
+    fn raw_candidate_generation_without_guard_fd_is_rejected() {
+        let error = KagemushaV4GuardChannel::from_descriptor_value(None)
+            .expect_err("raw generation must not pass admission");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+        let error = KagemushaV4GuardChannel::from_descriptor_value(Some(std::ffi::OsStr::new(
+            "not-a-descriptor",
+        )))
+        .expect_err("malformed supervisor descriptors must be rejected");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
 
     #[test]
     fn artifact_inventory_is_exact_eq_then_ep_four_role_order() {

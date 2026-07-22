@@ -27,8 +27,9 @@ use iroha_data_model::{
     offline::{
         KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
         KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendTopUpAnchorRefV2,
-        KagemushaRecursiveSpendTopUpAnchorV4, KagemushaTopUpFinalityProofV2,
-        KagemushaTopUpFinalityRosterArtifactV2, KagemushaTopUpFinalityRosterWindowV2,
+        KagemushaRecursiveSpendTopUpAnchorV4, KagemushaTopUpAnchorMerkleProofV2,
+        KagemushaTopUpFinalityProofV2, KagemushaTopUpFinalityRosterArtifactV2,
+        KagemushaTopUpFinalityRosterWindowV2,
     },
 };
 use parking_lot::Mutex;
@@ -37,8 +38,63 @@ use thiserror::Error;
 
 use crate::sumeragi::smt::{
     KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KagemushaTopUpMerkleProof, KvPair,
-    verify_kagemusha_topup_write_inclusion,
+    build_kagemusha_topup_block_commitment, verify_kagemusha_topup_write_inclusion,
 };
+
+/// Consensus execution-commitment material for a block containing one
+/// finalized Kagemusha top-up anchor and no unrelated writes.
+///
+/// This narrow producer-side projection deliberately reuses the live
+/// Sumeragi commitment builder. Release qualification and portable SDK
+/// acceptance generators can therefore construct a real QC-authenticated
+/// anchor without duplicating the consensus leaf tag, sparse-tree rules, or
+/// balanced top-up tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KagemushaSingleTopUpExecutionCommitmentV2 {
+    /// Root of the (empty) ordinary-write set.
+    pub ordinary_writes_root: Hash,
+    /// Post-state root combining ordinary writes and the top-up root.
+    pub post_state_root: Hash,
+    /// Root of the one-leaf block-local top-up tree.
+    pub topup_anchor_root: Hash,
+    /// Inclusion path consumed by [`KagemushaTopUpFinalityProofV2`].
+    pub anchor_path: KagemushaTopUpAnchorMerkleProofV2,
+}
+
+/// Build the exact consensus commitment for one finalized top-up anchor.
+///
+/// # Errors
+///
+/// Returns an error for a zero operation id/digest or if the live consensus
+/// commitment builder unexpectedly rejects or omits the supplied leaf.
+pub fn build_single_kagemusha_topup_execution_commitment_v2(
+    operation_id: [u8; 32],
+    anchor_digest: [u8; 32],
+) -> Result<KagemushaSingleTopUpExecutionCommitmentV2, &'static str> {
+    if operation_id == [0; 32] || anchor_digest == [0; 32] {
+        return Err("Kagemusha top-up operation id and anchor digest must be non-zero");
+    }
+    let mut witness_key = Vec::with_capacity(33);
+    witness_key.push(KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
+    witness_key.extend_from_slice(&operation_id);
+    let commitment =
+        build_kagemusha_topup_block_commitment(&[KvPair::new(witness_key, anchor_digest)])?
+            .ok_or("single Kagemusha top-up commitment unexpectedly has no leaf")?;
+    let proof = commitment
+        .proofs
+        .first()
+        .ok_or("single Kagemusha top-up commitment unexpectedly has no proof")?;
+    Ok(KagemushaSingleTopUpExecutionCommitmentV2 {
+        ordinary_writes_root: commitment.ordinary_writes_root,
+        post_state_root: commitment.post_state_root,
+        topup_anchor_root: commitment.topup_anchor_root,
+        anchor_path: KagemushaTopUpAnchorMerkleProofV2 {
+            leaf_index: proof.leaf_index,
+            leaf_count: proof.leaf_count,
+            siblings: proof.siblings.iter().copied().map(Into::into).collect(),
+        },
+    })
+}
 
 /// Number of exact authenticated roster archives whose successful full PoP
 /// validation is retained by one verifier instance.

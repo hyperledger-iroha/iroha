@@ -13,7 +13,7 @@ func irohaPeerKagemushaStructuralArchiveV1(
     let alignment: Int
     switch kind {
     case .receiveRequest:
-        schema = KagemushaRecursiveSpend.recipientRequestWireName
+        schema = KagemushaRecursiveSpend.recipientReceiveOfferWireName
         alignment = 16
     case .payment:
         schema = KagemushaRecursiveSpend.peerPaymentWireNameV4

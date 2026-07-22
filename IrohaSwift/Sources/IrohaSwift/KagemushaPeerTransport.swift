@@ -52,7 +52,11 @@ public enum KagemushaPeerTransportContract {
     public static let acknowledgementTextPrefix = "PKK2A."
     public static let qrStreamTextPrefix = "PKKQ1."
 
-    public static let nfcApplicationIdentifierHex = "F0504B45504B524E464301"
+    /// Kagemusha uses the canonical SDK NFC AID; it does not register a
+    /// parallel application identifier that could route the same transfer to
+    /// a different protocol implementation.
+    public static let nfcApplicationIdentifierHex =
+        IrohaPeerNfcV1.applicationIdentifierHex
     public static let nearbyServiceName = "pk-kagemusha"
     public static let nearbyBonjourService = "_pk-kagemusha._tcp"
 
@@ -75,7 +79,9 @@ public enum KagemushaPeerTransportContract {
 
 /// A canonical, decoded Kagemusha peer archive.
 public enum KagemushaPeerPayload: Equatable, Sendable {
-    case receiveRequest(KagemushaRecipientPaymentRequest)
+    /// ABI-21 carries the whole portable offer (signed request, reusable
+    /// lineage, and publisher checkpoint envelope) under wire kind 1.
+    case receiveRequest(KagemushaRecipientReceiveOfferV2)
     case payment(KagemushaRecursiveSpendPeerPaymentV4)
     case acknowledgement(KagemushaReceiverAcknowledgement)
 
@@ -92,8 +98,8 @@ public enum KagemushaPeerPayload: Equatable, Sendable {
 
     public var archive: Data {
         switch self {
-        case .receiveRequest(let request):
-            return request.archive
+        case .receiveRequest(let offer):
+            return offer.noritoArchive
         case .payment(let payment):
             return payment.archive
         case .acknowledgement(let acknowledgement):
@@ -118,7 +124,7 @@ public enum KagemushaPeerPayload: Equatable, Sendable {
             switch kind {
             case .receiveRequest:
                 return .receiveRequest(
-                    try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(archive)
+                    try KagemushaRecipientReceiveOfferV2(noritoArchive: archive)
                 )
             case .payment:
                 return .payment(try KagemushaRecursiveSpendPeerPaymentV4(noritoArchive: archive))

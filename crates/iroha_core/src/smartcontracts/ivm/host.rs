@@ -162,6 +162,9 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
 // reads/enumeration remain supported; mutation must go through the validating
 // native instructions that own the records.
 const READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
+    "offline_device_attestation_policy/",
+    "kagemusha_online_registration_v1_",
+    "kagemusha_online_registration_v2_",
     "pkdeploy_verified_lane_relay_",
     "pkdeploy_verified_nexus_fee_budget_",
     "VerifiedLaneRelays/",
@@ -26270,6 +26273,10 @@ seiyaku DurableOwner {
             );
         }
         for key in [
+            "offline_device_attestation_policy",
+            "offline_device_attestation_policy/platform-roots",
+            "kagemusha_online_registration_v1_deadbeef",
+            "kagemusha_online_registration_v2_deadbeef",
             "pkdeploy_verified_lane_relay",
             "pkdeploy_verified_lane_relay_1_2_3_deadbeef",
             "pkdeploy_verified_nexus_fee_budget_deadbeef",
@@ -26285,6 +26292,9 @@ seiyaku DurableOwner {
         for key in [
             "scatter/counter",
             "merge_lane_frontier_v1x",
+            "offline_device_attestation_policyx",
+            "kagemusha_online_registration_v1x",
+            "kagemusha_online_registration_v2x",
             "pkdeploy_verified_lane_relayx",
             "counter",
         ] {

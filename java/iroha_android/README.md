@@ -134,9 +134,8 @@ fields. Both BEGIN and COMMIT callbacks have a five-second fail-closed deadline
 and must be idempotent because a timeout makes the durable result ambiguous.
 Late callbacks cannot mutate a newer tap. IPA1 resumes at byte zero, while IDA1
 takes precedence after COMMIT and ACK-phase BEGIN is rejected.
-The NFC value and the 32-KiB canonical, 24,576-byte Offline Note encoded, and
-12,288-byte bounded Kagemusha encoded wire limits are hard constructor
-ceilings.
+The NFC value and the 32-KiB canonical and 24,576-byte encoded-body limits for
+both Offline Note and bounded Kagemusha handoffs are hard constructor ceilings.
 
 The AAR merges the version-bounded Nearby/NFC permissions and ships
 `@xml/iroha_peer_nfc_v1_aids`. A wallet must still register its concrete HCE
@@ -177,17 +176,19 @@ dependencies, so Java and Kotlin do not maintain divergent cryptographic or
 APDU implementations. Shared vectors live in `fixtures/offline/peer_*.json`.
 
 Profile `1` requires schema `1` and a maximum 24,576-byte encoded body. Profile
-`2` requires schema `0x0102` and is a 12,288-byte bounded handoff for a mainline
+`2` requires schema `0x0102` and is a 24,576-byte bounded handoff for a mainline
 typed Kagemusha native archive. Generic IPM validates its exact ABI21 envelope
 without native code; production code then performs deeper semantic decoding
 through `IrohaPeerKagemushaAdapterV1`. Full ABI21
 QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStream`, `KagemushaNfcProtocol`, and `KagemushaNearby`
-facades with distinct `PKK2*`/`PKKQ1`, F050, and Bonjour identifiers.
-Kagemusha Nearby's JSON/text envelope has its own smaller bound. Those rails
-are never negotiated, reinterpreted, or used as fallback for Retail Offline
-Peer V1. The no-old-AID/raw-text/unauthenticated-Nearby rule applies to
-`IrohaPeer*V1`, not the retained ABI21 family. Do not use profile `2` for a
+facades. Kagemusha retains its distinct `PKK2*`/`PKKQ1` text and Bonjour
+identifiers, while NFC uses the sole canonical AID
+`F049524F48415045455201`. Nearby uses the authenticated binary `PKNB1`
+envelope and its own smaller bound. Those rails are never negotiated,
+reinterpreted, or used as fallback for Retail Offline Peer V1. The
+no-raw-text/no-unauthenticated-Nearby rule applies to `IrohaPeer*V1`; the
+retained ABI21 family also has no old AID. Do not use profile `2` for a
 sidecar/demo representation.
 
 These transport changes are client-side and require no backend API change.

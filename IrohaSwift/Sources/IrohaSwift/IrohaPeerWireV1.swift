@@ -50,6 +50,11 @@ public enum IrohaPeerWireCompressionPolicyV1: Sendable {
 
 /// Allocation limits applied before an untrusted body is decompressed.
 public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
+    /// The binary IPM1 Kagemusha profile deliberately admits one complete
+    /// portable receiver-lineage offer on the smallest shared NFC rail. Text
+    /// and static-QR codecs retain their independent, smaller rail limits.
+    public static let maximumKagemushaProfileBytes = 24_576
+
     public let maximumCanonicalBytes: Int
     public let maximumOfflineNoteEncodedBytes: Int
     public let maximumKagemushaEncodedBytes: Int
@@ -57,7 +62,7 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
     public init(
         maximumCanonicalBytes: Int = 32 * 1024,
         maximumOfflineNoteEncodedBytes: Int = 24_576,
-        maximumKagemushaEncodedBytes: Int = 12_288
+        maximumKagemushaEncodedBytes: Int = Self.maximumKagemushaProfileBytes
     ) {
         precondition(
             Self.areValid(
@@ -80,7 +85,7 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
     ) -> Bool {
         (1...(32 * 1_024)).contains(maximumCanonicalBytes) &&
             (1...24_576).contains(maximumOfflineNoteEncodedBytes) &&
-            (1...12_288).contains(maximumKagemushaEncodedBytes)
+            (1...maximumKagemushaProfileBytes).contains(maximumKagemushaEncodedBytes)
     }
 
     public func maximumEncodedBytes(for profile: IrohaPeerWireProfileV1) throws -> Int {
@@ -415,7 +420,7 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         let schema: String
         switch kind {
         case .receiveRequest:
-            schema = KagemushaRecursiveSpend.recipientRequestWireName
+            schema = KagemushaRecursiveSpend.recipientReceiveOfferWireName
         case .payment:
             schema = KagemushaRecursiveSpend.peerPaymentWireNameV4
         case .acknowledgement:

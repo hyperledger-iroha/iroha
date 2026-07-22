@@ -306,6 +306,7 @@ PLIST
   "version": "1.0.0",
   "native_bridge_abi_version": 21,
   "privacy_production_enabled": false,
+  "cargo_features": [],
   "source_commit": "0000000000000000000000000000000000000000",
   "source_tree_dirty": false,
   "source_fingerprint_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -352,6 +353,12 @@ PLIST
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_create_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_project_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
     "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
@@ -360,6 +367,7 @@ PLIST
     "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
@@ -381,6 +389,11 @@ SETTINGS
   make_gradle_file "$root/kotlin/core-jvm/build.gradle.kts" "core-jvm"
   make_gradle_file "$root/kotlin/client-android/build.gradle.kts" "client-android"
   printf '<manifest />\n' >"$root/kotlin/client-android/src/main/AndroidManifest.xml"
+
+  local keymint_source="$root/java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaAndroidKeyMint.java"
+  mkdir -p "$(dirname "$keymint_source")"
+  cp "$SCRIPT_DIR/../java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaAndroidKeyMint.java" \
+    "$keymint_source"
 }
 
 append_candidate_lab_source() {
@@ -1021,7 +1034,9 @@ run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 21"
 
 enabled_privacy="$TMP_DIR/enabled-privacy"
 make_fixture "$enabled_privacy"
-sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+sed -i.bak \
+  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  -e 's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled"]/' \
   "$enabled_privacy/dist/NoritoBridge.artifacts.json"
 rm -f "$enabled_privacy/dist/NoritoBridge.artifacts.json.bak"
 touch "$enabled_privacy/dist/NoritoBridge.xcframework/.privacy-production-enabled"
@@ -1029,7 +1044,9 @@ run_expect_pass "$enabled_privacy"
 
 enabled_without_marker="$TMP_DIR/enabled-without-marker"
 make_fixture "$enabled_without_marker"
-sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+sed -i.bak \
+  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  -e 's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled"]/' \
   "$enabled_without_marker/dist/NoritoBridge.artifacts.json"
 rm -f "$enabled_without_marker/dist/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$enabled_without_marker" "missing privacy-production-enabled XCFramework marker"
@@ -1038,6 +1055,62 @@ default_with_marker="$TMP_DIR/default-with-marker"
 make_fixture "$default_with_marker"
 touch "$default_with_marker/dist/NoritoBridge.xcframework/.privacy-production-enabled"
 run_expect_fail "$default_with_marker" "default privacy artifact must not carry the privacy-production-enabled XCFramework marker"
+
+missing_production_cargo_features="$TMP_DIR/missing-production-cargo-features"
+make_fixture "$missing_production_cargo_features"
+sed -i.bak \
+  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  -e '/"cargo_features": \[\],/d' \
+  "$missing_production_cargo_features/dist/NoritoBridge.artifacts.json"
+rm -f "$missing_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+touch "$missing_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
+run_expect_fail \
+  "$missing_production_cargo_features" \
+  'cargo_features must be exactly ["privacy-production-enabled"]'
+
+empty_production_cargo_features="$TMP_DIR/empty-production-cargo-features"
+make_fixture "$empty_production_cargo_features"
+sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  "$empty_production_cargo_features/dist/NoritoBridge.artifacts.json"
+rm -f "$empty_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+touch "$empty_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
+run_expect_fail \
+  "$empty_production_cargo_features" \
+  'cargo_features must be exactly ["privacy-production-enabled"]'
+
+extra_production_cargo_features="$TMP_DIR/extra-production-cargo-features"
+make_fixture "$extra_production_cargo_features"
+sed -i.bak \
+  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  -e 's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled", "unexpected-feature"]/' \
+  "$extra_production_cargo_features/dist/NoritoBridge.artifacts.json"
+rm -f "$extra_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+touch "$extra_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
+run_expect_fail \
+  "$extra_production_cargo_features" \
+  'cargo_features must be exactly ["privacy-production-enabled"]'
+
+wrong_production_cargo_features="$TMP_DIR/wrong-production-cargo-features"
+make_fixture "$wrong_production_cargo_features"
+sed -i.bak \
+  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  -e 's/"cargo_features": \[\]/"cargo_features": ["wrong-feature"]/' \
+  "$wrong_production_cargo_features/dist/NoritoBridge.artifacts.json"
+rm -f "$wrong_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+touch "$wrong_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
+run_expect_fail \
+  "$wrong_production_cargo_features" \
+  'cargo_features must be exactly ["privacy-production-enabled"]'
+
+default_with_production_cargo_feature="$TMP_DIR/default-with-production-cargo-feature"
+make_fixture "$default_with_production_cargo_feature"
+sed -i.bak \
+  's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled"]/' \
+  "$default_with_production_cargo_feature/dist/NoritoBridge.artifacts.json"
+rm -f "$default_with_production_cargo_feature/dist/NoritoBridge.artifacts.json.bak"
+run_expect_fail \
+  "$default_with_production_cargo_feature" \
+  "default NoritoBridge artifact cargo_features must be exactly []"
 
 invalid_privacy_state="$TMP_DIR/invalid-privacy-state"
 make_fixture "$invalid_privacy_state"
@@ -1088,6 +1161,7 @@ cat >"$missing_hash/dist/NoritoBridge.artifacts.json" <<'JSON'
 {
   "version": "1.0.0",
   "privacy_production_enabled": false,
+  "cargo_features": [],
   "hashes": {
     "ios-arm64": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "macos-arm64": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"

@@ -253,6 +253,8 @@ public enum KagemushaRecursiveSpend {
     public static let recipientRequestPayloadWireName =
         wire("KagemushaRecipientPaymentRequestSigningPayloadV2")
     public static let recipientRequestWireName = wire("KagemushaRecipientPaymentRequestV2")
+    public static let recipientReceiveOfferWireName =
+        "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2"
     public static let authorizationWireName = wire("KagemushaRequestAuthorizationV2")
     public static let authorizationPreparationWireName =
         "connect_norito_bridge::KagemushaRequestAuthorizationPreparationV2"
@@ -321,6 +323,7 @@ public enum KagemushaRecursiveSpend {
              recipientOutputDerivationResultWireName,
              recipientRequestPayloadWireName,
              recipientRequestWireName,
+             recipientReceiveOfferWireName,
              topUpRequestWireName,
              redeemRequestWireName,
              bundleWireNameV4,
@@ -458,6 +461,12 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
         "connect_norito_kagemusha_recipient_payment_request_create_v2",
         "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+        "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+        "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+        "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
+        "connect_norito_kagemusha_recipient_receive_offer_create_v2",
+        "connect_norito_kagemusha_recipient_receive_offer_project_v2",
+        "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
         "connect_norito_kagemusha_request_authorization_create_v2",
         "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
         "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
@@ -466,6 +475,7 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
         "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
         "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+        "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
         "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
         "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
         "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
@@ -506,11 +516,54 @@ public enum KagemushaRecursiveSpend {
 
     /// Exact local production capability; Torii readiness remains an additional requirement.
     public static var isProductionAvailable: Bool {
-        guard hasRequiredNativeSymbols else {
+        productionAvailability(
+            hasRequiredNativeSymbols: hasRequiredNativeSymbols,
+            probe: {
+                try nativeCapabilitiesV4().proofBackendAvailable
+            }
+        )
+    }
+
+    /// True when the ABI-21 bridge was compiled with the audited production
+    /// promotion feature, even if its authenticated artifact set has not been
+    /// installed yet. Setup UI uses this non-cached probe to avoid an artifact
+    /// bootstrap cycle; value-moving operations still require
+    /// `isProductionAvailable` after installation.
+    public static var isProductionCompiledAndLinked: Bool {
+        productionCompilationAvailability(
+            hasRequiredNativeSymbols: hasRequiredNativeSymbols,
+            probe: {
+                let capabilities = try nativeCapabilitiesV4()
+                return (
+                    capabilities.proofBackendAvailable,
+                    capabilities.missingGates
+                )
+            }
+        )
+    }
+
+    /// Keep ABI linkage separate from mutable artifact readiness. In
+    /// particular, an unavailable response before artifact promotion must not
+    /// be remembered as a missing symbol: the probe is deliberately executed
+    /// afresh on every readiness check.
+    static func productionAvailability(
+        hasRequiredNativeSymbols: Bool,
+        probe: () throws -> Bool
+    ) -> Bool {
+        guard hasRequiredNativeSymbols else { return false }
+        return (try? probe()) == true
+    }
+
+    static func productionCompilationAvailability(
+        hasRequiredNativeSymbols: Bool,
+        probe: () throws -> (proofBackendAvailable: Bool, missingGates: [String])
+    ) -> Bool {
+        guard hasRequiredNativeSymbols,
+              let capabilities = try? probe() else {
             return false
         }
-        let cachedNativeCapabilities = try? nativeCapabilitiesV4()
-        return cachedNativeCapabilities?.proofBackendAvailable == true
+        return capabilities.proofBackendAvailable
+            || !capabilities.missingGates.contains("authenticated-production-promotion")
     }
 
     static func requireArchive(_ archive: Data, schema: String, field: String) throws {

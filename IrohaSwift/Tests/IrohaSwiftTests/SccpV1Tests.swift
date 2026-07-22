@@ -239,8 +239,11 @@ final class SccpV1Tests: XCTestCase {
         let sponsor = try AccountAddress
             .fromAccount(publicKey: Data(repeating: 0x52, count: 32))
             .toI105(networkPrefix: AccountId.defaultNetworkPrefix)
+        var assetDefinitionBytes = Data(repeating: 0x53, count: 16)
+        assetDefinitionBytes[6] = (assetDefinitionBytes[6] & 0x0f) | 0x40
+        assetDefinitionBytes[8] = (assetDefinitionBytes[8] & 0x3f) | 0x80
         let assetDefinitionId = try XCTUnwrap(
-            AssetDefinitionAddress.encode(uuidBytes: Data(repeating: 0x53, count: 16))
+            AssetDefinitionAddress.encode(uuidBytes: assetDefinitionBytes)
         )
         let limits = [
             try FeeChargeLimit(

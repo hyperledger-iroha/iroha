@@ -27,14 +27,15 @@ final class KagemushaQRStreamTests: XCTestCase {
     }
 
     func testEveryFrameRoundTripsForEveryPeerPayloadAndReassemblesOutOfOrder() throws {
-        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let request = try offer.project().request
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
         let acknowledgement = try KagemushaPeerTransportTestFixtures.acknowledgement(
             request: request,
             payment: payment
         )
         let payloads: [KagemushaPeerPayload] = [
-            .receiveRequest(request),
+            .receiveRequest(offer),
             .payment(payment),
             .acknowledgement(acknowledgement),
         ]
