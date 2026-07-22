@@ -56,11 +56,11 @@ route ordinal.  `SumeragiV2AsyncNetworkReplyRoutes!AsyncProductionSpec`
 composes a bounded per-authenticated-source ownership machine with this
 consensus scheduler: each source has an
 independent message/chunk cursor and tenure-bound ticket, while immutable
-payload materialization is shared by semantic identity.  Exact retry, later
-refresh, and reconnect preserve progress; only a newly observed alternate
-source starts at item zero.  The source capacity is derived from the validator/source geometry and
-the exact-output corridor fails configuration when it cannot reserve every
-source.
+payload materialization is shared by semantic identity.  Exact retry, a later
+delivery on the same tenure, and reconnect preserve progress; only a newly
+observed alternate source starts at item zero.  The source capacity is derived
+from the validator/source geometry and the exact-output corridor fails
+configuration when it cannot reserve every source.
 
 An emitted Core envelope remains in immutable authentication history when a
 hidden packet is lost before GST.  Retransmission scans only the reducer's
@@ -167,6 +167,14 @@ AsyncChunkReceipt(node, roundView, subject, chunk) ==
 AsyncChunkReceiptSet ==
   [node: ValidatorIds, view: Views, subject: Subjects,
    chunk: AsyncChunks]
+
+AsyncHistoricalLockRestartAuthority(node, qc) ==
+  [node |-> node, context |-> qc.context,
+   view |-> qc.view, subject |-> qc.subject]
+
+AsyncHistoricalLockRestartAuthoritySet ==
+  [node: ValidatorIds, context: ContextRecords,
+   view: Views, subject: Subjects]
 
 AsyncRunnerCycleBudget ==
   AsyncQueueCapacity + 2 * AsyncIngressCapacity + 3
@@ -419,6 +427,25 @@ NoAsyncCandidate ==
     AsyncHeartbeatSubject, NoAsyncItem, context, 0, 0, NoAsyncItem,
     AsyncHeartbeatSubject, AsyncHeartbeatSubject, AsyncHeartbeatSubject)
 
+(***************************************************************************
+An adapter Busy result retains one exact deferred reducer input independently
+of the cyclic class cursor.  The full immutable candidate is carried alongside
+its canonical semantic identity; neither a later same-class input nor a cursor
+advance can manufacture an equal handoff.  The candidate remains at the head
+of its class queue, so the ordinary bounded queues continue to own capacity and
+the handoff is an exact dispatch capability rather than a second queue owner.
+***************************************************************************)
+NoAsyncDeferredHandoff == [active |-> FALSE]
+
+AsyncDeferredHandoff(candidate) ==
+  [active |-> TRUE,
+   candidate |-> candidate,
+   identity |-> ExactAsyncCandidateIdentity(candidate)]
+
+AsyncDeferredHandoffSet ==
+  {NoAsyncDeferredHandoff}
+    \cup {AsyncDeferredHandoff(candidate): candidate \in AsyncCandidateSet}
+
 AsyncIoCapacity == AsyncIoAuxCapacity + AsyncIoWorkCapacity + 1
 
 AsyncIoJob(commandClass, candidate, nonce) ==
@@ -552,6 +579,7 @@ VARIABLES
   asyncDeferredCompletionQueues,
   asyncDeferredProgressQueues,
   asyncDeferredNormalQueues,
+  asyncDeferredHandoffs,
   asyncNextDeferredClass,
   asyncDeferredDrainOwed,
   asyncCausalQueues,
@@ -569,7 +597,8 @@ VARIABLES
   asyncRecoveryPhase,
   asyncRecoveryNode,
   asyncRecoveryGeneration,
-  asyncRecoveryReplayQueue
+  asyncRecoveryReplayQueue,
+  asyncHistoricalLockRestartAuthorities
 
 AsyncSchedulerVars ==
   <<asyncNow, asyncCommandQueues, asyncNextCommandClass,
@@ -580,6 +609,7 @@ AsyncSchedulerVars ==
     asyncLocalReadyCompletions, asyncNextCompletionSource,
     asyncIoControlAvailable, asyncDeferredCompletionQueues,
     asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+    asyncDeferredHandoffs,
     asyncNextDeferredClass, asyncDeferredDrainOwed,
     asyncCausalQueues, asyncOutstandingTags,
     asyncNodeDeadlines, asyncRetransmitDeadlines,
@@ -597,6 +627,7 @@ AsyncSchedulerExceptHistoricalRecoveryTargets ==
     asyncLocalReadyCompletions, asyncNextCompletionSource,
     asyncIoControlAvailable, asyncDeferredCompletionQueues,
     asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+    asyncDeferredHandoffs,
     asyncNextDeferredClass, asyncDeferredDrainOwed,
     asyncCausalQueues, asyncOutstandingTags,
     asyncNodeDeadlines, asyncRetransmitDeadlines,
@@ -607,37 +638,15 @@ AsyncSchedulerExceptHistoricalRecoveryTargets ==
 AsyncRecoveryLifecycleVars ==
   <<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration>>
 
-AsyncRecoveryVars ==
+AsyncRecoveryControlVars ==
   <<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration,
     asyncRecoveryReplayQueue>>
 
+AsyncRecoveryVars ==
+  <<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration,
+    asyncRecoveryReplayQueue, asyncHistoricalLockRestartAuthorities>>
+
 AsyncAllVars == <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>
-
-\* Every action named by weak fairness is the exact fully framed AsyncNext arm,
-\* not only its inner scheduler or reducer component.  These suffixes bind
-\* every otherwise-outer primed variable before TLC evaluates ENABLED.  Do not
-\* conjoin the complete Core `Next` relation here: the action itself already
-\* supplies an exact Core transition or `UNCHANGED vars`, and redundantly
-\* searching every Core branch makes ENABLED both noisy and needlessly costly.
-\* `AsyncFairActionsRefineAsyncNext` states the typed executable-relation
-\* claim once, outside the fairness queries;
-\* `SumeragiV2AsyncFairnessRefinementProofs` owns its deductive discharge
-\* without changing this executable action relation.
-AsyncCoreOuterFrame ==
-  UNCHANGED <<height, context>>
-
-AsyncNonCrashOuterFrame ==
-  /\ UNCHANGED up
-  /\ UNCHANGED AsyncRecoveryVars
-  /\ AsyncCoreOuterFrame
-
-AsyncNonRunnerOuterFrame ==
-  /\ UNCHANGED asyncNodeServiceDeadlines
-  /\ AsyncNonCrashOuterFrame
-
-AsyncRecoveryOuterFrame ==
-  /\ UNCHANGED up
-  /\ AsyncCoreOuterFrame
 
 AsyncIoVars ==
   <<asyncIoQueues, asyncOutstandingWork, asyncIoReadyCompletions,
@@ -646,7 +655,7 @@ AsyncIoVars ==
 
 AsyncDeferredVars ==
   <<asyncDeferredCompletionQueues, asyncDeferredProgressQueues,
-    asyncDeferredNormalQueues, asyncNextDeferredClass,
+    asyncDeferredNormalQueues, asyncDeferredHandoffs, asyncNextDeferredClass,
     asyncDeferredDrainOwed>>
 
 AsyncLocalSources == {"Producer", "Causal"}
@@ -675,6 +684,17 @@ AsyncVotersAt(initialContext) ==
   Responsive \cap VotingRoster(initialContext.epoch)
 
 AsyncCurrentResponsiveVoters == Responsive \cap CurrentVoters
+
+(***************************************************************************
+`asyncNodeServiceDeadlines` is ghost bookkeeping for the reviewed
+`runtime-after-gst` contract, not a shared scheduler or a value stored by the
+production nodes. Each member below denotes one independent validator process
+whose serialized height runner must regain a finite local service turn. The
+product model advances its proof clock only while every such local contract is
+current; no production process reads or updates another process's deadline.
+***************************************************************************)
+LocalRunnerServiceOwners ==
+  AsyncCurrentResponsiveVoters \cup asyncHistoricalRecoveryTargets
 
 HistoricalRecoveryTarget(node) ==
   node \in asyncHistoricalRecoveryTargets
@@ -790,9 +810,176 @@ ResponsiveReplayScheduledCandidates(node) ==
                     \cup CausalCandidates \cup TrackedWorkCandidates:
      candidate.node = node}
 
+CandidateScheduledIn(candidate, commandQueues,
+                     deferredCompletionQueues, deferredProgressQueues,
+                     deferredNormalQueues, causalQueues, outstandingWork) ==
+  candidate \in
+    UNION {SequenceSet(commandQueues[node]): node \in ValidatorIds}
+      \cup UNION
+          {SequenceSet(deferredCompletionQueues[node])
+             \cup SequenceSet(deferredProgressQueues[node])
+             \cup SequenceSet(deferredNormalQueues[node]):
+             node \in ValidatorIds}
+      \cup UNION {SequenceSet(causalQueues[node]): node \in ValidatorIds}
+      \cup UNION {outstandingWork[node]: node \in ValidatorIds}
+
 CandidateScheduled(candidate) ==
-  candidate \in QueuedCandidates \cup DeferredCandidates \cup CausalCandidates
-    \cup TrackedWorkCandidates
+  CandidateScheduledIn(
+    candidate, asyncCommandQueues,
+    asyncDeferredCompletionQueues, asyncDeferredProgressQueues,
+    asyncDeferredNormalQueues, asyncCausalQueues, asyncOutstandingWork)
+
+(***************************************************************************
+Responsive restart does not create a second durable owner.  The authority
+below is a generation-free ghost projection of the exact PrepareQC already
+retained by `DurableState::locked()` before a crash.  It records only the
+semantic lock identity needed while process-local scheduler ownership is
+rebuilt.  The projection is registered atomically when the responsive-crash
+lifecycle starts, survives the generation change and replay reset, and is
+retired only when either the durable source is legitimately gone or an exact
+current-generation FetchBody owner has been materialized.
+***************************************************************************)
+
+HistoricalLockRestartAuthoritySourceKernel(
+    authority, qc, currentContext, currentNodeView,
+    currentLockRank, currentLockSubject, currentInstalledTCs,
+    currentCommitIntents, currentDecisions) ==
+  /\ authority =
+       AsyncHistoricalLockRestartAuthority(authority.node, qc)
+  /\ qc.context = currentContext
+  /\ qc.phase = "Prepare"
+  /\ qc.view < currentNodeView[authority.node]
+  /\ qc.view = currentLockRank[authority.node]
+  /\ qc.subject = currentLockSubject[authority.node]
+  /\ \/ \E installed \in currentInstalledTCs:
+          /\ installed.node = authority.node
+          /\ installed.tc.context = qc.context
+          /\ installed.tc.view >= qc.view
+          /\ TcHighRank(installed.tc) = qc.view
+          /\ TcHighSubject(installed.tc) = qc.subject
+     \/ \E vote \in currentCommitIntents:
+          /\ vote.signer = authority.node
+          /\ vote.context = currentContext
+          /\ vote.phase = "Commit"
+          /\ vote.view = qc.view
+          /\ vote.subject = qc.subject
+  /\ ~\E decision \in currentDecisions:
+       /\ decision.node = authority.node
+       /\ decision.qc.context = currentContext
+
+HistoricalLockRestartAuthoritySource(authority) ==
+  \E qc \in prepareQCs:
+    HistoricalLockRestartAuthoritySourceKernel(
+      authority, qc, context, nodeView, lockRank, lockSubject,
+      installedTCs, commitIntents, decisions)
+
+HistoricalLockRestartAuthoritySourceAfter(authority) ==
+  \E qc \in prepareQCs':
+    HistoricalLockRestartAuthoritySourceKernel(
+      authority, qc, context', nodeView', lockRank', lockSubject',
+      installedTCs', commitIntents', decisions')
+
+HistoricalLockRestartExactCurrentFetchKernel(
+    authority, qc, candidate, currentContext, currentNodeView,
+    currentGeneration, commandQueues, deferredCompletionQueues,
+    deferredProgressQueues, deferredNormalQueues, causalQueues,
+    outstandingWork) ==
+  /\ candidate.class = "Completion"
+  /\ candidate.kind = "FetchBody"
+  /\ candidate.node = authority.node
+  /\ candidate.height = authority.context.height
+  /\ candidate.view = authority.view
+  /\ candidate.subject = authority.subject
+  /\ candidate.item = NoAsyncItem
+  /\ candidate.consumerContext = authority.context
+  /\ candidate.consumerContext = currentContext
+  /\ candidate.consumerView = currentNodeView[authority.node]
+  /\ candidate.consumerGeneration = currentGeneration[authority.node]
+  /\ candidate.evidence = qc
+  /\ candidate.bodyIdentity = authority.subject
+  /\ candidate.manifestIdentity = authority.subject
+  /\ candidate.commitmentIdentity = authority.subject
+  /\ CandidateScheduledIn(
+       candidate, commandQueues,
+       deferredCompletionQueues, deferredProgressQueues,
+       deferredNormalQueues, causalQueues, outstandingWork)
+
+HistoricalLockRestartExactCurrentFetchOwner(authority) ==
+  \E qc \in prepareQCs, candidate \in AsyncCandidateSet:
+    /\ HistoricalLockRestartAuthoritySourceKernel(
+         authority, qc, context, nodeView, lockRank, lockSubject,
+         installedTCs, commitIntents, decisions)
+    /\ HistoricalLockRestartExactCurrentFetchKernel(
+         authority, qc, candidate, context, nodeView, generation,
+         asyncCommandQueues, asyncDeferredCompletionQueues,
+         asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+         asyncCausalQueues, asyncOutstandingWork)
+
+HistoricalLockRestartExactCurrentFetchOwnerAfter(authority) ==
+  \E qc \in prepareQCs', candidate \in AsyncCandidateSet:
+    /\ HistoricalLockRestartAuthoritySourceKernel(
+         authority, qc, context', nodeView', lockRank', lockSubject',
+         installedTCs', commitIntents', decisions')
+    /\ HistoricalLockRestartExactCurrentFetchKernel(
+         authority, qc, candidate, context', nodeView', generation',
+         asyncCommandQueues', asyncDeferredCompletionQueues',
+         asyncDeferredProgressQueues', asyncDeferredNormalQueues',
+         asyncCausalQueues', asyncOutstandingWork')
+
+ResponsiveCrashRecoveryRegistration(node) ==
+  /\ asyncRecoveryPhase = "Eligible"
+  /\ asyncRecoveryPhase' = "RestartRequired"
+  /\ asyncRecoveryNode' = node
+  /\ node \in Responsive
+
+ResponsiveCrashHistoricalLockRestartAuthorities(node) ==
+  {AsyncHistoricalLockRestartAuthority(node, qc):
+     qc \in {candidateQc \in prepareQCs:
+       HistoricalLockRestartAuthoritySourceKernel(
+         AsyncHistoricalLockRestartAuthority(node, candidateQc), candidateQc,
+         context, nodeView, lockRank, lockSubject,
+         installedTCs, commitIntents, decisions)}}
+
+AsyncHistoricalLockRestartAuthorityTransition ==
+  \/ \E node \in ValidatorIds:
+       /\ ResponsiveCrashRecoveryRegistration(node)
+       /\ asyncHistoricalLockRestartAuthorities' =
+            asyncHistoricalLockRestartAuthorities
+              \cup ResponsiveCrashHistoricalLockRestartAuthorities(node)
+  \/ /\ ~\E node \in ValidatorIds:
+             ResponsiveCrashRecoveryRegistration(node)
+     /\ asyncHistoricalLockRestartAuthorities' =
+          {authority \in asyncHistoricalLockRestartAuthorities:
+             /\ HistoricalLockRestartAuthoritySourceAfter(authority)
+             /\ ~HistoricalLockRestartExactCurrentFetchOwnerAfter(authority)}
+
+\* Every action named by weak fairness is the exact fully framed AsyncNext arm,
+\* not only its inner scheduler or reducer component.  These suffixes bind
+\* every otherwise-outer primed variable before TLC evaluates ENABLED.  Do not
+\* conjoin the complete Core `Next` relation here: the action itself already
+\* supplies an exact Core transition or `UNCHANGED vars`, and redundantly
+\* searching every Core branch makes ENABLED both noisy and needlessly costly.
+\* `AsyncFairActionsRefineAsyncNext` states the typed executable-relation
+\* claim once, outside the fairness queries;
+\* `SumeragiV2AsyncFairnessRefinementProofs` owns its deductive discharge
+\* without changing this executable action relation.
+AsyncCoreOuterFrame ==
+  UNCHANGED <<height, context>>
+
+AsyncNonCrashOuterFrame ==
+  /\ UNCHANGED up
+  /\ UNCHANGED AsyncRecoveryControlVars
+  /\ AsyncHistoricalLockRestartAuthorityTransition
+  /\ AsyncCoreOuterFrame
+
+AsyncNonRunnerOuterFrame ==
+  /\ UNCHANGED asyncNodeServiceDeadlines
+  /\ AsyncNonCrashOuterFrame
+
+AsyncRecoveryOuterFrame ==
+  /\ UNCHANGED up
+  /\ AsyncHistoricalLockRestartAuthorityTransition
+  /\ AsyncCoreOuterFrame
 
 (***************************************************************************
 Every logical reducer candidate has one scheduler owner.  This is stronger
@@ -2242,7 +2429,8 @@ DeferCommand(command) ==
                            ELSE IF Len(@) < AsyncDeferredNormalCapacity
                                 THEN Append(@, command) ELSE @]
           ELSE asyncDeferredNormalQueues
-     /\ UNCHANGED <<asyncNextDeferredClass, asyncDeferredDrainOwed,
+     /\ UNCHANGED <<asyncDeferredHandoffs, asyncNextDeferredClass,
+                    asyncDeferredDrainOwed,
                     asyncOutstandingTags,
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes,
@@ -2268,6 +2456,45 @@ DeferredClassQueue(node, commandClass) ==
 
 DeferredClassNonempty(node, commandClass) ==
   Len(DeferredClassQueue(node, commandClass)) > 0
+
+DeferredHandoffActive(node) ==
+  asyncDeferredHandoffs[node] # NoAsyncDeferredHandoff
+
+DeferredHandoffCandidate(node) ==
+  asyncDeferredHandoffs[node].candidate
+
+DeferredHandoffMatches(node, candidate) ==
+  /\ DeferredHandoffActive(node)
+  /\ asyncDeferredHandoffs[node] = AsyncDeferredHandoff(candidate)
+
+DeferredHandoffQueueHead(node) ==
+  IF DeferredHandoffActive(node)
+  THEN LET candidate == DeferredHandoffCandidate(node)
+       IN /\ DeferredClassNonempty(node, candidate.class)
+          /\ Head(DeferredClassQueue(node, candidate.class)) = candidate
+  ELSE FALSE
+
+InstallDeferredHandoff(node, candidate) ==
+  asyncDeferredHandoffs' =
+    [asyncDeferredHandoffs EXCEPT
+       ![node] = AsyncDeferredHandoff(candidate)]
+
+RetainDeferredHandoffs ==
+  UNCHANGED asyncDeferredHandoffs
+
+ClearDeferredHandoff(node) ==
+  asyncDeferredHandoffs' =
+    [asyncDeferredHandoffs EXCEPT ![node] = NoAsyncDeferredHandoff]
+
+DeferredHandoffAllowsExecution(node, candidate) ==
+  /\ CommandDispatchable(candidate)
+  /\ (~DeferredHandoffActive(node)
+        \/ DeferredHandoffMatches(node, candidate)
+        \/ candidate.class = "Completion")
+
+DeferredHandoffBlocksExecution(node, candidate) ==
+  /\ DeferredHandoffActive(node)
+  /\ ~DeferredHandoffMatches(node, candidate)
 
 SelectedDeferredClass(node) ==
   LET first == asyncNextDeferredClass[node]
@@ -3074,9 +3301,12 @@ TimeoutCausalCommand(node) ==
 
 (***************************************************************************
 The reducer derives historical locked-body retry work from durable lock state
-on every RetransmitElapsed event.  The timer is the handoff authority; once it
-fires, exact current-consumer Completion ownership is installed in the normal
-causal scheduler.  No permanent ghost recovery owner is introduced.
+on every RetransmitElapsed event.  The timer is the production handoff: once
+it fires, exact current-consumer Completion ownership is installed in the
+normal causal scheduler.  During responsive crash recovery the explicit
+generation-free ghost projection above retains that already-durable source;
+this retransmit installation atomically discharges the projection through
+`AsyncHistoricalLockRestartAuthorityTransition`.
 ***************************************************************************)
 
 HistoricalLockedRetransmitQCs(node) ==
@@ -3158,6 +3388,7 @@ DirectTimeoutStep(node) ==
      ELSE LeaveCausalQueues
   /\ UNCHANGED <<asyncDeferredCompletionQueues,
                  asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+                 asyncDeferredHandoffs,
                  asyncNextDeferredClass>>
   /\ asyncDeferredDrainOwed' =
        IF BeginTimeoutEnabled(node)
@@ -3187,6 +3418,7 @@ DirectRetransmitStep(node) ==
                   ![node] = @ \cup {"RetransmitElapsed"}]
   /\ UNCHANGED <<asyncDeferredCompletionQueues,
                  asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+                 asyncDeferredHandoffs,
                  asyncNextDeferredClass>>
   /\ asyncDeferredDrainOwed' =
        IF NodeIdle(node)
@@ -3220,6 +3452,7 @@ DeferredTimeoutStep(node) ==
        [asyncOutstandingTags EXCEPT ![node] = @ \ {"TimeoutElapsed"}]
   /\ UNCHANGED <<asyncDeferredCompletionQueues,
                  asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+                 asyncDeferredHandoffs,
                  asyncNextDeferredClass>>
   /\ asyncDeferredDrainOwed' =
        [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
@@ -3241,6 +3474,7 @@ DeferredRetransmitStep(node) ==
        [asyncOutstandingTags EXCEPT ![node] = @ \ {"RetransmitElapsed"}]
   /\ UNCHANGED <<asyncDeferredCompletionQueues,
                  asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+                 asyncDeferredHandoffs,
                  asyncNextDeferredClass>>
   /\ asyncDeferredDrainOwed' =
        [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
@@ -3279,6 +3513,7 @@ FifoRuntimeStep(node) ==
              /\ UNCHANGED <<asyncDeferredCompletionQueues,
                             asyncDeferredProgressQueues,
                             asyncDeferredNormalQueues,
+                            asyncDeferredHandoffs,
                             asyncNextDeferredClass>>
              /\ asyncDeferredDrainOwed' =
                   [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
@@ -3290,6 +3525,7 @@ FifoRuntimeStep(node) ==
                   /\ UNCHANGED <<asyncDeferredCompletionQueues,
                                  asyncDeferredProgressQueues,
                                  asyncDeferredNormalQueues,
+                                 asyncDeferredHandoffs,
                                  asyncNextDeferredClass>>
                   /\ asyncDeferredDrainOwed' =
                        [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
@@ -3307,6 +3543,7 @@ DeferredDrainStep(node) ==
                          asyncTimeoutEmitted, asyncDeferredCompletionQueues,
                          asyncDeferredProgressQueues,
                          asyncDeferredNormalQueues,
+                         asyncDeferredHandoffs,
                          asyncNextDeferredClass, asyncOutstandingTags,
                          asyncNodeDeadlines, asyncRetransmitDeadlines,
                          asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes,
@@ -3316,8 +3553,13 @@ DeferredDrainStep(node) ==
           /\ asyncDeferredDrainOwed' =
                [asyncDeferredDrainOwed EXCEPT ![node] = FALSE]
      ELSE LET command == NextDeferredCommand(node)
-          IN IF CommandDispatchable(command)
-             THEN /\ RemoveNextDeferredCommand(node)
+              handoffMatches == DeferredHandoffMatches(node, command)
+          IN IF DeferredHandoffAllowsExecution(node, command)
+             THEN /\ IF handoffMatches
+                        THEN /\ RemoveNextDeferredCommand(node)
+                             /\ ClearDeferredHandoff(node)
+                        ELSE /\ RemoveNextDeferredCommand(node)
+                             /\ RetainDeferredHandoffs
                   /\ ExecuteCommand(command)
                   /\ AppendCausalSuccessors(command)
                   /\ asyncDeferredDrainOwed' = asyncDeferredDrainOwed
@@ -3327,7 +3569,7 @@ DeferredDrainStep(node) ==
                        ELSE asyncTimeoutEmitted
                   /\ UNCHANGED <<asyncCommandQueues,
                                   asyncNextCommandClass, asyncFifoOwed>>
-             ELSE IF ~NodeIdle(node)
+             ELSE IF DeferredHandoffBlocksExecution(node, command)
                   THEN /\ LeaveCausalQueues
                        /\ AdvanceNextDeferredClass(node)
                        /\ UNCHANGED <<vars, asyncCommandQueues,
@@ -3343,14 +3585,49 @@ DeferredDrainStep(node) ==
                                       asyncIngressReady, asyncHeldChunks,
                                       asyncHistoricalRecoveryTargets>>
                        /\ asyncDeferredDrainOwed' =
-                            [asyncDeferredDrainOwed EXCEPT ![node] = FALSE]
-                  ELSE /\ RemoveNextDeferredCommand(node)
-                       /\ DiscardCommand(command)
-                       /\ LeaveCausalQueues
-                       /\ asyncDeferredDrainOwed' = asyncDeferredDrainOwed
-                       /\ UNCHANGED <<asyncCommandQueues,
-                                      asyncNextCommandClass, asyncFifoOwed,
-                                      asyncTimeoutEmitted>>
+                            [asyncDeferredDrainOwed EXCEPT
+                               ![node] = FALSE]
+                       /\ RetainDeferredHandoffs
+                  ELSE IF ~NodeIdle(node)
+                       THEN /\ LeaveCausalQueues
+                            /\ AdvanceNextDeferredClass(node)
+                            /\ UNCHANGED <<vars, asyncCommandQueues,
+                                           asyncNextCommandClass,
+                                           asyncFifoOwed,
+                                           asyncTimeoutEmitted,
+                                           asyncDeferredCompletionQueues,
+                                           asyncDeferredProgressQueues,
+                                           asyncDeferredNormalQueues,
+                                           asyncOutstandingTags,
+                                           asyncNodeDeadlines,
+                                           asyncRetransmitDeadlines,
+                                           asyncSentItems,
+                                           asyncRetainedControl,
+                                           asyncActiveRequests,
+                                           asyncTransport,
+                                           asyncIngressLanes,
+                                           asyncIngressReady,
+                                           asyncHeldChunks,
+                                           asyncHistoricalRecoveryTargets>>
+                            /\ asyncDeferredDrainOwed' =
+                                 [asyncDeferredDrainOwed EXCEPT
+                                    ![node] = FALSE]
+                            /\ IF DeferredHandoffActive(node)
+                               THEN RetainDeferredHandoffs
+                               ELSE InstallDeferredHandoff(node, command)
+                       ELSE /\ IF handoffMatches
+                               THEN /\ RemoveNextDeferredCommand(node)
+                                    /\ ClearDeferredHandoff(node)
+                               ELSE /\ RemoveNextDeferredCommand(node)
+                                    /\ RetainDeferredHandoffs
+                            /\ DiscardCommand(command)
+                            /\ LeaveCausalQueues
+                            /\ asyncDeferredDrainOwed' =
+                                 asyncDeferredDrainOwed
+                            /\ UNCHANGED <<asyncCommandQueues,
+                                           asyncNextCommandClass,
+                                           asyncFifoOwed,
+                                           asyncTimeoutEmitted>>
 
 IdleRuntimeStep(node) ==
   /\ UNCHANGED <<vars, asyncCommandQueues, asyncNextCommandClass,
@@ -3786,6 +4063,8 @@ ResetNodeSchedulerForRestart(node, replay) ==
        [asyncDeferredProgressQueues EXCEPT ![node] = <<>>]
   /\ asyncDeferredNormalQueues' =
        [asyncDeferredNormalQueues EXCEPT ![node] = <<>>]
+  /\ asyncDeferredHandoffs' =
+       [asyncDeferredHandoffs EXCEPT ![node] = NoAsyncDeferredHandoff]
   /\ asyncNextDeferredClass' =
        [asyncNextDeferredClass EXCEPT ![node] = "Completion"]
   /\ asyncDeferredDrainOwed' =
@@ -3986,6 +4265,7 @@ RearmResponsiveRecovery ==
   /\ asyncRecoveryNode' = 0
   /\ asyncRecoveryGeneration' = 0
   /\ asyncRecoveryReplayQueue' = <<>>
+  /\ AsyncHistoricalLockRestartAuthorityTransition
   /\ UNCHANGED <<vars, AsyncSchedulerVars>>
 
 (***************************************************************************
@@ -4223,8 +4503,7 @@ AsyncTickEnabled ==
   \/ ~gst
   \/ /\ gst
      /\ OverdueResponsivePackets = {}
-     /\ \A node \in AsyncCurrentResponsiveVoters
-                       \cup asyncHistoricalRecoveryTargets:
+     /\ \A node \in LocalRunnerServiceOwners:
           /\ asyncNodeServiceDeadlines[node] > asyncNow
           /\ \/ AsyncIoQueueDepth(node) = 0
              \/ asyncIoServiceDeadlines[node] > asyncNow
@@ -4234,7 +4513,8 @@ AsyncNonClockVars ==
     asyncFifoOwed, asyncTimeoutEmitted,
     asyncRunnerPhase, asyncRunnerBudget, AsyncLocalAdmissionVars, AsyncIoVars,
     asyncDeferredCompletionQueues, asyncDeferredProgressQueues,
-    asyncDeferredNormalQueues, asyncNextDeferredClass,
+    asyncDeferredNormalQueues, asyncDeferredHandoffs,
+    asyncNextDeferredClass,
     asyncDeferredDrainOwed, asyncCausalQueues,
     asyncOutstandingTags, asyncNodeDeadlines, asyncRetransmitDeadlines,
     asyncNodeServiceDeadlines, asyncIoServiceDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests,
@@ -4275,7 +4555,8 @@ AsyncNonRunnerStep ==
 
 AsyncNonCrashStep ==
   \/ /\ (AsyncRunnerStep \/ AsyncNonRunnerStep)
-     /\ UNCHANGED <<up, AsyncRecoveryVars>>
+     /\ UNCHANGED <<up, AsyncRecoveryControlVars>>
+     /\ AsyncHistoricalLockRestartAuthorityTransition
   \/ /\ (DriveResponsiveReplayHead \/ FinishResponsiveReplay)
      /\ UNCHANGED up
   \/ /\ RearmResponsiveRecovery
@@ -4287,6 +4568,7 @@ AsyncNext ==
         \/ (\E node \in ValidatorIds: PreGstResponsiveCrash(node))
         \/ PreGstResponsiveRestart
         \/ PreGstResponsiveReplay)
+  /\ AsyncHistoricalLockRestartAuthorityTransition
   /\ UNCHANGED <<height, context>>
   /\ [Next]_vars
 
@@ -4460,6 +4742,8 @@ AsyncDeferredInit ==
        [node \in ValidatorIds |-> <<>>]
   /\ asyncDeferredProgressQueues = [node \in ValidatorIds |-> <<>>]
   /\ asyncDeferredNormalQueues = [node \in ValidatorIds |-> <<>>]
+  /\ asyncDeferredHandoffs =
+       [node \in ValidatorIds |-> NoAsyncDeferredHandoff]
   /\ asyncNextDeferredClass =
        [node \in ValidatorIds |-> "Completion"]
   /\ asyncDeferredDrainOwed = [node \in ValidatorIds |-> FALSE]
@@ -4492,6 +4776,7 @@ AsyncRecoveryInit ==
   /\ asyncRecoveryNode = 0
   /\ asyncRecoveryGeneration = 0
   /\ asyncRecoveryReplayQueue = <<>>
+  /\ asyncHistoricalLockRestartAuthorities = {}
 
 AsyncBaseInitAt(initialContext) ==
   /\ InitAt(initialContext)
@@ -4748,6 +5033,8 @@ AsyncDeferredTopologyTypeInvariant ==
   /\ DOMAIN asyncDeferredCompletionQueues = ValidatorIds
   /\ DOMAIN asyncDeferredProgressQueues = ValidatorIds
   /\ DOMAIN asyncDeferredNormalQueues = ValidatorIds
+  /\ asyncDeferredHandoffs
+       \in [ValidatorIds -> AsyncDeferredHandoffSet]
   /\ asyncNextDeferredClass \in
        [ValidatorIds -> AsyncCommandClasses]
   /\ asyncDeferredDrainOwed \in [ValidatorIds -> BOOLEAN]
@@ -4774,6 +5061,23 @@ AsyncDeferredContentTypeInvariant ==
        /\ Len(asyncDeferredNormalQueues[node]) <=
             AsyncDeferredNormalCapacity
 
+AsyncDeferredHandoffOwnershipInvariant ==
+  \A node \in ValidatorIds:
+    IF DeferredHandoffActive(node)
+    THEN LET candidate == DeferredHandoffCandidate(node)
+         IN /\ AsyncCandidateTyped(candidate)
+            /\ candidate.node = node
+            /\ asyncDeferredHandoffs[node].identity =
+                 ExactAsyncCandidateIdentity(candidate)
+            /\ DeferredHandoffQueueHead(node)
+    ELSE TRUE
+
+(***************************************************************************
+The queue-head relation is a scheduler safety invariant, not a carrier/type
+fact.  It is therefore proved separately from `AsyncDeferredTypeInvariant`;
+folding it into the type predicate would let unrelated type-preservation
+lemmas silently stand in for the required exact-ownership induction.
+***************************************************************************)
 AsyncDeferredTypeInvariant ==
   /\ AsyncDeferredTopologyTypeInvariant
   /\ AsyncDeferredContentTypeInvariant
@@ -4923,6 +5227,13 @@ AsyncRecoveryTypeInvariant ==
              /\ CandidateConsumerCurrent(candidate))
   /\ (asyncRecoveryPhase = "Recovered" =>
         Responsive \subseteq up)
+
+AsyncHistoricalLockRestartAuthorityTypeInvariant ==
+  /\ IsFiniteSet(asyncHistoricalLockRestartAuthorities)
+  /\ asyncHistoricalLockRestartAuthorities
+       \subseteq AsyncHistoricalLockRestartAuthoritySet
+  /\ Cardinality(asyncHistoricalLockRestartAuthorities)
+       <= Cardinality(ValidatorIds)
 
 AsyncRestartAuthorityInvariant ==
   asyncRecoveryPhase

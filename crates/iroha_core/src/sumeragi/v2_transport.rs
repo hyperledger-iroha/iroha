@@ -225,7 +225,6 @@ pub(crate) struct AuthenticatedCertifiedBodyResponse {
 
 impl AuthenticatedCertifiedBodyResponse {
     /// Borrow the authenticated response.
-    #[cfg(test)]
     pub(crate) const fn response(&self) -> &wire::CertifiedBodyResponse {
         &self.response
     }
@@ -470,7 +469,6 @@ impl OutstandingCertifiedBodyRequests {
     }
 
     /// Whether one exact request hash is currently outstanding.
-    #[cfg(test)]
     pub(crate) fn contains(&self, hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
         self.requests.contains_key(&hash)
     }
@@ -682,7 +680,6 @@ impl OutstandingCommitCertificateRequests {
     }
 
     /// Whether the exact request remains outstanding.
-    #[cfg(test)]
     pub(crate) fn contains(&self, request_hash: HashOf<wire::CommitCertificateRequest>) -> bool {
         self.requests.contains_key(&request_hash)
     }

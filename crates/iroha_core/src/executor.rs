@@ -11155,15 +11155,13 @@ pub mod executor_norito {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "telemetry")]
-    use crate::telemetry::StateTelemetry;
     use crate::{
         kura::Kura,
         query,
         state::{State, World},
     };
     #[cfg(feature = "telemetry")]
-    use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
+    use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         asset::AssetTransferControlWindow,
@@ -11178,8 +11176,6 @@ mod tests {
     };
     use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
     use iroha_primitives::json::Json;
-    #[cfg(feature = "telemetry")]
-    use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
     };

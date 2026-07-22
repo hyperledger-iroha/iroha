@@ -8,7 +8,7 @@ use iroha_data_model::{
     asset::AssetId,
     block::{SignedBlock, decode_framed_signed_block},
     isi::{InstructionBox, Mint, MintBox},
-    transaction::Executable,
+    transaction::{Executable, ExecutableBatchItem},
 };
 use iroha_primitives::numeric::Quantity;
 use norito::decode_from_bytes;
@@ -20,6 +20,12 @@ struct DumpContext {
 }
 
 impl DumpContext {
+    fn record_executable(&mut self, executable: &Executable) {
+        for instruction in executable.explicit_instructions() {
+            self.record_mint(instruction);
+        }
+    }
+
     fn record_mint(&mut self, instruction: &InstructionBox) {
         let Some(target_asset) = &self.sum_asset else {
             return;
@@ -177,10 +183,11 @@ fn dump_block(path: &Path, block: &SignedBlock, ctx: &mut DumpContext) {
     );
     for (idx, tx) in txs.iter().enumerate() {
         println!("  tx[{idx}] hash={}", tx.hash());
-        match tx.instructions() {
+        let executable = tx.instructions();
+        ctx.record_executable(executable);
+        match executable {
             Executable::Instructions(instrs) => {
                 for (instr_idx, instr) in instrs.iter().enumerate() {
-                    ctx.record_mint(instr);
                     if ctx.verbose {
                         println!("    instr[{instr_idx}]: {instr:?}");
                     }
@@ -211,6 +218,28 @@ fn dump_block(path: &Path, block: &SignedBlock, ctx: &mut DumpContext) {
                     );
                 }
             }
+            Executable::Batch(items) => {
+                for (item_idx, item) in items.iter().enumerate() {
+                    match item {
+                        ExecutableBatchItem::Instruction(instruction) => {
+                            if ctx.verbose {
+                                println!("    batch[{item_idx}] instruction: {instruction:?}");
+                            }
+                        }
+                        ExecutableBatchItem::ContractCall(call) => {
+                            if ctx.verbose {
+                                println!(
+                                    "    batch[{item_idx}] contract call: address={} expected_code_hash={} entrypoint={} arguments={:?}",
+                                    call.contract_address,
+                                    call.expected_code_hash,
+                                    call.entrypoint,
+                                    call.arguments
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -230,5 +259,37 @@ fn dump_pipeline(path: &Path, sidecar: &PipelineRecoverySidecar) {
             format_args!("{:?}", tx.reads),
             format_args!("{:?}", tx.writes)
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_data_model::{asset::AssetDefinitionId, domain::DomainId};
+    use iroha_test_samples::ALICE_ID;
+
+    use super::*;
+
+    #[test]
+    fn mixed_batch_mints_contribute_to_requested_asset_sum() {
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let target = AssetId::new(definition, ALICE_ID.clone());
+        let executable = Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(
+                Mint::asset_quantity(7_u32, target.clone()).into(),
+            )]
+            .into(),
+        );
+        let mut context = DumpContext {
+            verbose: false,
+            sum_asset: Some(target),
+            minted_sum: Quantity::zero(),
+        };
+
+        context.record_executable(&executable);
+
+        assert_eq!(context.minted_sum, Quantity::from(7_u32));
     }
 }

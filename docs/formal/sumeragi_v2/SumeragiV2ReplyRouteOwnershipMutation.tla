@@ -9,9 +9,12 @@ and a later route observation retain the first request's rank.  Source 1 is
 then attached at cursor zero and independently advances one message.  The
 fixed path retires source 0, reconnects the first request at its retained
 cursor, and then rebinds the second request to the source-scoped new tenure at
-its own retained cursor.  The two mutations either reset source 0's cursor
-during reconnect or replace its independently owned attempts during a later
-delivery.
+its own retained cursor.  The mutations reset a reconnect cursor, replace
+independent attempts, retain a sibling semantic ticket across a source-wide
+tenure change, accept the authenticated source as a substituted semantic target,
+or reuse a consumed ticket for the next cursor payload.  These cases pin the
+production distinctions among semantic origin, authenticated source,
+connection tenure, and one-item admission authority.
 ***************************************************************************)
 
 CONSTANT RouteMutationMode
@@ -21,6 +24,9 @@ MutationSourceOrder == <<0, 1>>
 MutationSources ==
   {MutationSourceOrder[index]: index \in 1..Len(MutationSourceOrder)}
 MutationSemantics == {"request-a", "request-b"}
+MutationTargets == {2, 3}
+MutationSemanticTarget(semantic) ==
+  IF semantic = "request-a" THEN 2 ELSE 3
 MutationSourceCapacity == 2
 MutationDeliveryOrdinalLimit == 8
 MutationMessageCount == 2
@@ -33,6 +39,7 @@ VARIABLES
   connectionTenure,
   sourceActive,
   nextServiceIndex,
+  acceptedInvalidCapability,
   phase
 
 MutationRoute ==
@@ -40,6 +47,8 @@ MutationRoute ==
     ReplyOwners <- MutationOwners,
     ReplySourceOrder <- MutationSourceOrder,
     ReplySemantics <- MutationSemantics,
+    ReplyTargets <- MutationTargets,
+    ReplySemanticTarget <- MutationSemanticTarget,
     ReplySourceCapacity <- MutationSourceCapacity,
     ReplyDeliveryOrdinalLimit <- MutationDeliveryOrdinalLimit,
     ReplyMessageCount <- MutationMessageCount,
@@ -52,7 +61,7 @@ MutationRoute ==
     rrNextServiceIndex <- nextServiceIndex
 
 MutationRouteVars == MutationRoute!ReplyRouteVars
-MutationVars == <<MutationRouteVars, phase>>
+MutationVars == <<MutationRouteVars, acceptedInvalidCapability, phase>>
 
 RequestA == "request-a"
 RequestB == "request-b"
@@ -62,6 +71,7 @@ SourceAttempt(semantic, source) ==
 
 AdvancePhase(action, nextPhase) ==
   /\ action
+  /\ UNCHANGED acceptedInvalidCapability
   /\ phase' = nextPhase
 
 BuggyReconnectResetsCursor ==
@@ -85,7 +95,8 @@ BuggyReconnectResetsCursor ==
      /\ sourceActive' = [sourceActive EXCEPT ![0][0] = TRUE]
      /\ nextDeliveryOrdinal' =
           [nextDeliveryOrdinal EXCEPT ![0] = @ + 1]
-     /\ UNCHANGED <<payloads, nextServiceIndex>>
+     /\ UNCHANGED <<payloads, nextServiceIndex,
+                    acceptedInvalidCapability>>
      /\ phase' = 14
 
 BuggyLaterDeliveryReplacesAlternateSource ==
@@ -101,23 +112,180 @@ BuggyLaterDeliveryReplacesAlternateSource ==
      /\ nextDeliveryOrdinal' =
           [nextDeliveryOrdinal EXCEPT ![0] = @ + 1]
      /\ UNCHANGED <<payloads, connectionTenure, sourceActive,
-                    nextServiceIndex>>
+                    nextServiceIndex, acceptedInvalidCapability>>
      /\ phase' = 15
+
+SourceAsTargetCapability(semantic, source) ==
+  MutationRoute!ReplyCapability(
+    0, source, source, semantic, nextDeliveryOrdinal[0],
+    connectionTenure[0][source])
+
+SourceAsTargetCapabilityRejected ==
+  \A semantic \in MutationSemantics, source \in MutationSources:
+    /\ MutationSemanticTarget(semantic) # source
+    /\ MutationRoute!ReplyCapabilityRejection(
+         SourceAsTargetCapability(semantic, source),
+         0, source, semantic) = "Retargeted"
+    /\ ~MutationRoute!ReplyCapabilityValidFor(
+         SourceAsTargetCapability(semantic, source),
+         0, source, semantic)
+
+IntrinsicTenureSubstitutionCapability ==
+  LET minted ==
+        MutationRoute!ReplyCapability(
+          0, 0, MutationSemanticTarget(RequestA), RequestA,
+          nextDeliveryOrdinal[0], connectionTenure[0][0])
+  IN [minted EXCEPT !.connectionTenure = @ + 1]
+
+IntrinsicTenureSubstitutionRejected ==
+  /\ MutationRoute!ReplyCapabilityRejection(
+       IntrinsicTenureSubstitutionCapability, 0, 0, RequestA) =
+       "EqualOrdinalDifferentTenure"
+  /\ ~MutationRoute!ReplyCapabilityValidFor(
+       IntrinsicTenureSubstitutionCapability, 0, 0, RequestA)
+
+SourceCapacitySubstitutionCapability ==
+  LET minted ==
+        MutationRoute!ReplyCapability(
+          0, 0, MutationSemanticTarget(RequestA), RequestA,
+          nextDeliveryOrdinal[0], connectionTenure[0][0])
+  IN [minted EXCEPT
+        !.sourceCapacity = 1,
+        !.bindingSourceCapacity = 1]
+
+SourceCapacitySubstitutionRejected ==
+  /\ MutationRoute!ReplyCapabilityIntrinsicBindingValid(
+       SourceCapacitySubstitutionCapability)
+  /\ MutationRoute!ReplyCapabilityRejection(
+       SourceCapacitySubstitutionCapability, 0, 0, RequestA) =
+       "ForeignOwner"
+  /\ ~MutationRoute!ReplyCapabilityValidFor(
+       SourceCapacitySubstitutionCapability, 0, 0, RequestA)
+
+BuggyAcceptSourceAsSemanticTarget ==
+  /\ phase = 0
+  /\ SourceAsTargetCapabilityRejected
+  /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
+                 connectionTenure, sourceActive, nextServiceIndex>>
+  /\ acceptedInvalidCapability' = TRUE
+  /\ phase' = 16
+
+BuggyAcceptIntrinsicTenureSubstitution ==
+  /\ phase = 0
+  /\ IntrinsicTenureSubstitutionRejected
+  /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
+                 connectionTenure, sourceActive, nextServiceIndex>>
+  /\ acceptedInvalidCapability' = TRUE
+  /\ phase' = 20
+
+BuggyAcceptSourceCapacitySubstitution ==
+  /\ phase = 0
+  /\ SourceCapacitySubstitutionRejected
+  /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
+                 connectionTenure, sourceActive, nextServiceIndex>>
+  /\ acceptedInvalidCapability' = TRUE
+  /\ phase' = 21
+
+BuggyReuseTicketForNextPayload ==
+  LET oldAttempt == SourceAttempt(RequestA, 0)
+      serviced == MutationRoute!ReplyAttemptAfterService(oldAttempt)
+      reused ==
+        [serviced EXCEPT
+           !.ticketTenure = oldAttempt.ticketTenure,
+           !.ticketSemantic = oldAttempt.ticketSemantic,
+           !.ticketTarget = oldAttempt.ticketTarget,
+           !.ticketMessageCursor = oldAttempt.ticketMessageCursor,
+           !.ticketChunkCursor = oldAttempt.ticketChunkCursor]
+      selectedIndex ==
+        MutationRoute!ReplySelectedSourceIndex(0, RequestA)
+  IN /\ phase = 2
+     /\ attempts' = MutationRoute!ReplaceReplyAttempt(oldAttempt, reused)
+     /\ nextServiceIndex' =
+          [nextServiceIndex EXCEPT
+             ![0][RequestA] =
+               MutationRoute!NextReplySourceIndex(selectedIndex)]
+     /\ UNCHANGED <<payloads, nextDeliveryOrdinal,
+                    connectionTenure, sourceActive,
+                    acceptedInvalidCapability>>
+     /\ phase' = 3
+
+(***************************************************************************
+This mutation collapses teardown and reconnect into one source-tenure change,
+but clears only the selected semantic attempt.  Request B therefore retains a
+ticket minted by tenure 1 after source 0 advances to tenure 2.  A correct
+source-wide invalidation changes no sibling route/cursor, but clears that
+ticket atomically.
+***************************************************************************)
+BuggyReconnectRetainsSiblingTicket ==
+  LET selectedAttempt == SourceAttempt(RequestA, 0)
+      siblingAttempt == SourceAttempt(RequestB, 0)
+      deliveryOrdinal == nextDeliveryOrdinal[0]
+      newTenure == connectionTenure[0][0] + 1
+      routedAttempt ==
+        MutationRoute!ReplyAttemptWithRoute(
+          selectedAttempt, deliveryOrdinal, newTenure)
+  IN /\ phase = 17
+     /\ MutationRoute!ReplyTicketValidForAttempt(siblingAttempt)
+     /\ attempts' =
+          MutationRoute!ReplaceReplyAttempt(
+            selectedAttempt, routedAttempt)
+     /\ connectionTenure' =
+          [connectionTenure EXCEPT ![0][0] = newTenure]
+     /\ nextDeliveryOrdinal' =
+          [nextDeliveryOrdinal EXCEPT ![0] = @ + 1]
+     /\ UNCHANGED <<payloads, sourceActive, nextServiceIndex,
+                    acceptedInvalidCapability>>
+     /\ phase' = 18
+
+RetiredOrdinalCollisionCapability ==
+  MutationRoute!ReplyCapability(
+    0, 1, MutationSemanticTarget(RequestA), RequestA,
+    SourceAttempt(RequestA, 0).retiredDeliveryOrdinal,
+    connectionTenure[0][1])
+
+RetiredOrdinalCollisionRejected ==
+  /\ SourceAttempt(RequestA, 0).retiredDeliveryOrdinal # 0
+  /\ MutationRoute!ReplyCapabilityRejection(
+       RetiredOrdinalCollisionCapability, 0, 1, RequestA) =
+       "EqualOrdinalDifferentTenure"
+  /\ ~MutationRoute!ReplyCapabilityValidFor(
+       RetiredOrdinalCollisionCapability, 0, 1, RequestA)
+
+BuggyAcceptRetiredOrdinalCollision ==
+  /\ phase = 14
+  /\ RetiredOrdinalCollisionRejected
+  /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
+                 connectionTenure, sourceActive, nextServiceIndex>>
+  /\ acceptedInvalidCapability' = TRUE
+  /\ phase' = 19
 
 RouteMutationInit ==
   /\ MutationRoute!ReplyRouteInit
+  /\ acceptedInvalidCapability = FALSE
   /\ phase = 0
 
 RouteMutationNext ==
   \/ /\ phase = 0
+     /\ RouteMutationMode \notin
+          {"TargetSubstitution", "IntrinsicTenureSubstitution",
+           "SourceCapacitySubstitution"}
      /\ AdvancePhase(
           MutationRoute!ObserveNewReplySource(0, RequestA, 0), 1)
+  \/ /\ RouteMutationMode = "TargetSubstitution"
+     /\ BuggyAcceptSourceAsSemanticTarget
+  \/ /\ RouteMutationMode = "IntrinsicTenureSubstitution"
+     /\ BuggyAcceptIntrinsicTenureSubstitution
+  \/ /\ RouteMutationMode = "SourceCapacitySubstitution"
+     /\ BuggyAcceptSourceCapacitySubstitution
   \/ /\ phase = 1
      /\ AdvancePhase(
           MutationRoute!AcquireReplyTicket(0, RequestA, 0), 2)
   \/ /\ phase = 2
+     /\ RouteMutationMode # "TicketPayloadReuse"
      /\ AdvancePhase(
           MutationRoute!ServiceReplyRoute(0, RequestA), 3)
+  \/ /\ RouteMutationMode = "TicketPayloadReuse"
+     /\ BuggyReuseTicketForNextPayload
   \/ /\ phase = 3
      /\ AdvancePhase(
           MutationRoute!ObserveNewReplySource(0, RequestB, 0), 4)
@@ -143,16 +311,24 @@ RouteMutationNext ==
      /\ AdvancePhase(
           MutationRoute!ServiceReplyRoute(0, RequestA), 11)
   \/ /\ phase = 11
-     /\ RouteMutationMode \in {"Fixed", "CursorReset"}
+     /\ RouteMutationMode \in
+          {"Fixed", "CursorReset", "RetiredOrdinalCollision"}
      /\ AdvancePhase(
           MutationRoute!ObserveLaterReplyDelivery(0, RequestA, 0), 12)
   \/ /\ RouteMutationMode = "SourceReplacement"
      /\ BuggyLaterDeliveryReplacesAlternateSource
+  \/ /\ phase = 11
+     /\ RouteMutationMode = "ReconnectSiblingTicket"
+     /\ AdvancePhase(
+          MutationRoute!AcquireReplyTicket(0, RequestB, 0), 17)
+  \/ /\ RouteMutationMode = "ReconnectSiblingTicket"
+     /\ BuggyReconnectRetainsSiblingTicket
   \/ /\ phase = 12
-     /\ RouteMutationMode \in {"Fixed", "CursorReset"}
+     /\ RouteMutationMode \in
+          {"Fixed", "CursorReset", "RetiredOrdinalCollision"}
      /\ AdvancePhase(MutationRoute!RetireReplySource(0, 0), 13)
   \/ /\ phase = 13
-     /\ RouteMutationMode = "Fixed"
+     /\ RouteMutationMode \in {"Fixed", "RetiredOrdinalCollision"}
      /\ AdvancePhase(
           MutationRoute!ReconnectReplySource(0, RequestA, 0), 14)
   \/ /\ RouteMutationMode = "CursorReset"
@@ -161,6 +337,8 @@ RouteMutationNext ==
      /\ RouteMutationMode \in {"Fixed", "CursorReset"}
      /\ AdvancePhase(
           MutationRoute!ObserveLaterReplyDelivery(0, RequestB, 0), 15)
+  \/ /\ RouteMutationMode = "RetiredOrdinalCollision"
+     /\ BuggyAcceptRetiredOrdinalCollision
 
 BothSemanticAttemptsRetained ==
   phase < 4
@@ -188,8 +366,8 @@ ReconnectPreservesCurrentCursor ==
     \/ connectionTenure[0][0] = 1
     \/ /\ SourceAttempt(RequestA, 0).messageCursor = 1
        /\ SourceAttempt(RequestA, 0).chunkCursor = 0
-       /\ SourceAttempt(RequestA, 0).ticketTenure =
-              MutationRoute!NoReplyTicketTenure
+       /\ MutationRoute!ReplyAttemptHasNoTicket(
+            SourceAttempt(RequestA, 0))
        /\ SourceAttempt(RequestA, 1).messageCursor = 1
        /\ SourceAttempt(RequestA, 1).chunkCursor = 0
 
@@ -199,19 +377,56 @@ PerAttemptRebindPreservesCurrentCursor ==
       attemptsB ==
         MutationRoute!ReplyAttemptsForSource(0, RequestB, 0)
   IN phase < 15
+       \/ phase \in {17, 18, 19}
        \/ /\ Cardinality(attemptsA) = 1
           /\ Cardinality(attemptsB) = 1
           /\ \A attempt \in attemptsA \cup attemptsB:
                /\ attempt.connectionTenure = 2
-               /\ attempt.ticketTenure =
-                    MutationRoute!NoReplyTicketTenure
+               /\ MutationRoute!ReplyAttemptHasNoTicket(attempt)
                /\ attempt.messageCursor = 1
                /\ attempt.chunkCursor = 0
           /\ \A attempt \in attemptsB:
                attempt.deliveryOrdinal = 7
 
+ConsumedTicketCannotAuthorizeNextPayload ==
+  phase < 3
+    \/ phase = 16
+    \/ MutationRoute!ReplyAttemptHasNoTicket(
+         SourceAttempt(RequestA, 0))
+
+SourceAsSemanticTargetNeverAccepted ==
+  /\ SourceAsTargetCapabilityRejected
+  /\ (RouteMutationMode # "TargetSubstitution"
+       \/ ~acceptedInvalidCapability)
+
+IntrinsicTenureSubstitutionNeverAccepted ==
+  /\ IntrinsicTenureSubstitutionRejected
+  /\ (RouteMutationMode # "IntrinsicTenureSubstitution"
+       \/ ~acceptedInvalidCapability)
+
+SourceCapacitySubstitutionNeverAccepted ==
+  /\ SourceCapacitySubstitutionRejected
+  /\ (RouteMutationMode # "SourceCapacitySubstitution"
+       \/ ~acceptedInvalidCapability)
+
+RetiredOrdinalCollisionNeverAccepted ==
+  RouteMutationMode # "RetiredOrdinalCollision"
+    \/ phase < 14
+    \/ /\ RetiredOrdinalCollisionRejected
+       /\ ~acceptedInvalidCapability
+
+ReconnectInvalidatesEverySemanticTicket ==
+  phase # 18
+    \/ MutationRoute!ReplySourceHasNoTickets(0, 0)
+
 RouteMutationSafety ==
   /\ MutationRoute!ReplyRouteSafetyInvariant
+  /\ SourceAsSemanticTargetNeverAccepted
+  /\ IntrinsicTenureSubstitutionNeverAccepted
+  /\ SourceCapacitySubstitutionNeverAccepted
+  /\ RetiredOrdinalCollisionNeverAccepted
+  /\ ReconnectInvalidatesEverySemanticTicket
+  /\ ConsumedTicketCannotAuthorizeNextPayload
   /\ BothSemanticAttemptsRetained
   /\ BothSourcesRetained
   /\ ExactAndLaterDuplicatesKeepRank

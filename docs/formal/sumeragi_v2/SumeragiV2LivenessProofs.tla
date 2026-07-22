@@ -431,20 +431,31 @@ ProtectedServeRankDecreaseStep ==
     /\ \/ ~ResponsiveProtectedServeJobOwned(node, job)'
        \/ ServiceRankLess(ServeJobRank(node, job)', <<5, position>>)
 
-PostGstProductiveStep ==
+PostGstProductiveStepWith(localWorkDecreaseStep) ==
   /\ gst
   /\ AsyncNext
   /\ \/ HeightProtocolEvidenceGrows
      \/ PostGstDeadlineDebtDecreases
      \/ ProtectedServiceRankDecreaseStep
      \/ ProtectedServeRankDecreaseStep
+     \/ localWorkDecreaseStep
+
+PostGstProductiveStep == PostGstProductiveStepWith(FALSE)
+
+PostGstProductiveActionEnabledWith(localWorkDecreaseStep) ==
+  ENABLED PostGstProductiveStepWith(localWorkDecreaseStep)
 
 PostGstProductiveActionEnabled == ENABLED PostGstProductiveStep
 
-DeadlockFreedomProperty(specification) ==
+DeadlockFreedomWithLocalWorkProperty(specification,
+                                     localWorkDecreaseStep) ==
   specification
     => [](gst /\ ~ResponsiveNodesDecide
-           => PostGstProductiveActionEnabled)
+           => PostGstProductiveActionEnabledWith(
+                localWorkDecreaseStep))
+
+DeadlockFreedomProperty(specification) ==
+  DeadlockFreedomWithLocalWorkProperty(specification, FALSE)
 
 ProtectedServiceRankProgressProperty(specification) ==
   specification

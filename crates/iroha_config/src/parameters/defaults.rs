@@ -3168,23 +3168,28 @@ pub mod sumeragi {
 
     /// Serialized reducer command FIFO capacity.
     pub const QUEUE_COMMAND_CAPACITY: NonZeroUsize = nonzero!(1024_usize);
+    /// Maximum simultaneously materialized authenticated non-validator fair-ingress lanes.
+    pub const QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY: NonZeroUsize = nonzero!(2_usize);
     /// Certified-body and block-sync outer-ingress message capacity.
     ///
     /// Every admitted validator owns four protected positions (general source,
     /// non-timeout progress, timeout vote, and transport completion), while
-    /// anonymous/non-roster traffic shares one additional generic position.
-    /// A second untrusted-lane position is reserved for a roster-origin
-    /// completion forwarded by a trusted non-validator relay.
+    /// each configured authenticated non-validator source owns two positions, and
+    /// anonymous traffic owns two further positions.
     /// Deriving the default from the protocol roster ceiling keeps the queue
     /// count allocation representable for every legal height context; byte
     /// quotas remain explicitly roster-scaled by deployment generators.
-    pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(4 * MAX_VALIDATORS_PER_HEIGHT + 2);
+    pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(
+        4 * MAX_VALIDATORS_PER_HEIGHT
+            + 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
+            + 2
+    );
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
     ///
-    /// Five default per-source quotas cover a four-validator roster plus the
-    /// shared untrusted-source lane.
-    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(165_usize * 1024 * 1024);
-    /// Per-authenticated-source canonical outer-ingress wire bytes. The
+    /// Seven default per-source quotas cover a four-validator roster, two
+    /// independently authenticated non-validator lanes, and the anonymous lane.
+    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(231_usize * 1024 * 1024);
+    /// Per-ingress-source canonical outer-ingress wire-byte partition. The
     /// default contains disjoint maximum ordinary-envelope, payload-completion,
     /// and timeout-vote partitions. The ordinary and completion partitions also
     /// cover the one-MiB atomic lane-certificate and four-MiB executable-source
@@ -3210,6 +3215,18 @@ pub mod sumeragi {
     pub const QUEUE_READY_BODY_CAPACITY: NonZeroUsize = nonzero!(128_usize);
     /// Smallest reducer FIFO admitting normal, progress, and completion regions.
     pub const MIN_RUNTIME_COMMAND_CAPACITY: usize = 8;
+    /// Divisor used to reserve trusted completion slots from the reducer command FIFO.
+    pub const V2_RUNTIME_COMPLETION_RESERVE_DIVISOR: usize = 4;
+    /// Maximum effects one serialized reducer input can emit.
+    ///
+    /// This is shared with the executable refinement gate so configuration
+    /// validation reserves the exact same producer batch used by production.
+    pub const V2_MAX_EFFECTS_PER_STEP: usize = 8;
+    /// Number of independently reserved exact-output progress classes.
+    ///
+    /// Safety, lane-progress, and bulk-progress each require one ownership
+    /// unit for every source in a maximum fanout.
+    pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;
     /// Ready-body byte budget relative to the per-body bound.
     pub const READY_BODY_BYTE_MULTIPLIER: u64 = 2;
 

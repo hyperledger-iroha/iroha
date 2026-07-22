@@ -17,18 +17,23 @@ The status is release-eligible only when all of the following hold together:
 2. a fresh strict TLAPS module log is bound to the current canonical formal
    source manifest and the pinned TLAPM commit
    `3ab43c7ff31db4ced850619d4746fa4c841a7681`;
-3. every mapped claim has exactly one named public Verus `proof fn` in the
-   reviewed verified-crate source;
+3. every mapped claim has exactly one named public Verus `proof fn` with its
+   exact normalized parameters, non-vacuous and non-contradictory `requires`,
+   reviewed nontrivial `ensures`, and one exact invocation of its projection
+   builder and verified kernel;
 4. the linked Verus evidence passes the pinned `--no-cheating` invocation,
    verifier binary identities, exact result counts, transcript markers, and
    current workspace source-manifest checks;
-5. each claim records the current SHA-256 digest of its Verus source and every
+5. each production boolean kernel is a pure shared Rust/Verus predicate with
+   the exact reviewed signature and body, and every authoritative production
+   call item has an exact token seal with no unfrozen call item remaining;
+6. each claim records the current SHA-256 digest of its Verus source and every
    code-owned production source in its exact ordered inventory;
-6. every prerequisite in the complete transitive dependency closure has
+7. every prerequisite in the complete transitive dependency closure has
    either `tlaps_proved` or `cross_tool_proved` status; and
-7. each named TLA+ production premise contains its exact ordered `4 + 6 + 6`
+8. each named TLA+ production premise contains its exact ordered `4 + 7 + 6`
    constants, with every mapped constant required to equal `TRUE`; and
-8. the cross-tool document exactly matches the source-bound canonical ledger
+9. the cross-tool document exactly matches the source-bound canonical ledger
    and its digest, TLAPS evidence digest, Verus evidence digest, tool
    identities, source manifests, and canonical claim mapping.
 
@@ -82,7 +87,7 @@ Verus source:
 Its dependency closure includes
 `effective-lock-body-acquisition-model`.
 
-### Durable progress witness (6 claims)
+### Durable progress witness (7 claims)
 
 Ledger obligation: `progress-witness-production-refinement`.
 
@@ -97,6 +102,7 @@ Verus source: `crates/iroha_sumeragi_core/src/verus_proofs.rs`.
 | `ProductionDecisionTraceRefinesRecoveryWitness` | `production_decision_trace_refines_recovery_witness` |
 | `ProductionSchedulerTraceRefinesProtectedOwnership` | `production_scheduler_trace_refines_protected_ownership` |
 | `ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership` | `production_ingress_identity_and_class_trace_refines_protected_ownership` |
+| `ProductionTwoStageRelayRetryTraceRefinesSourceFairness` | `production_two_stage_relay_retry_trace_refines_source_fairness` |
 | `ProductionReliableFlushTraceRefinesOutboundOwnership` | `production_reliable_flush_trace_refines_outbound_ownership` |
 | `ProductionApplicationTraceRefinesDecisionCompletion` | `production_application_trace_refines_decision_completion` |
 
@@ -118,10 +124,15 @@ Verus source: `crates/iroha_sumeragi_core/src/verus_proofs.rs`.
 | --- | --- |
 | `ProductionAppliedSuccessorTraceRefinesIndexedActivation` | `production_applied_successor_trace_refines_indexed_activation` |
 | `ProductionRecoveredSuccessorTraceRefinesIndexedActivation` | `production_recovered_successor_trace_refines_indexed_activation` |
-| `ProductionStartupFailureRefinesFailClosedActivation` | `production_startup_failure_refines_fail_closed_activation` |
+| `ProductionStartupFailureAndRestartRefinesIndexedLifecycle` | `production_startup_failure_and_restart_refines_indexed_lifecycle` |
 | `ProductionHistoricalCertificateTraceRefinesIndexedAsync` | `production_historical_certificate_trace_refines_indexed_async` |
 | `ProductionHistoricalBodyPipelineTraceRefinesIndexedAsync` | `production_historical_body_pipeline_trace_refines_indexed_async` |
-| `ProductionTerminalApplicationExcludesActivation` | `production_terminal_application_excludes_activation` |
+| `ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal` | `production_terminal_application_without_successor_activation_refines_indexed_terminal` |
+
+The sixth claim is the authenticated Apply-boundary separation: the exact
+receipt, finality artifact, context, block, and durable predecessor agree while
+no successor activation is pending. It has no production `MaxHeight` input;
+`MaxHeight` remains only a finite-horizon proof projection.
 
 Its dependency closure includes the epoch-boundary proof, durable decision
 recovery, and successor-activation starvation freedom.
@@ -158,34 +169,48 @@ override lets validation read the immutable archived copy instead of mutable
 ## Current status
 
 The evidence architecture does not itself prove a production refinement. The
-three ledger obligations above remain `specified_unproved`, but the
-effective-lock entry now has its exact named TLA+ bridge, four non-vacuous
-Verus theorems, shared Rust/Verus trace kernels, and fail-closed production
-call-site projections. A focused strict TLAPS slice proves the two bridge
-obligations, and the pinned Verus run proves the source-linked kernels. The
-entry is not promoted until those results are regenerated as one immutable,
-source-manifest-bound release evidence set. The current boundary is:
+three ledger obligations above remain `specified_unproved`, but the code-owned
+4 + 7 + 6 inventory now has exact named Verus signatures, non-vacuous
+postconditions, shared Rust/Verus kernels, sealed projection builders and
+identity extractors, and fail-closed production call-site expressions. The
+checker also seals the complete token stream of each authoritative production
+call item, so retaining the reviewed kernel snippet behind a newly inserted
+bypass is not accepted. Seventeen of the 24 call items are sealed. Seven remain
+explicitly unfrozen while the reply-route ownership patch changes
+`v2_runtime.rs::{pop_next_with_ownership, enqueue_classified_command,
+enqueue_completion_batch, commit_canonical_body_available}`,
+`v2_worker.rs::poll_sidecar_flushes`, and
+`v2_runner.rs::{recovered, run_inner}`. Each unfrozen item is a promotion error,
+not evidence. None of the three obligations is promoted until those items are
+sealed and strict TLAPS and pinned Verus results are regenerated as one
+immutable, source-manifest-bound release evidence set. The current boundary is:
 
 - effective-lock verification now covers the serialized post-install lock,
   immutable body-owner, exact retirement-accounting, and bounded class-selector
   seams through live production invocations. Repeated host invocation and
   terminating local work remain explicit runtime assumptions of the liveness
   theorem rather than facts manufactured by this refinement;
-- progress-witness verification reaches the pure reducer/WAL transition and
-  timer/FIFO kernels, but not the collection-heavy runtime ingress, worker,
-  sidecar, P2P actor-to-writer-flush, or application trace as one verified
-  transition system; and
-- successor verification has no Verus model of the status adapter, runner
-  publication, startup failure, historical block-sync pipeline, crash/restart,
+- progress-witness verification reaches seven pure reducer/WAL, timer/FIFO,
+  ingress, two-stage relay retry, writer-flush, and application kernels, but
+  not those collection-heavy runtime paths as one verified transition system.
+  The writer-flush and lane-application kernels are linked by typed,
+  process-local identities for the opaque authenticated source key, the exact
+  admitted delivery route, and the clone-shared one-shot writer claim. Equal
+  peer, ordinal, ticket, and payload fields under another actor, route, budget,
+  or independently rebuilt completion therefore cannot satisfy the link. These
+  identities are never wire, persistent, or consensus fields. Promotion remains
+  blocked until the remaining production paths are sealed and one fresh pinned
+  source-bound evidence set verifies the complete contract; and
+- successor verification reaches six pure status, runner, startup, historical
+  block-sync, and terminal Apply-boundary kernels. Crash/restart scheduling,
   recovery-scoped eager CommitQC-discovery scheduling, late canonical
-  lane-ownership rehydration at rollover, or epoch-boundary action mapping.
+  lane-ownership rehydration at rollover, and the full epoch-boundary action
+  map remain outside those safety refinements.
 
-The pinned `--no-cheating --rlimit 60` run verifies 1,690 dependency and 126
-root obligations with zero errors after splitting the largest EnterView query.
-The effective-lock four have the reviewed signatures and production call-path
-closure; the remaining 12 claims do not. In addition, the progress-witness
-target still depends on the unproved async progress-ownership invariant, and
-the successor target still depends on unproved successor starvation freedom.
+Earlier pinned Verus result counts predate this 17-claim source closure and
+remain diagnostic only. In addition, the progress-witness target still depends
+on the unproved async progress-ownership invariant, and the successor target
+still depends on unproved successor starvation freedom.
 Because no ledger entry is yet `cross_tool_proved`, the dormant release
 workflow neither generates nor accepts a cross-tool evidence document. The
 checker reports the active set with `--print-cross-tool-obligations`; empty

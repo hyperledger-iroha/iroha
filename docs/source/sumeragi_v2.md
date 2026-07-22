@@ -178,15 +178,25 @@ consensus traffic stays on `Consensus`; Torii proxy and genesis bootstrap traffi
 bounded burst scheduling still gives repair traffic a turn.
 
 The final Sumeragi handoff repeats that source isolation instead of collapsing authenticated
-traffic into one FIFO. Each frozen-roster validator has a bounded ingress lane and anonymous plus
-non-roster traffic shares one untrusted lane. Each validator owns an ordinary first-message slot,
-a non-timeout Progress slot, and a distinct signer-bounded TimeoutVote slot; configuration must
-therefore provide at least `3 * roster_len + 1` total slots. A busy lane may borrow only capacity
-which preserves those outstanding reservations, and the continuation potential cannot increase
-when one item is serviced. Dequeue rotates one message per non-empty source. Height rollover closes
-the queue, discards messages owned by the old immutable context, installs the successor roster, and
-reopens only after WAL replay. A Byzantine validator or a swarm of non-roster identities therefore
-cannot indefinitely exclude an honest retransmission at the production ingress boundary.
+traffic into one FIFO. Each frozen-roster validator has a bounded ingress lane, authenticated
+non-validator sources receive on-demand lanes capped by
+`sumeragi.queues.authenticated_non_validator_sources = H`, and anonymous traffic retains its own
+persistent lane. Each validator owns an ordinary first-message slot, a non-timeout Progress slot,
+a distinct signer-bounded TimeoutVote slot, and a TransportCompletion slot. Each materialized
+authenticated non-validator lane owns a generic slot and a TransportCompletion slot; the anonymous
+lane owns the same pair for a non-empty roster. Configuration must therefore provide at least
+`4 * roster_len + 2 * H + 2` slots, or `2 * H + 1` for the no-roster diagnostic geometry, and body
+bytes must isolate `(roster_len + H + 1) * body_source_bytes`. A semantic duplicate carrying an
+alternate authenticated reply route attaches to its existing request before the new-lane `H` gate
+is evaluated. Exact-output route capacity remains the independent effective
+`network.max_total_connections` value `R`; root validation resolves any configured lane profile
+before deriving `R` and rejects `H > R`. Authenticated non-validator lanes are removed when empty. A busy lane may borrow only
+capacity which preserves those outstanding reservations, and the continuation potential cannot
+increase when one item is serviced. Dequeue rotates one message per non-empty source. Height
+rollover closes the queue, discards messages owned by the old immutable context, installs the
+successor roster, and reopens only after WAL replay. A Byzantine validator or a swarm of
+non-roster identities therefore cannot indefinitely exclude an honest retransmission at the
+production ingress boundary.
 
 Removal from that fair ingress is conditional on the exact next queue. A reducer-directed head
 remains in its source lane unless the single runtime FIFO has room in that payload's Normal or

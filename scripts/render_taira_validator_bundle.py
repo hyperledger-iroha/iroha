@@ -105,7 +105,7 @@ def _require_positive_integer(
 def _scaled_sumeragi_body_bytes(
     template: dict[str, Any], validator_count: int
 ) -> int:
-    """Return an aggregate ingress budget isolating every roster source."""
+    """Return an aggregate ingress budget isolating every configured source."""
 
     sumeragi = template.get("sumeragi")
     if not isinstance(sumeragi, dict):
@@ -116,7 +116,12 @@ def _scaled_sumeragi_body_bytes(
     context = "config template `[sumeragi.queues]`"
     configured = _require_positive_integer(queues, "body_bytes", context)
     source_bytes = _require_positive_integer(queues, "body_source_bytes", context)
-    minimum = (validator_count + 1) * source_bytes
+    authenticated_non_validator_sources = _require_positive_integer(
+        queues, "authenticated_non_validator_sources", context
+    )
+    minimum = (
+        validator_count + authenticated_non_validator_sources + 1
+    ) * source_bytes
     return max(configured, minimum)
 
 

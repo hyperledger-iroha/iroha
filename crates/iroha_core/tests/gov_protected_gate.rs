@@ -14,7 +14,6 @@ use iroha_core::{
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::nexus::DataSpaceId;
-use iroha_primitives::json::Json;
 
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 

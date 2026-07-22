@@ -363,7 +363,7 @@ pub(crate) enum V2LaneWorkEffect {
         /// Independent request sources for response chunks; absent for local fetch requests.
         reply_routes: Option<NetworkReplyRoutes>,
         /// Bounded request or fixed-boundary response chunk.
-        message: CertifiedMergeSidecarMessage,
+        message: Arc<CertifiedMergeSidecarMessage>,
     },
 }
 
@@ -2195,6 +2195,7 @@ impl V2LaneWorkAdapter {
         if ingress_ownership.as_ref().is_some_and(|ownership| {
             !ownership.validate_exact()
                 || !ownership.matches_message(&message)
+                || !ownership.matches_semantic_origin(sender.as_ref())
                 || !ownership.matches_reply_routes(reply_routes.as_ref())
         }) {
             return V2LaneIngressOutcome::Rejected;
@@ -2726,7 +2727,7 @@ impl V2LaneWorkAdapter {
     fn schedule_lane_artifact_retransmissions(&mut self) {
         // Peer-queue admission is only a volatile delivery boundary. Begin a
         // fresh bounded fanout round after the previous round transferred all
-        // destinations, so a connection-generation failure after enqueue
+        // destinations, so loss of an authenticated transport tenure after enqueue
         // cannot permanently erase the final lane certificate. Once Decision
         // is installed, the decision branch above keeps starting bounded
         // rounds only for the exact decided-lane ownerships until their
@@ -2885,11 +2886,11 @@ impl V2LaneWorkAdapter {
         &mut self,
         post: MergeSidecarPost,
     ) -> Result<(), V2LaneWorkError> {
-        let retired_response_route = match (&post.message, &post.reply_route) {
+        let retired_response_route = match (post.message.as_ref(), &post.reply_route) {
             (CertifiedMergeSidecarMessage::Chunk(_), Some(route)) => Some(route.clone()),
             _ => None,
         };
-        let unsent_request = match &post.message {
+        let unsent_request = match post.message.as_ref() {
             CertifiedMergeSidecarMessage::Request(request) => Some(request.clone()),
             CertifiedMergeSidecarMessage::Chunk(_) => None,
         };
@@ -2925,6 +2926,7 @@ impl V2LaneWorkAdapter {
             .acknowledge_outbound_chunk(admission, now)
             .map_err(|_| V2LaneWorkError::RestartRequired)?;
         if acknowledged {
+            self.remove_acknowledged_sidecar_retry_effect(admission);
             let posts = self
                 .merge_sidecars
                 .drain_outbound_chunks(self.sidecar_effect_slots().min(8), now);
@@ -2934,6 +2936,44 @@ impl V2LaneWorkAdapter {
         }
         operation.complete();
         Ok(())
+    }
+
+    fn remove_acknowledged_sidecar_retry_effect(
+        &mut self,
+        admission: &CertifiedMergeSidecarChunkAdmission,
+    ) {
+        let mut retained = VecDeque::with_capacity(self.sidecar_effects.len());
+        while let Some(mut effect) = self.sidecar_effects.pop_front() {
+            let mut keep = true;
+            if let V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                reply_routes: Some(reply_routes),
+                message,
+                ..
+            } = &mut effect
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(_))
+                && admission.matches_materialized_chunk(message)
+            {
+                let completed_sources = reply_routes
+                    .iter()
+                    .filter(|route| admission.is_bound_to_source(route))
+                    .map(NetworkReplyRoute::source_key)
+                    .collect::<Vec<_>>();
+                for source in completed_sources {
+                    let removed = reply_routes.remove_completed_source(&source);
+                    debug_assert!(removed);
+                }
+                keep = !reply_routes.is_empty();
+            }
+            if keep {
+                retained.push_back(effect);
+            }
+        }
+        self.sidecar_effects = retained;
+        self.sidecar_effect_keys = self
+            .sidecar_effects
+            .iter()
+            .map(lane_work_effect_key)
+            .collect();
     }
 
     fn push_merge_sidecar_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
@@ -3161,7 +3201,7 @@ impl V2LaneWorkAdapter {
         );
         if let Some(post) = retry {
             if !self.push_merge_sidecar_post(post.clone())
-                && let CertifiedMergeSidecarMessage::Request(request) = &post.message
+                && let CertifiedMergeSidecarMessage::Request(request) = post.message.as_ref()
             {
                 self.merge_sidecars.release_unsent_request(request);
             }
@@ -5620,7 +5660,7 @@ fn lane_work_effect_reply_routes_have_valid_shape(effect: &V2LaneWorkEffect) -> 
             peer,
             reply_routes,
             message,
-        } => match message {
+        } => match message.as_ref() {
             CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
             CertifiedMergeSidecarMessage::Chunk(_) => reply_routes
                 .as_ref()
@@ -5659,7 +5699,7 @@ fn lane_work_effect_reply_routes_are_valid(effect: &V2LaneWorkEffect) -> bool {
             peer,
             reply_routes,
             message,
-        } => match message {
+        } => match message.as_ref() {
             CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
             CertifiedMergeSidecarMessage::Chunk(_) => reply_routes
                 .as_ref()
@@ -5668,30 +5708,52 @@ fn lane_work_effect_reply_routes_are_valid(effect: &V2LaneWorkEffect) -> bool {
     }
 }
 
+fn optional_reply_routes_retain_candidate(
+    merged: &Option<NetworkReplyRoutes>,
+    candidate: &Option<NetworkReplyRoutes>,
+) -> bool {
+    match (merged, candidate) {
+        (Some(merged), Some(candidate)) => candidate.iter().any(|candidate_route| {
+            merged
+                .iter()
+                .any(|route| route.same_delivery(candidate_route))
+        }),
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+    }
+}
+
 fn merge_optional_reply_routes(
     queued: &mut Option<NetworkReplyRoutes>,
     candidate: &Option<NetworkReplyRoutes>,
 ) -> bool {
-    match (queued, candidate) {
-        (Some(queued), Some(candidate)) => {
-            // Reconcile the complete observed history on a shadow set. A
-            // successful maintenance-only merge still commits retirement and
-            // tombstone history even when no candidate delivery remains live.
-            let mut merged = queued.clone();
-            if merged.merge_observed(candidate).is_err() {
+    match (queued.as_ref(), candidate.as_ref()) {
+        (Some(retained), Some(candidate)) => {
+            // Both reconciliation and its final liveness snapshot return
+            // operation-owned histories. No caller-supplied projection can
+            // erase another authenticated source at this coalescing seam.
+            let mut merged = retained.clone();
+            let Ok(merge_receipt) = merged.merge_observed_with_receipt(candidate) else {
                 return false;
-            }
-            let retained_active_candidate = candidate.iter().any(|candidate_route| {
-                candidate_route.is_active()
-                    && merged
-                        .iter()
-                        .any(|route| route.same_delivery(candidate_route))
+            };
+            let Some(mut merged) = merge_receipt.into_output(retained, candidate) else {
+                return false;
+            };
+            let before_prune = merged.clone();
+            let (_, prune_receipt) = merged.retain_active_with_receipt();
+            let Some(merged) = prune_receipt.into_output(&before_prune) else {
+                return false;
+            };
+            let retains_candidate = candidate.iter().any(|candidate_route| {
+                merged
+                    .iter()
+                    .any(|route| route.same_delivery(candidate_route))
             });
-            *queued = merged;
-            retained_active_candidate
+            *queued = Some(merged);
+            retains_candidate
         }
         (None, None) => true,
-        (None, Some(_)) | (Some(_), None) => false,
+        (Some(_), None) | (None, Some(_)) => false,
     }
 }
 
@@ -5699,6 +5761,17 @@ fn merge_lane_work_effect_reply_routes(
     queued: &mut V2LaneWorkEffect,
     candidate: &V2LaneWorkEffect,
 ) -> bool {
+    merge_lane_work_effect_reply_routes_after_route_merge(queued, candidate, || {})
+}
+
+fn merge_lane_work_effect_reply_routes_after_route_merge<AfterRouteMerge>(
+    queued: &mut V2LaneWorkEffect,
+    candidate: &V2LaneWorkEffect,
+    after_route_merge: AfterRouteMerge,
+) -> bool
+where
+    AfterRouteMerge: FnOnce(),
+{
     // A queued source may have disconnected since reservation. The
     // per-source merge prunes such retained attempts while allowing other live
     // members of the same occurrence to attach.
@@ -5718,25 +5791,43 @@ fn merge_lane_work_effect_reply_routes(
                 ..
             },
         ) => {
-            let mut merged_routes = queued_routes.clone();
-            let retained_candidate_route =
-                merge_optional_reply_routes(&mut merged_routes, candidate_routes);
+            let (mut merged_routes, merge_receipt) =
+                match (queued_routes.as_ref(), candidate_routes.as_ref()) {
+                    (Some(queued), Some(candidate)) => {
+                        let mut merged = queued.clone();
+                        let Ok(receipt) = merged.merge_observed_with_receipt(candidate) else {
+                            return false;
+                        };
+                        (Some(merged), Some(receipt))
+                    }
+                    (None, None) if cfg!(test) => (None, None),
+                    (Some(_), None) | (None, Some(_)) | (None, None) => return false,
+                };
+            after_route_merge();
             let mut merged_ownership = queued_ownership.clone();
             match (&mut merged_ownership, candidate_ownership) {
                 (Some(retained), Some(candidate)) => {
-                    if !retained.merge_downstream(candidate.clone()) {
+                    let Some(receipt) = merge_receipt else {
                         return false;
-                    }
+                    };
+                    let Some(receipt_routes) =
+                        retained.merge_downstream_with_observed_receipt(candidate.clone(), receipt)
+                    else {
+                        return false;
+                    };
+                    merged_routes = Some(receipt_routes);
                 }
                 (None, None) if cfg!(test) => {}
                 (Some(_), None) | (None, Some(_)) | (None, None) => return false,
             }
             if merged_ownership.as_ref().is_some_and(|ownership| {
-                !ownership.matches_reply_routes(merged_routes.as_ref())
-                    || !ownership.validate_exact()
+                !ownership.validate_exact()
+                    || !ownership.matches_reply_routes(merged_routes.as_ref())
             }) {
                 return false;
             }
+            let retained_candidate_route =
+                optional_reply_routes_retain_candidate(&merged_routes, candidate_routes);
             *queued_routes = merged_routes;
             *queued_ownership = merged_ownership;
             retained_candidate_route
@@ -5815,7 +5906,7 @@ fn lane_work_effect_key(effect: &V2LaneWorkEffect) -> Hash {
         V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message, .. } => {
             encoded.push(3);
             encoded.extend(peer.encode());
-            encoded.extend(message.encode());
+            encoded.extend(message.as_ref().encode());
         }
     }
     Hash::new(encoded)
@@ -7297,7 +7388,7 @@ pub(super) mod tests {
         let post = |reply_route| MergeSidecarPost {
             peer: requester.clone(),
             reply_route: Some(reply_route),
-            message: CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
+            message: Arc::new(CertifiedMergeSidecarMessage::Chunk(chunk.clone())),
         };
 
         assert!(routes.retire(&route_a));
@@ -10231,7 +10322,7 @@ pub(super) mod tests {
         let effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
             peer: responder,
             reply_routes: None,
-            message: CertifiedMergeSidecarMessage::Request(request.clone()),
+            message: Arc::new(CertifiedMergeSidecarMessage::Request(request.clone())),
         };
 
         assert!(adapter.push_effect(effect.clone()));
@@ -10242,7 +10333,7 @@ pub(super) mod tests {
             adapter.push_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
                 peer: alternate_destination,
                 reply_routes: None,
-                message: CertifiedMergeSidecarMessage::Request(request.clone()),
+                message: Arc::new(CertifiedMergeSidecarMessage::Request(request.clone())),
             })
         );
         assert_eq!(
@@ -10257,7 +10348,7 @@ pub(super) mod tests {
             adapter.push_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
                 peer: distinct_request.responder.clone(),
                 reply_routes: None,
-                message: CertifiedMergeSidecarMessage::Request(distinct_request),
+                message: Arc::new(CertifiedMergeSidecarMessage::Request(distinct_request)),
             })
         );
         assert_eq!(
@@ -11008,9 +11099,9 @@ pub(super) mod tests {
         assert_eq!(
             certificate,
             LaneBlockCertificateV1 {
-                proposal: session.proposal,
-                prepare_qc: session.prepare_qc,
-                commit_qc: session.commit_qc,
+                proposal: session.proposal.clone(),
+                prepare_qc: session.prepare_qc.clone(),
+                commit_qc: session.commit_qc.clone(),
             }
         );
         assert_eq!(reply_routes.len(), 2);
@@ -11027,6 +11118,73 @@ pub(super) mod tests {
         assert!(ownership.validate_exact());
         assert_eq!(ownership.admission_count, 2);
         assert!(ownership.matches_reply_routes(Some(&reply_routes)));
+
+        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_d = PeerId::new(KeyPair::random().public_key().clone());
+        let route_c = route_fixture.mint_via(requester.clone(), hub_c.clone());
+        let route_d = route_fixture.mint_via(requester.clone(), hub_d.clone());
+        let race_effect = |via: PeerId, route: NetworkReplyRoute| {
+            let mut inbound = admitted(via, route);
+            let ingress_ownership = inbound
+                .take_ingress_ownership()
+                .expect("fair admission attaches exact ownership");
+            let (_, peer, reply_routes) = inbound.into_message_sender_and_reply_routes();
+            V2LaneWorkEffect::PostDurableLaneCertificate {
+                peer: peer.expect("transport request retains its semantic origin"),
+                reply_routes,
+                ingress_ownership: Some(ingress_ownership),
+                certificate: certificate.clone(),
+            }
+        };
+        let mut queued = race_effect(hub_c, route_c.clone());
+        let candidate = race_effect(hub_d, route_d.clone());
+        assert!(merge_lane_work_effect_reply_routes_after_route_merge(
+            &mut queued,
+            &candidate,
+            || assert!(route_fixture.retire(&route_c))
+        ));
+        let V2LaneWorkEffect::PostDurableLaneCertificate {
+            reply_routes: Some(mut race_routes),
+            ingress_ownership: Some(mut race_ownership),
+            ..
+        } = queued
+        else {
+            panic!("coalesced race result retains route and ownership carriers")
+        };
+        assert_eq!(
+            race_routes.len(),
+            2,
+            "source C retired after the authoritative merge snapshot"
+        );
+        assert!(
+            race_routes
+                .iter()
+                .any(|route| route.same_delivery(&route_c))
+        );
+        assert!(
+            race_routes
+                .iter()
+                .any(|route| route.same_delivery(&route_d)),
+            "source C retirement cannot consume independent source D"
+        );
+        assert!(race_ownership.validate_exact());
+        assert!(race_ownership.matches_reply_routes(Some(&race_routes)));
+        let (retained, prune_receipt) = race_routes.retain_active_with_receipt();
+        assert_eq!(
+            retained, 1,
+            "the next bounded snapshot observes only source C's retirement"
+        );
+        race_routes = race_ownership
+            .project_retained_reply_routes(prune_receipt)
+            .expect("the prune receipt owns the exact source-D output");
+        assert!(race_ownership.validate_exact());
+        assert!(race_ownership.matches_reply_routes(Some(&race_routes)));
+        assert!(
+            race_ownership
+                .current_reply_routes()
+                .is_some_and(|routes| routes.len() == 1
+                    && routes.iter().any(|route| route.same_delivery(&route_d)))
+        );
     }
 
     #[test]

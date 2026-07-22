@@ -78,17 +78,20 @@ use super::v2_core::{
     EffectiveLockTraceProjection, EquivocationKind, EventTag, ExactBodyOwnerProjection,
     ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
     IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER,
-    IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_DURABLE_BODY_FRAME,
+    IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+    IDENTITY_KIND_CONSENSUS_MESSAGE, IDENTITY_KIND_DURABLE_BODY_FRAME,
     IDENTITY_KIND_EXECUTED_BLOCK_WIRE, IDENTITY_KIND_EXECUTION_COMMITMENT,
     IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_QUORUM_CERTIFICATE,
     IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP,
     ProductionDecisionIdentityProjection, ProductionDecisionRecoveryTraceProjection,
-    ProductionDurableBodyIdentityProjection, ProductionQuorumCertificateIdentityProjection,
-    TagProjection, exact_body_stage_is_owned, plan_exact_body_owner_binding,
-    plan_exact_body_owner_rebind, plan_exact_body_retirement_accounting,
+    ProductionDurableBodyIdentityProjection, ProductionHistoricalBodyPipelineTraceProjection,
+    ProductionQuorumCertificateIdentityProjection, TagProjection, exact_body_stage_is_owned,
+    plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
+    plan_exact_body_retirement_accounting,
     production_body_capacity_retirement_preserves_effective_lock_kernel,
     production_body_ownership_preserves_effective_lock_kernel,
     production_decision_trace_refines_recovery_witness_kernel,
+    production_historical_body_pipeline_trace_refines_indexed_async_kernel,
 };
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
@@ -136,6 +139,42 @@ impl EffectWorkId {
     #[cfg(test)]
     pub(crate) const fn for_test(value: u64) -> Self {
         Self(value)
+    }
+}
+
+/// One-shot proof that an exact discovered CommitQC entered serialized reducer ingress.
+///
+/// Fields and the production constructor remain private to this module. Block-sync discovery can
+/// therefore retire an authenticated request only after the real effect executor accepted the
+/// exact message; a generic callback returning `Ok(())` cannot claim reducer admission.
+#[derive(Debug)]
+#[must_use]
+pub(crate) struct CommitCertificateReducerAdmission {
+    message_hash: HashOf<wire::ConsensusMessageV2>,
+}
+
+impl CommitCertificateReducerAdmission {
+    /// Return whether this admission was minted for the complete canonical message.
+    pub(crate) fn matches(&self, message: &wire::ConsensusMessageV2) -> bool {
+        self.message_hash == HashOf::new(message)
+    }
+
+    /// Losslessly project the admitted canonical envelope for the shared
+    /// historical-certificate refinement gate.
+    pub(crate) fn refinement_projection(&self) -> CanonicalIdentityProjection {
+        canonical_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CONSENSUS_MESSAGE,
+            self.message_hash,
+        )
+    }
+
+    /// Construct deterministic ownership evidence for block-sync boundary tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(message: &wire::ConsensusMessageV2) -> Self {
+        Self {
+            message_hash: HashOf::new(message),
+        }
     }
 }
 
@@ -2475,13 +2514,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         Ok(genesis_context)
     }
 
-    /// Borrow the complete process-local evidence for interrupted-tip replay.
-    pub(crate) const fn pending_kura_apply_recovery_evidence(
-        &self,
-    ) -> Option<&PendingKuraApplyRecoveryEvidence> {
-        self.pending_tip_recovery.as_ref()
-    }
-
     /// Authenticate and enqueue one reducer-directed v2 network message while
     /// preserving the exact fair-ingress owner through serialized dispatch.
     pub(crate) fn enqueue_network_with_ingress_ownership(
@@ -2492,8 +2524,39 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         if self.fatal_reason.is_some() || self.output_guard.restart_required() {
             return Err(NetworkIngressError::FailClosed);
         }
-        self.runtime
-            .enqueue_network_with_ingress_ownership(message, ingress_ownership)
+        let result = self
+            .runtime
+            .enqueue_network_with_ingress_ownership(message, ingress_ownership);
+        if matches!(&result, Err(NetworkIngressError::FailClosed)) {
+            self.output_guard.activate_restart_required();
+            self.fatal_reason.get_or_insert_with(|| {
+                "Sumeragi v2 runtime rejected authenticated ingress ownership".to_owned()
+            });
+        }
+        result
+    }
+
+    /// Admit an authenticated block-sync CommitQC and return exact one-shot ownership evidence.
+    ///
+    /// The evidence is minted only after serialized reducer admission succeeds and is bound to
+    /// the complete canonical message. Discovery uses it to retire the matching request.
+    pub(crate) fn enqueue_discovered_commit_certificate(
+        &mut self,
+        message: wire::ConsensusMessageV2,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
+    ) -> Result<CommitCertificateReducerAdmission, NetworkIngressError> {
+        let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) = &message.payload
+        else {
+            return Err(NetworkIngressError::TransportPayload);
+        };
+        if certificate.phase != wire::GlobalPhase::Commit {
+            return Err(NetworkIngressError::Authentication(
+                AdapterError::DurableCommitMismatch,
+            ));
+        }
+        let message_hash = HashOf::new(&message);
+        let _tag = self.enqueue_network_with_ingress_ownership(message, ingress_ownership)?;
+        Ok(CommitCertificateReducerAdmission { message_hash })
     }
 
     /// Test-only direct helper. Production must provide the ownership carrier
@@ -2506,7 +2569,14 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         if self.fatal_reason.is_some() || self.output_guard.restart_required() {
             return Err(NetworkIngressError::FailClosed);
         }
-        self.runtime.enqueue_network(message)
+        let result = self.runtime.enqueue_network(message);
+        if matches!(&result, Err(NetworkIngressError::FailClosed)) {
+            self.output_guard.activate_restart_required();
+            self.fatal_reason.get_or_insert_with(|| {
+                "Sumeragi v2 runtime rejected authenticated ingress ownership".to_owned()
+            });
+        }
+        result
     }
 
     /// Borrow the immutable context governing this executor height.
@@ -2530,11 +2600,28 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// A `CommitCertificateResponse` is deliberately classified as reducer
     /// producing because the runner unwraps its authenticated CommitQC into
     /// reducer ingress before retiring discovery ownership.
-    pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
+    pub(crate) fn can_admit_network_message_with_ingress_ownership(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
         self.fatal_reason.is_none()
             && !self.output_guard.restart_required()
             && self.retained_dispatch_allows_network_ingress(&message.payload)
-            && self.runtime.can_admit_network_message(message)
+            && self
+                .runtime
+                .can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
+        if self.fatal_reason.is_some()
+            || self.output_guard.restart_required()
+            || !self.retained_dispatch_allows_network_ingress(&message.payload)
+        {
+            return false;
+        }
+        self.runtime.can_admit_network_message(message)
     }
 
     /// Snapshot the reducer-owned leader/lock constraint for the local
@@ -2600,6 +2687,13 @@ impl V2EffectExecutor<SerializedV2Runtime> {
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Borrow the complete process-local evidence for interrupted-tip replay.
+    pub(crate) const fn pending_kura_apply_recovery_evidence(
+        &self,
+    ) -> Option<&PendingKuraApplyRecoveryEvidence> {
+        self.pending_tip_recovery.as_ref()
+    }
+
     /// Retain the exact resultless wire of the already-authenticated staged
     /// genesis as a process-local acquisition source.
     ///
@@ -3507,7 +3601,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
-        if self.pending_tip_recovery.is_some() && effects.len() != 1 {
+        if self.pending_kura_apply_recovery_evidence().is_some() && effects.len() != 1 {
             return Err(self.close(
                 EffectExecutorError::Contract(
                     "interrupted-tip recovery must emit exactly one effect for its current stage"
@@ -4290,7 +4384,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),
         ));
-        if !ingress_ownership.validate_exact() || !ingress_ownership.matches_message(&message) {
+        if !ingress_ownership.validate_exact()
+            || !ingress_ownership.matches_message(&message)
+            || !ingress_ownership.matches_semantic_origin(Some(authenticated_sender))
+        {
             return Err(self.fail_closed_transport(
                 "payload chunk lost or altered its fair-ingress ownership",
                 services,
@@ -4443,10 +4540,44 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(CompletionDisposition::Rejected)
     }
 
+    /// Consume one certified response with the exact fair-ingress owner that
+    /// authenticated its semantic responder and canonical envelope.
+    pub(crate) fn accept_certified_body_response_with_ingress_ownership<S: V2EffectServices>(
+        &mut self,
+        response: wire::CertifiedBodyResponse,
+        authenticated_responder: &PeerId,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
+        services: &mut S,
+    ) -> Result<CompletionDisposition, EffectTransportError> {
+        let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response.clone()),
+        ));
+        if !ingress_ownership.validate_exact()
+            || !ingress_ownership.matches_message(&message)
+            || !ingress_ownership.matches_semantic_origin(Some(authenticated_responder))
+        {
+            return Err(self.fail_closed_transport(
+                "certified body response differs from its fair-ingress ownership",
+                services,
+            ));
+        }
+        self.accept_certified_body_response_inner(response, authenticated_responder, services)
+    }
+
     /// Authenticate a certified response against the exact outstanding signed
     /// request, rederive its canonical DA manifest, then enqueue body
     /// availability with the original fetch tag.
+    #[cfg(test)]
     pub(crate) fn accept_certified_body_response<S: V2EffectServices>(
+        &mut self,
+        response: wire::CertifiedBodyResponse,
+        authenticated_responder: &PeerId,
+        services: &mut S,
+    ) -> Result<CompletionDisposition, EffectTransportError> {
+        self.accept_certified_body_response_inner(response, authenticated_responder, services)
+    }
+
+    fn accept_certified_body_response_inner<S: V2EffectServices>(
         &mut self,
         response: wire::CertifiedBodyResponse,
         authenticated_responder: &PeerId,
@@ -4480,6 +4611,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         let task = pending.task.clone();
+        let pending_request_hash = pending
+            .request_hash
+            .expect("certified response ownership was checked to retain its exact request hash");
         if !task.matches_reconstructed_manifest(&response.manifest) {
             return Err(EffectTransportError::BodyMismatch(
                 "certified response manifest differs from proposal authority",
@@ -4490,8 +4624,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             response,
             authenticated_responder,
         )?;
+        let authenticated_request_hash = authenticated.response().request_hash;
         let response = authenticated.into_inner();
+        let request_hash = response.request_hash;
         let response_manifest = response.manifest;
+        let body_payload_hash = Hash::new(&response.body);
         let ready_body = ReadyBody::derive(&self.context, task.round, task.subject, response.body)
             .map_err(|_| {
                 EffectTransportError::BodyMismatch(
@@ -4503,12 +4640,118 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "certified response manifest is not canonical for its body",
             ));
         }
+        let ready_manifest = ready_body.manifest.clone();
         let plan = self.plan_fetch_completion(&task, ready_body, None, services)?;
         if let Err(error) = services.complete_certified_body_fetch(&task) {
             self.abort_fetch_completion(plan);
             return Err(self.fail_closed_transport(error, services));
         }
         self.commit_fetch_completion(plan);
+        let key = (task.round, task.subject);
+        let owner_after = self.body_pipeline_owners.get(&key).copied();
+        let historical_trace = ProductionHistoricalBodyPipelineTraceProjection {
+            context_id: canonical_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                self.context.id().0,
+            ),
+            context_height: self.context.height,
+            request_hash: canonical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+                request_hash,
+            ),
+            pending_request_hash: canonical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+                pending_request_hash,
+            ),
+            authenticated_request_hash: canonical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+                authenticated_request_hash,
+            ),
+            fetch_tag: TagProjection {
+                height: task.tag.height(),
+                view: task.tag.view(),
+                generation: task.tag.generation().get(),
+            },
+            round_context_id: canonical_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                task.round.context_id.0,
+            ),
+            round_height: task.round.height,
+            round_view: task.round.view,
+            subject: canonical_typed_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+                HashOf::new(&task.subject),
+            ),
+            manifest_round_context_id: canonical_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                response_manifest.round.context_id.0,
+            ),
+            manifest_round_height: response_manifest.round.height,
+            manifest_round_view: response_manifest.round.view,
+            manifest_subject: canonical_typed_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+                HashOf::new(&response_manifest.subject),
+            ),
+            response_manifest: canonical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_PAYLOAD_MANIFEST,
+                HashOf::new(&response_manifest),
+            ),
+            ready_manifest: canonical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_PAYLOAD_MANIFEST,
+                HashOf::new(&ready_manifest),
+            ),
+            subject_payload_hash: canonical_hash_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CANONICAL_PAYLOAD,
+                task.subject.payload_hash,
+            ),
+            body_payload_hash: canonical_hash_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CANONICAL_PAYLOAD,
+                body_payload_hash,
+            ),
+            owner_present_after: owner_after.is_some(),
+            owner_tag: owner_after.map_or(TagProjection::default(), |owner| TagProjection {
+                height: owner.tag.height(),
+                view: owner.tag.view(),
+                generation: owner.tag.generation().get(),
+            }),
+            owner_round_context_id: owner_after.map_or(CanonicalIdentityProjection::zero(), |_| {
+                canonical_typed_identity(
+                    IDENTITY_DOMAIN_CONTEXT,
+                    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                    key.0.context_id.0,
+                )
+            }),
+            owner_round_height: owner_after.map_or(0, |_| key.0.height),
+            owner_round_view: owner_after.map_or(0, |_| key.0.view),
+            owner_subject: owner_after.map_or(CanonicalIdentityProjection::zero(), |_| {
+                canonical_typed_identity(
+                    IDENTITY_DOMAIN_SUBJECT,
+                    IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+                    HashOf::new(&key.1),
+                )
+            }),
+            pending_fetch_present_after: self.pending_fetches.contains_key(&task.id()),
+            request_present_after: self.outstanding_requests.contains(request_hash),
+        };
+        if !production_historical_body_pipeline_trace_refines_indexed_async_kernel(historical_trace)
+        {
+            return Err(self.fail_closed_transport(
+                "certified body admission did not preserve its exact historical pipeline owner",
+                services,
+            ));
+        }
         Ok(CompletionDisposition::Accepted)
     }
 
@@ -8330,6 +8573,8 @@ mod tests {
     use std::{collections::VecDeque, num::NonZeroU64};
 
     use crate::sumeragi::{
+        InboundBlockMessage,
+        message::BlockMessage,
         v2::{
             AdapterError, AdapterFingerprints, DecisionLocalProposalDisposition,
             DeferredAdmissionOrdinalSource, SumeragiV2Adapter, VerifiedHeightContext,
@@ -9751,7 +9996,11 @@ mod tests {
             .expect("authenticate signed outer response");
 
         let admission = discovery.enqueue_and_complete(discovered, |message| {
-            fixture.executor.enqueue_network(message).map(|_| ())
+            let reducer_admission = CommitCertificateReducerAdmission::for_test(&message);
+            fixture
+                .executor
+                .enqueue_network(message)
+                .map(|_| reducer_admission)
         });
         assert!(matches!(
             admission,
@@ -9766,6 +10015,63 @@ mod tests {
             .expect("rejected runtime handoff leaves the response retryable");
         assert!(fixture.executor.runtime.driver().ingress_ready());
         assert!(!fixture.executor.status().fail_closed);
+    }
+
+    #[test]
+    fn discovered_commit_certificate_mints_exact_reducer_admission_only_after_enqueue() {
+        let mut fixture = ProductionTransportFixture::new();
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                fixture.quorum_certificate(wire::GlobalPhase::Commit, fixture.canonical_commitment),
+            ));
+        let sender = PeerId::new(fixture.validator_keys[0].public_key().clone());
+        let ownership = fair_transport_ingress_ownership(message.clone(), sender);
+        let admission = fixture
+            .executor
+            .enqueue_discovered_commit_certificate(message.clone(), ownership)
+            .expect("exact authenticated CommitQC enters serialized reducer ingress");
+        assert!(admission.matches(&message));
+
+        let prepare =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                fixture
+                    .quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment),
+            ));
+        let prepare_owner = fair_transport_ingress_ownership(
+            prepare.clone(),
+            PeerId::new(fixture.validator_keys[0].public_key().clone()),
+        );
+        assert!(matches!(
+            fixture
+                .executor
+                .enqueue_discovered_commit_certificate(prepare, prepare_owner),
+            Err(NetworkIngressError::Authentication(
+                AdapterError::DurableCommitMismatch
+            ))
+        ));
+
+        let transport = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CommitCertificateRequest(
+                wire::CommitCertificateRequest {
+                    protocol_version: wire::PROTOCOL_VERSION,
+                    chain_id: fixture.context.chain_id.clone(),
+                    context_id: fixture.context.id(),
+                    height: fixture.context.height,
+                    requester: PeerId::new(fixture.requester_key.public_key().clone()),
+                    signature: Vec::new(),
+                },
+            ),
+        );
+        let transport_owner = fair_transport_ingress_ownership(
+            transport.clone(),
+            PeerId::new(fixture.requester_key.public_key().clone()),
+        );
+        assert!(matches!(
+            fixture
+                .executor
+                .enqueue_discovered_commit_certificate(transport, transport_owner),
+            Err(NetworkIngressError::TransportPayload)
+        ));
     }
 
     fn round(context: &wire::HeightContext, view: u64) -> wire::ConsensusRound {
@@ -9948,6 +10254,42 @@ mod tests {
         .payload()
         .to_vec();
         response
+    }
+
+    fn certified_response_ingress_ownership(
+        response: &wire::CertifiedBodyResponse,
+        responder: PeerId,
+    ) -> FairV2IngressOwnershipEvidence {
+        fair_transport_ingress_ownership(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
+                response.clone(),
+            )),
+            responder,
+        )
+    }
+
+    fn payload_chunk_ingress_ownership(
+        chunk: &wire::PayloadChunk,
+        sender: PeerId,
+    ) -> FairV2IngressOwnershipEvidence {
+        fair_transport_ingress_ownership(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+                chunk.clone(),
+            )),
+            sender,
+        )
+    }
+
+    fn fair_transport_ingress_ownership(
+        message: wire::ConsensusMessageV2,
+        sender: PeerId,
+    ) -> FairV2IngressOwnershipEvidence {
+        let mut inbound = crate::sumeragi::fair_v2_ingress_admit_for_test(
+            InboundBlockMessage::new(BlockMessage::V2(message), Some(sender)),
+        );
+        inbound
+            .take_ingress_ownership()
+            .expect("real fair ingress attaches certified-response ownership")
     }
 
     fn manifest_for_payload(fixture: &Fixture, label: &'static [u8]) -> wire::PayloadManifest {
@@ -11228,17 +11570,27 @@ mod tests {
         let response_envelope = wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response_a.clone()),
         );
+        let responder = fixture.context.roster[0].validator.clone();
+        let ingress_ownership =
+            certified_response_ingress_ownership(&response_a, responder.clone());
         assert!(
             fixture
                 .executor
-                .can_admit_network_message(&response_envelope),
+                .can_admit_network_message_with_ingress_ownership(
+                    &response_envelope,
+                    &ingress_ownership,
+                ),
             "the exact transport completion remains admissible under request pressure"
         );
-        let responder = fixture.context.roster[0].validator.clone();
         assert_eq!(
             fixture
                 .executor
-                .accept_certified_body_response(response_a, &responder, &mut services)
+                .accept_certified_body_response_with_ingress_ownership(
+                    response_a,
+                    &responder,
+                    ingress_ownership,
+                    &mut services,
+                )
                 .expect("exact A response releases certified-request capacity"),
             CompletionDisposition::Accepted
         );
@@ -11546,17 +11898,27 @@ mod tests {
         let response_envelope = wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response_a.clone()),
         );
+        let responder = fixture.context.roster[0].validator.clone();
+        let ingress_ownership =
+            certified_response_ingress_ownership(&response_a, responder.clone());
         assert!(
             fixture
                 .executor
-                .can_admit_network_message(&response_envelope),
+                .can_admit_network_message_with_ingress_ownership(
+                    &response_envelope,
+                    &ingress_ownership,
+                ),
             "the exact response must cross the full reducer ingress prefix"
         );
-        let responder = fixture.context.roster[0].validator.clone();
         assert_eq!(
             fixture
                 .executor
-                .accept_certified_body_response(response_a, &responder, &mut services)
+                .accept_certified_body_response_with_ingress_ownership(
+                    response_a,
+                    &responder,
+                    ingress_ownership,
+                    &mut services,
+                )
                 .expect("reserve and enqueue exact BodyAvailable completion"),
             CompletionDisposition::Accepted
         );
@@ -16124,11 +16486,14 @@ mod tests {
         )
         .payload()
         .to_vec();
+        let sender = fixture.context.roster[0].validator.clone();
+        let ingress_ownership = payload_chunk_ingress_ownership(&chunk, sender.clone());
         executor
-            .accept_payload_chunk(
+            .accept_payload_chunk_with_ingress_ownership(
                 work_id,
                 chunk,
-                &fixture.context.roster[0].validator,
+                &sender,
+                ingress_ownership,
                 &mut services,
             )
             .expect("authenticated chunk");
@@ -16216,6 +16581,46 @@ mod tests {
                     && *subject == fixture.manifest.subject
                     && receipt.durable().subject() == fixture.manifest.subject
         ));
+    }
+
+    #[test]
+    fn owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work_nonfatal() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let chunk = signed_payload_chunk(&fixture);
+        let sender = fixture.context.roster[0].validator.clone();
+        let unknown = EffectWorkId::for_test(999);
+        let exact_ownership = payload_chunk_ingress_ownership(&chunk, sender.clone());
+
+        assert_eq!(
+            executor.accept_payload_chunk_with_ingress_ownership(
+                unknown,
+                chunk.clone(),
+                &sender,
+                exact_ownership,
+                &mut services,
+            ),
+            Err(EffectTransportError::UnknownWork(unknown))
+        );
+        assert!(!executor.status().fail_closed);
+        assert!(services.chunks.is_empty());
+
+        let foreign_origin = fixture.context.roster[1].validator.clone();
+        let swapped_ownership = payload_chunk_ingress_ownership(&chunk, foreign_origin);
+        assert!(matches!(
+            executor.accept_payload_chunk_with_ingress_ownership(
+                unknown,
+                chunk,
+                &sender,
+                swapped_ownership,
+                &mut services,
+            ),
+            Err(EffectTransportError::FailClosed(reason))
+                if reason.contains("fair-ingress ownership")
+        ));
+        assert!(services.chunks.is_empty());
+        assert!(executor.status().fail_closed);
     }
 
     #[test]
@@ -16364,11 +16769,14 @@ mod tests {
         )
         .payload()
         .to_vec();
+        let responder = fixture.context.roster[0].validator.clone();
+        let ingress_ownership = certified_response_ingress_ownership(&response, responder.clone());
         assert_eq!(
             executor
-                .accept_certified_body_response(
+                .accept_certified_body_response_with_ingress_ownership(
                     response.clone(),
-                    &fixture.context.roster[0].validator,
+                    &responder,
+                    ingress_ownership,
                     &mut services,
                 )
                 .expect("authenticated certified response"),
@@ -16379,15 +16787,64 @@ mod tests {
         assert!(executor.outstanding_requests.is_empty());
         assert_eq!(services.completed_certified_fetches, vec![work_id]);
         assert!(matches!(
-            executor.accept_certified_body_response(
-                response,
-                &fixture.context.roster[0].validator,
-                &mut services,
-            ),
+            executor.accept_certified_body_response(response, &responder, &mut services,),
             Err(EffectTransportError::Authentication(
                 V2TransportError::UnsolicitedResponse(_)
             ))
         ));
+    }
+
+    #[test]
+    fn certified_body_response_carrier_swap_fails_closed_before_fetch_mutation() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+        let sources = certified_sources(&fixture, &prepare);
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    certified_sources: sources,
+                    certificate: Some(prepare),
+                }],
+                &mut services,
+            )
+            .expect("certified fetch");
+        let task = services.fetch_tasks[0].clone();
+        let response = signed_certified_response(
+            &fixture,
+            &task,
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            0,
+        );
+        let mut other = response.clone();
+        other.body.push(0xFF);
+        let responder = fixture.context.roster[0].validator.clone();
+        let swapped_ownership = certified_response_ingress_ownership(&other, responder.clone());
+        let pending_before = executor.pending_fetches.clone();
+        let certified_before = executor.certified_work.clone();
+        let outstanding_before = executor.outstanding_requests.hashes();
+
+        assert!(matches!(
+            executor.accept_certified_body_response_with_ingress_ownership(
+                response,
+                &responder,
+                swapped_ownership,
+                &mut services,
+            ),
+            Err(EffectTransportError::FailClosed(reason))
+                if reason.contains("fair-ingress ownership")
+        ));
+        assert_eq!(executor.pending_fetches, pending_before);
+        assert_eq!(executor.certified_work, certified_before);
+        assert_eq!(executor.outstanding_requests.hashes(), outstanding_before);
+        assert!(services.completed_certified_fetches.is_empty());
+        assert!(executor.status().fail_closed);
     }
 
     #[test]

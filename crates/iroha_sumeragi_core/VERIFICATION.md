@@ -45,7 +45,7 @@ must not be cited as discharge of the changed obligations:
 ```text
 $ scripts/verify_sumeragi_v2.sh  # official pinned release already in PATH
 verification results:: 1690 verified, 0 errors  # pinned vstd dependency
-verification results:: 126 verified, 0 errors   # iroha_sumeragi_core root obligations
+verification results:: 157 verified, 0 errors   # iroha_sumeragi_core root obligations
 ```
 
 Evidence for the source-link edit itself uses the isolated harness because
@@ -246,6 +246,14 @@ Before either EnterView cleanup or direct locked-body reconciliation, the
 executor also requires both counters to equal the complete serialized
 ready/retained/store owner sets; even exact lock repetition cannot bypass that
 aggregate equality check.
+
+Authenticated consensus-message ownership uses the same generic production
+bridge. `deferred_authenticated_message_owner` encodes the complete candidate
+envelope and compares those bytes with the deferred occurrence's retained
+`authenticated_wire_identity`; runtime admission repeats the exact comparison
+after authentication. The QC-named lookup wrappers are `cfg(test)` regression
+conveniences only. They are not a second, reducer-event-only production
+ownership rule and are not counted as production-refinement evidence.
 Collection lookups, manifest hashing, and external service acknowledgements
 remain ordinary Rust extraction/adapter boundaries; temporal service remains
 the conditional liveness obligation.
@@ -454,7 +462,7 @@ The module contains transition-by-transition proof functions for:
 | Exact one-shot state/effect relation | Encoded in the production gate | `ACTION_RESUME_AFTER_REPLAY` checks false-to-true, unchanged durable state, and the exact Sign/Fetch/empty effect class |
 | Abstract reducer refinement | Encoded | `ReducerPathProjection::ResumeAfterReplay` preserves WAL, application, and effect fences |
 | Named TLA+ action map | Encoded and spelling-gated | Proposal/vote/timeout resumption maps to the existing `ResumeProposal`, `ResumeVote`, and `ResumeTimeout` actions; decided replay maps to `FetchBody` |
-| Pinned Verus discharge of the changed obligations | **Pending rerun** | The historical 1690-dependency/126-root receipt predates the proposal-origin source changes; the current source contract expects 1690 dependency and 127 root obligations |
+| Pinned Verus discharge of the changed obligations | **Pending rerun** | The historical 1690-dependency/157-root receipt predates the proposal-origin source changes; the combined source contract expects 1690 dependency and 158 root obligations |
 
 ## Exact production commit gate
 
@@ -527,16 +535,26 @@ ordinary Rust collection lookups that produce those concrete primitives are
 not themselves verified, which remains gap 1 below, but no authorization or
 action-exactness boolean crosses the shared proof-kernel boundary.
 
-An earlier pinned verifier run discharged 126 root obligations with zero errors
+An earlier pinned verifier run discharged 157 root obligations with zero errors
 on its clean historical target. It predates the proposal-origin changes and was
-not rerun for the current 127-root source. The verification script rejects `assume`,
-`admit`, unreviewed trusted bodies, and external function specifications in the
-package-local reducer and proof modules throughout this crate. It also rejects
-reintroduction
+not rerun for the combined 158-root source. The verification script rejects
+`assume`, `admit`, unreviewed trusted bodies, and external function
+specifications in the package-local reducer and proof modules throughout this
+crate. It also rejects reintroduction
 of compressed `TimeoutIntent` validity/high-QC-match predicates and requires
 the primitive-guard proof. It checks that every mapped TLA+ action name still
 exists in both `SumeragiV2Core.tla` and the Verus mapping; this prevents name
 drift but does not prove the independently parsed operator bodies equivalent.
+
+The cross-tool successor inventory additionally includes
+`production_terminal_application_without_successor_activation_refines_indexed_terminal`.
+Its shared production/Verus kernel binds the exact height context, application
+receipt, finality artifact, block identity, and authenticated durable
+predecessor while requiring that no successor activation is pending. The live
+runner invokes that kernel immediately after predecessor authentication and
+before `PendingSuccessorConstruction::begin`. This is an Apply-boundary
+separation result, not a production `MaxHeight` rule; the projection deliberately
+contains no finite-horizon input.
 
 ## Production WAL byte mapping
 

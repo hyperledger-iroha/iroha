@@ -3472,56 +3472,6 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     world.remove("vrf_epochs");
 }
 
-#[cfg(test)]
-pub(crate) fn canonical_state_snapshot_component_hashes(
-    state: &State,
-) -> Vec<(String, iroha_crypto::Hash)> {
-    fn component_hash(
-        name: impl Into<String>,
-        value: &json::Value,
-    ) -> (String, iroha_crypto::Hash) {
-        let mut out = String::new();
-        json::JsonSerialize::json_serialize(value, &mut out);
-        (name.into(), iroha_crypto::Hash::new(out.into_bytes()))
-    }
-
-    let value = canonical_state_snapshot_value(state);
-    let mut components = Vec::new();
-    let Some(state_map) = value.as_object() else {
-        return components;
-    };
-    for (key, value) in state_map {
-        components.push(component_hash(key.clone(), value));
-    }
-    if let Some(world) = state_map.get("world").and_then(json::Value::as_object) {
-        for (key, value) in world {
-            components.push(component_hash(format!("world.{key}"), value));
-            if key == "parameters" {
-                push_nested_component_hashes(format!("world.{key}"), value, &mut components);
-            }
-        }
-    }
-    components
-}
-
-#[cfg(test)]
-fn push_nested_component_hashes(
-    prefix: String,
-    value: &json::Value,
-    components: &mut Vec<(String, iroha_crypto::Hash)>,
-) {
-    let Some(map) = value.as_object() else {
-        return;
-    };
-    for (key, value) in map {
-        let name = format!("{prefix}.{key}");
-        let mut out = String::new();
-        json::JsonSerialize::json_serialize(value, &mut out);
-        components.push((name.clone(), iroha_crypto::Hash::new(out.into_bytes())));
-        push_nested_component_hashes(name, value, components);
-    }
-}
-
 /// Canonical hash for the legacy checkpoint surface used before Space Directory manifests
 /// were included in durable snapshots.
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -4917,26 +4867,6 @@ mod tests {
         let mut payload = String::new();
         serialize_state_snapshot(state, &mut payload, true);
         payload.into_bytes()
-    }
-
-    fn snapshot_bytes_without_world_field(state: &State, field: &str) -> Vec<u8> {
-        let mut payload = String::new();
-        serialize_state_snapshot(state, &mut payload, true);
-        let mut value: json::Value =
-            json::from_slice(payload.as_bytes()).expect("snapshot JSON should parse");
-        let json::Value::Object(root) = &mut value else {
-            panic!("snapshot root should be an object");
-        };
-        let Some(json::Value::Object(world)) = root.get_mut("world") else {
-            panic!("snapshot world should be an object");
-        };
-        assert!(
-            world.remove(field).is_some(),
-            "snapshot world field {field} should be present before removal"
-        );
-        let mut bytes = Vec::new();
-        json::to_writer(&mut bytes, &value).expect("write legacy snapshot JSON");
-        bytes
     }
 
     fn publish_test_snapshot_generation(

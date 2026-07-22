@@ -25104,12 +25104,6 @@ seiyaku GovernanceLifecycle {
             (asset, custody)
         }
 
-        fn register_wonderland_account(stx: &mut StateTransaction<'_, '_>, account_id: &AccountId) {
-            Register::account(new_account_in_domain(account_id))
-                .execute(&ALICE_ID, stx)
-                .expect("register wonderland account");
-        }
-
         fn restricted_shield_fixture(
             account_uaid: Option<UniversalAccountId>,
             bindings: &[(UniversalAccountId, DataSpaceId)],

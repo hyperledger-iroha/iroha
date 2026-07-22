@@ -234,5 +234,108 @@ run_case reply-route-source-replacement-bug \
   reply_route_source_replacement_bug.cfg 12 \
   "Invariant RouteMutationSafety is violated." \
   "attempts = { [ connectionTenure |-> 1"
+run_case reply-route-target-substitution-bug \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_target_substitution_bug.cfg 12 \
+  "Invariant RouteMutationSafety is violated." \
+  "acceptedInvalidCapability = TRUE" "phase = 16"
+run_case reply-route-ticket-payload-reuse-bug \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_ticket_payload_reuse_bug.cfg 12 \
+  "Invariant RouteMutationSafety is violated." \
+  "ticketTenure |-> 1" "phase = 3"
+run_case reply-route-reconnect-sibling-ticket-bug \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_reconnect_sibling_ticket_bug.cfg 12 \
+  "Invariant RouteMutationSafety is violated." \
+  "ticketTenure |-> 1"
+run_case reply-route-retired-ordinal-collision-bug \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_retired_ordinal_collision_bug.cfg 12 \
+  "Invariant RouteMutationSafety is violated." \
+  "acceptedInvalidCapability = TRUE"
+run_case reply-route-intrinsic-tenure-substitution-bug \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_intrinsic_tenure_substitution_bug.cfg 12 \
+  "Invariant RouteMutationSafety is violated." \
+  "acceptedInvalidCapability = TRUE"
+run_case reply-route-source-capacity-substitution-bug \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_source_capacity_substitution_bug.cfg 12 \
+  "Invariant RouteMutationSafety is violated." \
+  "acceptedInvalidCapability = TRUE"
 
-echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, ownership, and per-source reply-route mutation matrix passed"
+run_case reply-route-pipeline-fixed \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "23 states generated, 18 distinct states found" \
+  "depth of the complete state graph search is 18"
+run_case reply-route-pipeline-replay-isolation-fixed \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_replay_isolation_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "23 states generated, 18 distinct states found" \
+  "depth of the complete state graph search is 18"
+run_case reply-route-pipeline-replay-step-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_replay_step_bug.cfg 13 \
+  "Action property MutationPipeline!ReplyTenureAwareReplay is violated." \
+  "15 states generated, 14 distinct states found" \
+  "phase = 34"
+run_case reply-route-pipeline-source-isolation-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_source_isolation_bug.cfg 13 \
+  "Action property MutationPipeline!ReplySourceIsolation is violated." \
+  "14 states generated, 13 distinct states found" \
+  "phase = 35"
+run_case reply-route-pipeline-unfair-attach-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_unfair_attach_bug.cfg 13 \
+  "Temporal properties were violated." \
+  "2 states generated, 2 distinct states found" \
+  "State 3: Stuttering"
+run_case reply-route-pipeline-fifo-bypass-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_fifo_bypass_bug.cfg 12 \
+  "Invariant PipelineMutationSafety is violated." \
+  "phase = 30"
+run_case reply-route-pipeline-cursor-regression-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_cursor_regression_bug.cfg 12 \
+  "Invariant PipelineMutationSafety is violated." \
+  "phase = 34"
+run_case reply-route-pipeline-ticket-reuse-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_ticket_reuse_bug.cfg 12 \
+  "Invariant PipelineMutationSafety is violated." \
+  "ticketTenure |-> 2" "phase = 31"
+run_case reply-route-pipeline-premature-reconnect-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_premature_reconnect_bug.cfg 12 \
+  "Invariant PipelineMutationSafety is violated." \
+  "sourceActive = (0 :> (0 :> FALSE" "phase = 32"
+run_case reply-route-pipeline-reconnect-observation-not-ready-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_reconnect_observation_not_ready_bug.cfg 12 \
+  "Invariant PipelineMutationSafety is violated." \
+  "phase = 36" "kind |-> \"Later\""
+run_case reply-route-pipeline-old-flush-double-apply-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_old_flush_double_apply_bug.cfg 12 \
+  "Invariant PipelineMutationSafety is violated." \
+  "oldFlushAppliedTwice = TRUE" "messageCursor |-> 2"
+run_case reply-route-pipeline-source-class-writer-fixed \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_source_class_writer_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "14 states generated, 13 distinct states found" \
+  "depth of the complete state graph search is 13"
+run_case reply-route-pipeline-cross-semantic-close-cycle-bug \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_cross_semantic_close_cycle_bug.cfg 13 \
+  "Temporal properties were violated." \
+  "14 states generated, 13 distinct states found" \
+  "Back to state 7"
+
+echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, ownership, replay/isolation, and per-source reply-route/pipeline mutation matrix passed"

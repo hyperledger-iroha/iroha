@@ -490,19 +490,19 @@ pub enum NetworkMessage {
     ///
     /// The nested enum retains global v1 variants for archive decoding, but
     /// [`BlockMessageWire`] rejects those variants during serialization.
-    SumeragiBlock(Box<BlockMessageWire>),
+    SumeragiBlock(Arc<BlockMessageWire>),
     /// Archived v1 consensus control-flow frame; live serialization and ingress reject it.
     SumeragiControlFlow(Box<ControlFlow>),
     /// Lane settlement relay envelope (NX-4).
     LaneRelay(Box<LaneRelayEnvelope>),
     /// Merge committee signature share for merge-ledger quorum certificates.
-    MergeCommitteeSignature(Box<MergeCommitteeSignature>),
+    MergeCommitteeSignature(Arc<MergeCommitteeSignature>),
     /// Lane-committee signature share for an automatic drain certificate.
     LaneDrainVote(Box<crate::lane_consensus::LaneDrainVoteV1>),
     /// Authenticated request/chunk traffic for a block-referenced certified merge sidecar.
-    CertifiedMergeSidecar(Box<CertifiedMergeSidecarMessage>),
+    CertifiedMergeSidecar(Arc<CertifiedMergeSidecarMessage>),
     /// Native AMX participant attestation control-plane message.
-    NativeAmx(Box<native_amx::NativeAmxMessage>),
+    NativeAmx(Arc<native_amx::NativeAmxMessage>),
     /// Archived v1 block-sync frame; live serialization rejects it and v2 uses certified bodies.
     BlockSync(Box<BlockSyncMessage>),
     /// Transaction gossiper message.
@@ -953,7 +953,7 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Hash, KeyPair, SignatureOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::block::{BlockHeader, BlockSignature, builder::BlockBuilder};
     use iroha_data_model::nexus::{DataSpaceId, LaneId};
     use iroha_data_model::peer::PeerId;
@@ -1583,6 +1583,26 @@ mod tests {
             CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
         };
 
+        #[derive(Encode)]
+        enum LegacySidecarCarrier {
+            Payload(Box<CertifiedMergeSidecarMessage>),
+        }
+
+        #[derive(Encode)]
+        enum SharedSidecarCarrier {
+            Payload(Arc<CertifiedMergeSidecarMessage>),
+        }
+
+        let assert_shared_carrier_wire_compatible = |message: &CertifiedMergeSidecarMessage| {
+            let legacy = LegacySidecarCarrier::Payload(Box::new(message.clone()));
+            let shared = SharedSidecarCarrier::Payload(Arc::new(message.clone()));
+            assert_eq!(
+                legacy.encode(),
+                shared.encode(),
+                "Box-to-Arc carrier conversion must not alter canonical Norito bytes"
+            );
+        };
+
         let requester = PeerId::new(checked_topic_keypair().public_key().clone());
         let responder = PeerId::new(checked_topic_keypair().public_key().clone());
         let entry_hash = iroha_crypto::HashOf::<MergeLedgerEntry>::from_untyped_unchecked(
@@ -1598,18 +1618,24 @@ mod tests {
             requester: requester.clone(),
             responder: responder.clone(),
         };
-        let request_message = NetworkMessage::CertifiedMergeSidecar(Box::new(
+        let request_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
             CertifiedMergeSidecarMessage::Request(request.clone()),
         ));
+        let NetworkMessage::CertifiedMergeSidecar(request_payload) = &request_message else {
+            unreachable!("request fixture uses the sidecar variant")
+        };
+        assert_shared_carrier_wire_compatible(request_payload.as_ref());
         assert_eq!(request_message.topic(), NetworkTopic::Consensus);
         assert_eq!(raw_network_topic(&request_message), NetworkTopic::Consensus);
+        let request_hash = HashOf::new(&request_message);
         let encoded = norito::to_bytes(&request_message).expect("encode sidecar request");
         let decoded =
             norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar request");
+        assert_eq!(HashOf::new(&decoded), request_hash);
         assert!(matches!(
             decoded,
             NetworkMessage::CertifiedMergeSidecar(message)
-                if *message == CertifiedMergeSidecarMessage::Request(request.clone())
+                if message.as_ref() == &CertifiedMergeSidecarMessage::Request(request.clone())
         ));
 
         let chunk = CertifiedMergeSidecarChunkV1 {
@@ -1625,21 +1651,27 @@ mod tests {
             chunk_count: 1,
             bytes: vec![1, 2, 3],
         };
-        let chunk_message = NetworkMessage::CertifiedMergeSidecar(Box::new(
+        let chunk_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
             CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
         ));
+        let NetworkMessage::CertifiedMergeSidecar(chunk_payload) = &chunk_message else {
+            unreachable!("chunk fixture uses the sidecar variant")
+        };
+        assert_shared_carrier_wire_compatible(chunk_payload.as_ref());
         assert_eq!(chunk_message.topic(), NetworkTopic::ConsensusChunk);
         assert_eq!(
             raw_network_topic(&chunk_message),
             NetworkTopic::ConsensusChunk
         );
         let encoded = norito::to_bytes(&chunk_message).expect("encode sidecar chunk");
+        let chunk_hash = HashOf::new(&chunk_message);
         let decoded =
             norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar chunk");
+        assert_eq!(HashOf::new(&decoded), chunk_hash);
         assert!(matches!(
             decoded,
             NetworkMessage::CertifiedMergeSidecar(message)
-                if *message == CertifiedMergeSidecarMessage::Chunk(chunk)
+                if message.as_ref() == &CertifiedMergeSidecarMessage::Chunk(chunk)
         ));
     }
 
@@ -1748,7 +1780,7 @@ mod tests {
             signature: vec![1],
         };
         let message =
-            NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(BlockMessage::V2(
+            NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(BlockMessage::V2(
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
             ))));
         assert_eq!(message.topic(), NetworkTopic::ConsensusSafety);
@@ -1765,7 +1797,7 @@ mod tests {
         );
         assert_eq!(raw_network_topic(&message), NetworkTopic::ConsensusSafety);
 
-        let vrf = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let vrf = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::VrfCommit(crate::sumeragi::consensus::VrfCommit {
                 epoch: 3,
                 commitment: [0xA5; 32],
@@ -1796,7 +1828,7 @@ mod tests {
                 sender: 0,
                 signature: vec![4],
             }));
-        let v2_chunk = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let v2_chunk = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::V2(canonical_chunk.clone()),
         )));
         assert_eq!(v2_chunk.topic(), NetworkTopic::ConsensusChunk);
@@ -1809,7 +1841,7 @@ mod tests {
 
         let mut wrong_version_chunk = canonical_chunk;
         wrong_version_chunk.protocol_version = 1;
-        let wrong_version_chunk = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let wrong_version_chunk = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::V2(wrong_version_chunk),
         )));
         assert_eq!(wrong_version_chunk.topic(), NetworkTopic::Other);
@@ -1829,7 +1861,7 @@ mod tests {
         );
         let block_hash = header.hash();
         let block = BlockBuilder::new(header.clone()).build(BTreeSet::new());
-        let created = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let created = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::BlockCreated(BlockCreated {
                 block: block.clone(),
                 frontier: None,
@@ -1846,7 +1878,7 @@ mod tests {
             requester_roster_proof_known: None,
             commit_qc_only: None,
         };
-        let fetch_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let fetch_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::FetchPendingBlock(fetch),
         )));
         assert_eq!(fetch_msg.topic(), NetworkTopic::Other);
@@ -1879,7 +1911,7 @@ mod tests {
             block_header: header.clone(),
             leader_signature,
         };
-        let init_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let init_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::RbcInit(init),
         )));
         assert_eq!(init_msg.topic(), NetworkTopic::Other);
@@ -1892,7 +1924,7 @@ mod tests {
             idx: 0,
             bytes: vec![1, 2, 3],
         };
-        let payload = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let payload = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::RbcChunk(chunk),
         )));
         assert_eq!(payload.topic(), NetworkTopic::Other);
@@ -1916,13 +1948,13 @@ mod tests {
             },
             payload_hash,
         };
-        let proposal_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let proposal_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::Proposal(proposal),
         )));
         assert_eq!(proposal_msg.topic(), NetworkTopic::Other);
 
         let sync = BlockSyncUpdate::from(&block);
-        let sync_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let sync_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::BlockSyncUpdate(sync),
         )));
         assert_eq!(sync_msg.topic(), NetworkTopic::Other);
@@ -1937,7 +1969,7 @@ mod tests {
             sender: 0,
             signature: vec![7],
         };
-        let ready_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let ready_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::RbcReady(ready),
         )));
         assert_eq!(ready_msg.topic(), NetworkTopic::Other);
@@ -1953,7 +1985,7 @@ mod tests {
             signature: vec![9],
             ready_signatures: Vec::new(),
         };
-        let deliver_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+        let deliver_msg = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
             BlockMessage::RbcDeliver(deliver),
         )));
         assert_eq!(deliver_msg.topic(), NetworkTopic::Other);
@@ -1972,7 +2004,7 @@ mod tests {
         let wire = <BlockMessageWire as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
             .expect("decode archival block-message fixture")
             .0;
-        let network = NetworkMessage::SumeragiBlock(Box::new(wire));
+        let network = NetworkMessage::SumeragiBlock(Arc::new(wire));
 
         match &network {
             NetworkMessage::SumeragiBlock(wire) => {

@@ -1116,7 +1116,7 @@ mod prepare_qc_split_tests {
             held_prepare_vote(3, peer_ids[1].clone(), 1, first_vote),
             held_prepare_vote(4, peer_ids[2].clone(), 2, second_vote),
         ];
-        let held_ack = ack(held);
+        let prepare_ack = ack(held);
         let allowed = peer_ids
             .iter()
             .cloned()
@@ -1124,13 +1124,13 @@ mod prepare_qc_split_tests {
             .map(|(index, peer)| (peer, ValidatorIndex::try_from(index).expect("small roster")))
             .collect::<BTreeMap<_, _>>();
         assert_eq!(
-            held_prepare_vote_subject(&held_ack, HEIGHT, FIRST_VIEW, &allowed, None, 2)
+            held_prepare_vote_subject(&prepare_ack, HEIGHT, FIRST_VIEW, &allowed, None, 2)
                 .map(|selection| selection.sequences),
             Some(vec![1, 3]),
         );
         assert_eq!(
             held_prepare_vote_subject(
-                &held_ack,
+                &prepare_ack,
                 HEIGHT,
                 FIRST_VIEW,
                 &allowed,
@@ -1142,7 +1142,7 @@ mod prepare_qc_split_tests {
         );
         assert!(
             held_prepare_vote_subject(
-                &held_ack,
+                &prepare_ack,
                 HEIGHT,
                 FIRST_VIEW,
                 &allowed,

@@ -44,6 +44,7 @@ pub const EFFECT_REPORT: u8 = 9;
 pub const EVENT_BODY_AVAILABLE: u8 = 8;
 pub const EVENT_BODY_STORED: u8 = 9;
 pub const EVENT_PERSISTED: u8 = 11;
+/// Safety-WAL persistence failure delivered to the reducer.
 pub const EVENT_PERSISTENCE_FAILED: u8 = 12;
 pub const EVENT_SIGNED: u8 = 13;
 pub const EVENT_RESUME_AFTER_REPLAY: u8 = 15;
@@ -188,6 +189,8 @@ pub(crate) const IDENTITY_DOMAIN_PAYLOAD: u8 = 3;
 pub(crate) const IDENTITY_DOMAIN_PEER: u8 = 4;
 /// Domain for a durable receipt or finality artifact.
 pub(crate) const IDENTITY_DOMAIN_DURABLE_ARTIFACT: u8 = 5;
+/// Domain for process-local identities which must never enter wire or consensus state.
+pub(crate) const IDENTITY_DOMAIN_PROCESS_LOCAL: u8 = 6;
 /// Canonical identity kind for one frozen consensus context.
 pub(crate) const IDENTITY_KIND_CONSENSUS_CONTEXT: u8 = 1;
 /// Canonical identity kind for one consensus subject.
@@ -224,12 +227,384 @@ pub(crate) const IDENTITY_KIND_SIDECAR_RESPONSE: u8 = 11;
 pub(crate) const IDENTITY_KIND_SIDECAR_CHUNK: u8 = 12;
 /// Canonical identity kind for one sidecar payload digest.
 pub(crate) const IDENTITY_KIND_SIDECAR_PAYLOAD: u8 = 13;
+/// Canonical identity kind for one signed CommitQC discovery request.
+pub(crate) const IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST: u8 = 14;
+/// Canonical identity kind for one complete v2 consensus envelope.
+pub(crate) const IDENTITY_KIND_CONSENSUS_MESSAGE: u8 = 15;
+/// Canonical identity kind for one signed certified-body request.
+pub(crate) const IDENTITY_KIND_CERTIFIED_BODY_REQUEST: u8 = 16;
+/// Process-local identity kind for the exact non-target sidecar lane state.
+pub(crate) const IDENTITY_KIND_SIDECAR_SIBLING_STATE: u8 = 1;
+/// Process-local identity kind for immutable shared sidecar response state.
+pub(crate) const IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE: u8 = 2;
+/// Process-local identity kind for unchanged target gate reservation state.
+pub(crate) const IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE: u8 = 3;
+/// Process-local identity kind for unchanged target outbound route state.
+pub(crate) const IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE: u8 = 4;
+/// Process-local identity kind for one opaque authenticated reply-source owner.
+pub(crate) const IDENTITY_KIND_REPLY_SOURCE_KEY: u8 = 5;
+/// Process-local identity kind for one exact admitted reply delivery route.
+pub(crate) const IDENTITY_KIND_REPLY_DELIVERY_ROUTE: u8 = 6;
+/// Process-local identity kind for one actor-minted writer-flush occurrence.
+pub(crate) const IDENTITY_KIND_REPLY_WRITER_OCCURRENCE: u8 = 7;
 /// Canonical identity kind for one checksummed durable body frame.
 pub(crate) const IDENTITY_KIND_DURABLE_BODY_FRAME: u8 = 1;
 /// Canonical identity kind for one finality artifact.
 pub(crate) const IDENTITY_KIND_FINALITY_ARTIFACT: u8 = 2;
+/// Canonical identity kind for one authenticated snapshot-bootstrap record.
+pub(crate) const IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD: u8 = 3;
 /// Canonical identity kind for one authenticated peer.
 pub(crate) const IDENTITY_KIND_PEER: u8 = 1;
+
+/// Successor authority derived from an applied predecessor in this process.
+pub(crate) const SUCCESSOR_AUTHORITY_APPLIED: u8 = 1;
+/// Successor authority reconstructed from an exact complete durable tip.
+pub(crate) const SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP: u8 = 2;
+/// First executable context authenticated by an audited snapshot envelope.
+pub(crate) const SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP: u8 = 3;
+
+/// No successor-work stage participates in a lifecycle projection.
+pub(crate) const SUCCESSOR_STAGE_NONE: u8 = 0;
+/// Successor construction is queued behind durable application.
+pub(crate) const SUCCESSOR_STAGE_QUEUED: u8 = 1;
+/// Successor construction owns the serialized runner.
+pub(crate) const SUCCESSOR_STAGE_RUNNING: u8 = 2;
+/// Successor publication completed.
+pub(crate) const SUCCESSOR_STAGE_COMPLETE: u8 = 3;
+
+/// Begin the applied predecessor's fallible successor construction.
+pub(crate) const SUCCESSOR_LIFECYCLE_BEGIN: u8 = 1;
+/// Latch a startup failure without fabricating completion.
+pub(crate) const SUCCESSOR_LIFECYCLE_FAIL: u8 = 2;
+/// Re-enter startup from an exact complete durable tip.
+pub(crate) const SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP: u8 = 3;
+/// Enter the first executable height from audited snapshot authority.
+pub(crate) const SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP: u8 = 4;
+
+/// Exact successor-activation progress marker.
+pub(crate) const SUCCESSOR_MARKER_ACTIVATED: u8 = 1;
+
+// Verus cannot read an ordinary Rust `const` from inside `verus!`: it treats
+// that item as an opaque external function. Keep the reviewed wire/refinement
+// tags as literal macro arms so the shared production decision bodies and
+// their Verus instantiations expand to the same primitive values. The
+// compile-time assertions below bind every macro arm back to its public or
+// crate-visible production constant, making drift a build failure.
+macro_rules! refinement_tag_value {
+    (EFFECT_PERSIST) => {
+        1u8
+    };
+    (EVENT_PERSISTED) => {
+        11u8
+    };
+    (EVENT_PERSISTENCE_FAILED) => {
+        12u8
+    };
+    (EVENT_SIGNED) => {
+        13u8
+    };
+    (EVENT_RESUME_AFTER_REPLAY) => {
+        15u8
+    };
+    (CONTINUATION_NONE) => {
+        0u8
+    };
+    (CONTINUATION_SIGN) => {
+        1u8
+    };
+    (CONTINUATION_INSTALL_TIMEOUT) => {
+        2u8
+    };
+    (CONTINUATION_DECIDE) => {
+        3u8
+    };
+    (WAL_RECORD_NONE) => {
+        0u8
+    };
+    (WAL_RECORD_PROPOSAL_INTENT) => {
+        1u8
+    };
+    (WAL_RECORD_PREPARE_INTENT) => {
+        2u8
+    };
+    (WAL_RECORD_OBSERVE_PREPARE) => {
+        3u8
+    };
+    (WAL_RECORD_LOCK_AND_COMMIT) => {
+        4u8
+    };
+    (WAL_RECORD_TIMEOUT_INTENT) => {
+        5u8
+    };
+    (WAL_RECORD_INSTALL_TIMEOUT) => {
+        6u8
+    };
+    (WAL_RECORD_DECISION) => {
+        7u8
+    };
+    (REPLAY_EFFECT_NONE) => {
+        0u8
+    };
+    (BOUNDARY_NONE) => {
+        0u8
+    };
+    (BOUNDARY_BEGIN_WAL) => {
+        1u8
+    };
+    (BOUNDARY_ACKNOWLEDGE_WAL) => {
+        2u8
+    };
+    (BOUNDARY_COMPLETE_APPLICATION) => {
+        3u8
+    };
+    (BOUNDARY_RESUME_AFTER_REPLAY) => {
+        4u8
+    };
+    (CERTIFICATE_EVIDENCE_ABSENT) => {
+        0u8
+    };
+    (CERTIFICATE_EVIDENCE_LOCAL) => {
+        1u8
+    };
+    (CERTIFICATE_EVIDENCE_INCOMING) => {
+        2u8
+    };
+    (IDENTITY_DOMAIN_CONTEXT) => {
+        1u8
+    };
+    (IDENTITY_DOMAIN_SUBJECT) => {
+        2u8
+    };
+    (IDENTITY_DOMAIN_PAYLOAD) => {
+        3u8
+    };
+    (IDENTITY_DOMAIN_PEER) => {
+        4u8
+    };
+    (IDENTITY_DOMAIN_DURABLE_ARTIFACT) => {
+        5u8
+    };
+    (IDENTITY_DOMAIN_PROCESS_LOCAL) => {
+        6u8
+    };
+    (IDENTITY_KIND_CONSENSUS_CONTEXT) => {
+        1u8
+    };
+    (IDENTITY_KIND_CONSENSUS_SUBJECT) => {
+        1u8
+    };
+    (IDENTITY_KIND_WIRE_HEIGHT_CONTEXT) => {
+        2u8
+    };
+    (IDENTITY_KIND_WIRE_BLOCK_SUBJECT) => {
+        2u8
+    };
+    (IDENTITY_KIND_BLOCK_HEADER) => {
+        3u8
+    };
+    (IDENTITY_KIND_CANONICAL_PAYLOAD) => {
+        1u8
+    };
+    (IDENTITY_KIND_EXECUTION_COMMITMENT) => {
+        2u8
+    };
+    (IDENTITY_KIND_QUORUM_CERTIFICATE) => {
+        3u8
+    };
+    (IDENTITY_KIND_PAYLOAD_MANIFEST) => {
+        4u8
+    };
+    (IDENTITY_KIND_EXECUTED_BLOCK_WIRE) => {
+        5u8
+    };
+    (IDENTITY_KIND_SIDECAR_REQUEST) => {
+        6u8
+    };
+    (IDENTITY_KIND_REPLY_PAYLOAD) => {
+        7u8
+    };
+    (IDENTITY_KIND_MERGE_ENTRY) => {
+        8u8
+    };
+    (IDENTITY_KIND_REFERENCE_DIGEST) => {
+        9u8
+    };
+    (IDENTITY_KIND_NETWORK_RESPONSE) => {
+        10u8
+    };
+    (IDENTITY_KIND_SIDECAR_RESPONSE) => {
+        11u8
+    };
+    (IDENTITY_KIND_SIDECAR_CHUNK) => {
+        12u8
+    };
+    (IDENTITY_KIND_SIDECAR_PAYLOAD) => {
+        13u8
+    };
+    (IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST) => {
+        14u8
+    };
+    (IDENTITY_KIND_CONSENSUS_MESSAGE) => {
+        15u8
+    };
+    (IDENTITY_KIND_CERTIFIED_BODY_REQUEST) => {
+        16u8
+    };
+    (IDENTITY_KIND_SIDECAR_SIBLING_STATE) => {
+        1u8
+    };
+    (IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE) => {
+        2u8
+    };
+    (IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE) => {
+        3u8
+    };
+    (IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE) => {
+        4u8
+    };
+    (IDENTITY_KIND_REPLY_SOURCE_KEY) => {
+        5u8
+    };
+    (IDENTITY_KIND_REPLY_DELIVERY_ROUTE) => {
+        6u8
+    };
+    (IDENTITY_KIND_REPLY_WRITER_OCCURRENCE) => {
+        7u8
+    };
+    (IDENTITY_KIND_DURABLE_BODY_FRAME) => {
+        1u8
+    };
+    (IDENTITY_KIND_FINALITY_ARTIFACT) => {
+        2u8
+    };
+    (IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD) => {
+        3u8
+    };
+    (IDENTITY_KIND_PEER) => {
+        1u8
+    };
+    (SUCCESSOR_AUTHORITY_APPLIED) => {
+        1u8
+    };
+    (SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP) => {
+        2u8
+    };
+    (SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP) => {
+        3u8
+    };
+    (SUCCESSOR_STAGE_NONE) => {
+        0u8
+    };
+    (SUCCESSOR_STAGE_QUEUED) => {
+        1u8
+    };
+    (SUCCESSOR_STAGE_RUNNING) => {
+        2u8
+    };
+    (SUCCESSOR_STAGE_COMPLETE) => {
+        3u8
+    };
+    (SUCCESSOR_LIFECYCLE_BEGIN) => {
+        1u8
+    };
+    (SUCCESSOR_LIFECYCLE_FAIL) => {
+        2u8
+    };
+    (SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP) => {
+        3u8
+    };
+    (SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP) => {
+        4u8
+    };
+    (SUCCESSOR_MARKER_ACTIVATED) => {
+        1u8
+    };
+}
+
+macro_rules! assert_refinement_tag_values {
+    ($($tag:ident),+ $(,)?) => {
+        $(const _: [(); $tag as usize] = [(); refinement_tag_value!($tag) as usize];)+
+    };
+}
+
+assert_refinement_tag_values!(
+    EFFECT_PERSIST,
+    EVENT_PERSISTED,
+    EVENT_PERSISTENCE_FAILED,
+    EVENT_SIGNED,
+    EVENT_RESUME_AFTER_REPLAY,
+    CONTINUATION_NONE,
+    CONTINUATION_SIGN,
+    CONTINUATION_INSTALL_TIMEOUT,
+    CONTINUATION_DECIDE,
+    WAL_RECORD_NONE,
+    WAL_RECORD_PROPOSAL_INTENT,
+    WAL_RECORD_PREPARE_INTENT,
+    WAL_RECORD_OBSERVE_PREPARE,
+    WAL_RECORD_LOCK_AND_COMMIT,
+    WAL_RECORD_TIMEOUT_INTENT,
+    WAL_RECORD_INSTALL_TIMEOUT,
+    WAL_RECORD_DECISION,
+    REPLAY_EFFECT_NONE,
+    BOUNDARY_NONE,
+    BOUNDARY_BEGIN_WAL,
+    BOUNDARY_ACKNOWLEDGE_WAL,
+    BOUNDARY_COMPLETE_APPLICATION,
+    BOUNDARY_RESUME_AFTER_REPLAY,
+    CERTIFICATE_EVIDENCE_ABSENT,
+    CERTIFICATE_EVIDENCE_LOCAL,
+    CERTIFICATE_EVIDENCE_INCOMING,
+    IDENTITY_DOMAIN_CONTEXT,
+    IDENTITY_DOMAIN_SUBJECT,
+    IDENTITY_DOMAIN_PAYLOAD,
+    IDENTITY_DOMAIN_PEER,
+    IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+    IDENTITY_DOMAIN_PROCESS_LOCAL,
+    IDENTITY_KIND_CONSENSUS_CONTEXT,
+    IDENTITY_KIND_CONSENSUS_SUBJECT,
+    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+    IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+    IDENTITY_KIND_BLOCK_HEADER,
+    IDENTITY_KIND_CANONICAL_PAYLOAD,
+    IDENTITY_KIND_EXECUTION_COMMITMENT,
+    IDENTITY_KIND_QUORUM_CERTIFICATE,
+    IDENTITY_KIND_PAYLOAD_MANIFEST,
+    IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+    IDENTITY_KIND_SIDECAR_REQUEST,
+    IDENTITY_KIND_REPLY_PAYLOAD,
+    IDENTITY_KIND_MERGE_ENTRY,
+    IDENTITY_KIND_REFERENCE_DIGEST,
+    IDENTITY_KIND_NETWORK_RESPONSE,
+    IDENTITY_KIND_SIDECAR_RESPONSE,
+    IDENTITY_KIND_SIDECAR_CHUNK,
+    IDENTITY_KIND_SIDECAR_PAYLOAD,
+    IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST,
+    IDENTITY_KIND_CONSENSUS_MESSAGE,
+    IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+    IDENTITY_KIND_SIDECAR_SIBLING_STATE,
+    IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE,
+    IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE,
+    IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE,
+    IDENTITY_KIND_REPLY_SOURCE_KEY,
+    IDENTITY_KIND_REPLY_DELIVERY_ROUTE,
+    IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,
+    IDENTITY_KIND_DURABLE_BODY_FRAME,
+    IDENTITY_KIND_FINALITY_ARTIFACT,
+    IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD,
+    IDENTITY_KIND_PEER,
+    SUCCESSOR_AUTHORITY_APPLIED,
+    SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
+    SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+    SUCCESSOR_STAGE_NONE,
+    SUCCESSOR_STAGE_QUEUED,
+    SUCCESSOR_STAGE_RUNNING,
+    SUCCESSOR_STAGE_COMPLETE,
+    SUCCESSOR_LIFECYCLE_BEGIN,
+    SUCCESSOR_LIFECYCLE_FAIL,
+    SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP,
+    SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP,
+    SUCCESSOR_MARKER_ACTIVATED,
+);
 
 /// Lossless fixed-width view of one existing canonical 256-bit identity.
 ///
@@ -308,6 +683,317 @@ macro_rules! canonical_identity_is_zero_body {
             && $identity.word1 == 0u64
             && $identity.word2 == 0u64
             && $identity.word3 == 0u64
+    }};
+}
+
+// These expressions are instantiated by both the executable production
+// decision gates below and their exact Verus mirrors. Every authorization
+// decision is derived from lossless identities, heights, stages, and marker
+// fields observed at the enforcing seam; callers cannot supply an already
+// computed validity bit.
+macro_rules! durable_predecessor_is_canonical_body {
+    ($predecessor:expr) => {{
+        $predecessor.height > 0u64
+            && canonical_identity_is_typed_body!(
+                $predecessor.block_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
+                refinement_tag_value!(IDENTITY_KIND_BLOCK_HEADER)
+            )
+            && canonical_identity_is_typed_body!(
+                $predecessor.artifact_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                refinement_tag_value!(IDENTITY_KIND_FINALITY_ARTIFACT)
+            )
+    }};
+}
+
+macro_rules! durable_predecessor_is_zero_body {
+    ($predecessor:expr) => {{
+        $predecessor.height == 0u64
+            && canonical_identity_is_zero_body!($predecessor.block_hash)
+            && canonical_identity_is_zero_body!($predecessor.artifact_hash)
+    }};
+}
+
+macro_rules! durable_predecessor_equal_body {
+    ($left:expr, $right:expr) => {{
+        durable_predecessor_is_canonical_body!($left)
+            && durable_predecessor_is_canonical_body!($right)
+            && $left.height == $right.height
+            && canonical_identity_equal_body!($left.block_hash, $right.block_hash)
+            && canonical_identity_equal_body!($left.artifact_hash, $right.artifact_hash)
+    }};
+}
+
+macro_rules! production_successor_snapshot_body {
+    ($predecessor_height:expr, $snapshot:expr) => {{
+        $predecessor_height > 0u64
+            && $predecessor_height < u64::MAX
+            && $snapshot.height == $predecessor_height + 1u64
+            && $snapshot.last_committed_height == $predecessor_height
+            && canonical_identity_is_typed_body!(
+                $snapshot.expected_context_id,
+                refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+                refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
+            )
+            && canonical_identity_equal_body!(
+                $snapshot.expected_context_id,
+                $snapshot.published_context_id
+            )
+            && canonical_identity_equal_body!(
+                $snapshot.published_context_id,
+                $snapshot.marker_context_id
+            )
+            && $snapshot.marker_height == $snapshot.height
+            && $snapshot.marker_view == $snapshot.view
+            && $snapshot.marker_generation == $snapshot.generation
+            && $snapshot.marker_kind == refinement_tag_value!(SUCCESSOR_MARKER_ACTIVATED)
+            && $snapshot.marker_age_ms == 0u64
+    }};
+}
+
+macro_rules! production_successor_predecessor_binding_body {
+    ($projection:expr) => {{
+        durable_predecessor_equal_body!(
+            $projection.expected_predecessor,
+            $projection.authority_predecessor
+        ) && canonical_identity_is_typed_body!(
+            $projection.successor_context_id,
+            refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+            refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
+        )
+    }};
+}
+
+macro_rules! production_applied_successor_trace_body {
+    ($projection:expr) => {{
+        $projection.authority_kind == refinement_tag_value!(SUCCESSOR_AUTHORITY_APPLIED)
+            && production_successor_predecessor_binding_body!($projection.binding)
+            && $projection.predecessor_status_height
+                == $projection.binding.expected_predecessor.height
+            && $projection.predecessor_stage_before
+                == refinement_tag_value!(SUCCESSOR_STAGE_RUNNING)
+            && $projection.predecessor_stage_after
+                == refinement_tag_value!(SUCCESSOR_STAGE_COMPLETE)
+            && canonical_identity_equal_body!(
+                $projection.binding.successor_context_id,
+                $projection.successor.expected_context_id
+            )
+            && production_successor_snapshot_body!(
+                $projection.binding.expected_predecessor.height,
+                $projection.successor
+            )
+    }};
+}
+
+macro_rules! production_recovered_successor_trace_body {
+    ($projection:expr) => {{
+        $projection.published_status_height_before == 0u64
+            && canonical_identity_equal_body!(
+                $projection.authority_context_id,
+                $projection.successor.expected_context_id
+            )
+            && production_successor_snapshot_body!(
+                $projection.successor.last_committed_height,
+                $projection.successor
+            )
+            && (if $projection.authority_kind
+                == refinement_tag_value!(SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP)
+            {
+                durable_predecessor_is_canonical_body!($projection.predecessor)
+                    && $projection.predecessor.height == $projection.successor.last_committed_height
+                    && canonical_identity_is_zero_body!($projection.snapshot_record_hash)
+                    && $projection.snapshot_height == 0u64
+                    && canonical_identity_is_zero_body!($projection.snapshot_block_hash)
+            } else if $projection.authority_kind
+                == refinement_tag_value!(SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP)
+            {
+                durable_predecessor_is_zero_body!($projection.predecessor)
+                    && canonical_identity_is_typed_body!(
+                        $projection.snapshot_record_hash,
+                        refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                        refinement_tag_value!(IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD)
+                    )
+                    && $projection.snapshot_height > 0u64
+                    && $projection.snapshot_height == $projection.successor.last_committed_height
+                    && canonical_identity_is_typed_body!(
+                        $projection.snapshot_block_hash,
+                        refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
+                        refinement_tag_value!(IDENTITY_KIND_BLOCK_HEADER)
+                    )
+            } else {
+                false
+            })
+    }};
+}
+
+macro_rules! production_startup_failure_and_restart_trace_body {
+    ($projection:expr) => {{
+        $projection.status_height > 0u64
+            && (if $projection.transition_kind == refinement_tag_value!(SUCCESSOR_LIFECYCLE_BEGIN) {
+                $projection.authority_kind == refinement_tag_value!(SUCCESSOR_AUTHORITY_APPLIED)
+                    && $projection.stage_before == refinement_tag_value!(SUCCESSOR_STAGE_QUEUED)
+                    && $projection.stage_after == refinement_tag_value!(SUCCESSOR_STAGE_RUNNING)
+                    && $projection.published_height_before == $projection.status_height
+                    && $projection.published_height_after == $projection.status_height
+                    && !$projection.restart_required_before
+                    && !$projection.restart_required_after
+            } else if $projection.transition_kind == refinement_tag_value!(SUCCESSOR_LIFECYCLE_FAIL)
+            {
+                $projection.authority_kind == refinement_tag_value!(SUCCESSOR_AUTHORITY_APPLIED)
+                    && $projection.stage_before == refinement_tag_value!(SUCCESSOR_STAGE_RUNNING)
+                    && $projection.stage_after == refinement_tag_value!(SUCCESSOR_STAGE_RUNNING)
+                    && $projection.published_height_before == $projection.status_height
+                    && $projection.published_height_after == $projection.status_height
+                    && !$projection.restart_required_before
+                    && $projection.restart_required_after
+            } else if $projection.transition_kind
+                == refinement_tag_value!(SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP)
+            {
+                $projection.authority_kind
+                    == refinement_tag_value!(SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP)
+                    && $projection.stage_before == refinement_tag_value!(SUCCESSOR_STAGE_NONE)
+                    && $projection.stage_after == refinement_tag_value!(SUCCESSOR_STAGE_NONE)
+                    && $projection.published_height_before == 0u64
+                    && $projection.published_height_after == 0u64
+                    && !$projection.restart_required_before
+                    && !$projection.restart_required_after
+            } else if $projection.transition_kind
+                == refinement_tag_value!(SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP)
+            {
+                $projection.authority_kind
+                    == refinement_tag_value!(SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP)
+                    && $projection.stage_before == refinement_tag_value!(SUCCESSOR_STAGE_NONE)
+                    && $projection.stage_after == refinement_tag_value!(SUCCESSOR_STAGE_NONE)
+                    && $projection.published_height_before == 0u64
+                    && $projection.published_height_after == 0u64
+                    && !$projection.restart_required_before
+                    && !$projection.restart_required_after
+            } else {
+                false
+            })
+    }};
+}
+
+// Historical catch-up is admitted only through two exact ownership seams.
+// The first consumes an authenticated CommitQC discovery request only after
+// the exact certificate envelope entered reducer ingress. The second consumes
+// an authenticated certified-body request only after its exact body owner and
+// BodyAvailable reservation were committed. Both expressions are instantiated
+// unchanged by production and Verus.
+macro_rules! production_historical_certificate_trace_body {
+    ($projection:expr) => {{
+        $projection.context_height > 0u64
+            && canonical_identity_is_typed_body!(
+                $projection.context_id,
+                refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+                refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
+            )
+            && $projection.certificate_height == $projection.context_height
+            && canonical_identity_equal_body!(
+                $projection.certificate_context_id,
+                $projection.context_id
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.request_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST)
+            )
+            && canonical_identity_equal_body!(
+                $projection.request_hash,
+                $projection.response_request_hash
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.response_certificate,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_QUORUM_CERTIFICATE)
+            )
+            && canonical_identity_equal_body!(
+                $projection.response_certificate,
+                $projection.message_certificate
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.message_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_CONSENSUS_MESSAGE)
+            )
+            && canonical_identity_equal_body!(
+                $projection.message_hash,
+                $projection.admitted_message_hash
+            )
+            && $projection.request_present_before
+            && !$projection.request_present_after
+    }};
+}
+
+macro_rules! production_historical_body_pipeline_trace_body {
+    ($projection:expr) => {{
+        $projection.context_height > 0u64
+            && canonical_identity_is_typed_body!(
+                $projection.context_id,
+                refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+                refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.request_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_CERTIFIED_BODY_REQUEST)
+            )
+            && canonical_identity_equal_body!(
+                $projection.request_hash,
+                $projection.pending_request_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.pending_request_hash,
+                $projection.authenticated_request_hash
+            )
+            && $projection.fetch_tag.height == $projection.context_height
+            && $projection.fetch_tag.generation > 0u64
+            && canonical_identity_equal_body!($projection.round_context_id, $projection.context_id)
+            && $projection.round_height == $projection.context_height
+            && canonical_identity_is_typed_body!(
+                $projection.subject,
+                refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
+                refinement_tag_value!(IDENTITY_KIND_WIRE_BLOCK_SUBJECT)
+            )
+            && canonical_identity_equal_body!(
+                $projection.manifest_round_context_id,
+                $projection.round_context_id
+            )
+            && $projection.manifest_round_height == $projection.round_height
+            && $projection.manifest_round_view == $projection.round_view
+            && canonical_identity_equal_body!($projection.manifest_subject, $projection.subject)
+            && canonical_identity_is_typed_body!(
+                $projection.response_manifest,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_PAYLOAD_MANIFEST)
+            )
+            && canonical_identity_equal_body!(
+                $projection.response_manifest,
+                $projection.ready_manifest
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.subject_payload_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_CANONICAL_PAYLOAD)
+            )
+            && canonical_identity_equal_body!(
+                $projection.subject_payload_hash,
+                $projection.body_payload_hash
+            )
+            && $projection.owner_present_after
+            && $projection.owner_tag.height == $projection.fetch_tag.height
+            && $projection.owner_tag.view == $projection.fetch_tag.view
+            && $projection.owner_tag.generation == $projection.fetch_tag.generation
+            && canonical_identity_equal_body!(
+                $projection.owner_round_context_id,
+                $projection.round_context_id
+            )
+            && $projection.owner_round_height == $projection.round_height
+            && $projection.owner_round_view == $projection.round_view
+            && canonical_identity_equal_body!($projection.owner_subject, $projection.subject)
+            && !$projection.pending_fetch_present_after
+            && !$projection.request_present_after
     }};
 }
 
@@ -643,8 +1329,8 @@ macro_rules! effective_lock_trace_claim_body {
 
 macro_rules! pending_projection_is_absent_body {
     ($pending:expr) => {{
-        $pending.record_kind == WAL_RECORD_NONE
-            && $pending.continuation == CONTINUATION_NONE
+        $pending.record_kind == refinement_tag_value!(WAL_RECORD_NONE)
+            && $pending.continuation == refinement_tag_value!(CONTINUATION_NONE)
             && $pending.persistence_id == 0u64
             && canonical_identity_is_zero_body!($pending.context_id)
             && $pending.height == 0u64
@@ -671,6 +1357,11 @@ macro_rules! pending_projection_equal_body {
     }};
 }
 
+// A boundary tag names the reducer owner of the WAL operation, while the
+// pending projection names the round carried by the record.  Those rounds are
+// intentionally distinct for a future TC, a historical locked Commit, and a
+// Decision learned outside the local view.  Keep their shared identity exact
+// here and check the record/owner round relation separately below.
 macro_rules! pending_projection_matches_boundary_body {
     ($pending:expr, $boundary:expr) => {{
         $boundary.subject.present
@@ -685,15 +1376,55 @@ macro_rules! pending_projection_matches_boundary_body {
     }};
 }
 
+macro_rules! pending_round_can_begin_body {
+    ($pending:expr, $owner:expr) => {{
+        $pending.height == $owner.height
+            && match $pending.record_kind {
+                refinement_tag_value!(WAL_RECORD_PROPOSAL_INTENT)
+                | refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
+                | refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT) => $pending.view == $owner.view,
+                refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE)
+                | refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT) => $pending.view <= $owner.view,
+                refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) => {
+                    $pending.view >= $owner.view && $pending.view < u64::MAX
+                }
+                // A valid CommitQC decides independently of how far the local
+                // view has advanced. Its exact round remains in `pending` and
+                // is checked against the Persist effect below.
+                refinement_tag_value!(WAL_RECORD_DECISION) => true,
+                _ => false,
+            }
+    }};
+}
+
+macro_rules! pending_round_can_acknowledge_body {
+    ($pending:expr, $owner_before:expr, $owner_after:expr) => {{
+        if $pending.record_kind == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) {
+            $pending.height == $owner_before.height
+                && $pending.height == $owner_after.height
+                && $owner_before.view <= $pending.view
+                && $pending.view < u64::MAX
+                && $owner_after.view == $pending.view + 1u64
+                && $owner_before.generation < u64::MAX
+                && $owner_after.generation == $owner_before.generation + 1u64
+        } else {
+            tag_projection_equal_body!($owner_before, $owner_after)
+                && pending_round_can_begin_body!($pending, $owner_after)
+        }
+    }};
+}
+
 macro_rules! wal_record_proposal_round_is_exact_body {
     ($record_kind:expr, $pending:expr, $boundary:expr) => {{
         match $record_kind {
-            WAL_RECORD_PROPOSAL_INTENT | WAL_RECORD_PREPARE_INTENT | WAL_RECORD_OBSERVE_PREPARE => {
+            refinement_tag_value!(WAL_RECORD_PROPOSAL_INTENT)
+            | refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
+            | refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE) => {
                 $pending.proposal_present
                     && $pending.proposal_height == $pending.height
                     && $pending.proposal_view == $pending.view
             }
-            WAL_RECORD_LOCK_AND_COMMIT => {
+            refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT) => {
                 $pending.proposal_present
                     && $pending.proposal_height == $pending.height
                     && $pending.proposal_view <= $pending.view
@@ -706,12 +1437,13 @@ macro_rules! wal_record_proposal_round_is_exact_body {
                     && $boundary.auxiliary_phase == 1u8
                     && $boundary.auxiliary_subject == $boundary.subject.subject
             }
-            WAL_RECORD_DECISION => {
+            refinement_tag_value!(WAL_RECORD_DECISION) => {
                 $pending.proposal_present
                     && $pending.proposal_height == $pending.height
                     && $pending.proposal_view <= $pending.view
             }
-            WAL_RECORD_TIMEOUT_INTENT | WAL_RECORD_INSTALL_TIMEOUT => {
+            refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT)
+            | refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) => {
                 !$pending.proposal_present
                     && $pending.proposal_height == 0u64
                     && $pending.proposal_view == 0u64
@@ -724,13 +1456,21 @@ macro_rules! wal_record_proposal_round_is_exact_body {
 macro_rules! wal_record_continuation_is_exact_body {
     ($record_kind:expr, $continuation:expr) => {{
         match $record_kind {
-            WAL_RECORD_PROPOSAL_INTENT
-            | WAL_RECORD_PREPARE_INTENT
-            | WAL_RECORD_LOCK_AND_COMMIT
-            | WAL_RECORD_TIMEOUT_INTENT => $continuation == CONTINUATION_SIGN,
-            WAL_RECORD_OBSERVE_PREPARE => $continuation == CONTINUATION_NONE,
-            WAL_RECORD_INSTALL_TIMEOUT => $continuation == CONTINUATION_INSTALL_TIMEOUT,
-            WAL_RECORD_DECISION => $continuation == CONTINUATION_DECIDE,
+            refinement_tag_value!(WAL_RECORD_PROPOSAL_INTENT)
+            | refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
+            | refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
+            | refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT) => {
+                $continuation == refinement_tag_value!(CONTINUATION_SIGN)
+            }
+            refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE) => {
+                $continuation == refinement_tag_value!(CONTINUATION_NONE)
+            }
+            refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) => {
+                $continuation == refinement_tag_value!(CONTINUATION_INSTALL_TIMEOUT)
+            }
+            refinement_tag_value!(WAL_RECORD_DECISION) => {
+                $continuation == refinement_tag_value!(CONTINUATION_DECIDE)
+            }
             _ => false,
         }
     }};
@@ -740,16 +1480,16 @@ macro_rules! wal_record_round_matches_owner_body {
     ($record_kind:expr, $pending:expr, $owner:expr) => {{
         $pending.height == $owner.height
             && match $record_kind {
-                WAL_RECORD_PROPOSAL_INTENT
-                | WAL_RECORD_PREPARE_INTENT
-                | WAL_RECORD_LOCK_AND_COMMIT
-                | WAL_RECORD_TIMEOUT_INTENT => $pending.view == $owner.view,
-                WAL_RECORD_OBSERVE_PREPARE => $pending.view <= $owner.view,
-                WAL_RECORD_INSTALL_TIMEOUT => {
+                refinement_tag_value!(WAL_RECORD_PROPOSAL_INTENT)
+                | refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
+                | refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
+                | refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT) => $pending.view == $owner.view,
+                refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE) => $pending.view <= $owner.view,
+                refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) => {
                     $pending.view < u64::MAX
                         && ($owner.view <= $pending.view || $pending.view + 1u64 == $owner.view)
                 }
-                WAL_RECORD_DECISION => true,
+                refinement_tag_value!(WAL_RECORD_DECISION) => true,
                 _ => false,
             }
     }};
@@ -758,24 +1498,24 @@ macro_rules! wal_record_round_matches_owner_body {
 macro_rules! event_can_start_wal_record_body {
     ($event_kind:expr, $record_kind:expr) => {{
         match $event_kind {
-            0u8 => $record_kind == WAL_RECORD_PROPOSAL_INTENT,
+            0u8 => $record_kind == refinement_tag_value!(WAL_RECORD_PROPOSAL_INTENT),
             2u8 | 3u8 => {
-                $record_kind == WAL_RECORD_OBSERVE_PREPARE
-                    || $record_kind == WAL_RECORD_LOCK_AND_COMMIT
-                    || $record_kind == WAL_RECORD_DECISION
+                $record_kind == refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE)
+                    || $record_kind == refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
+                    || $record_kind == refinement_tag_value!(WAL_RECORD_DECISION)
             }
-            4u8 | 5u8 => $record_kind == WAL_RECORD_INSTALL_TIMEOUT,
-            6u8 => $record_kind == WAL_RECORD_TIMEOUT_INTENT,
+            4u8 | 5u8 => $record_kind == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT),
+            6u8 => $record_kind == refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT),
             10u8 => {
-                $record_kind == WAL_RECORD_PREPARE_INTENT
-                    || $record_kind == WAL_RECORD_LOCK_AND_COMMIT
+                $record_kind == refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
+                    || $record_kind == refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
             }
-            EVENT_SIGNED => {
-                $record_kind == WAL_RECORD_PREPARE_INTENT
-                    || $record_kind == WAL_RECORD_OBSERVE_PREPARE
-                    || $record_kind == WAL_RECORD_LOCK_AND_COMMIT
-                    || $record_kind == WAL_RECORD_INSTALL_TIMEOUT
-                    || $record_kind == WAL_RECORD_DECISION
+            refinement_tag_value!(EVENT_SIGNED) => {
+                $record_kind == refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
+                    || $record_kind == refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE)
+                    || $record_kind == refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
+                    || $record_kind == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT)
+                    || $record_kind == refinement_tag_value!(WAL_RECORD_DECISION)
             }
             _ => false,
         }
@@ -784,7 +1524,7 @@ macro_rules! event_can_start_wal_record_body {
 
 macro_rules! persist_slot_matches_boundary_body {
     ($slot:expr, $pending:expr, $boundary:expr) => {{
-        if $slot.kind == EFFECT_PERSIST {
+        if $slot.kind == refinement_tag_value!(EFFECT_PERSIST) {
             $slot.requested.persistence_id == $boundary.persistence_id
                 && $slot.requested.record_kind == $boundary.record_kind
                 && $slot.requested.context_id == $boundary.context_id
@@ -846,8 +1586,8 @@ macro_rules! locked_commit_progress_witness_body {
         let pending_lock_and_commit_is_exact = lock_is_active
             && !$projection.commit_intent_present
             && $projection.local_validator_present
-            && $projection.pending.record_kind == WAL_RECORD_LOCK_AND_COMMIT
-            && $projection.pending.continuation == CONTINUATION_SIGN
+            && $projection.pending.record_kind == refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
+            && $projection.pending.continuation == refinement_tag_value!(CONTINUATION_SIGN)
             && $projection.pending.persistence_id > 0u64
             && $projection.pending.context_id == $projection.context_id
             && $projection.pending.height == $projection.current_height
@@ -875,16 +1615,19 @@ macro_rules! locked_commit_progress_witness_body {
 // already-computed "valid" or "owned" bit.
 macro_rules! production_durable_intent_trace_body {
     ($projection:expr) => {{
-        let boundary_exact = $projection.boundary_claimed.kind != BOUNDARY_NONE
+        let boundary_exact = $projection.boundary_claimed.kind
+            != refinement_tag_value!(BOUNDARY_NONE)
             && boundary_capability_equal_body!(
                 $projection.boundary_claimed,
                 $projection.boundary_granted
             );
-        let persist_effects = effect_count_body!($projection.effects, EFFECT_PERSIST);
+        let persist_effects =
+            effect_count_body!($projection.effects, refinement_tag_value!(EFFECT_PERSIST));
         let tag_matches_owner =
             tag_projection_equal_body!($projection.event_tag, $projection.owner_tag_before);
-        let persistence_completion = $projection.event_kind == EVENT_PERSISTED
-            || $projection.event_kind == EVENT_PERSISTENCE_FAILED;
+        let persistence_completion = $projection.event_kind
+            == refinement_tag_value!(EVENT_PERSISTED)
+            || $projection.event_kind == refinement_tag_value!(EVENT_PERSISTENCE_FAILED);
         effect_slots_authorized_body!($projection.effects)
             && persist_effects <= 1u64
             && $projection.durable_sequence_after >= $projection.durable_sequence_before
@@ -902,9 +1645,19 @@ macro_rules! production_durable_intent_trace_body {
                     )
                     && $projection.effects.len == 0u8
                     && persist_effects == 0u64
-                    && (persistence_completion || $projection.event_persistence_id == 0u64)
-            } else if boundary_exact && $projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL {
+                    && (if persistence_completion {
+                        $projection.event_persistence_id > 0u64
+                    } else {
+                        $projection.event_persistence_id == 0u64
+                    })
+            } else if boundary_exact
+                && $projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
+            {
                 pending_projection_is_absent_body!($projection.pending_before)
+                    && tag_projection_equal_body!(
+                        $projection.event_tag,
+                        $projection.owner_tag_before
+                    )
                     && boundary_identity_is_canonical_body!($projection.boundary_claimed)
                     && $projection.boundary_claimed.subject.present
                     && tag_projection_equal_body!(
@@ -918,6 +1671,10 @@ macro_rules! production_durable_intent_trace_body {
                     && pending_projection_matches_boundary_body!(
                         $projection.pending_after,
                         $projection.boundary_claimed
+                    )
+                    && pending_round_can_begin_body!(
+                        $projection.pending_after,
+                        $projection.owner_tag_after
                     )
                     && wal_record_round_matches_owner_body!(
                         $projection.boundary_claimed.record_kind,
@@ -933,7 +1690,9 @@ macro_rules! production_durable_intent_trace_body {
                         $projection.boundary_claimed.record_kind,
                         $projection.boundary_claimed.continuation
                     )
-                    && (if $projection.boundary_claimed.record_kind == WAL_RECORD_INSTALL_TIMEOUT {
+                    && (if $projection.boundary_claimed.record_kind
+                        == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT)
+                    {
                         if $projection.boundary_claimed.auxiliary_present {
                             $projection.boundary_claimed.auxiliary_phase == 1u8
                                 && $projection.boundary_claimed.subject.subject
@@ -952,7 +1711,7 @@ macro_rules! production_durable_intent_trace_body {
                     && $projection.pending_after.persistence_id
                         == $projection.durable_sequence_before + 1u64
                     && $projection.durable_sequence_after == $projection.durable_sequence_before
-                    && $projection.event_kind != EVENT_PERSISTED
+                    && $projection.event_kind != refinement_tag_value!(EVENT_PERSISTED)
                     && $projection.event_persistence_id == 0u64
                     && persist_effects == 1u64
                     && persist_slot_matches_boundary_body!(
@@ -996,12 +1755,20 @@ macro_rules! production_durable_intent_trace_body {
                         $projection.boundary_claimed
                     )
             } else if boundary_exact
-                && $projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+                && $projection.boundary_claimed.kind
+                    == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
             {
-                pending_projection_matches_boundary_body!(
-                    $projection.pending_before,
-                    $projection.boundary_claimed
-                ) && boundary_identity_is_canonical_body!($projection.boundary_claimed)
+                tag_projection_equal_body!($projection.event_tag, $projection.owner_tag_before)
+                    && pending_projection_matches_boundary_body!(
+                        $projection.pending_before,
+                        $projection.boundary_claimed
+                    )
+                    && boundary_identity_is_canonical_body!($projection.boundary_claimed)
+                    && pending_round_can_acknowledge_body!(
+                        $projection.pending_before,
+                        $projection.owner_tag_before,
+                        $projection.owner_tag_after
+                    )
                     && $projection.boundary_claimed.subject.present
                     && wal_record_continuation_is_exact_body!(
                         $projection.boundary_claimed.record_kind,
@@ -1021,7 +1788,9 @@ macro_rules! production_durable_intent_trace_body {
                         $projection.pending_before,
                         $projection.boundary_claimed
                     )
-                    && (if $projection.boundary_claimed.record_kind == WAL_RECORD_INSTALL_TIMEOUT {
+                    && (if $projection.boundary_claimed.record_kind
+                        == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT)
+                    {
                         $projection.owner_tag_after.height == $projection.owner_tag_before.height
                             && $projection.owner_tag_after.view
                                 == $projection.pending_before.view + 1u64
@@ -1040,18 +1809,23 @@ macro_rules! production_durable_intent_trace_body {
                         == $projection.durable_sequence_before + 1u64
                     && $projection.pending_before.persistence_id
                         == $projection.durable_sequence_after
-                    && $projection.event_kind == EVENT_PERSISTED
+                    && $projection.event_kind == refinement_tag_value!(EVENT_PERSISTED)
                     && $projection.event_persistence_id
                         == $projection.boundary_claimed.persistence_id
                     && persist_effects == 0u64
             } else if boundary_exact
-                && $projection.boundary_claimed.kind == BOUNDARY_COMPLETE_APPLICATION
+                && $projection.boundary_claimed.kind
+                    == refinement_tag_value!(BOUNDARY_COMPLETE_APPLICATION)
             {
-                boundary_identity_is_canonical_body!($projection.boundary_claimed)
+                tag_projection_equal_body!($projection.event_tag, $projection.owner_tag_before)
+                    && boundary_identity_is_canonical_body!($projection.boundary_claimed)
                     && $projection.boundary_claimed.subject.present
-                    && $projection.boundary_claimed.record_kind == WAL_RECORD_NONE
-                    && $projection.boundary_claimed.continuation == CONTINUATION_NONE
-                    && $projection.boundary_claimed.replay_effect_kind == REPLAY_EFFECT_NONE
+                    && $projection.boundary_claimed.record_kind
+                        == refinement_tag_value!(WAL_RECORD_NONE)
+                    && $projection.boundary_claimed.continuation
+                        == refinement_tag_value!(CONTINUATION_NONE)
+                    && $projection.boundary_claimed.replay_effect_kind
+                        == refinement_tag_value!(REPLAY_EFFECT_NONE)
                     && $projection.boundary_claimed.persistence_id == 0u64
                     && $projection.boundary_claimed.replay_plan.len == 0u8
                     && tag_projection_equal_body!(
@@ -1071,11 +1845,15 @@ macro_rules! production_durable_intent_trace_body {
                     && $projection.event_persistence_id == 0u64
                     && persist_effects == 0u64
             } else if boundary_exact
-                && $projection.boundary_claimed.kind == BOUNDARY_RESUME_AFTER_REPLAY
+                && $projection.boundary_claimed.kind
+                    == refinement_tag_value!(BOUNDARY_RESUME_AFTER_REPLAY)
             {
-                boundary_identity_is_canonical_body!($projection.boundary_claimed)
-                    && $projection.boundary_claimed.record_kind == WAL_RECORD_NONE
-                    && $projection.boundary_claimed.continuation == CONTINUATION_NONE
+                tag_projection_equal_body!($projection.event_tag, $projection.owner_tag_before)
+                    && boundary_identity_is_canonical_body!($projection.boundary_claimed)
+                    && $projection.boundary_claimed.record_kind
+                        == refinement_tag_value!(WAL_RECORD_NONE)
+                    && $projection.boundary_claimed.continuation
+                        == refinement_tag_value!(CONTINUATION_NONE)
                     && $projection.boundary_claimed.persistence_id
                         == $projection.durable_sequence_before
                     && replay_plan_well_formed_body!(
@@ -1095,7 +1873,7 @@ macro_rules! production_durable_intent_trace_body {
                         $projection.pending_after
                     )
                     && $projection.durable_sequence_after == $projection.durable_sequence_before
-                    && $projection.event_kind == EVENT_RESUME_AFTER_REPLAY
+                    && $projection.event_kind == refinement_tag_value!(EVENT_RESUME_AFTER_REPLAY)
                     && $projection.event_persistence_id == 0u64
                     && persist_effects == 0u64
             } else {
@@ -1113,6 +1891,7 @@ macro_rules! production_durable_intent_trace_body {
                     && (if persistence_completion {
                         pending_projection_is_absent_body!($projection.pending_before)
                             && $projection.effects.len == 0u8
+                            && $projection.event_persistence_id > 0u64
                     } else {
                         $projection.event_persistence_id == 0u64
                     })
@@ -1125,8 +1904,8 @@ macro_rules! production_decision_identity_is_canonical_body {
     ($decision:expr) => {{
         canonical_identity_is_typed_body!(
             $decision.context_id,
-            IDENTITY_DOMAIN_CONTEXT,
-            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT
+            refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+            refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
         ) && $decision.height > 0u64
             && $decision.proposal_height == $decision.height
             && $decision.proposal_view <= $decision.view
@@ -1134,28 +1913,28 @@ macro_rules! production_decision_identity_is_canonical_body {
             && ($decision.phase != 1u8 || $decision.proposal_view == $decision.view)
             && canonical_identity_is_typed_body!(
                 $decision.subject,
-                IDENTITY_DOMAIN_SUBJECT,
-                IDENTITY_KIND_WIRE_BLOCK_SUBJECT
+                refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
+                refinement_tag_value!(IDENTITY_KIND_WIRE_BLOCK_SUBJECT)
             )
             && canonical_identity_is_typed_body!(
                 $decision.block_hash,
-                IDENTITY_DOMAIN_SUBJECT,
-                IDENTITY_KIND_BLOCK_HEADER
+                refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
+                refinement_tag_value!(IDENTITY_KIND_BLOCK_HEADER)
             )
             && canonical_identity_is_typed_body!(
                 $decision.payload_hash,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_CANONICAL_PAYLOAD
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_CANONICAL_PAYLOAD)
             )
             && canonical_identity_is_typed_body!(
                 $decision.execution_commitment,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_EXECUTION_COMMITMENT
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_EXECUTION_COMMITMENT)
             )
             && canonical_identity_is_typed_body!(
                 $decision.executed_block_wire_hash,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_EXECUTED_BLOCK_WIRE
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_EXECUTED_BLOCK_WIRE)
             )
     }};
 }
@@ -1189,8 +1968,8 @@ macro_rules! production_quorum_certificate_is_canonical_body {
         production_decision_identity_is_canonical_body!($certificate.decision)
             && canonical_identity_is_typed_body!(
                 $certificate.certificate,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_QUORUM_CERTIFICATE
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_QUORUM_CERTIFICATE)
             )
             && $certificate.signer_count > 0u64
             && $certificate.aggregate_signature_len > 0u64
@@ -1212,33 +1991,33 @@ macro_rules! production_durable_body_is_canonical_body {
     ($body:expr) => {{
         canonical_identity_is_typed_body!(
             $body.context_id,
-            IDENTITY_DOMAIN_CONTEXT,
-            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT
+            refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+            refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
         ) && $body.height > 0u64
             && canonical_identity_is_typed_body!(
                 $body.subject,
-                IDENTITY_DOMAIN_SUBJECT,
-                IDENTITY_KIND_WIRE_BLOCK_SUBJECT
+                refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
+                refinement_tag_value!(IDENTITY_KIND_WIRE_BLOCK_SUBJECT)
             )
             && canonical_identity_is_typed_body!(
                 $body.block_hash,
-                IDENTITY_DOMAIN_SUBJECT,
-                IDENTITY_KIND_BLOCK_HEADER
+                refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
+                refinement_tag_value!(IDENTITY_KIND_BLOCK_HEADER)
             )
             && canonical_identity_is_typed_body!(
                 $body.payload_hash,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_CANONICAL_PAYLOAD
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_CANONICAL_PAYLOAD)
             )
             && canonical_identity_is_typed_body!(
                 $body.manifest,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_PAYLOAD_MANIFEST
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_PAYLOAD_MANIFEST)
             )
             && canonical_identity_is_typed_body!(
                 $body.frame,
-                IDENTITY_DOMAIN_DURABLE_ARTIFACT,
-                IDENTITY_KIND_DURABLE_BODY_FRAME
+                refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                refinement_tag_value!(IDENTITY_KIND_DURABLE_BODY_FRAME)
             )
     }};
 }
@@ -1265,8 +2044,8 @@ macro_rules! production_decision_recovery_trace_body {
             && $projection.expected_height - $projection.state_height <= 1u64
             && canonical_identity_is_typed_body!(
                 $projection.expected_context_id,
-                IDENTITY_DOMAIN_CONTEXT,
-                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT
+                refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+                refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
             )
             && canonical_identity_equal_body!(
                 $projection.expected_context_id,
@@ -1296,8 +2075,8 @@ macro_rules! production_decision_recovery_trace_body {
             )
             && canonical_identity_is_typed_body!(
                 $projection.manifest,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_PAYLOAD_MANIFEST
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_PAYLOAD_MANIFEST)
             )
             && production_durable_body_equal_body!(
                 $projection.durable_body,
@@ -1364,68 +2143,110 @@ macro_rules! production_ingress_identity_and_class_trace_body {
     }};
 }
 
+macro_rules! production_two_stage_relay_retry_trace_body {
+    ($projection:expr) => {{
+        $projection.daemon_source_capacity_matches_two_upstream_lanes
+            && $projection.class_corridor_covers_authenticated_sources
+            && $projection.authenticated_source_matches_resource_owner
+            && $projection.retry_route_same_delivery
+            && $projection.retry_route_active
+            && $projection.selected_eligible
+            && $projection.ready_sources_before > 0u64
+            && $projection.selected_source_rank_before < $projection.ready_sources_before
+            && $projection.ready_sources_after == $projection.ready_sources_before
+            && $projection.selected_source_rank_after < $projection.ready_sources_after
+            && $projection.selected_source_rank_after == $projection.ready_sources_after - 1u64
+            && $projection.source_depth_before > 0u64
+            && $projection.selected_item_rank_before < $projection.source_depth_before
+            && $projection.source_depth_after == $projection.source_depth_before
+            && $projection.selected_item_rank_after < $projection.source_depth_after
+            && $projection.selected_item_rank_after == $projection.source_depth_after - 1u64
+            && $projection.total_depth_after == $projection.total_depth_before
+            && $projection.source_capacity > 0u64
+            && $projection.source_capacity < $projection.total_capacity
+            && $projection.source_depth_before <= $projection.source_capacity
+            && $projection.source_depth_after <= $projection.source_capacity
+            && $projection.total_depth_before <= $projection.total_capacity
+            && $projection.total_depth_after <= $projection.total_capacity
+            && $projection.ready_sources_before <= $projection.total_depth_before
+            && $projection.ready_sources_after <= $projection.total_depth_after
+    }};
+}
+
 macro_rules! production_reliable_flush_trace_body {
     ($projection:expr) => {{
         canonical_identity_is_typed_body!(
             $projection.semantic_target,
-            IDENTITY_DOMAIN_PEER,
-            IDENTITY_KIND_PEER
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
         ) && canonical_identity_is_typed_body!(
             $projection.authenticated_source,
-            IDENTITY_DOMAIN_PEER,
-            IDENTITY_KIND_PEER
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
+        ) && canonical_identity_is_typed_body!(
+            $projection.source_key_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_SOURCE_KEY)
+        ) && canonical_identity_is_typed_body!(
+            $projection.delivery_route_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_DELIVERY_ROUTE)
+        ) && canonical_identity_is_typed_body!(
+            $projection.writer_occurrence_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_WRITER_OCCURRENCE)
         ) && canonical_identity_is_typed_body!(
             $projection.requester,
-            IDENTITY_DOMAIN_PEER,
-            IDENTITY_KIND_PEER
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
         ) && canonical_identity_is_typed_body!(
             $projection.responder,
-            IDENTITY_DOMAIN_PEER,
-            IDENTITY_KIND_PEER
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
         ) && canonical_identity_equal_body!($projection.semantic_target, $projection.requester)
             && $projection.ticket_rank > 0u64
             && $projection.ticket_topic == 3u8
             && canonical_identity_is_typed_body!(
                 $projection.canonical_request_digest,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_REPLY_PAYLOAD
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_REPLY_PAYLOAD)
             )
             && $projection.stream_wire_bytes > 0u64
             && canonical_identity_is_typed_body!(
                 $projection.request_id,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_SIDECAR_REQUEST
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_REQUEST)
             )
             && canonical_identity_is_typed_body!(
                 $projection.entry_hash,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_MERGE_ENTRY
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_MERGE_ENTRY)
             )
             && $projection.encoded_len > 0u64
             && canonical_identity_is_typed_body!(
                 $projection.reference_digest,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_REFERENCE_DIGEST
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_REFERENCE_DIGEST)
             )
             && canonical_identity_is_typed_body!(
                 $projection.canonical_response_hash,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_NETWORK_RESPONSE
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_NETWORK_RESPONSE)
             )
             && canonical_identity_is_typed_body!(
                 $projection.sidecar_response_hash,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_SIDECAR_RESPONSE
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_RESPONSE)
             )
             && canonical_identity_is_typed_body!(
                 $projection.chunk_hash,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_SIDECAR_CHUNK
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_CHUNK)
             )
             && canonical_identity_is_typed_body!(
                 $projection.payload_digest,
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_SIDECAR_PAYLOAD
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_PAYLOAD)
             )
             && $projection.chunk_count > 0u64
             && $projection.chunk_index < $projection.chunk_count
@@ -1456,6 +2277,351 @@ macro_rules! production_reliable_flush_trace_body {
             } else {
                 false
             })
+    }};
+}
+
+// This second reliable-flush kernel is deliberately separate from the worker
+// queue kernel above. The worker proves which immutable response occurrence
+// crossed the peer writer; this kernel proves how that occurrence is applied
+// to one source-owned sidecar lane without changing any sibling lane.
+macro_rules! production_reliable_flush_application_body {
+    ($projection:expr) => {{
+        canonical_identity_is_typed_body!(
+            $projection.semantic_target,
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
+        ) && canonical_identity_is_typed_body!(
+            $projection.authenticated_source,
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
+        ) && canonical_identity_is_typed_body!(
+            $projection.source_key_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_SOURCE_KEY)
+        ) && canonical_identity_is_typed_body!(
+            $projection.delivery_route_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_DELIVERY_ROUTE)
+        ) && canonical_identity_is_typed_body!(
+            $projection.writer_occurrence_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_REPLY_WRITER_OCCURRENCE)
+        ) && canonical_identity_is_typed_body!(
+            $projection.requester,
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
+        ) && canonical_identity_is_typed_body!(
+            $projection.responder,
+            refinement_tag_value!(IDENTITY_DOMAIN_PEER),
+            refinement_tag_value!(IDENTITY_KIND_PEER)
+        ) && canonical_identity_equal_body!($projection.semantic_target, $projection.requester)
+            && $projection.ticket_rank > 0u64
+            && $projection.ticket_topic == 3u8
+            && canonical_identity_is_typed_body!(
+                $projection.canonical_request_digest,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_REPLY_PAYLOAD)
+            )
+            && $projection.stream_wire_bytes > 0u64
+            && canonical_identity_is_typed_body!(
+                $projection.request_id,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_REQUEST)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.entry_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_MERGE_ENTRY)
+            )
+            && $projection.encoded_len > 0u64
+            && canonical_identity_is_typed_body!(
+                $projection.reference_digest,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_REFERENCE_DIGEST)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.canonical_response_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_NETWORK_RESPONSE)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.sidecar_response_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_RESPONSE)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.chunk_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_CHUNK)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.payload_digest,
+                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_PAYLOAD)
+            )
+            && canonical_identity_equal_body!($projection.request_id, $projection.marker_request_id)
+            && canonical_identity_equal_body!($projection.entry_hash, $projection.marker_entry_hash)
+            && $projection.encoded_len == $projection.marker_encoded_len
+            && $projection.epoch_id == $projection.marker_epoch_id
+            && canonical_identity_equal_body!(
+                $projection.reference_digest,
+                $projection.marker_reference_digest
+            )
+            && canonical_identity_equal_body!($projection.requester, $projection.marker_requester)
+            && canonical_identity_equal_body!($projection.responder, $projection.marker_responder)
+            && canonical_identity_equal_body!(
+                $projection.canonical_response_hash,
+                $projection.marker_canonical_response_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.sidecar_response_hash,
+                $projection.marker_sidecar_response_hash
+            )
+            && canonical_identity_equal_body!($projection.chunk_hash, $projection.marker_chunk_hash)
+            && canonical_identity_equal_body!(
+                $projection.payload_digest,
+                $projection.marker_payload_digest
+            )
+            && $projection.chunk_index == $projection.marker_chunk_index
+            && $projection.chunk_count == $projection.marker_chunk_count
+            && $projection.ticket_topic == $projection.marker_topic
+            && $projection.chunk_count > 0u64
+            && $projection.chunk_index < $projection.chunk_count
+            && $projection.message_cursor_before == 0u64
+            && $projection.message_cursor_before < u64::MAX
+            && $projection.message_cursor_after == $projection.message_cursor_before + 1u64
+            && $projection.chunk_cursor_before == $projection.chunk_index
+            && $projection.chunk_cursor_before < u64::MAX
+            && $projection.chunk_cursor_after == $projection.chunk_cursor_before + 1u64
+            && $projection.claim_acquired
+            && $projection.gate_marker_present_before
+            && !$projection.gate_marker_present_after
+            && $projection.gate_cursor_before == $projection.chunk_index
+            && $projection.gate_cursor_before < u64::MAX
+            && $projection.gate_cursor_after == $projection.gate_cursor_before + 1u64
+            && $projection.gate_cursor_after == $projection.chunk_cursor_after
+            && $projection.gate_cursor_after <= $projection.chunk_count
+            && $projection.gate_complete_after
+                == ($projection.gate_cursor_after == $projection.chunk_count)
+            && $projection.gate_attempt_present_after
+            && canonical_identity_is_typed_body!(
+                $projection.target_gate_residual_before,
+                refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.target_gate_residual_after,
+                refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE)
+            )
+            && $projection.target_gate_residual_records_equal
+            && canonical_identity_equal_body!(
+                $projection.target_gate_residual_before,
+                $projection.target_gate_residual_after
+            )
+            && (!$projection.outbound_attempt_present_before
+                || $projection.shared_transfer_present_before)
+            && (if $projection.target_outbound_residual_records_equal {
+                $projection.outbound_attempt_present_before
+                    && $projection.outbound_attempt_present_after
+                    && canonical_identity_is_typed_body!(
+                        $projection.target_outbound_residual_before,
+                        refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                        refinement_tag_value!(IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE)
+                    )
+                    && canonical_identity_is_typed_body!(
+                        $projection.target_outbound_residual_after,
+                        refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                        refinement_tag_value!(IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE)
+                    )
+                    && canonical_identity_equal_body!(
+                        $projection.target_outbound_residual_before,
+                        $projection.target_outbound_residual_after
+                    )
+            } else if $projection.outbound_attempt_present_before {
+                canonical_identity_is_typed_body!(
+                    $projection.target_outbound_residual_before,
+                    refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                    refinement_tag_value!(IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE)
+                ) && !$projection.outbound_attempt_present_after
+                    && canonical_identity_is_zero_body!($projection.target_outbound_residual_after)
+            } else {
+                canonical_identity_is_zero_body!($projection.target_outbound_residual_before)
+                    && !$projection.outbound_attempt_present_after
+                    && canonical_identity_is_zero_body!($projection.target_outbound_residual_after)
+            })
+            && $projection.shared_transfer_present_after
+                == ($projection.shared_transfer_present_before
+                    && (!$projection.outbound_attempt_present_before
+                        || $projection.outbound_attempt_present_after
+                        || $projection.shared_transfer_other_attempts_before))
+            && (!$projection.shared_transfer_other_attempts_before
+                || $projection.shared_transfer_present_before)
+            && (if $projection.shared_transfer_present_before {
+                canonical_identity_is_typed_body!(
+                    $projection.shared_transfer_state_before,
+                    refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                    refinement_tag_value!(IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE)
+                ) && (if $projection.shared_transfer_present_after {
+                    $projection.shared_transfer_records_equal
+                        && canonical_identity_is_typed_body!(
+                            $projection.shared_transfer_state_after,
+                            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                            refinement_tag_value!(IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE)
+                        )
+                        && canonical_identity_equal_body!(
+                            $projection.shared_transfer_state_before,
+                            $projection.shared_transfer_state_after
+                        )
+                } else {
+                    canonical_identity_is_zero_body!($projection.shared_transfer_state_after)
+                })
+            } else {
+                !$projection.shared_transfer_present_after
+                    && canonical_identity_is_zero_body!($projection.shared_transfer_state_before)
+                    && canonical_identity_is_zero_body!($projection.shared_transfer_state_after)
+            })
+            && canonical_identity_is_typed_body!(
+                $projection.sibling_state_before,
+                refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_SIBLING_STATE)
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.sibling_state_after,
+                refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                refinement_tag_value!(IDENTITY_KIND_SIDECAR_SIBLING_STATE)
+            )
+            && $projection.sibling_records_equal
+            && canonical_identity_equal_body!(
+                $projection.sibling_state_before,
+                $projection.sibling_state_after
+            )
+            && (if $projection.outbound_attempt_present_before
+                && $projection.outbound_route_active_before
+                && !$projection.gate_complete_after
+            {
+                $projection.inserted_preserved
+            } else {
+                $projection.inserted_equals_now
+            })
+            && $projection.outbound_order_count_before <= 1u64
+            && $projection.outbound_order_count_after <= 1u64
+            && $projection.outbound_queued_before
+                == ($projection.outbound_order_count_before == 1u64)
+            && $projection.outbound_queued_after == ($projection.outbound_order_count_after == 1u64)
+            && $projection.sibling_order_len_after == $projection.sibling_order_len_before
+            && (if $projection.outbound_order_count_before == 1u64 {
+                $projection.outbound_order_rank_before <= $projection.sibling_order_len_before
+            } else {
+                $projection.outbound_order_rank_before == 0u64
+            })
+            && (if $projection.outbound_order_count_after == 1u64 {
+                $projection.outbound_order_rank_after <= $projection.sibling_order_len_after
+            } else {
+                $projection.outbound_order_rank_after == 0u64
+            })
+            && (if $projection.outbound_attempt_present_before {
+                $projection.outbound_route_bound_before
+                    && $projection.outbound_cursor_before == $projection.chunk_index
+                    && $projection.outbound_cursor_before < u64::MAX
+                    && $projection.outbound_cursor_after
+                        == $projection.outbound_cursor_before + 1u64
+                    && (!$projection.outbound_in_flight_before_present
+                        || $projection.outbound_in_flight_before == $projection.chunk_index)
+                    && !$projection.outbound_in_flight_after_present
+                    && (if $projection.outbound_route_active_before
+                        && !$projection.gate_complete_after
+                    {
+                        $projection.outbound_attempt_present_after
+                            && $projection.outbound_queued_after
+                            && $projection.outbound_order_count_after == 1u64
+                            && (if $projection.outbound_queued_before {
+                                $projection.outbound_order_rank_after
+                                    == $projection.outbound_order_rank_before
+                            } else {
+                                $projection.outbound_order_rank_after
+                                    == $projection.sibling_order_len_before
+                            })
+                    } else {
+                        !$projection.outbound_attempt_present_after
+                            && !$projection.outbound_queued_after
+                            && $projection.outbound_order_count_after == 0u64
+                    })
+            } else {
+                !$projection.outbound_route_bound_before
+                    && !$projection.outbound_route_active_before
+                    && !$projection.outbound_in_flight_before_present
+                    && !$projection.outbound_queued_before
+                    && $projection.outbound_order_count_before == 0u64
+                    && !$projection.outbound_attempt_present_after
+                    && !$projection.outbound_in_flight_after_present
+                    && !$projection.outbound_queued_after
+                    && $projection.outbound_order_count_after == 0u64
+            })
+    }};
+}
+
+// The cross-tool proof consumes this exact bridge: a writer-flush projection
+// and a lane-application projection are related only when every immutable
+// request, ticket, response, and cursor field is the same flushed occurrence.
+macro_rules! production_reliable_flush_two_phase_link_body {
+    ($worker:expr, $application:expr) => {{
+        $worker.status == 2u8
+            && canonical_identity_equal_body!($worker.semantic_target, $application.semantic_target)
+            && canonical_identity_equal_body!(
+                $worker.authenticated_source,
+                $application.authenticated_source
+            )
+            && canonical_identity_equal_body!(
+                $worker.source_key_identity,
+                $application.source_key_identity
+            )
+            && canonical_identity_equal_body!(
+                $worker.delivery_route_identity,
+                $application.delivery_route_identity
+            )
+            && canonical_identity_equal_body!(
+                $worker.writer_occurrence_identity,
+                $application.writer_occurrence_identity
+            )
+            && canonical_identity_equal_body!($worker.requester, $application.requester)
+            && canonical_identity_equal_body!($worker.responder, $application.responder)
+            && $worker.connection_tenure_ordinal_high == $application.connection_tenure_ordinal_high
+            && $worker.connection_tenure_ordinal_low == $application.connection_tenure_ordinal_low
+            && $worker.delivery_ordinal_high == $application.delivery_ordinal_high
+            && $worker.delivery_ordinal_low == $application.delivery_ordinal_low
+            && $worker.ticket_id == $application.ticket_id
+            && $worker.ticket_rank == $application.ticket_rank
+            && $worker.ticket_topic == $application.ticket_topic
+            && canonical_identity_equal_body!(
+                $worker.canonical_request_digest,
+                $application.canonical_request_digest
+            )
+            && $worker.stream_wire_bytes == $application.stream_wire_bytes
+            && canonical_identity_equal_body!($worker.request_id, $application.request_id)
+            && canonical_identity_equal_body!($worker.entry_hash, $application.entry_hash)
+            && $worker.encoded_len == $application.encoded_len
+            && $worker.epoch_id == $application.epoch_id
+            && canonical_identity_equal_body!(
+                $worker.reference_digest,
+                $application.reference_digest
+            )
+            && canonical_identity_equal_body!(
+                $worker.canonical_response_hash,
+                $application.canonical_response_hash
+            )
+            && canonical_identity_equal_body!(
+                $worker.sidecar_response_hash,
+                $application.sidecar_response_hash
+            )
+            && canonical_identity_equal_body!($worker.chunk_hash, $application.chunk_hash)
+            && canonical_identity_equal_body!($worker.payload_digest, $application.payload_digest)
+            && $worker.chunk_index == $application.chunk_index
+            && $worker.chunk_count == $application.chunk_count
+            && $worker.message_cursor_before == $application.message_cursor_before
+            && $worker.message_cursor_after == $application.message_cursor_after
+            && $worker.chunk_cursor_before == $application.chunk_cursor_before
+            && $worker.chunk_cursor_after == $application.chunk_cursor_after
     }};
 }
 
@@ -1547,11 +2713,66 @@ macro_rules! production_application_trace_body {
             )
             && canonical_identity_is_typed_body!(
                 $projection.artifact_hash,
-                IDENTITY_DOMAIN_DURABLE_ARTIFACT,
-                IDENTITY_KIND_FINALITY_ARTIFACT
+                refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                refinement_tag_value!(IDENTITY_KIND_FINALITY_ARTIFACT)
             )
             && $projection.state_height_after == $projection.context_height
             && $projection.completion_work_id == $projection.task_work_id
+    }};
+}
+
+// Exact application finalization is a distinct production boundary from
+// successor construction.  This relation deliberately has no `MaxHeight`
+// input: the finite terminal horizon is a TLA+ projection, while production
+// proves that the authenticated receipt/artifact handoff itself neither owns
+// nor publishes a successor activation.
+macro_rules! production_terminal_application_without_successor_activation_body {
+    ($projection:expr) => {{
+        $projection.context_height > 0u64
+            && canonical_identity_is_typed_body!(
+                $projection.context_id,
+                refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+                refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
+            )
+            && canonical_identity_equal_body!(
+                $projection.receipt_context_id,
+                $projection.context_id
+            )
+            && canonical_identity_equal_body!(
+                $projection.artifact_context_id,
+                $projection.context_id
+            )
+            && $projection.receipt_height == $projection.context_height
+            && $projection.artifact_height == $projection.context_height
+            && durable_predecessor_is_canonical_body!($projection.predecessor)
+            && $projection.predecessor.height == $projection.context_height
+            && canonical_identity_is_typed_body!(
+                $projection.receipt_block_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
+                refinement_tag_value!(IDENTITY_KIND_BLOCK_HEADER)
+            )
+            && canonical_identity_equal_body!(
+                $projection.receipt_block_hash,
+                $projection.predecessor.block_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.artifact_block_hash,
+                $projection.predecessor.block_hash
+            )
+            && canonical_identity_is_typed_body!(
+                $projection.receipt_artifact_hash,
+                refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                refinement_tag_value!(IDENTITY_KIND_FINALITY_ARTIFACT)
+            )
+            && canonical_identity_equal_body!(
+                $projection.receipt_artifact_hash,
+                $projection.predecessor.artifact_hash
+            )
+            && canonical_identity_equal_body!(
+                $projection.artifact_hash,
+                $projection.predecessor.artifact_hash
+            )
+            && !$projection.pending_successor_activation_present
     }};
 }
 
@@ -1875,6 +3096,125 @@ pub struct EffectiveLockTraceProjection {
     pub(crate) cursor_after: u8,
 }
 
+/// Complete immutable identity of one durable predecessor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionDurablePredecessorIdentityProjection {
+    pub(crate) height: u64,
+    pub(crate) block_hash: CanonicalIdentityProjection,
+    pub(crate) artifact_hash: CanonicalIdentityProjection,
+}
+
+/// Expected and returned ownership at the fallible successor-construction seam.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionSuccessorPredecessorBindingProjection {
+    pub(crate) expected_predecessor: ProductionDurablePredecessorIdentityProjection,
+    pub(crate) authority_predecessor: ProductionDurablePredecessorIdentityProjection,
+    pub(crate) successor_context_id: CanonicalIdentityProjection,
+}
+
+/// Primitive fields of the prepared successor status and activation marker.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionSuccessorSnapshotProjection {
+    pub(crate) expected_context_id: CanonicalIdentityProjection,
+    pub(crate) published_context_id: CanonicalIdentityProjection,
+    pub(crate) height: u64,
+    pub(crate) last_committed_height: u64,
+    pub(crate) view: u64,
+    pub(crate) generation: u64,
+    pub(crate) marker_context_id: CanonicalIdentityProjection,
+    pub(crate) marker_height: u64,
+    pub(crate) marker_view: u64,
+    pub(crate) marker_generation: u64,
+    pub(crate) marker_kind: u8,
+    pub(crate) marker_age_ms: u64,
+}
+
+/// Applied-predecessor successor activation observed at the publication gate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionAppliedSuccessorTraceProjection {
+    pub(crate) authority_kind: u8,
+    pub(crate) binding: ProductionSuccessorPredecessorBindingProjection,
+    pub(crate) predecessor_status_height: u64,
+    pub(crate) predecessor_stage_before: u8,
+    pub(crate) predecessor_stage_after: u8,
+    pub(crate) successor: ProductionSuccessorSnapshotProjection,
+}
+
+/// Complete-tip or snapshot recovery activation at an empty registry boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionRecoveredSuccessorTraceProjection {
+    pub(crate) authority_kind: u8,
+    pub(crate) predecessor: ProductionDurablePredecessorIdentityProjection,
+    pub(crate) snapshot_record_hash: CanonicalIdentityProjection,
+    pub(crate) snapshot_height: u64,
+    pub(crate) snapshot_block_hash: CanonicalIdentityProjection,
+    pub(crate) authority_context_id: CanonicalIdentityProjection,
+    pub(crate) published_status_height_before: u64,
+    pub(crate) successor: ProductionSuccessorSnapshotProjection,
+}
+
+/// Primitive successor startup lifecycle transition.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionSuccessorStartupLifecycleProjection {
+    pub(crate) transition_kind: u8,
+    pub(crate) authority_kind: u8,
+    pub(crate) status_height: u64,
+    pub(crate) stage_before: u8,
+    pub(crate) stage_after: u8,
+    pub(crate) published_height_before: u64,
+    pub(crate) published_height_after: u64,
+    pub(crate) restart_required_before: bool,
+    pub(crate) restart_required_after: bool,
+}
+
+/// Exact block-sync CommitQC handoff from authenticated discovery to reducer ingress.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionHistoricalCertificateTraceProjection {
+    pub(crate) context_id: CanonicalIdentityProjection,
+    pub(crate) context_height: u64,
+    pub(crate) certificate_context_id: CanonicalIdentityProjection,
+    pub(crate) certificate_height: u64,
+    pub(crate) request_hash: CanonicalIdentityProjection,
+    pub(crate) response_request_hash: CanonicalIdentityProjection,
+    pub(crate) response_certificate: CanonicalIdentityProjection,
+    pub(crate) message_certificate: CanonicalIdentityProjection,
+    pub(crate) message_hash: CanonicalIdentityProjection,
+    pub(crate) admitted_message_hash: CanonicalIdentityProjection,
+    pub(crate) request_present_before: bool,
+    pub(crate) request_present_after: bool,
+}
+
+/// Exact certified historical body handoff into the ordinary body pipeline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionHistoricalBodyPipelineTraceProjection {
+    pub(crate) context_id: CanonicalIdentityProjection,
+    pub(crate) context_height: u64,
+    pub(crate) request_hash: CanonicalIdentityProjection,
+    pub(crate) pending_request_hash: CanonicalIdentityProjection,
+    pub(crate) authenticated_request_hash: CanonicalIdentityProjection,
+    pub(crate) fetch_tag: TagProjection,
+    pub(crate) round_context_id: CanonicalIdentityProjection,
+    pub(crate) round_height: u64,
+    pub(crate) round_view: u64,
+    pub(crate) subject: CanonicalIdentityProjection,
+    pub(crate) manifest_round_context_id: CanonicalIdentityProjection,
+    pub(crate) manifest_round_height: u64,
+    pub(crate) manifest_round_view: u64,
+    pub(crate) manifest_subject: CanonicalIdentityProjection,
+    pub(crate) response_manifest: CanonicalIdentityProjection,
+    pub(crate) ready_manifest: CanonicalIdentityProjection,
+    pub(crate) subject_payload_hash: CanonicalIdentityProjection,
+    pub(crate) body_payload_hash: CanonicalIdentityProjection,
+    pub(crate) owner_present_after: bool,
+    pub(crate) owner_tag: TagProjection,
+    pub(crate) owner_round_context_id: CanonicalIdentityProjection,
+    pub(crate) owner_round_height: u64,
+    pub(crate) owner_round_view: u64,
+    pub(crate) owner_subject: CanonicalIdentityProjection,
+    pub(crate) pending_fetch_present_after: bool,
+    pub(crate) request_present_after: bool,
+}
+
 /// Primitive durable-intent ownership observed around one reducer step.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionDurableIntentTraceProjection {
@@ -2028,12 +3368,57 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub(crate) queue_capacity: u64,
 }
 
+/// Primitive observation of one exact daemon retry across its source-fair
+/// outer queue and source-fair inner Sumeragi ingress.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionTwoStageRelayRetryTraceProjection {
+    /// Whether the daemon source capacity is exactly safety plus shared-high.
+    pub daemon_source_capacity_matches_two_upstream_lanes: bool,
+    /// Whether the class and retained corridors cover every configured source.
+    pub class_corridor_covers_authenticated_sources: bool,
+    /// Whether the authenticated route source equals the resource-credit owner.
+    pub authenticated_source_matches_resource_owner: bool,
+    /// Whether retry retained the same opaque delivery capability.
+    pub retry_route_same_delivery: bool,
+    /// Whether the retained retry route remains active.
+    pub retry_route_active: bool,
+    /// Whether the removed item satisfied the retry eligibility predicate.
+    pub selected_eligible: bool,
+    /// Number of ready authenticated sources before service.
+    pub ready_sources_before: u64,
+    /// Selected source's fair rank before service.
+    pub selected_source_rank_before: u64,
+    /// Number of ready authenticated sources after retry reinsertion.
+    pub ready_sources_after: u64,
+    /// Selected source's fair rank after retry reinsertion.
+    pub selected_source_rank_after: u64,
+    /// Selected source lane depth before service.
+    pub source_depth_before: u64,
+    /// Selected item's FIFO rank before service.
+    pub selected_item_rank_before: u64,
+    /// Selected source lane depth after retry reinsertion.
+    pub source_depth_after: u64,
+    /// Retried item's FIFO rank after reinsertion.
+    pub selected_item_rank_after: u64,
+    /// Total retained depth before service.
+    pub total_depth_before: u64,
+    /// Total retained depth after retry reinsertion.
+    pub total_depth_after: u64,
+    /// Per-authenticated-source retained capacity.
+    pub source_capacity: u64,
+    /// Total retained capacity across authenticated sources.
+    pub total_capacity: u64,
+}
+
 /// Primitive per-source sidecar-flush cursor movement.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionReliableFlushTraceProjection {
     pub(crate) status: u8,
     pub(crate) semantic_target: CanonicalIdentityProjection,
     pub(crate) authenticated_source: CanonicalIdentityProjection,
+    pub(crate) source_key_identity: CanonicalIdentityProjection,
+    pub(crate) delivery_route_identity: CanonicalIdentityProjection,
+    pub(crate) writer_occurrence_identity: CanonicalIdentityProjection,
     pub(crate) requester: CanonicalIdentityProjection,
     pub(crate) responder: CanonicalIdentityProjection,
     pub(crate) connection_tenure_ordinal_high: u64,
@@ -2067,6 +3452,105 @@ pub struct ProductionReliableFlushTraceProjection {
     pub(crate) capacity: u64,
 }
 
+/// Exact lane-side application of one actor-confirmed sidecar writer flush.
+///
+/// Identity fields mirror the worker projection so the formal harness can
+/// prove a non-vacuous two-phase link. The source-key, delivery-route, and
+/// writer-occurrence identities are process-local only and never enter wire,
+/// persistence, or consensus state. `marker_*` fields are independently
+/// observed from the retained byte-free gate marker. Sibling state is both
+/// compared as exact records by production and committed to a fixed-width,
+/// domain-separated projection; it is never reduced to lane counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionReliableFlushApplicationProjection {
+    pub(crate) semantic_target: CanonicalIdentityProjection,
+    pub(crate) authenticated_source: CanonicalIdentityProjection,
+    pub(crate) source_key_identity: CanonicalIdentityProjection,
+    pub(crate) delivery_route_identity: CanonicalIdentityProjection,
+    pub(crate) writer_occurrence_identity: CanonicalIdentityProjection,
+    pub(crate) requester: CanonicalIdentityProjection,
+    pub(crate) responder: CanonicalIdentityProjection,
+    pub(crate) connection_tenure_ordinal_high: u64,
+    pub(crate) connection_tenure_ordinal_low: u64,
+    pub(crate) delivery_ordinal_high: u64,
+    pub(crate) delivery_ordinal_low: u64,
+    pub(crate) ticket_id: u64,
+    pub(crate) ticket_rank: u64,
+    pub(crate) ticket_topic: u8,
+    pub(crate) canonical_request_digest: CanonicalIdentityProjection,
+    pub(crate) stream_wire_bytes: u64,
+    pub(crate) request_id: CanonicalIdentityProjection,
+    pub(crate) entry_hash: CanonicalIdentityProjection,
+    pub(crate) encoded_len: u64,
+    pub(crate) epoch_id: u64,
+    pub(crate) reference_digest: CanonicalIdentityProjection,
+    pub(crate) canonical_response_hash: CanonicalIdentityProjection,
+    pub(crate) sidecar_response_hash: CanonicalIdentityProjection,
+    pub(crate) chunk_hash: CanonicalIdentityProjection,
+    pub(crate) payload_digest: CanonicalIdentityProjection,
+    pub(crate) chunk_index: u64,
+    pub(crate) chunk_count: u64,
+    pub(crate) message_cursor_before: u64,
+    pub(crate) message_cursor_after: u64,
+    pub(crate) chunk_cursor_before: u64,
+    pub(crate) chunk_cursor_after: u64,
+    pub(crate) marker_request_id: CanonicalIdentityProjection,
+    pub(crate) marker_entry_hash: CanonicalIdentityProjection,
+    pub(crate) marker_encoded_len: u64,
+    pub(crate) marker_epoch_id: u64,
+    pub(crate) marker_reference_digest: CanonicalIdentityProjection,
+    pub(crate) marker_requester: CanonicalIdentityProjection,
+    pub(crate) marker_responder: CanonicalIdentityProjection,
+    pub(crate) marker_canonical_response_hash: CanonicalIdentityProjection,
+    pub(crate) marker_sidecar_response_hash: CanonicalIdentityProjection,
+    pub(crate) marker_chunk_hash: CanonicalIdentityProjection,
+    pub(crate) marker_payload_digest: CanonicalIdentityProjection,
+    pub(crate) marker_chunk_index: u64,
+    pub(crate) marker_chunk_count: u64,
+    pub(crate) marker_topic: u8,
+    pub(crate) claim_acquired: bool,
+    pub(crate) gate_marker_present_before: bool,
+    pub(crate) gate_marker_present_after: bool,
+    pub(crate) gate_cursor_before: u64,
+    pub(crate) gate_cursor_after: u64,
+    pub(crate) gate_complete_after: bool,
+    pub(crate) gate_attempt_present_after: bool,
+    pub(crate) outbound_attempt_present_before: bool,
+    pub(crate) outbound_route_bound_before: bool,
+    pub(crate) outbound_route_active_before: bool,
+    pub(crate) outbound_cursor_before: u64,
+    pub(crate) outbound_cursor_after: u64,
+    pub(crate) outbound_in_flight_before_present: bool,
+    pub(crate) outbound_in_flight_before: u64,
+    pub(crate) outbound_queued_before: bool,
+    pub(crate) outbound_order_count_before: u64,
+    pub(crate) outbound_order_rank_before: u64,
+    pub(crate) sibling_order_len_before: u64,
+    pub(crate) outbound_attempt_present_after: bool,
+    pub(crate) outbound_in_flight_after_present: bool,
+    pub(crate) outbound_queued_after: bool,
+    pub(crate) outbound_order_count_after: u64,
+    pub(crate) outbound_order_rank_after: u64,
+    pub(crate) sibling_order_len_after: u64,
+    pub(crate) inserted_preserved: bool,
+    pub(crate) inserted_equals_now: bool,
+    pub(crate) target_gate_residual_records_equal: bool,
+    pub(crate) target_gate_residual_before: CanonicalIdentityProjection,
+    pub(crate) target_gate_residual_after: CanonicalIdentityProjection,
+    pub(crate) target_outbound_residual_records_equal: bool,
+    pub(crate) target_outbound_residual_before: CanonicalIdentityProjection,
+    pub(crate) target_outbound_residual_after: CanonicalIdentityProjection,
+    pub(crate) shared_transfer_present_before: bool,
+    pub(crate) shared_transfer_present_after: bool,
+    pub(crate) shared_transfer_other_attempts_before: bool,
+    pub(crate) shared_transfer_records_equal: bool,
+    pub(crate) shared_transfer_state_before: CanonicalIdentityProjection,
+    pub(crate) shared_transfer_state_after: CanonicalIdentityProjection,
+    pub(crate) sibling_records_equal: bool,
+    pub(crate) sibling_state_before: CanonicalIdentityProjection,
+    pub(crate) sibling_state_after: CanonicalIdentityProjection,
+}
+
 /// Primitive durable application completion returned to the reducer owner.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionApplicationTraceProjection {
@@ -2093,6 +3577,27 @@ pub struct ProductionApplicationTraceProjection {
     pub(crate) state_height_after: u64,
     pub(crate) task_work_id: u64,
     pub(crate) completion_work_id: u64,
+}
+
+/// Exact applied-height handoff before successor construction begins.
+///
+/// This projection separates one authenticated application boundary from the
+/// subsequent runner-owned successor action.  It intentionally contains no
+/// finite-horizon or `MaxHeight` field.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProductionTerminalApplicationWithoutSuccessorActivationProjection {
+    pub(crate) context_id: CanonicalIdentityProjection,
+    pub(crate) context_height: u64,
+    pub(crate) receipt_context_id: CanonicalIdentityProjection,
+    pub(crate) receipt_height: u64,
+    pub(crate) receipt_block_hash: CanonicalIdentityProjection,
+    pub(crate) receipt_artifact_hash: CanonicalIdentityProjection,
+    pub(crate) artifact_context_id: CanonicalIdentityProjection,
+    pub(crate) artifact_height: u64,
+    pub(crate) artifact_block_hash: CanonicalIdentityProjection,
+    pub(crate) artifact_hash: CanonicalIdentityProjection,
+    pub(crate) predecessor: ProductionDurablePredecessorIdentityProjection,
+    pub(crate) pending_successor_activation_present: bool,
 }
 
 const fn effective_lock_trace_step_is_valid(projection: EffectiveLockTraceProjection) -> bool {
@@ -3049,10 +4554,10 @@ macro_rules! boundary_capability_equal_body {
 
 macro_rules! boundary_capability_is_absent_body {
     ($boundary:expr) => {{
-        $boundary.kind == BOUNDARY_NONE
-            && $boundary.record_kind == WAL_RECORD_NONE
-            && $boundary.continuation == CONTINUATION_NONE
-            && $boundary.replay_effect_kind == REPLAY_EFFECT_NONE
+        $boundary.kind == refinement_tag_value!(BOUNDARY_NONE)
+            && $boundary.record_kind == refinement_tag_value!(WAL_RECORD_NONE)
+            && $boundary.continuation == refinement_tag_value!(CONTINUATION_NONE)
+            && $boundary.replay_effect_kind == refinement_tag_value!(REPLAY_EFFECT_NONE)
             && $boundary.persistence_id == 0u64
             && canonical_identity_is_zero_body!($boundary.context_identity)
             && $boundary.tag.height == 0u64
@@ -3065,7 +4570,10 @@ macro_rules! boundary_capability_is_absent_body {
             && $boundary.proposal_view == 0u64
             && !$boundary.auxiliary_present
             && $boundary.replay_plan.len == 0u8
-            && replay_plan_well_formed_body!($boundary.replay_plan, REPLAY_EFFECT_NONE)
+            && replay_plan_well_formed_body!(
+                $boundary.replay_plan,
+                refinement_tag_value!(REPLAY_EFFECT_NONE)
+            )
     }};
 }
 
@@ -3073,13 +4581,13 @@ macro_rules! boundary_identity_is_canonical_body {
     ($boundary:expr) => {{
         canonical_identity_is_typed_body!(
             $boundary.context_identity,
-            IDENTITY_DOMAIN_CONTEXT,
-            IDENTITY_KIND_CONSENSUS_CONTEXT
+            refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+            refinement_tag_value!(IDENTITY_KIND_CONSENSUS_CONTEXT)
         ) && (if $boundary.subject.present {
             canonical_identity_is_typed_body!(
                 $boundary.subject_identity,
-                IDENTITY_DOMAIN_SUBJECT,
-                IDENTITY_KIND_CONSENSUS_SUBJECT
+                refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
+                refinement_tag_value!(IDENTITY_KIND_CONSENSUS_SUBJECT)
             )
         } else {
             canonical_identity_is_zero_body!($boundary.subject_identity)
@@ -3108,24 +4616,26 @@ macro_rules! certificate_identity_is_canonical_body {
                 && $certificate.signer_bitmap_count == 0u64
                 && $certificate.signer_count == 0u64
                 && $certificate.voting_power == 0u64
-                && $certificate.evidence_class == CERTIFICATE_EVIDENCE_ABSENT
+                && $certificate.evidence_class == refinement_tag_value!(CERTIFICATE_EVIDENCE_ABSENT)
         } else {
             canonical_identity_is_typed_body!(
                 $certificate.context_id,
-                IDENTITY_DOMAIN_CONTEXT,
-                IDENTITY_KIND_CONSENSUS_CONTEXT
+                refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+                refinement_tag_value!(IDENTITY_KIND_CONSENSUS_CONTEXT)
             ) && canonical_identity_is_typed_body!(
                 $certificate.subject,
-                IDENTITY_DOMAIN_SUBJECT,
-                IDENTITY_KIND_CONSENSUS_SUBJECT
+                refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
+                refinement_tag_value!(IDENTITY_KIND_CONSENSUS_SUBJECT)
             ) && $certificate.signer_bitmap != 0u128
                 && $certificate.signer_bitmap_count > 0u64
                 && $certificate.signer_bitmap_count == $certificate.signer_count
                 && $certificate.signer_count > 0u64
                 && $certificate.signer_count <= 128u64
                 && $certificate.voting_power > 0u64
-                && ($certificate.evidence_class == CERTIFICATE_EVIDENCE_LOCAL
-                    || $certificate.evidence_class == CERTIFICATE_EVIDENCE_INCOMING)
+                && ($certificate.evidence_class
+                    == refinement_tag_value!(CERTIFICATE_EVIDENCE_LOCAL)
+                    || $certificate.evidence_class
+                        == refinement_tag_value!(CERTIFICATE_EVIDENCE_INCOMING))
         }
     }};
 }
@@ -3197,7 +4707,8 @@ macro_rules! enter_view_locked_prepare_qc_identity_body {
             incoming
         };
         certificate_identity_is_canonical_body!(local)
-            && (!local.present || local.evidence_class == CERTIFICATE_EVIDENCE_LOCAL)
+            && (!local.present
+                || local.evidence_class == refinement_tag_value!(CERTIFICATE_EVIDENCE_LOCAL))
             && certificate_identity_is_canonical_body!(incoming)
             && timeout_identity_equal_body!(timeout, $projection.pending_continuation_timeout)
             && timeout_identity_equal_body!(timeout, $projection.durable_timeout_after)
@@ -3315,7 +4826,8 @@ macro_rules! transition_facts_from_projection_body {
         };
         let replay_duplicate = $projection.replay_before && $projection.event_kind == 15u8;
         let recovery_fence_open = $projection.replay_before || $projection.event_kind == 15u8;
-        let pending_completion = $projection.event_kind == 11u8 || $projection.event_kind == 12u8;
+        let pending_completion = $projection.event_kind == refinement_tag_value!(EVENT_PERSISTED)
+            || $projection.event_kind == refinement_tag_value!(EVENT_PERSISTENCE_FAILED);
         let signing_completion = $projection.event_kind == 13u8;
         let pending_present = $projection.pending_before.record_kind != 0u8;
         let busy_fence_open = recovery_fence_open
@@ -3799,6 +5311,55 @@ pub(crate) const fn production_body_service_refines_async_fairness_kernel(
     effective_lock_trace_claim_body!(projection, 4u8)
 }
 
+/// Validate exact predecessor ownership returned by successor construction.
+pub(crate) const fn production_durable_predecessor_identity_kernel(
+    projection: ProductionDurablePredecessorIdentityProjection,
+) -> bool {
+    durable_predecessor_is_canonical_body!(projection)
+}
+
+/// Validate exact predecessor ownership returned by successor construction.
+pub(crate) const fn production_successor_predecessor_binding_kernel(
+    projection: ProductionSuccessorPredecessorBindingProjection,
+) -> bool {
+    production_successor_predecessor_binding_body!(projection)
+}
+
+/// Validate applied-predecessor activation through the exact prepared status.
+pub(crate) const fn production_applied_successor_trace_refines_indexed_activation_kernel(
+    projection: ProductionAppliedSuccessorTraceProjection,
+) -> bool {
+    production_applied_successor_trace_body!(projection)
+}
+
+/// Validate complete-tip or distinct snapshot recovery activation.
+pub(crate) const fn production_recovered_successor_trace_refines_indexed_activation_kernel(
+    projection: ProductionRecoveredSuccessorTraceProjection,
+) -> bool {
+    production_recovered_successor_trace_body!(projection)
+}
+
+/// Validate begin, fail-closed, and authenticated restart lifecycle steps.
+pub(crate) const fn production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+    projection: ProductionSuccessorStartupLifecycleProjection,
+) -> bool {
+    production_startup_failure_and_restart_trace_body!(projection)
+}
+
+/// Validate one authenticated historical CommitQC's exact reducer admission.
+pub(crate) const fn production_historical_certificate_trace_refines_indexed_async_kernel(
+    projection: ProductionHistoricalCertificateTraceProjection,
+) -> bool {
+    production_historical_certificate_trace_body!(projection)
+}
+
+/// Validate one authenticated historical body entering its exact body pipeline.
+pub(crate) const fn production_historical_body_pipeline_trace_refines_indexed_async_kernel(
+    projection: ProductionHistoricalBodyPipelineTraceProjection,
+) -> bool {
+    production_historical_body_pipeline_trace_body!(projection)
+}
+
 /// Validate one reducer step's durable intent owner and WAL cursor movement.
 pub(crate) fn production_durable_intent_trace_refines_progress_witness_kernel(
     projection: ProductionDurableIntentTraceProjection,
@@ -3827,6 +5388,14 @@ pub(crate) const fn production_ingress_identity_and_class_trace_refines_protecte
     production_ingress_identity_and_class_trace_body!(projection)
 }
 
+/// Validate that an exact inner-ingress retry rotates both its authenticated
+/// source and its item to the respective fair-service tails.
+pub const fn production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
+    projection: ProductionTwoStageRelayRetryTraceProjection,
+) -> bool {
+    production_two_stage_relay_retry_trace_body!(projection)
+}
+
 /// Validate that sidecar delivery ownership moves only after exact flush.
 pub(crate) const fn production_reliable_flush_trace_refines_outbound_ownership_kernel(
     projection: ProductionReliableFlushTraceProjection,
@@ -3834,11 +5403,33 @@ pub(crate) const fn production_reliable_flush_trace_refines_outbound_ownership_k
     production_reliable_flush_trace_body!(projection)
 }
 
+/// Validate the exact one-shot lane mutation caused by a writer flush.
+pub(crate) const fn production_reliable_flush_application_refines_source_lane_kernel(
+    projection: ProductionReliableFlushApplicationProjection,
+) -> bool {
+    production_reliable_flush_application_body!(projection)
+}
+
+/// Validate that worker confirmation and lane application name one occurrence.
+pub(crate) const fn production_reliable_flush_two_phase_link_kernel(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+) -> bool {
+    production_reliable_flush_two_phase_link_body!(worker, application)
+}
+
 /// Validate the exact durable application completion exposed to the reducer.
 pub(crate) const fn production_application_trace_refines_decision_completion_kernel(
     projection: ProductionApplicationTraceProjection,
 ) -> bool {
     production_application_trace_body!(projection)
+}
+
+/// Validate one exact application handoff before successor construction.
+pub(crate) const fn production_terminal_application_without_successor_activation_kernel(
+    projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
+) -> bool {
+    production_terminal_application_without_successor_activation_body!(projection)
 }
 
 fn volatile_summary_is_well_formed(summary: VolatileSummary, validator_count: u64) -> bool {
@@ -4028,6 +5619,475 @@ pub fn accepts(projection: TransitionProjection<'_>) -> bool {
 mod tests {
     use super::*;
 
+    fn successor_identity(domain: u8, kind: u8, byte: u8) -> CanonicalIdentityProjection {
+        CanonicalIdentityProjection::from_bytes(domain, kind, [byte; 32])
+    }
+
+    fn durable_predecessor(byte: u8) -> ProductionDurablePredecessorIdentityProjection {
+        ProductionDurablePredecessorIdentityProjection {
+            height: 7,
+            block_hash: successor_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_BLOCK_HEADER,
+                byte,
+            ),
+            artifact_hash: successor_identity(
+                IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                IDENTITY_KIND_FINALITY_ARTIFACT,
+                byte.wrapping_add(1),
+            ),
+        }
+    }
+
+    fn successor_snapshot(
+        parent_height: u64,
+        context_byte: u8,
+    ) -> ProductionSuccessorSnapshotProjection {
+        let context = successor_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            context_byte,
+        );
+        ProductionSuccessorSnapshotProjection {
+            expected_context_id: context,
+            published_context_id: context,
+            height: parent_height + 1,
+            last_committed_height: parent_height,
+            view: 3,
+            generation: 19,
+            marker_context_id: context,
+            marker_height: parent_height + 1,
+            marker_view: 3,
+            marker_generation: 19,
+            marker_kind: SUCCESSOR_MARKER_ACTIVATED,
+            marker_age_ms: 0,
+        }
+    }
+
+    #[test]
+    fn applied_successor_kernel_rejects_foreign_same_height_authority_and_status_mutations() {
+        let predecessor = durable_predecessor(0x21);
+        let successor = successor_snapshot(predecessor.height, 0x31);
+        let trace = ProductionAppliedSuccessorTraceProjection {
+            authority_kind: SUCCESSOR_AUTHORITY_APPLIED,
+            binding: ProductionSuccessorPredecessorBindingProjection {
+                expected_predecessor: predecessor,
+                authority_predecessor: predecessor,
+                successor_context_id: successor.expected_context_id,
+            },
+            predecessor_status_height: predecessor.height,
+            predecessor_stage_before: SUCCESSOR_STAGE_RUNNING,
+            predecessor_stage_after: SUCCESSOR_STAGE_COMPLETE,
+            successor,
+        };
+        assert!(production_applied_successor_trace_refines_indexed_activation_kernel(trace));
+        assert_eq!(trace.predecessor_stage_before, SUCCESSOR_STAGE_RUNNING);
+        assert_eq!(trace.predecessor_stage_after, SUCCESSOR_STAGE_COMPLETE);
+        assert_eq!(
+            trace.successor.height,
+            trace.binding.expected_predecessor.height + 1
+        );
+        assert_eq!(trace.successor.marker_height, trace.successor.height);
+        assert!(production_successor_predecessor_binding_kernel(
+            trace.binding
+        ));
+
+        let mut foreign_block = trace;
+        foreign_block.binding.authority_predecessor.block_hash.word0 ^= 1;
+        assert!(!production_successor_predecessor_binding_kernel(
+            foreign_block.binding
+        ));
+        assert!(
+            !production_applied_successor_trace_refines_indexed_activation_kernel(foreign_block)
+        );
+
+        let mut foreign_artifact = trace;
+        foreign_artifact
+            .binding
+            .authority_predecessor
+            .artifact_hash
+            .word3 ^= 1;
+        assert!(!production_successor_predecessor_binding_kernel(
+            foreign_artifact.binding
+        ));
+
+        let mut reset_rank = trace;
+        reset_rank.predecessor_stage_before = SUCCESSOR_STAGE_QUEUED;
+        assert!(!production_applied_successor_trace_refines_indexed_activation_kernel(reset_rank));
+
+        let mut retargeted = trace;
+        retargeted.successor.published_context_id.word2 ^= 1;
+        assert!(!production_applied_successor_trace_refines_indexed_activation_kernel(retargeted));
+
+        let mut wrong_parent = trace;
+        wrong_parent.successor.last_committed_height -= 1;
+        assert!(
+            !production_applied_successor_trace_refines_indexed_activation_kernel(wrong_parent)
+        );
+    }
+
+    #[test]
+    fn two_stage_relay_retry_kernel_rejects_source_rotation_eligibility_and_fifo_mutations() {
+        let trace = ProductionTwoStageRelayRetryTraceProjection {
+            daemon_source_capacity_matches_two_upstream_lanes: true,
+            class_corridor_covers_authenticated_sources: true,
+            authenticated_source_matches_resource_owner: true,
+            retry_route_same_delivery: true,
+            retry_route_active: true,
+            selected_eligible: true,
+            ready_sources_before: 2,
+            selected_source_rank_before: 0,
+            ready_sources_after: 2,
+            selected_source_rank_after: 1,
+            source_depth_before: 2,
+            selected_item_rank_before: 0,
+            source_depth_after: 2,
+            selected_item_rank_after: 1,
+            total_depth_before: 3,
+            total_depth_after: 3,
+            source_capacity: 4,
+            total_capacity: 8,
+        };
+        assert!(production_two_stage_relay_retry_trace_refines_source_fairness_kernel(trace));
+        assert!(trace.daemon_source_capacity_matches_two_upstream_lanes);
+        assert!(trace.class_corridor_covers_authenticated_sources);
+        assert_eq!(trace.total_depth_after, trace.total_depth_before);
+        assert_eq!(
+            trace.selected_source_rank_after,
+            trace.ready_sources_after - 1
+        );
+        assert_eq!(trace.selected_item_rank_after, trace.source_depth_after - 1);
+        assert!(trace.source_depth_after <= trace.source_capacity);
+
+        for mutant in [
+            ProductionTwoStageRelayRetryTraceProjection {
+                daemon_source_capacity_matches_two_upstream_lanes: false,
+                ..trace
+            },
+            ProductionTwoStageRelayRetryTraceProjection {
+                class_corridor_covers_authenticated_sources: false,
+                ..trace
+            },
+            ProductionTwoStageRelayRetryTraceProjection {
+                authenticated_source_matches_resource_owner: false,
+                ..trace
+            },
+            ProductionTwoStageRelayRetryTraceProjection {
+                selected_source_rank_after: 0,
+                ..trace
+            },
+            ProductionTwoStageRelayRetryTraceProjection {
+                selected_eligible: false,
+                ..trace
+            },
+            ProductionTwoStageRelayRetryTraceProjection {
+                selected_item_rank_after: 0,
+                ..trace
+            },
+        ] {
+            assert!(!production_two_stage_relay_retry_trace_refines_source_fairness_kernel(mutant));
+        }
+    }
+
+    #[test]
+    fn recovered_successor_kernel_keeps_complete_tip_and_snapshot_authority_disjoint() {
+        let predecessor = durable_predecessor(0x41);
+        let successor = successor_snapshot(predecessor.height, 0x51);
+        let complete_tip = ProductionRecoveredSuccessorTraceProjection {
+            authority_kind: SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
+            predecessor,
+            snapshot_record_hash: CanonicalIdentityProjection::zero(),
+            snapshot_height: 0,
+            snapshot_block_hash: CanonicalIdentityProjection::zero(),
+            authority_context_id: successor.expected_context_id,
+            published_status_height_before: 0,
+            successor,
+        };
+        assert!(
+            production_recovered_successor_trace_refines_indexed_activation_kernel(complete_tip)
+        );
+        assert_eq!(complete_tip.published_status_height_before, 0);
+        assert_eq!(
+            complete_tip.successor.height,
+            complete_tip.successor.last_committed_height + 1
+        );
+
+        let snapshot = ProductionRecoveredSuccessorTraceProjection {
+            authority_kind: SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+            predecessor: ProductionDurablePredecessorIdentityProjection::default(),
+            snapshot_record_hash: successor_identity(
+                IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD,
+                0x61,
+            ),
+            snapshot_height: predecessor.height,
+            snapshot_block_hash: successor_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_BLOCK_HEADER,
+                0x62,
+            ),
+            authority_context_id: successor.expected_context_id,
+            published_status_height_before: 0,
+            successor,
+        };
+        assert!(production_recovered_successor_trace_refines_indexed_activation_kernel(snapshot));
+        assert_eq!(snapshot.published_status_height_before, 0);
+        assert_eq!(
+            snapshot.snapshot_height,
+            snapshot.successor.last_committed_height
+        );
+
+        let mut snapshot_as_tip = snapshot;
+        snapshot_as_tip.authority_kind = SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP;
+        assert!(
+            !production_recovered_successor_trace_refines_indexed_activation_kernel(
+                snapshot_as_tip
+            )
+        );
+
+        let mut tip_as_snapshot = complete_tip;
+        tip_as_snapshot.authority_kind = SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP;
+        assert!(
+            !production_recovered_successor_trace_refines_indexed_activation_kernel(
+                tip_as_snapshot
+            )
+        );
+
+        let mut occupied_registry = complete_tip;
+        occupied_registry.published_status_height_before = predecessor.height;
+        assert!(
+            !production_recovered_successor_trace_refines_indexed_activation_kernel(
+                occupied_registry
+            )
+        );
+
+        let mut stale_snapshot_anchor = snapshot;
+        stale_snapshot_anchor.snapshot_height -= 1;
+        assert!(
+            !production_recovered_successor_trace_refines_indexed_activation_kernel(
+                stale_snapshot_anchor
+            )
+        );
+    }
+
+    #[test]
+    fn successor_startup_lifecycle_preserves_running_on_failure_and_separates_restart_sources() {
+        let begin = ProductionSuccessorStartupLifecycleProjection {
+            transition_kind: SUCCESSOR_LIFECYCLE_BEGIN,
+            authority_kind: SUCCESSOR_AUTHORITY_APPLIED,
+            status_height: 7,
+            stage_before: SUCCESSOR_STAGE_QUEUED,
+            stage_after: SUCCESSOR_STAGE_RUNNING,
+            published_height_before: 7,
+            published_height_after: 7,
+            restart_required_before: false,
+            restart_required_after: false,
+        };
+        assert!(production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(begin));
+        assert_eq!(begin.published_height_after, begin.published_height_before);
+        assert!(!begin.restart_required_after);
+
+        let failure = ProductionSuccessorStartupLifecycleProjection {
+            transition_kind: SUCCESSOR_LIFECYCLE_FAIL,
+            authority_kind: SUCCESSOR_AUTHORITY_APPLIED,
+            stage_before: SUCCESSOR_STAGE_RUNNING,
+            stage_after: SUCCESSOR_STAGE_RUNNING,
+            restart_required_after: true,
+            ..begin
+        };
+        assert!(production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(failure));
+        assert_eq!(failure.stage_after, failure.stage_before);
+        assert!(failure.restart_required_after);
+
+        let mut fabricated_completion = failure;
+        fabricated_completion.stage_after = SUCCESSOR_STAGE_COMPLETE;
+        assert!(
+            !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+                fabricated_completion
+            )
+        );
+
+        let recovered_retry = ProductionSuccessorStartupLifecycleProjection {
+            transition_kind: SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP,
+            authority_kind: SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
+            status_height: 8,
+            stage_before: SUCCESSOR_STAGE_NONE,
+            stage_after: SUCCESSOR_STAGE_NONE,
+            published_height_before: 0,
+            published_height_after: 0,
+            restart_required_before: false,
+            restart_required_after: false,
+        };
+        assert!(
+            production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+                recovered_retry
+            )
+        );
+
+        let mut snapshot_as_retry = recovered_retry;
+        snapshot_as_retry.authority_kind = SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP;
+        assert!(
+            !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+                snapshot_as_retry
+            )
+        );
+
+        let snapshot_bootstrap = ProductionSuccessorStartupLifecycleProjection {
+            transition_kind: SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP,
+            authority_kind: SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+            ..recovered_retry
+        };
+        assert!(
+            production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+                snapshot_bootstrap
+            )
+        );
+    }
+
+    #[test]
+    fn historical_certificate_kernel_rejects_foreign_admission_and_unretired_request() {
+        let context = successor_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            0x71,
+        );
+        let request = successor_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST,
+            0x72,
+        );
+        let certificate = successor_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_QUORUM_CERTIFICATE,
+            0x73,
+        );
+        let message = successor_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CONSENSUS_MESSAGE,
+            0x74,
+        );
+        let trace = ProductionHistoricalCertificateTraceProjection {
+            context_id: context,
+            context_height: 9,
+            certificate_context_id: context,
+            certificate_height: 9,
+            request_hash: request,
+            response_request_hash: request,
+            response_certificate: certificate,
+            message_certificate: certificate,
+            message_hash: message,
+            admitted_message_hash: message,
+            request_present_before: true,
+            request_present_after: false,
+        };
+        assert!(production_historical_certificate_trace_refines_indexed_async_kernel(trace));
+        assert_eq!(trace.certificate_height, trace.context_height);
+        assert!(trace.request_present_before);
+        assert!(!trace.request_present_after);
+        assert_eq!(trace.message_hash, trace.admitted_message_hash);
+
+        let mut foreign_admission = trace;
+        foreign_admission.admitted_message_hash.word1 ^= 1;
+        assert!(
+            !production_historical_certificate_trace_refines_indexed_async_kernel(
+                foreign_admission
+            )
+        );
+
+        let mut unretired = trace;
+        unretired.request_present_after = true;
+        assert!(!production_historical_certificate_trace_refines_indexed_async_kernel(unretired));
+    }
+
+    #[test]
+    fn historical_body_pipeline_kernel_rejects_request_subject_and_owner_substitution() {
+        let context = successor_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            0x81,
+        );
+        let request = successor_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+            0x82,
+        );
+        let subject = successor_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+            0x83,
+        );
+        let manifest = successor_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_PAYLOAD_MANIFEST,
+            0x84,
+        );
+        let payload = successor_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CANONICAL_PAYLOAD,
+            0x85,
+        );
+        let tag = TagProjection {
+            height: 12,
+            view: 6,
+            generation: 4,
+        };
+        let trace = ProductionHistoricalBodyPipelineTraceProjection {
+            context_id: context,
+            context_height: 12,
+            request_hash: request,
+            pending_request_hash: request,
+            authenticated_request_hash: request,
+            fetch_tag: tag,
+            round_context_id: context,
+            round_height: 12,
+            round_view: 5,
+            subject,
+            manifest_round_context_id: context,
+            manifest_round_height: 12,
+            manifest_round_view: 5,
+            manifest_subject: subject,
+            response_manifest: manifest,
+            ready_manifest: manifest,
+            subject_payload_hash: payload,
+            body_payload_hash: payload,
+            owner_present_after: true,
+            owner_tag: tag,
+            owner_round_context_id: context,
+            owner_round_height: 12,
+            owner_round_view: 5,
+            owner_subject: subject,
+            pending_fetch_present_after: false,
+            request_present_after: false,
+        };
+        assert!(production_historical_body_pipeline_trace_refines_indexed_async_kernel(trace));
+        assert!(trace.owner_present_after);
+        assert_eq!(trace.owner_tag, trace.fetch_tag);
+        assert!(!trace.pending_fetch_present_after);
+        assert!(!trace.request_present_after);
+
+        let mut replayed_request = trace;
+        replayed_request.request_present_after = true;
+        assert!(
+            !production_historical_body_pipeline_trace_refines_indexed_async_kernel(
+                replayed_request
+            )
+        );
+
+        let mut retargeted_subject = trace;
+        retargeted_subject.manifest_subject.word2 ^= 1;
+        assert!(
+            !production_historical_body_pipeline_trace_refines_indexed_async_kernel(
+                retargeted_subject
+            )
+        );
+
+        let mut foreign_owner = trace;
+        foreign_owner.owner_tag.generation += 1;
+        assert!(
+            !production_historical_body_pipeline_trace_refines_indexed_async_kernel(foreign_owner)
+        );
+    }
+
     fn progress_identity(byte: u64) -> CanonicalIdentityProjection {
         CanonicalIdentityProjection {
             domain: 1,
@@ -4144,10 +6204,16 @@ mod tests {
     fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
         let durable_intent = durable_begin_trace();
         assert!(production_durable_intent_trace_refines_progress_witness_kernel(durable_intent));
+        assert!(durable_intent.durable_sequence_after >= durable_intent.durable_sequence_before);
+        assert!(effect_count(durable_intent.effects, EFFECT_PERSIST) <= 1);
 
         let mut wrong_event = durable_intent;
         wrong_event.event_kind = EVENT_PERSISTED;
         assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_event));
+
+        let mut wrong_event_tag = durable_intent;
+        wrong_event_tag.event_tag.generation += 1;
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_event_tag));
 
         let mut wrong_context = durable_intent;
         wrong_context.pending_after.context_id.word3 ^= 1;
@@ -4587,6 +6653,185 @@ mod tests {
     }
 
     #[test]
+    fn durable_intent_accepts_only_empty_persistence_completion_stutters() {
+        let owner = TagProjection {
+            height: 4,
+            view: 2,
+            generation: 3,
+        };
+        let stale = ProductionDurableIntentTraceProjection {
+            event_tag: TagProjection {
+                height: owner.height,
+                view: owner.view - 1,
+                generation: owner.generation - 1,
+            },
+            owner_tag_before: owner,
+            owner_tag_after: owner,
+            durable_sequence_before: 8,
+            durable_sequence_after: 8,
+            ..ProductionDurableIntentTraceProjection::default()
+        };
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale));
+
+        let mut stale_persisted = stale;
+        stale_persisted.event_kind = EVENT_PERSISTED;
+        stale_persisted.event_persistence_id = 9;
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_persisted));
+
+        let mut stale_persistence_failed = stale_persisted;
+        stale_persistence_failed.event_kind = EVENT_PERSISTENCE_FAILED;
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(
+                stale_persistence_failed
+            )
+        );
+
+        let mut current_owner_completion = stale_persisted;
+        current_owner_completion.event_tag = owner;
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(
+                current_owner_completion
+            )
+        );
+
+        let mut current_owner_failure = stale_persistence_failed;
+        current_owner_failure.event_tag = owner;
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(current_owner_failure)
+        );
+
+        let mut zero_id_completion = current_owner_completion;
+        zero_id_completion.event_persistence_id = 0;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(zero_id_completion)
+        );
+
+        let mut non_persistence_payload = stale_persisted;
+        non_persistence_payload.event_kind = EVENT_SIGNED;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                non_persistence_payload
+            )
+        );
+
+        let mut changed_owner = stale;
+        changed_owner.owner_tag_after.generation += 1;
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(changed_owner));
+
+        let mut invented_persist = stale;
+        invented_persist.effects.slot0.kind = EFFECT_PERSIST;
+        invented_persist.effects.len = 1;
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(invented_persist));
+    }
+
+    #[test]
+    fn durable_timeout_boundary_preserves_record_and_successor_owner_rounds() {
+        let mut begin = durable_begin_trace();
+        begin.event_kind = 5;
+        begin.boundary_claimed.record_kind = WAL_RECORD_INSTALL_TIMEOUT;
+        begin.boundary_claimed.continuation = CONTINUATION_INSTALL_TIMEOUT;
+        begin.boundary_claimed.proposal_present = false;
+        begin.boundary_claimed.proposal_height = 0;
+        begin.boundary_claimed.proposal_view = 0;
+        begin.boundary_claimed.auxiliary_present = true;
+        begin.boundary_claimed.auxiliary_context_id = begin.boundary_claimed.context_id;
+        begin.boundary_claimed.auxiliary_height = begin.owner_tag_before.height;
+        begin.boundary_claimed.auxiliary_view = begin.owner_tag_before.view;
+        begin.boundary_claimed.auxiliary_proposal_height = begin.owner_tag_before.height;
+        begin.boundary_claimed.auxiliary_proposal_view = begin.owner_tag_before.view;
+        begin.boundary_claimed.auxiliary_phase = 1;
+        begin.boundary_claimed.auxiliary_subject = begin.boundary_claimed.subject.subject;
+        begin.pending_after.record_kind = WAL_RECORD_INSTALL_TIMEOUT;
+        begin.pending_after.continuation = CONTINUATION_INSTALL_TIMEOUT;
+        begin.pending_after.view = 5;
+        begin.pending_after.proposal_present = false;
+        begin.pending_after.proposal_height = 0;
+        begin.pending_after.proposal_view = 0;
+        begin.effects.slot0.requested.record_kind = WAL_RECORD_INSTALL_TIMEOUT;
+        begin.effects.slot0.requested.view = 5;
+        begin.effects.slot0.requested.proposal_height = 0;
+        begin.effects.slot0.requested.proposal_view = 0;
+        begin.effects.slot0.requested.subject = begin.boundary_claimed.subject.subject;
+        begin.effects.slot0.requested.auxiliary_present = true;
+        begin.effects.slot0.requested.auxiliary_context_id =
+            begin.boundary_claimed.auxiliary_context_id;
+        begin.effects.slot0.requested.auxiliary_height = begin.boundary_claimed.auxiliary_height;
+        begin.effects.slot0.requested.auxiliary_view = begin.boundary_claimed.auxiliary_view;
+        begin.effects.slot0.requested.auxiliary_proposal_height =
+            begin.boundary_claimed.auxiliary_proposal_height;
+        begin.effects.slot0.requested.auxiliary_proposal_view =
+            begin.boundary_claimed.auxiliary_proposal_view;
+        begin.effects.slot0.requested.auxiliary_phase = begin.boundary_claimed.auxiliary_phase;
+        begin.effects.slot0.requested.auxiliary_subject = begin.boundary_claimed.subject.subject;
+        begin.boundary_granted = begin.boundary_claimed;
+        begin.effects.slot0.granted = begin.effects.slot0.requested;
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(begin));
+
+        let mut missing_high_prepare_subject = begin;
+        missing_high_prepare_subject
+            .effects
+            .slot0
+            .requested
+            .auxiliary_subject = Subject::default();
+        missing_high_prepare_subject.effects.slot0.granted =
+            missing_high_prepare_subject.effects.slot0.requested;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                missing_high_prepare_subject
+            )
+        );
+
+        let mut missing_primary_subject = begin;
+        missing_primary_subject.effects.slot0.requested.subject = Subject::default();
+        missing_primary_subject.effects.slot0.granted =
+            missing_primary_subject.effects.slot0.requested;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                missing_primary_subject
+            )
+        );
+
+        let mut mismatched_persist_round = begin;
+        mismatched_persist_round.effects.slot0.requested.view = 4;
+        mismatched_persist_round.effects.slot0.granted.view = 4;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                mismatched_persist_round
+            )
+        );
+
+        let successor = TagProjection {
+            height: begin.owner_tag_before.height,
+            view: begin.pending_after.view + 1,
+            generation: begin.owner_tag_before.generation + 1,
+        };
+        let mut acknowledge_boundary = begin.boundary_claimed;
+        acknowledge_boundary.kind = BOUNDARY_ACKNOWLEDGE_WAL;
+        acknowledge_boundary.tag = successor;
+        let acknowledge = ProductionDurableIntentTraceProjection {
+            event_tag: begin.owner_tag_before,
+            owner_tag_before: begin.owner_tag_before,
+            owner_tag_after: successor,
+            event_kind: EVENT_PERSISTED,
+            event_persistence_id: begin.pending_after.persistence_id,
+            pending_before: begin.pending_after,
+            pending_after: PendingProjection::default(),
+            boundary_claimed: acknowledge_boundary,
+            boundary_granted: acknowledge_boundary,
+            effects: EffectTrace::empty(),
+            durable_sequence_before: begin.durable_sequence_before,
+            durable_sequence_after: begin.durable_sequence_before + 1,
+        };
+        assert!(production_durable_intent_trace_refines_progress_witness_kernel(acknowledge));
+
+        let mut wrong_successor = acknowledge;
+        wrong_successor.owner_tag_after.view -= 1;
+        wrong_successor.boundary_claimed.tag = wrong_successor.owner_tag_after;
+        wrong_successor.boundary_granted.tag = wrong_successor.owner_tag_after;
+        assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_successor));
+    }
+
+    #[test]
     fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         let identity =
             |domain, kind, byte| CanonicalIdentityProjection::from_bytes(domain, kind, [byte; 32]);
@@ -4676,6 +6921,11 @@ mod tests {
         assert!(production_decision_trace_refines_recovery_witness_kernel(
             recovery
         ));
+        assert!(recovery.expected_height > 0);
+        assert!(recovery.state_height <= recovery.expected_height);
+        assert!(recovery.expected_height - recovery.state_height <= 1);
+        assert_eq!(recovery.durable_body.height, recovery.frozen_height);
+        assert_eq!(recovery.stage, 1);
         let historical_body = ProductionDurableBodyIdentityProjection {
             view: 2,
             ..durable_body
@@ -4761,6 +7011,9 @@ mod tests {
             fifo_owed_after: true,
         };
         assert!(production_scheduler_trace_refines_protected_ownership_kernel(scheduler));
+        assert!(scheduler.selected <= 3);
+        assert_eq!(scheduler.selected, 2);
+        assert_eq!(scheduler.fifo_owed_after, scheduler.fifo_ready);
         assert!(
             !production_scheduler_trace_refines_protected_ownership_kernel(
                 ProductionSchedulerTraceProjection {
@@ -4786,6 +7039,12 @@ mod tests {
         assert!(
             production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(ingress)
         );
+        assert_eq!(ingress.incoming_height, ingress.stored_height);
+        assert_eq!(ingress.incoming_view, ingress.stored_view);
+        assert_eq!(ingress.incoming_generation, ingress.stored_generation);
+        assert_eq!(ingress.incoming_class, ingress.stored_class);
+        assert!(ingress.queue_len_after > ingress.queue_len_before);
+        assert!(ingress.queue_len_after <= ingress.queue_capacity);
         assert!(
             !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
                 ProductionIngressIdentityAndClassTraceProjection {
@@ -4799,6 +7058,21 @@ mod tests {
             status: 2,
             semantic_target: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 20),
             authenticated_source: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 21),
+            source_key_identity: identity(
+                IDENTITY_DOMAIN_PROCESS_LOCAL,
+                IDENTITY_KIND_REPLY_SOURCE_KEY,
+                35,
+            ),
+            delivery_route_identity: identity(
+                IDENTITY_DOMAIN_PROCESS_LOCAL,
+                IDENTITY_KIND_REPLY_DELIVERY_ROUTE,
+                36,
+            ),
+            writer_occurrence_identity: identity(
+                IDENTITY_DOMAIN_PROCESS_LOCAL,
+                IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,
+                37,
+            ),
             requester: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 20),
             responder: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 22),
             connection_tenure_ordinal_high: 0,
@@ -4844,6 +7118,10 @@ mod tests {
             capacity: 2,
         };
         assert!(production_reliable_flush_trace_refines_outbound_ownership_kernel(flush));
+        assert!((1..=3).contains(&flush.status));
+        assert!(flush.chunk_index < flush.chunk_count);
+        assert_eq!(flush.chunk_cursor_before, flush.chunk_index);
+        assert!(flush.flushing_after <= flush.capacity);
         assert!(
             !production_reliable_flush_trace_refines_outbound_ownership_kernel(
                 ProductionReliableFlushTraceProjection {
@@ -4852,6 +7130,172 @@ mod tests {
                 }
             )
         );
+
+        let gate_residual = identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE,
+            31,
+        );
+        let outbound_residual = identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE,
+            32,
+        );
+        let shared_transfer = identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE,
+            33,
+        );
+        let sibling_state = identity(
+            IDENTITY_DOMAIN_PROCESS_LOCAL,
+            IDENTITY_KIND_SIDECAR_SIBLING_STATE,
+            34,
+        );
+        let mut lane_application = ProductionReliableFlushApplicationProjection {
+            semantic_target: flush.semantic_target,
+            authenticated_source: flush.authenticated_source,
+            source_key_identity: flush.source_key_identity,
+            delivery_route_identity: flush.delivery_route_identity,
+            writer_occurrence_identity: flush.writer_occurrence_identity,
+            requester: flush.requester,
+            responder: flush.responder,
+            connection_tenure_ordinal_high: flush.connection_tenure_ordinal_high,
+            connection_tenure_ordinal_low: flush.connection_tenure_ordinal_low,
+            delivery_ordinal_high: flush.delivery_ordinal_high,
+            delivery_ordinal_low: flush.delivery_ordinal_low,
+            ticket_id: flush.ticket_id,
+            ticket_rank: flush.ticket_rank,
+            ticket_topic: flush.ticket_topic,
+            canonical_request_digest: flush.canonical_request_digest,
+            stream_wire_bytes: flush.stream_wire_bytes,
+            request_id: flush.request_id,
+            entry_hash: flush.entry_hash,
+            encoded_len: flush.encoded_len,
+            epoch_id: flush.epoch_id,
+            reference_digest: flush.reference_digest,
+            canonical_response_hash: flush.canonical_response_hash,
+            sidecar_response_hash: flush.sidecar_response_hash,
+            chunk_hash: flush.chunk_hash,
+            payload_digest: flush.payload_digest,
+            chunk_index: flush.chunk_index,
+            chunk_count: flush.chunk_count,
+            message_cursor_before: flush.message_cursor_before,
+            message_cursor_after: flush.message_cursor_after,
+            chunk_cursor_before: flush.chunk_cursor_before,
+            chunk_cursor_after: flush.chunk_cursor_after,
+            marker_request_id: flush.request_id,
+            marker_entry_hash: flush.entry_hash,
+            marker_encoded_len: flush.encoded_len,
+            marker_epoch_id: flush.epoch_id,
+            marker_reference_digest: flush.reference_digest,
+            marker_requester: flush.requester,
+            marker_responder: flush.responder,
+            marker_canonical_response_hash: flush.canonical_response_hash,
+            marker_sidecar_response_hash: flush.sidecar_response_hash,
+            marker_chunk_hash: flush.chunk_hash,
+            marker_payload_digest: flush.payload_digest,
+            marker_chunk_index: flush.chunk_index,
+            marker_chunk_count: flush.chunk_count,
+            marker_topic: flush.ticket_topic,
+            claim_acquired: true,
+            gate_marker_present_before: true,
+            gate_marker_present_after: false,
+            gate_cursor_before: 0,
+            gate_cursor_after: 1,
+            gate_complete_after: false,
+            gate_attempt_present_after: true,
+            outbound_attempt_present_before: true,
+            outbound_route_bound_before: true,
+            outbound_route_active_before: true,
+            outbound_cursor_before: 0,
+            outbound_cursor_after: 1,
+            outbound_in_flight_before_present: true,
+            outbound_in_flight_before: 0,
+            outbound_queued_before: false,
+            outbound_order_count_before: 0,
+            outbound_order_rank_before: 0,
+            sibling_order_len_before: 2,
+            outbound_attempt_present_after: true,
+            outbound_in_flight_after_present: false,
+            outbound_queued_after: true,
+            outbound_order_count_after: 1,
+            outbound_order_rank_after: 2,
+            sibling_order_len_after: 2,
+            inserted_preserved: true,
+            inserted_equals_now: false,
+            target_gate_residual_records_equal: true,
+            target_gate_residual_before: gate_residual,
+            target_gate_residual_after: gate_residual,
+            target_outbound_residual_records_equal: true,
+            target_outbound_residual_before: outbound_residual,
+            target_outbound_residual_after: outbound_residual,
+            shared_transfer_present_before: true,
+            shared_transfer_present_after: true,
+            shared_transfer_other_attempts_before: false,
+            shared_transfer_records_equal: true,
+            shared_transfer_state_before: shared_transfer,
+            shared_transfer_state_after: shared_transfer,
+            sibling_records_equal: true,
+            sibling_state_before: sibling_state,
+            sibling_state_after: sibling_state,
+        };
+        assert!(production_reliable_flush_application_refines_source_lane_kernel(lane_application));
+        assert!(production_reliable_flush_two_phase_link_kernel(
+            flush,
+            lane_application
+        ));
+
+        lane_application.marker_chunk_index = 1;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.marker_chunk_index = 0;
+        lane_application.gate_cursor_after = 2;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.gate_cursor_after = 1;
+        lane_application.sibling_records_equal = false;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.sibling_records_equal = true;
+        lane_application.target_gate_residual_after = sibling_state;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.target_gate_residual_after = gate_residual;
+        lane_application.shared_transfer_state_after = sibling_state;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.shared_transfer_state_after = shared_transfer;
+        lane_application.inserted_preserved = false;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.inserted_preserved = true;
+        lane_application.outbound_order_count_after = 2;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.outbound_order_count_after = 1;
+        lane_application.outbound_order_rank_after = 1;
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(lane_application)
+        );
+        lane_application.outbound_order_rank_after = 2;
+        let disconnected_worker = ProductionReliableFlushTraceProjection {
+            chunk_hash: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_SIDECAR_CHUNK, 35),
+            ..flush
+        };
+        assert!(
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(disconnected_worker)
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            disconnected_worker,
+            lane_application
+        ));
 
         let artifact_hash = identity(
             IDENTITY_DOMAIN_DURABLE_ARTIFACT,
@@ -4892,6 +7336,11 @@ mod tests {
             completion_work_id: 11,
         };
         assert!(production_application_trace_refines_decision_completion_kernel(application));
+        assert!(application.context_height > 0);
+        assert_eq!(application.state_height_after, application.context_height);
+        assert_eq!(application.artifact_height, application.context_height);
+        assert_eq!(application.completion_work_id, application.task_work_id);
+        assert_eq!(application.artifact_context_id, application.context_id);
         let historical_application = ProductionApplicationTraceProjection {
             commit_qc: historical_commit_qc,
             validated_body: ProductionDurableBodyIdentityProjection {
@@ -4952,6 +7401,60 @@ mod tests {
                 }
             )
         );
+
+        let terminal_application =
+            ProductionTerminalApplicationWithoutSuccessorActivationProjection {
+                context_id: context,
+                context_height: 9,
+                receipt_context_id: context,
+                receipt_height: 9,
+                receipt_block_hash: block_hash,
+                receipt_artifact_hash: artifact_hash,
+                artifact_context_id: context,
+                artifact_height: 9,
+                artifact_block_hash: block_hash,
+                artifact_hash,
+                predecessor: ProductionDurablePredecessorIdentityProjection {
+                    height: 9,
+                    block_hash,
+                    artifact_hash,
+                },
+                pending_successor_activation_present: false,
+            };
+        assert!(
+            production_terminal_application_without_successor_activation_kernel(
+                terminal_application
+            )
+        );
+        assert_eq!(
+            terminal_application.receipt_height,
+            terminal_application.context_height
+        );
+        assert_eq!(
+            terminal_application.artifact_height,
+            terminal_application.context_height
+        );
+        assert!(!terminal_application.pending_successor_activation_present);
+        assert!(
+            !production_terminal_application_without_successor_activation_kernel(
+                ProductionTerminalApplicationWithoutSuccessorActivationProjection {
+                    pending_successor_activation_present: true,
+                    ..terminal_application
+                }
+            )
+        );
+        assert!(
+            !production_terminal_application_without_successor_activation_kernel(
+                ProductionTerminalApplicationWithoutSuccessorActivationProjection {
+                    receipt_artifact_hash: identity(
+                        IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+                        IDENTITY_KIND_FINALITY_ARTIFACT,
+                        12,
+                    ),
+                    ..terminal_application
+                }
+            )
+        );
     }
 
     #[test]
@@ -4971,6 +7474,17 @@ mod tests {
                 enter_view,
                 enter_view_identity,
             )
+        );
+        assert_eq!(enter_view.kind, EFFECTIVE_LOCK_TRACE_ENTER_VIEW);
+        assert_eq!(enter_view.protected_after, enter_view.protected_before);
+        assert_eq!(enter_view.owner_after, enter_view.owner_before);
+        assert_eq!(
+            enter_view_identity.effect_protected_lock.present,
+            enter_view_identity.durable_lock_after.present
+        );
+        assert_eq!(
+            enter_view_identity.following_fetch_lock.present,
+            enter_view_identity.durable_lock_after.present
         );
         assert!(
             !production_enter_view_uses_post_install_effective_lock_kernel(
@@ -4992,6 +7506,9 @@ mod tests {
         assert!(production_body_ownership_preserves_effective_lock_kernel(
             ownership
         ));
+        assert_eq!(ownership.owner_after, 1);
+        assert!(ownership.protected_after >= ownership.protected_before);
+        assert_eq!(ownership.owner_reused, ownership.owner_before == 1);
         assert!(!production_body_ownership_preserves_effective_lock_kernel(
             EffectiveLockTraceProjection {
                 owner_reused: true,
@@ -5012,6 +7529,14 @@ mod tests {
             ..EffectiveLockTraceProjection::default()
         };
         assert!(production_body_capacity_retirement_preserves_effective_lock_kernel(retirement));
+        assert_eq!(
+            retirement.ready_after,
+            retirement.ready_before - retirement.retired_retained - retirement.retired_ready
+        );
+        assert_eq!(
+            retirement.store_after,
+            retirement.store_before - retirement.retired_store
+        );
         assert!(
             !production_body_capacity_retirement_preserves_effective_lock_kernel(
                 EffectiveLockTraceProjection {
@@ -5034,6 +7559,9 @@ mod tests {
         assert!(production_body_service_refines_async_fairness_kernel(
             service
         ));
+        assert!((SERVICE_CLASS_COMPLETION..=SERVICE_CLASS_NORMAL).contains(&service.selected));
+        assert!((SERVICE_CLASS_COMPLETION..=SERVICE_CLASS_NORMAL).contains(&service.cursor_after));
+        assert!(service.completion_ready);
         assert!(!production_body_service_refines_async_fairness_kernel(
             EffectiveLockTraceProjection {
                 selected: SERVICE_CLASS_PROGRESS,

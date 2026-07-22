@@ -1182,12 +1182,6 @@ pub struct Kura {
     /// Test hook for forcing the next Sumeragi v2 finality sidecar write to fail.
     #[cfg(test)]
     fail_next_v2_finality_write: AtomicBool,
-    /// Test hook for forcing the next lane-block application-receipt write to fail.
-    #[cfg(test)]
-    fail_next_lane_block_application_receipt_write: AtomicBool,
-    /// Test hook for forcing the next autonomous lane view-state write to fail.
-    #[cfg(test)]
-    fail_next_autonomous_lane_view_state_write: AtomicBool,
     /// Counts actual v2 finality BLS verification passes for cache tests.
     #[cfg(test)]
     v2_finality_crypto_verifications: AtomicUsize,
@@ -1218,15 +1212,6 @@ pub struct Kura {
     /// Test hook indicating an inline read is paused before its cache publication recheck.
     #[cfg(test)]
     block_read_paused_before_cache_recheck: AtomicBool,
-    /// Test hook that pauses rollback after it owns the canonical block-store write lock.
-    #[cfg(test)]
-    pause_rollback_after_write_lock: AtomicBool,
-    /// Test hook indicating rollback is paused while owning the block-store write lock.
-    #[cfg(test)]
-    rollback_paused_after_write_lock: AtomicBool,
-    /// Test hook indicating a block store call is waiting for the canonical write lock.
-    #[cfg(test)]
-    store_waiting_for_write_lock: AtomicBool,
     /// Test hook forcing `durable_blocks_count` through its in-memory fallback.
     #[cfg(test)]
     force_durable_blocks_count_fallback: AtomicBool,
@@ -4013,10 +3998,6 @@ impl Kura {
             #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
             #[cfg(test)]
-            fail_next_lane_block_application_receipt_write: AtomicBool::new(false),
-            #[cfg(test)]
-            fail_next_autonomous_lane_view_state_write: AtomicBool::new(false),
-            #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
             #[cfg(test)]
             fail_next_roster_sidecar_writes: AtomicUsize::new(0),
@@ -4036,12 +4017,6 @@ impl Kura {
             pause_block_read_before_cache_recheck: AtomicBool::new(false),
             #[cfg(test)]
             block_read_paused_before_cache_recheck: AtomicBool::new(false),
-            #[cfg(test)]
-            pause_rollback_after_write_lock: AtomicBool::new(false),
-            #[cfg(test)]
-            rollback_paused_after_write_lock: AtomicBool::new(false),
-            #[cfg(test)]
-            store_waiting_for_write_lock: AtomicBool::new(false),
             #[cfg(test)]
             force_durable_blocks_count_fallback: AtomicBool::new(false),
             #[cfg(test)]
@@ -4256,10 +4231,6 @@ impl Kura {
             #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
             #[cfg(test)]
-            fail_next_lane_block_application_receipt_write: AtomicBool::new(false),
-            #[cfg(test)]
-            fail_next_autonomous_lane_view_state_write: AtomicBool::new(false),
-            #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
             #[cfg(test)]
             fail_next_roster_sidecar_writes: AtomicUsize::new(0),
@@ -4279,12 +4250,6 @@ impl Kura {
             pause_block_read_before_cache_recheck: AtomicBool::new(false),
             #[cfg(test)]
             block_read_paused_before_cache_recheck: AtomicBool::new(false),
-            #[cfg(test)]
-            pause_rollback_after_write_lock: AtomicBool::new(false),
-            #[cfg(test)]
-            rollback_paused_after_write_lock: AtomicBool::new(false),
-            #[cfg(test)]
-            store_waiting_for_write_lock: AtomicBool::new(false),
             #[cfg(test)]
             force_durable_blocks_count_fallback: AtomicBool::new(false),
             #[cfg(test)]
@@ -4777,23 +4742,6 @@ impl Kura {
                 .store(true, Ordering::Release);
             while self
                 .hash_only_extension_paused_before_store
-                .load(Ordering::Acquire)
-            {
-                std::thread::yield_now();
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn maybe_pause_rollback_after_write_lock_for_tests(&self) {
-        if self
-            .pause_rollback_after_write_lock
-            .swap(false, Ordering::AcqRel)
-        {
-            self.rollback_paused_after_write_lock
-                .store(true, Ordering::Release);
-            while self
-                .rollback_paused_after_write_lock
                 .load(Ordering::Acquire)
             {
                 std::thread::yield_now();
@@ -13233,10 +13181,39 @@ impl Kura {
         Ok(())
     }
 
-    fn ensure_replay_metadata_allows_top_replacement(&self, height: u64) -> Result<()> {
-        if self.wsv_checkpoint(height)?.is_some() || self.commit_manifest(height)?.is_some() {
+    fn ensure_replay_metadata_allows_top_replacement_while_sidecars_locked(
+        &self,
+        blocks_dir: &Path,
+        height: u64,
+    ) -> Result<()> {
+        // The caller holds `sidecar_lock` across this preflight (and, for the
+        // final check, canonical marker publication). Read the two sidecars
+        // directly: the public accessors acquire the same non-reentrant mutex.
+        self.ensure_prune_recovery_not_required()?;
+        let checkpoint_path = Self::wsv_checkpoint_path_for(blocks_dir, height);
+        if let Some(checkpoint) = Self::decode_wsv_checkpoint_at(&checkpoint_path)? {
+            if checkpoint.height != height {
+                return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                    "WSV checkpoint height mismatch: expected {height}, got {}",
+                    checkpoint.height
+                ))));
+            }
+            self.ensure_durable_block_at_height(height, checkpoint.block_hash)?;
             return Err(Error::CommittedBlockReplacementForbidden { height });
         }
+
+        let manifest_path = Self::commit_manifest_path_for(blocks_dir, height);
+        if let Some(manifest) = Self::decode_commit_manifest_at(&manifest_path)? {
+            if manifest.height != height {
+                return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                    "commit manifest height mismatch: expected {height}, got {}",
+                    manifest.height
+                ))));
+            }
+            self.ensure_durable_block_at_height(height, manifest.block_hash)?;
+            return Err(Error::CommittedBlockReplacementForbidden { height });
+        }
+
         Ok(())
     }
 
@@ -17519,7 +17496,10 @@ impl Kura {
         // second check below is held through marker publication to close concurrent writers.
         {
             let _replay_metadata_guard = self.sidecar_lock.lock();
-            self.ensure_replay_metadata_allows_top_replacement(height)?;
+            self.ensure_replay_metadata_allows_top_replacement_while_sidecars_locked(
+                &blocks_dir,
+                height,
+            )?;
         }
 
         self.invalidate_pending_budget_cache();
@@ -17532,7 +17512,10 @@ impl Kura {
         )?;
 
         let replay_metadata_guard = self.sidecar_lock.lock();
-        self.ensure_replay_metadata_allows_top_replacement(height)?;
+        self.ensure_replay_metadata_allows_top_replacement_while_sidecars_locked(
+            &blocks_dir,
+            height,
+        )?;
         let write_guard = self.lock_block_store_for_write();
         let mut data = self.block_data.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -19671,11 +19654,6 @@ impl Kura {
             .store(true, Ordering::Relaxed);
     }
 
-    pub(crate) fn fail_next_lane_block_application_receipt_write_for_tests(&self) {
-        self.fail_next_lane_block_application_receipt_write
-            .store(true, Ordering::Relaxed);
-    }
-
     #[cfg(test)]
     pub(crate) fn fail_progress_sidecar_ancestor_sync_attempts_for_tests(
         &self,
@@ -19683,11 +19661,6 @@ impl Kura {
         failures: usize,
     ) {
         fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index, failures);
-    }
-
-    pub(crate) fn fail_next_autonomous_lane_view_state_write_for_tests(&self) {
-        self.fail_next_autonomous_lane_view_state_write
-            .store(true, Ordering::Relaxed);
     }
 
     /// Replace manifest bytes without updating the checkpoint digest, for corruption tests.
@@ -24061,16 +24034,6 @@ impl Kura {
             expected_epoch,
         )
         .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
-        #[cfg(test)]
-        if self
-            .fail_next_autonomous_lane_view_state_write
-            .swap(false, Ordering::Relaxed)
-        {
-            return Err(Error::IO(
-                std::io::Error::other("autonomous lane view-state injected failure"),
-                path.to_path_buf(),
-            ));
-        }
         let state = AutonomousLaneBlockViewState::from_artifact(artifact);
         let bytes = norito::to_bytes(&state).map_err(Error::NoritoFrame)?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > STRICT_INIT_MAX_BLOCK_BYTES {
@@ -24815,31 +24778,6 @@ impl Kura {
             expected_epoch,
             true,
         )
-    }
-
-    /// Return whether the supplied proposal is the current certified view of a
-    /// durable lane-owned executable payload.
-    #[cfg(test)]
-    pub(crate) fn autonomous_lane_payload_available(
-        &self,
-        proposal: &LaneBlockProposalV1,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> bool {
-        let Some(artifact) = self.read_autonomous_lane_block_artifact(
-            proposal.descriptor.lane_id,
-            proposal.descriptor.lane_block_height,
-            expected_chain_id_hash,
-            expected_epoch,
-        ) else {
-            return false;
-        };
-        Self::validate_autonomous_lane_block_artifact(
-            &artifact,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .is_ok_and(|current| current.same_consensus_identity(proposal))
     }
 
     /// Return the validated executable payload and current synthetic NewView cursor.
@@ -26923,17 +26861,6 @@ impl Kura {
         };
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
 
-        #[cfg(test)]
-        if self
-            .fail_next_lane_block_application_receipt_write
-            .swap(false, Ordering::Relaxed)
-        {
-            return Err(Error::IO(
-                std::io::Error::other("Kura lane-block application receipt injected failure"),
-                data_path,
-            ));
-        }
-
         let _guard = self.sidecar_lock.lock();
         if !self.recover_bound_progress_sidecar_artifacts(
             &data_path,
@@ -27769,19 +27696,6 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
     ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
         self.recover_lane_block_payload_with_sidecar_repair(proposal, true)
-    }
-
-    /// Revalidate a lane payload while an outer disk-mutation gate is held.
-    ///
-    /// Missing lane-artifact sidecars are reconstructed in memory from the
-    /// canonical block, but are not persisted because persistence acquires
-    /// `prune_lock` and would recursively lock the caller's outer gate.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
-    fn recover_lane_block_payload_without_sidecar_repair(
-        &self,
-        proposal: &LaneBlockProposalV1,
-    ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
-        self.recover_lane_block_payload_with_sidecar_repair(proposal, false)
     }
 
     fn recover_lane_block_payload_with_sidecar_repair(
@@ -46217,8 +46131,8 @@ mod tests {
             eviction_required_replicas:
                 iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
-        let (mut kura, _) =
-            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let lane_config = RuntimeLaneConfig::default();
+        let (mut kura, _) = Kura::new(&kura_cfg, &lane_config).expect("initialize kura");
 
         let make_block = |message: &str| -> SignedBlock {
             let tx = TransactionBuilder::new(
@@ -46238,8 +46152,27 @@ mod tests {
 
         let small_block = make_block("short");
         let large_block = make_block(&"x".repeat(4096));
-        let small_bytes = Kura::block_required_bytes(&small_block).expect("small bytes");
-        let large_bytes = Kura::block_required_bytes(&large_block).expect("large bytes");
+        let ownership = small_block
+            .execution_context()
+            .and_then(|context| context.lane_payload_ownerships.first())
+            .expect("test block carries default lane ownership");
+        assert_eq!(
+            large_block
+                .execution_context()
+                .and_then(|context| context.lane_payload_ownerships.first())
+                .map(|candidate| candidate.lane_incarnation),
+            Some(ownership.lane_incarnation),
+            "replacement uses the same default lane incarnation"
+        );
+        let lane_entry = lane_config
+            .entry(ownership.lane_id)
+            .expect("default lane is configured");
+        kura.install_lane_incarnation_marker_for_test(lane_entry, ownership.lane_incarnation, 0)
+            .expect("install default lane marker");
+        let small_bytes =
+            Kura::block_required_bytes_for_budget(&small_block, u64::MAX).expect("small bytes");
+        let large_bytes =
+            Kura::block_required_bytes_for_budget(&large_block, u64::MAX).expect("large bytes");
         assert!(
             large_bytes > small_bytes,
             "expected large block to be larger"
@@ -46260,7 +46193,7 @@ mod tests {
         kura.store_block(small_block).expect("store small block");
 
         assert!(
-            large_bytes > limit,
+            used.saturating_add(large_bytes) > limit,
             "expected replacement block to exceed budget"
         );
         let err = kura
@@ -52388,6 +52321,9 @@ mod tests {
         let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
             b"kura-lane-artifact-entrypoint",
         ));
+        block.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::new(entrypoint_hash, lane_id, dataspace_id),
+        ])));
         let ownership = sample_lane_payload_ownership_for_kura(
             &block,
             lane_id,
@@ -57046,6 +56982,9 @@ mod tests {
         let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
             b"kura-lane-artifact-replacement-entrypoint",
         ));
+        replacement.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::new(entrypoint_hash, lane_id, lane_entry.dataspace_id),
+        ])));
         let replacement_ownership = sample_lane_payload_ownership_for_kura(
             &replacement,
             lane_id,
@@ -65287,6 +65226,105 @@ mod tests {
         );
         assert!(!kura.canonical_association_stage_path().exists());
         assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn replace_top_block_replay_metadata_preflight_fails_closed_without_mutation() {
+        #[derive(Clone, Copy)]
+        enum ReplayMetadataCase {
+            ManifestOnly,
+            CorruptCheckpoint,
+            CorruptManifest,
+        }
+
+        for case in [
+            ReplayMetadataCase::ManifestOnly,
+            ReplayMetadataCase::CorruptCheckpoint,
+            ReplayMetadataCase::CorruptManifest,
+        ] {
+            let kura = Kura::blank_kura_for_testing();
+            let block = DummyBlocks::new().next();
+            let original_hash = block.hash();
+            kura.store_block(Arc::clone(&block)).expect("store block");
+
+            let protected_path = match case {
+                ReplayMetadataCase::ManifestOnly => {
+                    let manifest = CommitManifest::new(
+                        1,
+                        original_hash,
+                        None,
+                        None,
+                        Hash::new(b"manifest-only checkpoint hash"),
+                        None,
+                    );
+                    kura.store_commit_manifest(manifest)
+                        .expect("store manifest without a WSV checkpoint");
+                    assert!(
+                        !kura.wsv_checkpoint_path(1).exists(),
+                        "manifest-only publication must exercise the manifest preflight branch"
+                    );
+                    kura.commit_manifest_path(1)
+                }
+                ReplayMetadataCase::CorruptCheckpoint => {
+                    let path = kura.wsv_checkpoint_path(1);
+                    fs::create_dir_all(path.parent().expect("checkpoint parent"))
+                        .expect("create checkpoint directory");
+                    fs::write(&path, b"malformed WSV checkpoint").expect("corrupt checkpoint");
+                    path
+                }
+                ReplayMetadataCase::CorruptManifest => {
+                    let path = kura.commit_manifest_path(1);
+                    fs::create_dir_all(path.parent().expect("manifest parent"))
+                        .expect("create manifest directory");
+                    fs::write(&path, b"malformed commit manifest").expect("corrupt manifest");
+                    path
+                }
+            };
+            let protected_bytes = fs::read(&protected_path).expect("read protected sidecar");
+            kura.pending_budget_bytes.store(73, Ordering::Release);
+            kura.pending_budget_bytes_valid
+                .store(true, Ordering::Release);
+
+            let replacement: SignedBlock = ValidBlock::new_dummy_and_modify_header(
+                checked_keypair().private_key(),
+                |header| {
+                    header.set_height(nonzero!(1_u64));
+                    header.set_prev_block_hash(None);
+                    header.set_view_change_index(header.view_change_index().saturating_add(1));
+                },
+            )
+            .into();
+            assert_ne!(replacement.hash(), original_hash);
+
+            let error = kura
+                .replace_top_block(replacement)
+                .expect_err("replay metadata must forbid top replacement");
+            match case {
+                ReplayMetadataCase::ManifestOnly => assert!(matches!(
+                    error,
+                    Error::CommittedBlockReplacementForbidden { height: 1 }
+                )),
+                ReplayMetadataCase::CorruptCheckpoint | ReplayMetadataCase::CorruptManifest => {
+                    assert!(matches!(error, Error::NoritoFrame(_)))
+                }
+            }
+            assert_eq!(
+                kura.get_durable_block_hash(nonzero!(1_usize)),
+                Some(original_hash)
+            );
+            assert_eq!(
+                kura.get_block(nonzero!(1_usize)).as_deref(),
+                Some(block.as_ref())
+            );
+            assert_eq!(
+                fs::read(&protected_path).expect("reread protected sidecar"),
+                protected_bytes
+            );
+            assert!(!kura.canonical_association_stage_path().exists());
+            assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+            assert!(kura.pending_budget_bytes_valid.load(Ordering::Acquire));
+            assert_eq!(kura.pending_budget_bytes.load(Ordering::Acquire), 73);
+        }
     }
 
     #[test]

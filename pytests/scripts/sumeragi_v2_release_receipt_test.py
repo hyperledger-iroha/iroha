@@ -1340,7 +1340,22 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     sha256(run_log),
                     output,
                     f"localnets/run-{index:03d}",
-                    f"cargo exact release run {index}",
+                    f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={sealed_manifest} "
+                    "IROHA_TEST_REQUIRE_NETWORK=1 "
+                    "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
+                    "IROHA_TEST_SKIP_BUILD=0 "
+                    "IROHA_TEST_ALLOW_REENTRANT_BUILD=1 "
+                    "IROHA_TEST_BUILD_TIMEOUT_MS=3600 "
+                    "IROHA_TEST_PROCESS_TIMEOUT_MS=300 "
+                    "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300 "
+                    f"IROHA_TEST_NETWORK_BASE_SEED={seed} "
+                    "TEST_NETWORK_TMP_DIR=${SEED_MATRIX_EVIDENCE_DIRECTORY}/"
+                    f"localnets/run-{index:03d} "
+                    "IROHA_TEST_NETWORK_KEEP_DIRS=1 "
+                    "cargo test --locked -p integration_tests --test "
+                    "sumeragi_v2_runner_isolated "
+                    f"sumeragi_v2_runner::{scenario} -- --exact --nocapture "
+                    "--test-threads=1",
                 )
             )
         )
@@ -3020,6 +3035,40 @@ def test_receipt_requires_exact_nocapture_seed_diagnostic(tmp_path: Path) -> Non
 
     assert result.returncode == 1
     assert "does not prove its one exact passing scenario" in result.stderr
+
+    command_root = tmp_path / "hidden-start-retry"
+    command_root.mkdir()
+    command_evidence = make_evidence(command_root)
+    command_writer = fixture_writer(command_root)
+    command_summary = command_evidence["seed_summary"]
+    command_completion = command_evidence["seed_completion"]
+    assert isinstance(command_summary, Path)
+    assert isinstance(command_completion, Path)
+    command_lines = command_summary.read_text(encoding="utf-8").splitlines()
+    command_row = command_lines[18].split("\t")
+    command_row[10] = command_row[10].replace(
+        "IROHA_TEST_NETWORK_START_ATTEMPTS=1",
+        "IROHA_TEST_NETWORK_START_ATTEMPTS=2",
+    )
+    command_lines[18] = "\t".join(command_row)
+    command_summary.write_text(
+        "\n".join(command_lines) + "\n", encoding="utf-8"
+    )
+    command_fields = dict(
+        line.split("\t", 1)
+        for line in command_completion.read_text(encoding="utf-8").splitlines()
+    )
+    command_fields["summary_sha256"] = sha256(command_summary)
+    write_tsv(command_completion, command_fields)
+
+    command_result = run_writer(
+        command_evidence, command_root / "receipt.json", command_writer
+    )
+
+    assert command_result.returncode == 1
+    assert (
+        "seed summary row 17 is not the exact release run" in command_result.stderr
+    )
 
 
 def test_receipt_rejects_rehashed_chaos_log_without_required_semantics(

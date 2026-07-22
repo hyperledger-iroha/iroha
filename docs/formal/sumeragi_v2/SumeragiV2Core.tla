@@ -992,6 +992,15 @@ LocalProposalFor(node, subject) ==
   IN Proposal(context, nodeView[node], subject, node,
               justification.rank, justification.subject)
 
+\* A local leader may choose fresh work only when its justification has no
+\* Prepare high certificate.  Once the installed TC selects a high subject,
+\* production promotes that certificate into the durable lock and the runner
+\* rebinds the exact retained body.  Key this guard to the justification itself
+\* so even a locally-unlocked abstraction cannot choose an unrelated subject.
+LocalProposalReproposesJustifiedHigh(proposal) ==
+  \/ proposal.justifyRank = NoRank
+  \/ proposal.subject = proposal.justifySubject
+
 BeginLocalProposal(node, subject) ==
   LET roundView == nodeView[node]
       proposal == LocalProposalFor(node, subject)
@@ -1004,6 +1013,7 @@ BeginLocalProposal(node, subject) ==
      /\ BodyValidatedBy(validatedBodies, node, context, roundView,
                         generation[node], subject)
      /\ ProposalWireValidFor(node, proposal)
+     /\ LocalProposalReproposesJustifiedHigh(proposal)
      /\ ~\E prior \in proposalIntents:
            /\ prior.proposer = node
            /\ prior.context = context

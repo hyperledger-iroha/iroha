@@ -224,6 +224,48 @@ echo "[tlc] Busy Completion requeue with cursor advance services Progress"
 set +e
 (
   cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-handoff-rebusy" \
+    -config deferred_handoff_rebusy_bug.cfg \
+    SumeragiV2DeferredHandoffMutation.tla
+) >"$run_dir/deferred-handoff-rebusy.log" 2>&1
+deferred_handoff_rebusy_status=$?
+set -e
+
+[[ $deferred_handoff_rebusy_status -eq 13 ]] || {
+  echo "handoff-free deferred retry did not fail with TLC status 13" >&2
+  cat "$run_dir/deferred-handoff-rebusy.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  "3 distinct states" \
+  "Back to state 1"; do
+  grep -Fq "$marker" "$run_dir/deferred-handoff-rebusy.log" || {
+    echo "deferred re-Busy mutation missed expected marker: $marker" >&2
+    cat "$run_dir/deferred-handoff-rebusy.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-handoff-exact" \
+    -config deferred_handoff_exact.cfg \
+    SumeragiV2DeferredHandoffMutation.tla
+) >"$run_dir/deferred-handoff-exact.log" 2>&1
+grep -Fq "Model checking completed. No error has been found." \
+  "$run_dir/deferred-handoff-exact.log" || {
+  cat "$run_dir/deferred-handoff-exact.log" >&2
+  exit 1
+}
+
+echo "[tlc] an unowned retry admits the three-state equal-rank re-Busy lasso"
+echo "[tlc] the exact handoff lets Completion finish and blocks foreign re-Busy"
+
+set +e
+(
+  cd "$FORMAL_DIR"
   "${common[@]}" -metadir "$run_dir/head-only" \
     -config ingress_head_blocking_bug.cfg \
     SumeragiV2IngressMutation.tla

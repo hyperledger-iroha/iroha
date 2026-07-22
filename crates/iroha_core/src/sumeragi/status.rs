@@ -54,7 +54,26 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use super::{
-    FairV2Ingress, v2_effects::EffectExecutorStatus, v2_runtime::RuntimeQueueLaneSnapshot,
+    FairV2Ingress,
+    v2_core::{
+        CanonicalIdentityProjection, ProductionAppliedSuccessorTraceProjection,
+        ProductionDurablePredecessorIdentityProjection,
+        ProductionRecoveredSuccessorTraceProjection,
+        ProductionSuccessorPredecessorBindingProjection, ProductionSuccessorSnapshotProjection,
+        ProductionSuccessorStartupLifecycleProjection, SUCCESSOR_AUTHORITY_APPLIED,
+        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+        SUCCESSOR_LIFECYCLE_BEGIN, SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_MARKER_ACTIVATED,
+        SUCCESSOR_STAGE_COMPLETE, SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING,
+        production_applied_successor_trace_refines_indexed_activation_kernel,
+        production_recovered_successor_trace_refines_indexed_activation_kernel,
+        production_startup_failure_and_restart_refines_indexed_lifecycle_kernel,
+    },
+    v2_effects::EffectExecutorStatus,
+    v2_recovery::{
+        DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
+        SnapshotSuccessorActivationAuthority, successor_context_refinement_projection,
+    },
+    v2_runtime::RuntimeQueueLaneSnapshot,
 };
 #[cfg(test)]
 use crate::commit_roster_journal::CommitRosterSnapshot;
@@ -889,6 +908,46 @@ pub(crate) enum V2SuccessorActivationError {
     /// remained unpublished throughout successor startup.
     #[error("recovered Sumeragi v2 successor found an already published height {0}")]
     RecoveredStatusAlreadyPublished(u64),
+    /// Primitive successor fields failed the shared production/Verus decision kernel.
+    #[error("Sumeragi v2 successor activation failed the production refinement kernel")]
+    RefinementRejected,
+}
+
+const fn successor_stage_projection(stage: SumeragiV2LocalWorkStage) -> u8 {
+    match stage {
+        SumeragiV2LocalWorkStage::Queued => SUCCESSOR_STAGE_QUEUED,
+        SumeragiV2LocalWorkStage::Running => SUCCESSOR_STAGE_RUNNING,
+        SumeragiV2LocalWorkStage::Complete => SUCCESSOR_STAGE_COMPLETE,
+        _ => super::v2_core::SUCCESSOR_STAGE_NONE,
+    }
+}
+
+fn successor_snapshot_refinement_projection(
+    expected_context_id: HeightContextId,
+    successor: &SumeragiV2Status,
+) -> ProductionSuccessorSnapshotProjection {
+    let expected_context_id = successor_context_refinement_projection(expected_context_id);
+    let published_context_id = successor_context_refinement_projection(successor.height_context_id);
+    let marker = successor.liveness.last_progress;
+    ProductionSuccessorSnapshotProjection {
+        expected_context_id,
+        published_context_id,
+        height: successor.height,
+        last_committed_height: successor.last_committed_height,
+        view: successor.view,
+        generation: successor.liveness.generation,
+        marker_context_id: marker.map_or_else(CanonicalIdentityProjection::zero, |marker| {
+            successor_context_refinement_projection(marker.round.context_id)
+        }),
+        marker_height: marker.map_or(0, |marker| marker.round.height),
+        marker_view: marker.map_or(0, |marker| marker.round.view),
+        marker_generation: marker.map_or(0, |marker| marker.generation),
+        marker_kind: marker.map_or(0, |marker| {
+            u8::from(marker.transition == SumeragiV2ProgressTransition::SuccessorHeightActivated)
+                * SUCCESSOR_MARKER_ACTIVATED
+        }),
+        marker_age_ms: marker.map_or(u64::MAX, |marker| marker.age_ms),
+    }
 }
 
 fn update_v2_successor_work_stage_at(
@@ -906,6 +965,18 @@ fn update_v2_successor_work_stage_at(
     }) else {
         return Err(V2SuccessorActivationError::MissingFinalizedStatus);
     };
+    validate_v2_predecessor_status(&status, height, expected)?;
+
+    status.liveness.work.successor_height = stage;
+    set_v2_status_at(status, now);
+    Ok(())
+}
+
+fn validate_v2_predecessor_status(
+    status: &SumeragiV2Status,
+    height: u64,
+    expected: SumeragiV2LocalWorkStage,
+) -> Result<(), V2SuccessorActivationError> {
     if status.height != height {
         return Err(V2SuccessorActivationError::FinalizedHeightMismatch {
             expected: height,
@@ -934,9 +1005,6 @@ fn update_v2_successor_work_stage_at(
             actual: status.liveness.work.successor_height,
         });
     }
-
-    status.liveness.work.successor_height = stage;
-    set_v2_status_at(status, now);
     Ok(())
 }
 
@@ -946,7 +1014,32 @@ fn update_v2_successor_work_stage_at(
 /// the handoff as queued. The serialized runner changes that exact owner to
 /// running before any fallible successor construction. Dropping the caller's
 /// activation token leaves this stage visible and does not claim activation.
-pub(crate) fn begin_v2_successor_activation(height: u64) -> Result<(), V2SuccessorActivationError> {
+pub(crate) fn begin_v2_successor_activation(
+    predecessor: DurableV2PredecessorIdentity,
+) -> Result<(), V2SuccessorActivationError> {
+    let height = predecessor.height();
+    let Some(status) = SUMERAGI_V2_STATUS.get().and_then(|slot| {
+        slot.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }) else {
+        return Err(V2SuccessorActivationError::MissingFinalizedStatus);
+    };
+    validate_v2_predecessor_status(&status, height, SumeragiV2LocalWorkStage::Queued)?;
+    let lifecycle = ProductionSuccessorStartupLifecycleProjection {
+        transition_kind: SUCCESSOR_LIFECYCLE_BEGIN,
+        authority_kind: SUCCESSOR_AUTHORITY_APPLIED,
+        status_height: height,
+        stage_before: successor_stage_projection(status.liveness.work.successor_height),
+        stage_after: SUCCESSOR_STAGE_RUNNING,
+        published_height_before: status.height,
+        published_height_after: status.height,
+        restart_required_before: status.restart_required,
+        restart_required_after: status.restart_required,
+    };
+    if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle) {
+        return Err(V2SuccessorActivationError::RefinementRejected);
+    }
     update_v2_successor_work_stage_at(
         height,
         SumeragiV2LocalWorkStage::Queued,
@@ -998,14 +1091,51 @@ fn validate_v2_successor_snapshot(
 }
 
 fn activate_v2_successor_height_at(
-    finalized_height: u64,
-    expected_successor_context_id: HeightContextId,
+    expected_predecessor: DurableV2PredecessorIdentity,
+    authority: DurableSuccessorActivationAuthority,
     successor: SumeragiV2Status,
     now: Instant,
 ) -> Result<(), V2SuccessorActivationError> {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
+    let (authority_predecessor, expected_successor_context_id) = authority.into_parts();
+    let finalized_height = expected_predecessor.height();
     validate_v2_successor_snapshot(finalized_height, expected_successor_context_id, &successor)?;
+    let predecessor_status = SUMERAGI_V2_STATUS
+        .get()
+        .and_then(|slot| {
+            slot.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        })
+        .ok_or(V2SuccessorActivationError::MissingFinalizedStatus)?;
+    validate_v2_predecessor_status(
+        &predecessor_status,
+        finalized_height,
+        SumeragiV2LocalWorkStage::Running,
+    )?;
+    let trace = ProductionAppliedSuccessorTraceProjection {
+        authority_kind: SUCCESSOR_AUTHORITY_APPLIED,
+        binding: ProductionSuccessorPredecessorBindingProjection {
+            expected_predecessor: expected_predecessor.refinement_projection(),
+            authority_predecessor: authority_predecessor.refinement_projection(),
+            successor_context_id: successor_context_refinement_projection(
+                expected_successor_context_id,
+            ),
+        },
+        predecessor_status_height: predecessor_status.height,
+        predecessor_stage_before: successor_stage_projection(
+            predecessor_status.liveness.work.successor_height,
+        ),
+        predecessor_stage_after: SUCCESSOR_STAGE_COMPLETE,
+        successor: successor_snapshot_refinement_projection(
+            expected_successor_context_id,
+            &successor,
+        ),
+    };
+    if !production_applied_successor_trace_refines_indexed_activation_kernel(trace) {
+        return Err(V2SuccessorActivationError::RefinementRejected);
+    }
 
     // Validate the predecessor and publish Complete before replacing it with
     // the prepared successor snapshot. This is the sole accepted Running ->
@@ -1022,19 +1152,66 @@ fn activate_v2_successor_height_at(
 }
 
 fn activate_recovered_v2_successor_height_at(
-    finalized_height: u64,
+    authority: DurableSuccessorActivationAuthority,
+    successor: SumeragiV2Status,
+    now: Instant,
+) -> Result<(), V2SuccessorActivationError> {
+    let (predecessor, expected_successor_context_id) = authority.into_parts();
+    publish_recovered_v2_successor_height_at(
+        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
+        predecessor.refinement_projection(),
+        CanonicalIdentityProjection::zero(),
+        0,
+        CanonicalIdentityProjection::zero(),
+        expected_successor_context_id,
+        successor,
+        now,
+    )
+}
+
+fn publish_recovered_v2_successor_height_at(
+    authority_kind: u8,
+    predecessor: ProductionDurablePredecessorIdentityProjection,
+    snapshot_record_hash: CanonicalIdentityProjection,
+    snapshot_height: u64,
+    snapshot_block_hash: CanonicalIdentityProjection,
     expected_successor_context_id: HeightContextId,
     successor: SumeragiV2Status,
     now: Instant,
 ) -> Result<(), V2SuccessorActivationError> {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
+    let finalized_height = successor.last_committed_height;
     validate_v2_successor_snapshot(finalized_height, expected_successor_context_id, &successor)?;
-    if let Some(published) = SUMERAGI_V2_STATUS.get().and_then(|slot| {
+    let published = SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
-    }) {
+    });
+    let trace = ProductionRecoveredSuccessorTraceProjection {
+        authority_kind,
+        predecessor,
+        snapshot_record_hash,
+        snapshot_height,
+        snapshot_block_hash,
+        authority_context_id: successor_context_refinement_projection(
+            expected_successor_context_id,
+        ),
+        published_status_height_before: published.as_ref().map_or(0, |status| status.height),
+        successor: successor_snapshot_refinement_projection(
+            expected_successor_context_id,
+            &successor,
+        ),
+    };
+    if !production_recovered_successor_trace_refines_indexed_activation_kernel(trace) {
+        if let Some(published) = published {
+            return Err(V2SuccessorActivationError::RecoveredStatusAlreadyPublished(
+                published.height,
+            ));
+        }
+        return Err(V2SuccessorActivationError::RefinementRejected);
+    }
+    if let Some(published) = published {
         return Err(V2SuccessorActivationError::RecoveredStatusAlreadyPublished(
             published.height,
         ));
@@ -1052,16 +1229,11 @@ fn activate_recovered_v2_successor_height_at(
 /// activation marker is then attached to the successor's own height,
 /// generation, context, and view.
 pub(crate) fn activate_v2_successor_height(
-    finalized_height: u64,
-    expected_successor_context_id: HeightContextId,
+    expected_predecessor: DurableV2PredecessorIdentity,
+    authority: DurableSuccessorActivationAuthority,
     successor: SumeragiV2Status,
 ) -> Result<(), V2SuccessorActivationError> {
-    activate_v2_successor_height_at(
-        finalized_height,
-        expected_successor_context_id,
-        successor,
-        Instant::now(),
-    )
+    activate_v2_successor_height_at(expected_predecessor, authority, successor, Instant::now())
 }
 
 /// Publish a complete-tip restart's recovered successor at the same live
@@ -1071,12 +1243,29 @@ pub(crate) fn activate_v2_successor_height(
 /// the finalized parent. Therefore no predecessor snapshot is available to
 /// retag; any unexpectedly published status is a fail-closed contract error.
 pub(crate) fn activate_recovered_v2_successor_height(
-    finalized_height: u64,
-    expected_successor_context_id: HeightContextId,
+    authority: DurableSuccessorActivationAuthority,
     successor: SumeragiV2Status,
 ) -> Result<(), V2SuccessorActivationError> {
-    activate_recovered_v2_successor_height_at(
-        finalized_height,
+    activate_recovered_v2_successor_height_at(authority, successor, Instant::now())
+}
+
+/// Publish the authenticated first executable height after an audited snapshot.
+///
+/// This shares the empty process-local status boundary used by complete-tip
+/// restart, but deliberately names snapshot authority separately: the imported
+/// anchor is not a historical CommitQC or Kura finality receipt.
+pub(crate) fn activate_snapshot_bootstrap_v2_height(
+    authority: SnapshotSuccessorActivationAuthority,
+    successor: SumeragiV2Status,
+) -> Result<(), V2SuccessorActivationError> {
+    let (snapshot_record_hash, snapshot_height, snapshot_block_hash, expected_successor_context_id) =
+        authority.into_parts();
+    publish_recovered_v2_successor_height_at(
+        SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+        ProductionDurablePredecessorIdentityProjection::default(),
+        super::v2_recovery::snapshot_record_refinement_projection(snapshot_record_hash),
+        snapshot_height,
+        super::v2_recovery::successor_block_refinement_projection(snapshot_block_hash),
         expected_successor_context_id,
         successor,
         Instant::now(),
@@ -2012,6 +2201,27 @@ pub(crate) fn mark_v2_restart_required() {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_mut()
     {
+        if status.liveness.work.successor_height == SumeragiV2LocalWorkStage::Running
+            && !status.restart_required
+        {
+            let lifecycle = ProductionSuccessorStartupLifecycleProjection {
+                transition_kind: SUCCESSOR_LIFECYCLE_FAIL,
+                authority_kind: SUCCESSOR_AUTHORITY_APPLIED,
+                status_height: status.height,
+                stage_before: successor_stage_projection(status.liveness.work.successor_height),
+                stage_after: successor_stage_projection(status.liveness.work.successor_height),
+                published_height_before: status.height,
+                published_height_after: status.height,
+                restart_required_before: status.restart_required,
+                restart_required_after: true,
+            };
+            if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle) {
+                iroha_logger::error!(
+                    height = status.height,
+                    "Sumeragi v2 Running successor failure projection was rejected; latching restart-required fail-closed"
+                );
+            }
+        }
         status.restart_required = true;
     }
 }
@@ -2084,13 +2294,25 @@ mod v2_liveness_watchdog_tests {
         V2LivenessWatchdogTransition, V2SuccessorActivationError,
         activate_recovered_v2_successor_height_at, activate_v2_successor_height_at,
         begin_v2_successor_activation, classify_v2_liveness_blocker, clear_v2_status,
-        set_v2_effect_completion_observer, set_v2_effect_status, set_v2_network_ingress,
-        set_v2_status_at, update_v2_successor_work_stage_at, v2_status_at,
+        mark_v2_restart_required, set_v2_effect_completion_observer, set_v2_effect_status,
+        set_v2_network_ingress, set_v2_status_at, update_v2_successor_work_stage_at, v2_status_at,
     };
     use crate::sumeragi::{
         BlockMessage, FairV2Ingress, InboundBlockMessage,
+        v2_recovery::{DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity},
         v2_runtime::{RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot},
     };
+
+    fn test_predecessor(height: u64, label: &[u8]) -> DurableV2PredecessorIdentity {
+        DurableV2PredecessorIdentity::for_test(height, label)
+    }
+
+    fn test_successor_authority(
+        predecessor: DurableV2PredecessorIdentity,
+        successor_context_id: HeightContextId,
+    ) -> DurableSuccessorActivationAuthority {
+        DurableSuccessorActivationAuthority::for_test(predecessor, successor_context_id)
+    }
 
     fn context_id() -> HeightContextId {
         HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
@@ -2914,6 +3136,32 @@ mod v2_liveness_watchdog_tests {
     }
 
     #[test]
+    fn rejected_running_successor_failure_projection_still_latches_restart_required() {
+        let _guard = super::rbc_status_test_guard();
+        clear_v2_status();
+        let started_at = Instant::now();
+        let mut corrupted = status();
+        corrupted.height = 0;
+        corrupted.restart_required = false;
+        corrupted.liveness.work.successor_height = SumeragiV2LocalWorkStage::Running;
+        set_v2_status_at(corrupted, started_at);
+
+        mark_v2_restart_required();
+
+        let failed = v2_status_at(started_at).expect("failed status remains visible");
+        assert!(
+            failed.restart_required,
+            "kernel rejection must strengthen the process failure latch"
+        );
+        assert_eq!(
+            failed.liveness.work.successor_height,
+            SumeragiV2LocalWorkStage::Running,
+            "failure cannot fabricate successor completion"
+        );
+        clear_v2_status();
+    }
+
+    #[test]
     fn successor_handoff_is_visible_until_the_exact_successor_becomes_active_once() {
         let _guard = super::rbc_status_test_guard();
         clear_v2_status();
@@ -2965,9 +3213,10 @@ mod v2_liveness_watchdog_tests {
             2,
             SumeragiV2ProgressTransition::SuccessorHeightActivated,
         );
+        let predecessor = test_predecessor(height, b"status exact successor");
         activate_v2_successor_height_at(
-            height,
-            successor.height_context_id,
+            predecessor,
+            test_successor_authority(predecessor, successor.height_context_id),
             successor.clone(),
             started_at + Duration::from_secs(13),
         )
@@ -2995,8 +3244,8 @@ mod v2_liveness_watchdog_tests {
 
         assert_eq!(
             activate_v2_successor_height_at(
-                height,
-                successor.height_context_id,
+                predecessor,
+                test_successor_authority(predecessor, successor.height_context_id),
                 successor,
                 started_at + Duration::from_secs(16),
             ),
@@ -3088,10 +3337,10 @@ mod v2_liveness_watchdog_tests {
             2,
             SumeragiV2ProgressTransition::SuccessorHeightActivated,
         );
+        let predecessor = test_predecessor(7, b"status recovered successor");
 
         activate_recovered_v2_successor_height_at(
-            7,
-            successor.height_context_id,
+            test_successor_authority(predecessor, successor.height_context_id),
             successor.clone(),
             started_at,
         )
@@ -3110,8 +3359,7 @@ mod v2_liveness_watchdog_tests {
 
         assert_eq!(
             activate_recovered_v2_successor_height_at(
-                7,
-                successor.height_context_id,
+                test_successor_authority(predecessor, successor.height_context_id),
                 successor,
                 started_at + Duration::from_secs(3),
             ),
@@ -3258,10 +3506,12 @@ mod v2_liveness_watchdog_tests {
                     SumeragiV2ProgressTransition::SuccessorHeightActivated,
                 );
             }
+            let predecessor_identity =
+                test_predecessor(case.finalized_height, case.name.as_bytes());
             assert_eq!(
                 activate_v2_successor_height_at(
-                    case.finalized_height,
-                    successor.height_context_id,
+                    predecessor_identity,
+                    test_successor_authority(predecessor_identity, successor.height_context_id,),
                     successor,
                     started_at + Duration::from_secs(1),
                 ),
@@ -3332,10 +3582,11 @@ mod v2_liveness_watchdog_tests {
             Hash::new(b"different authenticated successor context"),
         ));
         let actual_context_id = successor.height_context_id;
+        let predecessor_identity = test_predecessor(predecessor_height, b"status context mismatch");
         assert_eq!(
             activate_v2_successor_height_at(
-                predecessor_height,
-                expected_context_id,
+                predecessor_identity,
+                test_successor_authority(predecessor_identity, expected_context_id),
                 successor,
                 started_at + Duration::from_secs(1),
             ),
@@ -3401,7 +3652,7 @@ mod v2_liveness_watchdog_tests {
             set_v2_status_at(predecessor, started_at);
 
             assert_eq!(
-                begin_v2_successor_activation(height),
+                begin_v2_successor_activation(test_predecessor(height, fault.as_bytes(),)),
                 Err(V2SuccessorActivationError::PredecessorNotApplied(height)),
                 "{fault}"
             );
@@ -6027,26 +6278,6 @@ pub fn set_pipeline_execution_snapshot(snapshot: PipelineExecutionSnapshot) {
     *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") = snapshot;
 }
 
-/// Test-only wrapper that reads only the pipeline adapter diagnostic without
-/// cloning the rest of the public non-consensus status snapshot.
-#[cfg(test)]
-pub(crate) struct PipelineExecutionTestSnapshot {
-    /// Aggregate adapter counters asserted by block-pipeline tests.
-    pub(crate) pipeline_execution: PipelineExecutionSnapshot,
-}
-
-/// Read the aggregate pipeline-execution diagnostic in isolated unit tests.
-#[cfg(test)]
-pub(crate) fn pipeline_execution_snapshot_for_tests() -> PipelineExecutionTestSnapshot {
-    PipelineExecutionTestSnapshot {
-        pipeline_execution: lock_operator_status_slot(
-            pipeline_execution_slot(),
-            "pipeline execution snapshot",
-        )
-        .clone(),
-    }
-}
-
 /// Replace the access-set source adapter diagnostic.
 pub fn set_access_set_source_summary(summary: AccessSetSourceSummary) {
     *lock_operator_status_slot(access_set_source_slot(), "access-set source snapshot") = summary;
@@ -6848,14 +7079,16 @@ fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Option<TestLoc
 pub(crate) struct NexusFeeTestLock;
 
 #[cfg(test)]
-pub(crate) struct NexusFeeTestGuard(TestLockGuard);
+pub(crate) struct NexusFeeTestGuard {
+    _guard: TestLockGuard,
+}
 
 #[cfg(test)]
 impl NexusFeeTestLock {
     pub(crate) fn lock(&'static self) -> Result<NexusFeeTestGuard, std::convert::Infallible> {
-        Ok(NexusFeeTestGuard(reentrant_test_guard(
-            &RBC_STATUS_TEST_LOCK,
-        )))
+        Ok(NexusFeeTestGuard {
+            _guard: reentrant_test_guard(&RBC_STATUS_TEST_LOCK),
+        })
     }
 }
 

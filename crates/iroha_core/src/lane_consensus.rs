@@ -2723,22 +2723,6 @@ pub(crate) struct LaneBlockCommitVoteRequest {
     pub(crate) prepare_qc: LaneBlockQcV1,
 }
 
-/// Bounded periodic transport work for one unresolved lane-block session.
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LaneBlockRebroadcastBundle {
-    /// Stable session key used by the actor's round-robin cursor.
-    pub(crate) key: LaneBlockSessionKey,
-    /// Proposal that defines the route and validator set for every artifact.
-    pub(crate) proposal: LaneBlockProposalV1,
-    /// Whether the proposal itself still needs periodic fanout.
-    pub(crate) rebroadcast_proposal: bool,
-    /// Locally authored votes that have not yet been superseded by their phase QC.
-    pub(crate) local_votes: Vec<LaneBlockVoteV1>,
-    /// Cached certificates retained for convergence until the session drains.
-    pub(crate) qcs: Vec<LaneBlockQcV1>,
-}
-
 /// Result of inserting a lane-block artifact into a session cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LaneBlockSessionInsertOutcome {
@@ -3126,61 +3110,6 @@ impl LaneBlockSessionCache {
                 }
                 qcs
             })
-            .collect()
-    }
-
-    /// Return whether an admissible unresolved session has periodic transport work.
-    #[cfg(test)]
-    pub(crate) fn has_periodic_rebroadcast_work(
-        &self,
-        _signer: &PeerId,
-        admissible: impl Fn(&LaneBlockProposalV1) -> bool,
-    ) -> bool {
-        self.sessions.values().any(|session| {
-            !session.committed_session_drained
-                && session
-                    .proposal
-                    .as_ref()
-                    .is_some_and(|proposal| admissible(proposal))
-        })
-    }
-
-    /// Select a stable, bounded round-robin slice of unresolved session bundles.
-    ///
-    /// The cursor is a stable session key instead of a vector index so concurrent
-    /// insertion and pruning cannot repeatedly select the first cached sibling.
-    #[cfg(test)]
-    pub(crate) fn periodic_rebroadcast_bundles_after(
-        &self,
-        signer: &PeerId,
-        cursor: Option<LaneBlockSessionKey>,
-        limit: usize,
-        admissible: impl Fn(&LaneBlockProposalV1) -> bool,
-    ) -> Vec<LaneBlockRebroadcastBundle> {
-        if limit == 0 {
-            return Vec::new();
-        }
-
-        let keys = if let Some(cursor) = cursor {
-            self.sessions
-                .range((
-                    std::ops::Bound::Excluded(cursor),
-                    std::ops::Bound::Unbounded,
-                ))
-                .map(|(key, _)| *key)
-                .chain(self.sessions.range(..=cursor).map(|(key, _)| *key))
-                .collect::<Vec<_>>()
-        } else {
-            self.sessions.keys().copied().collect::<Vec<_>>()
-        };
-
-        keys.into_iter()
-            .filter_map(|key| {
-                let session = self.sessions.get(&key)?;
-                let bundle = rebroadcast_bundle_for_session(key, session, signer)?;
-                admissible(&bundle.proposal).then_some(bundle)
-            })
-            .take(limit)
             .collect()
     }
 
@@ -4486,48 +4415,6 @@ fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
                 .map(|qc| qc.body.proposal_height)
         })
         .or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.proposal_height))
-}
-
-#[cfg(test)]
-fn rebroadcast_bundle_for_session(
-    key: LaneBlockSessionKey,
-    session: &LaneBlockSession,
-    signer: &PeerId,
-) -> Option<LaneBlockRebroadcastBundle> {
-    if session.committed_session_drained {
-        return None;
-    }
-    let proposal = session.proposal.as_ref()?;
-    let rebroadcast_proposal = session.commit_qc.is_none();
-    let mut local_votes = Vec::with_capacity(2);
-    if proposal.descriptor.validator_set.contains(signer) {
-        if session.prepare_qc.is_none()
-            && let Some(vote) = session.prepare_votes.get(signer)
-        {
-            local_votes.push(vote.clone());
-        }
-        if session.commit_qc.is_none()
-            && let Some(vote) = session.commit_votes.get(signer)
-        {
-            local_votes.push(vote.clone());
-        }
-    }
-    let mut qcs = Vec::with_capacity(2);
-    if let Some(qc) = session.prepare_qc.clone() {
-        qcs.push(qc);
-    }
-    if let Some(qc) = session.commit_qc.clone() {
-        qcs.push(qc);
-    }
-    (rebroadcast_proposal || !local_votes.is_empty() || !qcs.is_empty()).then_some(
-        LaneBlockRebroadcastBundle {
-            key,
-            proposal: proposal.clone(),
-            rebroadcast_proposal,
-            local_votes,
-            qcs,
-        },
-    )
 }
 
 fn validate_vote_matches_proposal(

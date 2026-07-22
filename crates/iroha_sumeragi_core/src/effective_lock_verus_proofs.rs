@@ -652,7 +652,15 @@ pub proof fn production_enter_view_uses_post_install_effective_lock(
             production_enter_view_effective_lock_trace(projection),
             projection.enter_view,
         ),
-        production_enter_view_preserves_locked_prepare_qc_identity(projection.enter_view),
+        production_enter_view_effective_lock_trace(projection).kind == 1u8,
+        production_enter_view_effective_lock_trace(projection).protected_after
+            == production_enter_view_effective_lock_trace(projection).protected_before,
+        production_enter_view_effective_lock_trace(projection).owner_after
+            == production_enter_view_effective_lock_trace(projection).owner_before,
+        projection.enter_view.effect_protected_lock.present
+            == projection.enter_view.durable_lock_after.present,
+        projection.enter_view.following_fetch_lock.present
+            == projection.enter_view.durable_lock_after.present,
 {
     accepted_core_enter_view_has_exact_fact(projection);
     accepted_core_enter_view_projection_selects_post_install_lock(projection);
@@ -679,6 +687,31 @@ pub proof fn production_body_ownership_preserves_effective_lock(
         production_body_ownership_preserves_effective_lock_kernel(
             production_body_ownership_effective_lock_trace(current, incoming, binding),
         ),
+        production_body_ownership_effective_lock_trace(
+            current,
+            incoming,
+            binding,
+        ).owner_after == 1u64,
+        production_body_ownership_effective_lock_trace(
+            current,
+            incoming,
+            binding,
+        ).protected_after
+            >= production_body_ownership_effective_lock_trace(
+                current,
+                incoming,
+                binding,
+            ).protected_before,
+        production_body_ownership_effective_lock_trace(
+            current,
+            incoming,
+            binding,
+        ).owner_reused
+            == (production_body_ownership_effective_lock_trace(
+                current,
+                incoming,
+                binding,
+            ).owner_before == 1u64),
 {
     reveal(production_body_ownership_effective_lock_trace);
     reveal(production_exact_body_owner_binding);
@@ -718,6 +751,11 @@ pub proof fn production_body_capacity_retirement_preserves_effective_lock(
                 accounting,
             ),
         ),
+        retained_bytes <= ready_before,
+        ready_bytes <= ready_before - retained_bytes,
+        accounting.ready_after == ready_before - retained_bytes - ready_bytes,
+        store_bytes <= store_before,
+        accounting.store_after == store_before - store_bytes,
 {
     reveal(production_body_capacity_retirement_effective_lock_trace);
     reveal(exact_body_retirement_accounting);
@@ -764,6 +802,13 @@ pub proof fn production_body_service_refines_async_fairness(
                 selection,
             ),
         ),
+        selection.selected >= 1u8,
+        selection.selected <= 3u8,
+        selection.next >= 1u8,
+        selection.next <= 3u8,
+        selection.selected == 1u8 ==> completion_ready,
+        selection.selected == 2u8 ==> progress_ready,
+        selection.selected == 3u8 ==> normal_ready,
 {
     reveal(production_body_service_effective_lock_trace);
     reveal(bounded_service_selection);

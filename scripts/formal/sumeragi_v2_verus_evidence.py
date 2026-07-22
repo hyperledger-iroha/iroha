@@ -31,7 +31,9 @@ from compute_workspace_source_manifest import workspace_source_manifest  # noqa:
 SCHEMA_VERSION = 2
 EXPECTED_VERUS_VERSION = "0.2026.05.31.5dd6d83"
 EXPECTED_DEPENDENCY_VERIFIED = 1690
-EXPECTED_ROOT_VERIFIED = 127
+# The local proof expansion adds 31 roots to the historical 126-root source;
+# the proposal-origin closure adds one independent root.
+EXPECTED_ROOT_VERIFIED = 158
 EXPECTED_LOG_PATH = "target/formal/sumeragi_v2/verus.log"
 EXPECTED_INVOCATION = (
     "bash",
@@ -83,6 +85,7 @@ REQUIRED_SOURCE_PATHS = (
     "crates/iroha_core/src/merge_sidecar.rs",
     "crates/iroha_p2p/src/network.rs",
     "crates/iroha_p2p/src/peer.rs",
+    "crates/irohad/src/main.rs",
     "docs/formal/sumeragi_v2/SumeragiV2EffectiveLockAcquisition.tla",
     "docs/formal/sumeragi_v2/SumeragiV2EffectiveLockAcquisitionProofs.tla",
     "docs/formal/sumeragi_v2/proof_coverage.json",
