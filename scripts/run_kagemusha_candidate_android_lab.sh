@@ -477,15 +477,29 @@ import subprocess
 import sys
 
 def digest(path_text):
-    return hashlib.sha256(Path(path_text).resolve().read_bytes()).hexdigest()
+    result = hashlib.sha256()
+    with Path(path_text).resolve().open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            result.update(chunk)
+    return result.hexdigest()
+
+def bounded_text(path_text, maximum):
+    path = Path(path_text)
+    if path.stat().st_size > maximum:
+        raise SystemExit(f"bounded text input is too large: {path}")
+    with path.open("rb") as handle:
+        payload = handle.read(maximum + 1)
+    if len(payload) > maximum:
+        raise SystemExit(f"bounded text input grew while reading: {path}")
+    return payload.decode("utf-8")
 
 def version(command):
     result = subprocess.run(command, check=True, capture_output=True, text=True)
     return (result.stdout + result.stderr).strip()
 
 output = Path(sys.argv[1])
-ndk_text = Path(sys.argv[8]).read_text(encoding="utf-8").strip()
-wrapper_properties = Path(sys.argv[10]).read_text(encoding="utf-8")
+ndk_text = bounded_text(sys.argv[8], 64 * 1024).strip()
+wrapper_properties = bounded_text(sys.argv[10], 64 * 1024)
 root = Path(sys.argv[9]).resolve().parents[3]
 sys.path.insert(0, str(root / "scripts"))
 from check_android_device_lab_slot import (
@@ -553,7 +567,9 @@ def validate_existing() -> bool:
         return False
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
         raise SystemExit("existing build-toolchain audit is not one private regular file")
-    if stat.S_IMODE(metadata.st_mode) != 0o600 or output.read_bytes() != encoded:
+    with output.open("rb") as handle:
+        existing = handle.read(len(encoded) + 1)
+    if stat.S_IMODE(metadata.st_mode) != 0o600 or existing != encoded:
         raise SystemExit("refusing to replace a different build-toolchain audit")
     return True
 
@@ -916,9 +932,12 @@ def validate_existing() -> bool:
         not stat.S_ISREG(metadata.st_mode)
         or metadata.st_nlink != 1
         or stat.S_IMODE(metadata.st_mode) != 0o600
-        or output.read_bytes() != encoded
+        or output.stat().st_size != len(encoded)
     ):
         raise SystemExit("refusing to replace a different candidate run receipt")
+    with output.open("rb") as handle:
+        if handle.read(len(encoded) + 1) != encoded:
+            raise SystemExit("refusing to replace a different candidate run receipt")
     return True
 
 def rename_no_replace(source: Path, destination: Path) -> None:
@@ -995,8 +1014,15 @@ root = Path(sys.argv[1])
 sys.path.insert(0, str(root / "scripts"))
 from check_android_device_lab_slot import derive_kagemusha_strongbox_challenge_v1
 
-manifest_sha = hashlib.sha256(Path(sys.argv[4]).read_bytes()).hexdigest()
-native_sha = hashlib.sha256(Path(sys.argv[6]).read_bytes()).hexdigest()
+def digest(path_text):
+    result = hashlib.sha256()
+    with Path(path_text).open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            result.update(chunk)
+    return result.hexdigest()
+
+manifest_sha = digest(sys.argv[4])
+native_sha = digest(sys.argv[6])
 values = {
     "slot_id": sys.argv[2],
     "candidate_record_sha256": sys.argv[3],
@@ -1093,7 +1119,14 @@ import json
 import re
 import sys
 
-summary = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+summary_path = Path(sys.argv[1])
+if summary_path.stat().st_size > 16 * 1024 * 1024:
+    raise SystemExit("trusted validator summary exceeds 16 MiB")
+with summary_path.open("rb") as handle:
+    summary_bytes = handle.read(16 * 1024 * 1024 + 1)
+if len(summary_bytes) > 16 * 1024 * 1024:
+    raise SystemExit("trusted validator summary grew while reading")
+summary = json.loads(summary_bytes)
 if summary.get("ok") != 1 or summary.get("failed") != 0:
     raise SystemExit("trusted validator summary does not contain one successful slot")
 slots = summary.get("slots")

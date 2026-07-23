@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets
 import java.util.ArrayList
 import java.util.Collections
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.locks.ReentrantLock
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
@@ -23,6 +24,12 @@ import org.hyperledger.iroha.sdk.norito.SchemaHash
  * Every recursive lifecycle result is projected only through an ABI-21/V4 native decoder.
  */
 class KagemushaRecursiveSpendProver private constructor() {
+    /** Retryable contention signal raised before a second proof request is copied. */
+    class ProofWorkerBusyException internal constructor(
+        message: String,
+        cause: Throwable? = null,
+    ) : IllegalStateException(message, cause)
+
     /** Canonical ABI-21 artifact roles. Declaration order is part of the native contract. */
     enum class ArtifactRoleV4(val fileName: String) {
         STEP_EQ_PARAMS_IPA("step-eq.params-ipa.krv4"),
@@ -61,6 +68,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val V4_ARTIFACT_COUNT: Int = 8
         const val ARTIFACT_COUNT: Int = V4_ARTIFACT_COUNT
         const val MAX_MANIFEST_BYTES: Int = 1024 * 1024
+        const val MAX_ARTIFACT_CHUNK_BYTES: Int = 1024 * 1024
         const val MAX_TRUSTED_RELEASE_POLICY_BYTES: Int = 64 * 1024
         const val MAX_RELEASE_ATTESTATION_BYTES: Int = 1024 * 1024
         const val MAX_RELEASE_EVIDENCE_BYTES: Int = 16 * 1024 * 1024
@@ -95,7 +103,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val MAXIMUM_BRANCH_CLAIMS: Int = 2
         const val MAXIMUM_PEER_HOPS: Int = 8
         const val MAXIMUM_PROOF_STEPS: Int = 128
-        const val MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4: Int = 16 * 1024 * 1024
+        const val MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4: Int = 21_764
         const val CONFIDENTIAL_TREE_DEPTH: Int = 16
         const val MAX_OUTPUT_MEMBERSHIP_FRONTIER_ARCHIVE_BYTES_V4: Int = 4 * 1024
         const val MAX_OUTPUT_MEMBERSHIP_PATHS_ARCHIVE_BYTES_V4: Int = 16 * 1024
@@ -104,6 +112,35 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         private const val LIBRARY_NAME = "connect_norito_bridge"
         private val artifactBridgeAvailable = loadArtifactBridge()
+        private val heavyProofPermit = ReentrantLock()
+        private const val NATIVE_BUSY_MESSAGE = " is busy; retry after the active proof completes"
+
+        private inline fun <T> withHeavyProofPermit(label: String, action: () -> T): T {
+            if (!heavyProofPermit.tryLock()) {
+                throw ProofWorkerBusyException(
+                    "Kagemusha $label is busy; retry after the active proof completes",
+                )
+            }
+            try {
+                return action()
+            } catch (failure: ProofWorkerBusyException) {
+                throw failure
+            } catch (failure: IllegalStateException) {
+                if (failure.message.orEmpty().contains(NATIVE_BUSY_MESSAGE)) {
+                    throw ProofWorkerBusyException(
+                        "Kagemusha $label is busy; retry after the active proof completes",
+                        failure,
+                    )
+                }
+                throw failure
+            } finally {
+                heavyProofPermit.unlock()
+            }
+        }
+
+        internal fun withHeavyProofPermitForTest(action: () -> Unit) {
+            withHeavyProofPermit("test", action)
+        }
 
         private inline fun <T> transferChangeOpeningOwnership(
             changeOpening: NoteOpening?,
@@ -1621,14 +1658,22 @@ class KagemushaRecursiveSpendProver private constructor() {
         /** Build the first spendable branch from a finalized top-up anchor. */
         @JvmStatic
         fun initSpendV4(request: InitRequestV4): InitResultV4 {
-            val secretArchive = request.consumeAndDestroy()
-            return try {
-                requireProofBackend()
-                InitResultV4(callNativeLifecycle("init spend") {
-                    nativeInitSpendV4(secretArchive)
-                })
-            } finally {
-                SecretArchiveWiper.wipe(secretArchive)
+            return withHeavyProofPermit("init spend") {
+                var secretArchive: ByteArray? = null
+                var terminal = true
+                try {
+                    requireProofBackend()
+                    val borrowed = request.borrowForNative().also { secretArchive = it }
+                    InitResultV4(callNativeLifecycle("init spend") {
+                        nativeInitSpendV4(borrowed)
+                    })
+                } catch (failure: ProofWorkerBusyException) {
+                    terminal = false
+                    throw failure
+                } finally {
+                    SecretArchiveWiper.wipe(secretArchive)
+                    if (terminal) request.close()
+                }
             }
         }
 
@@ -1638,53 +1683,66 @@ class KagemushaRecursiveSpendProver private constructor() {
             request: AppendRequestV4,
             recipientRequest: RecipientPaymentRequest,
             verifiedAtMilliseconds: Long,
-        ): SplitResultV4 =
-            transferChangeOpeningOwnership(request.takeChangeOpening()) { opening ->
+        ): SplitResultV4 = withHeavyProofPermit("append spend") {
+            var secretArchive: ByteArray? = null
+            var terminal = true
+            try {
                 require(verifiedAtMilliseconds > 0) {
                     "verifiedAtMilliseconds must be positive"
                 }
                 requireProofBackend()
-                val secretArchive = request.consumeAndDestroy()
-                try {
-                    SplitResultV4(
-                        callNativeLifecycle("append spend") {
-                            nativeAppendSpendV4(
-                                secretArchive,
-                                recipientRequest.noritoEncoded(),
-                                verifiedAtMilliseconds,
-                            )
-                        },
-                        opening,
+                val borrowed = request.borrowForNative().also { secretArchive = it }
+                val resultArchive = callNativeLifecycle("append spend") {
+                    nativeAppendSpendV4(
+                        borrowed,
+                        recipientRequest.noritoEncoded(),
+                        verifiedAtMilliseconds,
                     )
-                } finally {
-                    secretArchive.fill(0)
                 }
+                transferChangeOpeningOwnership(request.takeChangeOpening()) { opening ->
+                    SplitResultV4(resultArchive, opening)
+                }
+            } catch (failure: ProofWorkerBusyException) {
+                terminal = false
+                throw failure
+            } finally {
+                SecretArchiveWiper.wipe(secretArchive)
+                if (terminal) request.close()
             }
+        }
 
         /** Verify the recursive proof, exact split bindings, membership, and hop limit. */
         @JvmStatic
         fun verifySpendV4(request: VerifyRequestV4): VerifyResultV4 {
-            requireProofBackend()
-            return VerifyResultV4(callNativeLifecycle("verify spend") {
-                nativeVerifySpendV4(request.noritoEncoded())
-            })
+            return withHeavyProofPermit("verify spend") {
+                requireProofBackend()
+                VerifyResultV4(callNativeLifecycle("verify spend") {
+                    nativeVerifySpendV4(request.borrowForNative())
+                })
+            }
         }
 
         /** Build a full or partial redemption and its optional proof-bound offline change. */
         @JvmStatic
         fun buildRedeemV4(request: RedeemRequestV4): RedeemBuildResultV4 =
-            transferChangeOpeningOwnership(request.takeChangeOpening()) { opening ->
-                requireProofBackend()
-                val secretArchive = request.consumeAndDestroy()
+            withHeavyProofPermit("build redeem") {
+                var secretArchive: ByteArray? = null
+                var terminal = true
                 try {
-                    RedeemBuildResultV4(
-                        callNativeLifecycle("build redeem") {
-                            nativeBuildRedeemV4(secretArchive)
-                        },
-                        opening,
-                    )
+                    requireProofBackend()
+                    val borrowed = request.borrowForNative().also { secretArchive = it }
+                    val resultArchive = callNativeLifecycle("build redeem") {
+                        nativeBuildRedeemV4(borrowed)
+                    }
+                    transferChangeOpeningOwnership(request.takeChangeOpening()) { opening ->
+                        RedeemBuildResultV4(resultArchive, opening)
+                    }
+                } catch (failure: ProofWorkerBusyException) {
+                    terminal = false
+                    throw failure
                 } finally {
-                    secretArchive.fill(0)
+                    SecretArchiveWiper.wipe(secretArchive)
+                    if (terminal) request.close()
                 }
             }
 
@@ -1751,6 +1809,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         private inline fun callNativeLifecycle(label: String, call: () -> ByteArray?): ByteArray =
             try {
                 checkNotNull(call()) { "native Kagemusha $label returned no archive" }
+            } catch (failure: IllegalStateException) {
+                if (failure.message.orEmpty().contains(NATIVE_BUSY_MESSAGE)) {
+                    throw ProofWorkerBusyException(
+                        "Kagemusha $label is busy; retry after the active proof completes",
+                        failure,
+                    )
+                }
+                throw failure
             } catch (failure: UnsatisfiedLinkError) {
                 throw IllegalStateException("native Kagemusha $label entrypoint is unavailable", failure)
             }
@@ -2036,8 +2102,10 @@ class KagemushaRecursiveSpendProver private constructor() {
             return value.copyOf()
         }
 
-        private fun requireChunk(value: ByteArray?): ByteArray {
-            require(value != null && value.isNotEmpty()) { "chunk must not be empty" }
+        internal fun requireChunk(value: ByteArray?): ByteArray {
+            require(value != null && value.isNotEmpty() && value.size <= MAX_ARTIFACT_CHUNK_BYTES) {
+                "chunk must contain 1..$MAX_ARTIFACT_CHUNK_BYTES bytes"
+            }
             return value.copyOf()
         }
 
@@ -2271,6 +2339,13 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @Synchronized
         fun noritoEncoded(): ByteArray {
+            check(!destroyed) { "canonical archive has been destroyed" }
+            return bytes.copyOf()
+        }
+
+        /** Borrow one synchronized native-call copy without changing ownership. */
+        @Synchronized
+        internal fun borrowForNative(): ByteArray {
             check(!destroyed) { "canonical archive has been destroyed" }
             return bytes.copyOf()
         }
@@ -3809,11 +3884,14 @@ class KagemushaRecursiveSpendProver private constructor() {
             nativeArtifactWriteV4(handle, requireChunk(chunk))
         }
 
-        @Synchronized
         fun finish() {
-            requireOpen(allowFinalized = false)
-            nativeArtifactFinalizeV4(handle)
-            finalized = true
+            withHeavyProofPermit("artifact finalization") {
+                synchronized(this) {
+                    requireOpen(allowFinalized = false)
+                    nativeArtifactFinalizeV4(handle)
+                    finalized = true
+                }
+            }
         }
 
         @Synchronized
@@ -3940,43 +4018,46 @@ class KagemushaRecursiveSpendProver private constructor() {
                 }
         }
 
-        @Synchronized
         fun install() {
-            requirePending()
-            check(artifacts.size == ARTIFACT_COUNT) {
-                "artifact set must contain exactly eight streams"
-            }
-            requireCanonicalV4ArtifactRoleInventory(artifacts.keys.toList())
-            val ordered = artifacts.values.toList()
-            val handles = LongArray(ARTIFACT_COUNT)
-            var claimed = 0
-            try {
-                while (claimed < ordered.size) {
-                    handles[claimed] = ordered[claimed].claimFinalizedHandle()
-                    claimed += 1
+            withHeavyProofPermit("artifact install") {
+                synchronized(this) {
+                    requirePending()
+                    check(artifacts.size == ARTIFACT_COUNT) {
+                        "artifact set must contain exactly eight streams"
+                    }
+                    requireCanonicalV4ArtifactRoleInventory(artifacts.keys.toList())
+                    val ordered = artifacts.values.toList()
+                    val handles = LongArray(ARTIFACT_COUNT)
+                    var claimed = 0
+                    try {
+                        while (claimed < ordered.size) {
+                            handles[claimed] = ordered[claimed].claimFinalizedHandle()
+                            claimed += 1
+                        }
+                        nativeArtifactSetInstallV4(
+                            manifestNorito,
+                            manifestSha256,
+                            trustedPolicyNorito,
+                            releaseAttestationNorito,
+                            benchmarkEvidence,
+                            cryptographicReview,
+                            promotionRecordNorito,
+                            handles,
+                        )
+                    } catch (failure: Throwable) {
+                        repeat(claimed) { index ->
+                            ordered[index].releaseInstallClaim(handles[index])
+                        }
+                        throw failure
+                    }
+                    ordered.forEachIndexed { index, ingest ->
+                        ingest.relinquishInstalledHandle(handles[index])
+                    }
+                    artifacts.clear()
+                    artifactDigests.clear()
+                    installed = true
                 }
-                nativeArtifactSetInstallV4(
-                    manifestNorito,
-                    manifestSha256,
-                    trustedPolicyNorito,
-                    releaseAttestationNorito,
-                    benchmarkEvidence,
-                    cryptographicReview,
-                    promotionRecordNorito,
-                    handles,
-                )
-            } catch (failure: Throwable) {
-                repeat(claimed) { index ->
-                    ordered[index].releaseInstallClaim(handles[index])
-                }
-                throw failure
             }
-            ordered.forEachIndexed { index, ingest ->
-                ingest.relinquishInstalledHandle(handles[index])
-            }
-            artifacts.clear()
-            artifactDigests.clear()
-            installed = true
         }
 
         @Synchronized
@@ -3991,12 +4072,15 @@ class KagemushaRecursiveSpendProver private constructor() {
             )
         }
 
-        @Synchronized
         fun uninstall() {
-            if (!installed || closed) return
-            nativeArtifactSetUninstallV4(manifestSha256)
-            installed = false
-            closed = true
+            withHeavyProofPermit("artifact uninstall") {
+                synchronized(this) {
+                    if (!installed || closed) return@withHeavyProofPermit
+                    nativeArtifactSetUninstallV4(manifestSha256)
+                    installed = false
+                    closed = true
+                }
+            }
         }
 
         @Synchronized

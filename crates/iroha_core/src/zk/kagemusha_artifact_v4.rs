@@ -1,4 +1,4 @@
-//! Authenticated framing and role-safe carriers for Kagemusha ABI-20 artifacts.
+//! Authenticated framing and role-safe carriers for Kagemusha ABI-21 artifacts.
 //!
 //! V4 packages are selector-free and intentionally reject any pre-release
 //! format. Every release-sized allocation is preceded by a fixed upper-bound,
@@ -42,7 +42,7 @@ use iroha_data_model::offline::{
 };
 use sha2::{Digest as _, Sha256};
 
-/// Framing magic for a streamed ABI-20 artifact.
+/// Framing magic for a streamed ABI-21 artifact.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4: &[u8; 8] =
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4;
 /// Defensive limit checked before allocating an encoded V4 header.
@@ -113,6 +113,23 @@ fn export_header_v4(
     kind: KagemushaPastaCycleArtifactKindV4,
     payload: &[u8],
 ) -> Result<KagemushaRecursiveSpendPastaCycleArtifactHeaderV4, String> {
+    export_header_from_identity_v4(
+        generation,
+        profile,
+        kind,
+        u64::try_from(payload.len())
+            .map_err(|_| "Kagemusha V4 payload length does not fit u64".to_owned())?,
+        Sha256::digest(payload).into(),
+    )
+}
+
+fn export_header_from_identity_v4(
+    generation: &str,
+    profile: &KagemushaPastaCycleProofProfileV4,
+    kind: KagemushaPastaCycleArtifactKindV4,
+    payload_size_bytes: u64,
+    payload_sha256: [u8; 32],
+) -> Result<KagemushaRecursiveSpendPastaCycleArtifactHeaderV4, String> {
     profile
         .circuit_params
         .validate()
@@ -120,10 +137,9 @@ fn export_header_v4(
     if profile.ipa_k != profile.circuit_params.k
         || profile.compiled_protocol_structure_sha256 == [0; 32]
         || profile.step_proof_size_bytes != profile.circuit_params.max_parent_proof_bytes
-        || payload.is_empty()
-        || u64::try_from(payload.len())
-            .ok()
-            .is_none_or(|len| len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4)
+        || payload_size_bytes == 0
+        || payload_size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+        || payload_sha256 == [0; 32]
     {
         return Err("Kagemusha V4 export profile or payload is invalid".to_owned());
     }
@@ -145,9 +161,8 @@ fn export_header_v4(
         compiled_protocol_structure_sha256: profile.compiled_protocol_structure_sha256,
         step_proof_size_bytes: profile.step_proof_size_bytes,
         kind,
-        payload_size_bytes: u64::try_from(payload.len())
-            .map_err(|_| "Kagemusha V4 payload length does not fit u64".to_owned())?,
-        payload_sha256: Sha256::digest(payload).into(),
+        payload_size_bytes,
+        payload_sha256,
     };
     validate_header_v4(&header)?;
     Ok(header)
@@ -209,6 +224,108 @@ pub fn write_kagemusha_pasta_cycle_artifact_v4<W: Write>(
         sha256: framed_hasher.finalize().into(),
         payload_size_bytes: header.payload_size_bytes,
         payload_sha256: header.payload_sha256,
+    };
+    descriptor.validate().map_err(|error| error.to_string())?;
+    Ok(descriptor)
+}
+
+/// Stream a pre-authenticated payload into one canonical KRV4 package.
+///
+/// The declared identity must come from the same bounded writer that produced
+/// `payload`. This routine rereads in 1 MiB chunks, rejects early EOF and
+/// trailing bytes, and independently verifies the digest while framing, so a
+/// release-sized proving key never needs a second in-memory byte vector.
+pub fn write_kagemusha_pasta_cycle_artifact_from_reader_v4<W: Write, R: Read>(
+    writer: &mut W,
+    generation: &str,
+    profile: &KagemushaPastaCycleProofProfileV4,
+    kind: KagemushaPastaCycleArtifactKindV4,
+    payload: &mut R,
+    payload_size_bytes: u64,
+    payload_sha256: [u8; 32],
+) -> Result<KagemushaPastaCycleArtifactV4, String> {
+    let header = export_header_from_identity_v4(
+        generation,
+        profile,
+        kind,
+        payload_size_bytes,
+        payload_sha256,
+    )?;
+    let header_bytes = norito::to_bytes(&header)
+        .map_err(|error| format!("failed to encode Kagemusha V4 artifact header: {error}"))?;
+    if header_bytes.is_empty()
+        || header_bytes.len() > KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_MAX_HEADER_BYTES_V4
+    {
+        return Err("Kagemusha V4 encoded header exceeds its bound".to_owned());
+    }
+    let header_len = u32::try_from(header_bytes.len())
+        .map_err(|_| "Kagemusha V4 header length does not fit u32".to_owned())?;
+    let header_len_bytes = header_len.to_le_bytes();
+    let size_bytes = u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4.len())
+        .ok()
+        .and_then(|size| size.checked_add(u64::try_from(header_len_bytes.len()).ok()?))
+        .and_then(|size| size.checked_add(u64::from(header_len)))
+        .and_then(|size| size.checked_add(payload_size_bytes))
+        .ok_or_else(|| "Kagemusha V4 framed artifact size overflow".to_owned())?;
+    if size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4 {
+        return Err(format!(
+            "Kagemusha V4 framed artifact size {size_bytes} exceeds explicit ceiling {}",
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+        ));
+    }
+
+    let mut framed_hasher = Sha256::new();
+    for bytes in [
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4.as_slice(),
+        header_len_bytes.as_slice(),
+        header_bytes.as_slice(),
+    ] {
+        writer
+            .write_all(bytes)
+            .map_err(|error| format!("failed to write Kagemusha V4 artifact: {error}"))?;
+        framed_hasher.update(bytes);
+    }
+
+    let mut payload_hasher = Sha256::new();
+    let mut remaining = payload_size_bytes;
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    while remaining > 0 {
+        let requested = usize::try_from(remaining.min(buffer.len() as u64))
+            .map_err(|_| "Kagemusha V4 payload chunk length does not fit usize".to_owned())?;
+        let read = payload
+            .read(&mut buffer[..requested])
+            .map_err(|error| format!("failed to read Kagemusha V4 payload: {error}"))?;
+        if read == 0 {
+            return Err("Kagemusha V4 payload ended before its declared length".to_owned());
+        }
+        let bytes = &buffer[..read];
+        writer
+            .write_all(bytes)
+            .map_err(|error| format!("failed to write Kagemusha V4 artifact: {error}"))?;
+        payload_hasher.update(bytes);
+        framed_hasher.update(bytes);
+        remaining -= u64::try_from(read)
+            .map_err(|_| "Kagemusha V4 payload read length does not fit u64".to_owned())?;
+    }
+    let mut trailing = [0_u8; 1];
+    if payload
+        .read(&mut trailing)
+        .map_err(|error| format!("failed to check Kagemusha V4 payload boundary: {error}"))?
+        != 0
+    {
+        return Err("Kagemusha V4 payload exceeds its declared length".to_owned());
+    }
+    if <[u8; 32]>::from(payload_hasher.finalize()) != payload_sha256 {
+        return Err("Kagemusha V4 payload digest changed while framing".to_owned());
+    }
+
+    let descriptor = KagemushaPastaCycleArtifactV4 {
+        kind,
+        file_name: kagemusha_artifact_file_name_v4(profile.parity, kind).to_owned(),
+        size_bytes,
+        sha256: framed_hasher.finalize().into(),
+        payload_size_bytes,
+        payload_sha256,
     };
     descriptor.validate().map_err(|error| error.to_string())?;
     Ok(descriptor)
@@ -368,7 +485,7 @@ pub struct KagemushaValidatedArtifactPayloadV4 {
     payload: Vec<u8>,
 }
 
-/// Trust mode attached to one parsed ABI-20 inventory.
+/// Trust mode attached to one parsed ABI-21 inventory.
 ///
 /// The candidate variant is compiled only into the explicitly requested
 /// non-shipping evidence harness. Keeping the mode in the carrier prevents a
@@ -846,18 +963,6 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
         self.binding.manifest().max_proof_bytes
     }
 
-    /// Authenticated Eq profile selecting circuit parameters and measured cap.
-    #[must_use]
-    pub(crate) fn step_eq_profile(&self) -> &KagemushaPastaCycleProofProfileV4 {
-        &self.binding.manifest().profiles[0]
-    }
-
-    /// Authenticated Ep profile selecting circuit parameters and measured cap.
-    #[must_use]
-    pub(crate) fn step_ep_profile(&self) -> &KagemushaPastaCycleProofProfileV4 {
-        &self.binding.manifest().profiles[1]
-    }
-
     pub(crate) fn step_eq_parameters(&self) -> &[u8] {
         self.step_eq_parameters.payload()
     }
@@ -1025,13 +1130,5 @@ impl KagemushaPastaCycleProverArtifactsV4 {
     #[must_use]
     pub(crate) fn verifier(&self) -> &KagemushaPastaCycleVerifierArtifactsV4 {
         &self.verifier
-    }
-
-    pub(crate) fn step_eq_proving_key(&self) -> &[u8] {
-        self.step_eq_proving_key.payload()
-    }
-
-    pub(crate) fn step_ep_proving_key(&self) -> &[u8] {
-        self.step_ep_proving_key.payload()
     }
 }

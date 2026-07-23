@@ -74,15 +74,15 @@ impl<'params, E: MultiMillerLoop + Debug> SingleStrategy<'params, E> {
 }
 
 impl<
-        'params,
-        E: MultiMillerLoop + Debug,
-        V: Verifier<
+    'params,
+    E: MultiMillerLoop + Debug,
+    V: Verifier<
             'params,
             KZGCommitmentScheme<E>,
             MSMAccumulator = DualMSM<'params, E>,
             Guard = GuardKZG<'params, E>,
         >,
-    > VerificationStrategy<'params, KZGCommitmentScheme<E>, V> for AccumulatorStrategy<'params, E>
+> VerificationStrategy<'params, KZGCommitmentScheme<E>, V> for AccumulatorStrategy<'params, E>
 where
     E::G1Affine: SerdeCurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
     E::G2Affine: SerdeCurveAffine,
@@ -112,15 +112,15 @@ where
 }
 
 impl<
-        'params,
-        E: MultiMillerLoop + Debug,
-        V: Verifier<
+    'params,
+    E: MultiMillerLoop + Debug,
+    V: Verifier<
             'params,
             KZGCommitmentScheme<E>,
             MSMAccumulator = DualMSM<'params, E>,
             Guard = GuardKZG<'params, E>,
         >,
-    > VerificationStrategy<'params, KZGCommitmentScheme<E>, V> for SingleStrategy<'params, E>
+> VerificationStrategy<'params, KZGCommitmentScheme<E>, V> for SingleStrategy<'params, E>
 where
     E::G1Affine: SerdeCurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
     E::G2Affine: SerdeCurveAffine,

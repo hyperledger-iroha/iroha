@@ -276,8 +276,8 @@ public sealed partial class ToriiClient
         };
         var expectedCircuit = field switch
         {
-            "active_recursive_step_eq_verifier" => "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
-            "active_recursive_step_ep_verifier" => "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+            "active_recursive_step_eq_verifier" => "kagemusha-recursive-spend-step-eq-compact-layout-v5",
+            "active_recursive_step_ep_verifier" => "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
             _ => null,
         };
         if (expectedName is not null

@@ -68,9 +68,9 @@ to be unavailable and exactly one `recursive_v4_registry_unavailable` or
 `recursive_v4_registry_malformed` blocker; a present value forbids both.
 The recursive pair uses registry backend `halo2/ipa` and exact roles
 `kagemusha_recursive_step_eq_v4_verifier_record` with circuit
-`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
+`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
 `kagemusha_recursive_step_ep_v4_verifier_record` with circuit
-`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`.
+`kagemusha-recursive-spend-step-ep-compact-lineage-v5`.
 
 ## Online to offline
 
@@ -155,6 +155,84 @@ release metadata outside that eight-role cryptographic inventory. Every file
 has an exact framed and payload size and SHA-256. Installation streams to
 private files, verifies every binding plus the canonical candidate-bound
 `promotion-record-v4.norito`, and atomically activates the complete generation.
+Bootstrap payload version 5 authenticates the final key-generation circuit's
+canonical per-phase virtual-region breakpoints. Runtime rejects malformed or
+shape-incompatible breakpoints and builds only a witness-generation circuit
+from them, so it does not retain the key-generation constraint graph beside a
+processed proving key.
+Candidate verifier- and proving-key generation extracts or validates those
+breakpoints after synthesis and drops the populated circuit before key
+assembly. Proving-key assembly reuses the supplied verifier-key domain and
+stages compact permutation scratch instead of retaining a domain-by-column
+factor grid or parallel coefficient-clone fan-out. Empty-bootstrap permutation
+assembly keeps identity mappings implicit and materializes union-find state
+only on the first nontrivial copy, avoiding 17,301,504 bytes for the reviewed
+k16, 11-column mapping. Verifier-key construction also builds, commits, and
+drops one permutation polynomial at a time. Because the VK retains only
+commitments, this removes 20,971,520 bytes of retained permutation columns and
+lowers the first commitment's live field payload by approximately 18 MiB after
+accounting for the shared omega and delta tables. Those streamed permutation
+commitments now finish before assigned fixed columns and bit-packed selectors
+expand into ten degree-sized field polynomials. That removes another
+11,468,800 bytes from the reviewed first-MSM peak. These changes affect
+allocation lifetimes only; compressed and uncompressed canonical processed key
+bytes remain unchanged.
+Proof generation then transfers ownership of that live circuit and one parsed
+processed key into the prover. The circuit is released after witness synthesis;
+domain-sized fixed-value and permutation Lagrange preprocessing is released
+after its last commitment; and the consumed key yields only its embedded VK
+for immediate proof verification before that VK is dropped. A live circuit and
+full processed key therefore do not remain borrowed through transcript
+finalization or overlap a separately reparsed verifier domain.
+The consuming quotient evaluator additionally transforms one
+copy-permutation sigma chunk at a time rather than retaining all 11 transformed
+columns. It preserves canonical proof bytes while removing roughly 18 MiB of
+transient field storage from the reviewed shape. Evaluation domains initialize
+only the base FFT table eagerly and leave unused 2n/4n tables lazy (roughly
+24 MiB at k16); quotient parts are written directly into the final interleaved
+polynomial (roughly 8 MiB); and cached recursive FFT scratch is evicted before
+h-piece commitments (roughly 8 MiB). The outer lifecycle remains in a
+disposable one-worker Rayon pool. Large MSMs alone acquire process-wide
+admission before scalar/base preprocessing and use a fixed two-worker window
+pool, so concurrent outer commitments and host core count cannot multiply
+preprocessing buffers, bucket tables, or allocator caches. Accumulator order is
+unchanged. The checked static admission estimate is 232 MiB, not a
+physical-memory prediction; the 256 MiB userspace supervisor remains
+authoritative. Production candidate and physical-device peak-memory evidence
+remain required before promotion.
+Semantic construction loads one authenticated role at a time and drops each raw
+carrier after parsing; it never assembles the six-role verifier or eight-role
+prover payload inventory in memory. Runtime verifiers are transient rather
+than cached per generation. Parent verification is dropped before a prover is
+opened; after proving, terminal verification shares that prover's
+Params/circuit context and reparses only the two small raw VKs after parsed
+proving keys have been dropped. Memory-intensive install, top-up shielding,
+recursive proof, and
+verification entrypoints share one nonblocking process-wide permit, and a
+contending ABI caller receives
+`CONNECT_NORITO_ERR_KAGEMUSHA_BUSY` (`-318`) before its large input is copied.
+Swift exposes that status as the retryable `proofWorkerBusy` error. If an
+otherwise complete install encounters the busy permit, the coordinator retains
+the authenticated spools and retries the identical candidate without streaming
+the large artifact stream again; cancellation or a different candidate closes
+that pending install. JVM artifact ingestion also limits every native write
+chunk to 1 MiB; the
+Kotlin and mirrored Java SDKs enforce that ceiling before cloning the caller's
+array.
+Before Halo2 parses an authenticated ParamsIPA, verifier key, or proving key,
+an allocation-free structural pass checks its exact degree, commitment counts,
+polynomial-vector counts, polynomial lengths, and total encoding length against
+the authenticated circuit shape. Serialized inner counts are never trusted as
+allocation sizes.
+Release verification and finalization likewise authenticate one framed role at
+a time and drop its payload before opening the next. They do not reconstruct an
+eight-role raw prover container merely to check carrier bindings.
+Validator startup performs the same exact shape-derived role-size preflight
+before Halo2 parsing. Its decoded-memory budget includes retained IPA vectors,
+verifier-key FFT domains, transient release files, and allocator headroom.
+Runtime validates the shipped selector-zero proof with the final Step VK and
+does not regenerate a bootstrap VK. A release that cannot fit the configured
+budget fails closed before verifier parsing.
 Swift, Kotlin, and Java release-authentication inputs therefore require that
 promotion record alongside the trusted policy, attestation, benchmark evidence,
 and review. A partial, unpromoted, or role-substituted generation never becomes
@@ -165,7 +243,10 @@ active.
 Operators configure both optional paths together under `settlement.offline`:
 `kagemusha_release_policy_path` names the canonical Norito trust policy, and
 `kagemusha_artifact_dir` names the directory whose children are manifest
-digests. Leaving both unset is valid and keeps Kagemusha readiness false while
+digests. `kagemusha_max_decoded_bytes` caps the conservative decoded verifier
+working-set estimate. It defaults to, and cannot be raised above, 256 MiB per
+node; lower deployment limits are accepted. Leaving both paths unset is valid
+and keeps Kagemusha readiness false while
 the node otherwise operates normally. Supplying only one path, an empty path,
 a malformed policy, an invalid release directory, or corrupt artifact material
 is a startup error.
@@ -173,8 +254,12 @@ is a startup error.
 Startup authenticates every candidate subdirectory, validates framed and
 payload sizes and SHA-256 values, parses the six validator-side artifacts
 (ParamsIPA, verifying key, and bootstrap witness for Eq and Ep), and builds an
-immutable catalog keyed by manifest digest. Consensus never reads the
-filesystem. Wallets and provers install all eight artifacts, including both
+immutable catalog keyed by manifest digest. Loading fails before large artifact
+allocation when the decoded estimate exceeds the configured budget. After
+parsing, raw ParamsIPA and bootstrap payloads are released; the catalog retains
+the parsed verifier and only the serialized verifying keys needed to build
+governed activation records. Consensus never reads the filesystem. Wallets and
+provers install all eight artifacts, including both
 proving keys. Generated `dist/kagemusha/v4/*`, raw parameters, keys, device
 logs, and signing inputs remain untracked runtime material.
 

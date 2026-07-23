@@ -264,9 +264,47 @@ def validate_kagemusha_candidate_stage_manifest_v1(
         raise ValueError("candidate stage manifest must be one singly-linked regular file")
     if stat.S_IMODE(manifest_stat.st_mode) != 0o600:
         raise ValueError("candidate stage manifest mode must be 0600")
-    payload_bytes = manifest_path.read_bytes()
-    if not payload_bytes or len(payload_bytes) > 1024 * 1024:
+    maximum_manifest_bytes = 1024 * 1024
+    if manifest_stat.st_size <= 0 or manifest_stat.st_size > maximum_manifest_bytes:
         raise ValueError("candidate stage manifest is empty or oversized")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(manifest_path, flags)
+    chunks: list[bytes] = []
+    try:
+        open_stat = os.fstat(descriptor)
+        expected_identity = (manifest_stat.st_dev, manifest_stat.st_ino)
+        if (
+            not stat.S_ISREG(open_stat.st_mode)
+            or open_stat.st_nlink != 1
+            or (open_stat.st_dev, open_stat.st_ino) != expected_identity
+            or open_stat.st_size != manifest_stat.st_size
+        ):
+            raise ValueError("candidate stage manifest changed while being opened")
+        size = 0
+        while True:
+            chunk = os.read(
+                descriptor,
+                min(1024 * 1024, maximum_manifest_bytes + 1 - size),
+            )
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > maximum_manifest_bytes:
+                raise ValueError("candidate stage manifest is empty or oversized")
+            chunks.append(chunk)
+        final_open_stat = os.fstat(descriptor)
+        final_path_stat = manifest_path.lstat()
+        if (
+            (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity
+            or (final_open_stat.st_dev, final_open_stat.st_ino) != expected_identity
+            or final_path_stat.st_size != size
+            or final_path_stat.st_mtime_ns != manifest_stat.st_mtime_ns
+            or final_path_stat.st_ctime_ns != manifest_stat.st_ctime_ns
+        ):
+            raise ValueError("candidate stage manifest changed while being read")
+    finally:
+        os.close(descriptor)
+    payload_bytes = b"".join(chunks)
     if hashlib.sha256(payload_bytes).hexdigest() != stage_sha256:
         raise ValueError("candidate stage manifest digest is not the stage identity")
     try:

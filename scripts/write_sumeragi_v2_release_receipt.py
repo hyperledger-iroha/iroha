@@ -72,7 +72,7 @@ _MAX_LOCALNET_MANIFEST_INDEX_BYTES = 1024 * 1024
 _MAX_LOCALNET_MANIFEST_BYTES = 64 * 1024 * 1024
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "4c7c161667924706d79346a447a7ddd3e19be1e1868a30f24526ad475a4e7525"
+    "568269f0431494b4f29092f461822f50a0a060cf596e3b126ba34da4a19e1180"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -3187,7 +3187,7 @@ def _formal_artifacts(
     sealed: dict[str, Any],
     checker_environment: dict[str, str],
     repo_root: Path,
-) -> tuple[Path, Path, Path, Path, Path, Path, Path, Path]:
+) -> tuple[Path, Path, Path, Path, Path, Path, Path, Path, Path, Path]:
     ledger = _regular_file(
         completion_path.with_name("proof_coverage.json"), "formal proof ledger"
     )
@@ -3206,6 +3206,8 @@ def _formal_artifacts(
         "cross_tool_evidence_sha256",
         "harness_cargo_lock_sha256",
         "formal_toolchain_sha256",
+        "tlaps_resource_jsonl_sha256",
+        "tlaps_resource_summary_sha256",
     }
     _require_fields(
         fields,
@@ -3245,6 +3247,13 @@ def _formal_artifacts(
     toolchain_path = _regular_file(
         completion_path.with_name("formal-toolchain.tsv"), "formal toolchain"
     )
+    tlaps_resource_jsonl = _regular_file(
+        completion_path.with_name("tlaps_resource.jsonl"), "TLAPS resource samples"
+    )
+    tlaps_resource_summary = _regular_file(
+        completion_path.with_name("tlaps_resource_summary.json"),
+        "TLAPS resource summary",
+    )
     for artifact, digest_field, name in (
         (gate_log, "formal_gate_log_sha256", "formal gate log"),
         (ledger, "proof_coverage_sha256", "formal proof ledger"),
@@ -3258,9 +3267,35 @@ def _formal_artifacts(
         ),
         (harness_lock, "harness_cargo_lock_sha256", "formal harness lock"),
         (toolchain_path, "formal_toolchain_sha256", "formal toolchain"),
+        (
+            tlaps_resource_jsonl,
+            "tlaps_resource_jsonl_sha256",
+            "TLAPS resource samples",
+        ),
+        (
+            tlaps_resource_summary,
+            "tlaps_resource_summary_sha256",
+            "TLAPS resource summary",
+        ),
     ):
         if _sha256(artifact) != fields[digest_field]:
             raise ReceiptError(f"{name} digest mismatch")
+    resource_summary = _decode_canonical_json(
+        tlaps_resource_summary.read_bytes(), "TLAPS resource summary"
+    )
+    if (
+        resource_summary.get("schema_version") != 1
+        or resource_summary.get("event") != "summary"
+        or resource_summary.get("exit_reason") != "completed"
+        or resource_summary.get("exit_status") != 0
+        or resource_summary.get("memory_limit_bytes") != 2 * 1024 * 1024 * 1024
+        or resource_summary.get("sample_interval_seconds") != 0.25
+        or not isinstance(resource_summary.get("peak_memory_bytes"), int)
+        or resource_summary["peak_memory_bytes"] < 0
+        or resource_summary["peak_memory_bytes"]
+        > resource_summary["memory_limit_bytes"]
+    ):
+        raise ReceiptError("TLAPS resource summary is not a successful bounded release run")
     if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
         raise ReceiptError("formal harness lock is not the pinned dependency graph")
     cross_tool_result = subprocess.run(
@@ -3309,7 +3344,7 @@ def _formal_artifacts(
     if (
         toolchain["schema_version"] != "1"
         or toolchain["tlc_profile"] != "ci"
-        or toolchain["tlaps_threads"] != "4"
+        or toolchain["tlaps_threads"] != "1"
     ):
         raise ReceiptError("formal toolchain does not describe the pinned release profile")
     for tool in ("java", "tlapm", "tla2tools", "verus", "cargo_verus"):
@@ -3390,6 +3425,8 @@ def _formal_artifacts(
         cross_tool_evidence,
         harness_lock,
         toolchain_path,
+        tlaps_resource_jsonl,
+        tlaps_resource_summary,
     )
 
 
@@ -3495,7 +3532,7 @@ def _corridor_artifacts(
         "leg_count": str(len(_corridor_legs())),
         "production_required_test_count": str(_PRODUCTION_TEST_COUNT),
         "tlc_profile": "ci",
-        "tlaps_threads": "4",
+        "tlaps_threads": "1",
     }
     if any(fields.get(name) != value for name, value in expected_identity.items()):
         raise ReceiptError("corridor completion is not the exact release preflight")
@@ -3991,6 +4028,8 @@ def build_receipt(
         formal_cross_tool_evidence,
         formal_harness_lock,
         formal_toolchain,
+        formal_tlaps_resource_jsonl,
+        formal_tlaps_resource_summary,
     ) = _formal_artifacts(
         formal_path, formal_completion, sealed, checker_environment, repo_root
     )
@@ -4212,6 +4251,8 @@ def build_receipt(
             "formal_cross_tool_evidence": _artifact(formal_cross_tool_evidence),
             "formal_harness_lock": _artifact(formal_harness_lock),
             "formal_toolchain": _artifact(formal_toolchain),
+            "formal_tlaps_resource_jsonl": _artifact(formal_tlaps_resource_jsonl),
+            "formal_tlaps_resource_summary": _artifact(formal_tlaps_resource_summary),
             "seed_matrix_completion": _artifact(seed_path),
             "seed_matrix_summary": _artifact(seed_summary),
             "seed_matrix_run_logs": [_artifact(path) for path in seed_run_logs],

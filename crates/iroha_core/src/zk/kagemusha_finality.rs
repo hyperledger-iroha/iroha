@@ -166,7 +166,7 @@ impl KagemushaTopUpFinalityVerifier {
         Self::default()
     }
 
-    /// Verify one proof against a complete ABI-20 anchor and its exact
+    /// Verify one proof against a complete ABI-21 anchor and its exact
     /// authenticated V4 release. The V4 receipt and manifest are validated in
     /// place; this path never projects either value into an older release carrier.
     pub fn verify_v4(
@@ -187,7 +187,7 @@ impl KagemushaTopUpFinalityVerifier {
         )
     }
 
-    /// Verify the same live finality proof against a clean, unsigned ABI-20
+    /// Verify the same live finality proof against a clean, unsigned ABI-21
     /// candidate in an explicitly selected non-shipping evidence-lab build.
     #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     pub fn verify_candidate_evidence_lab_v4(
@@ -381,7 +381,7 @@ impl KagemushaTopUpFinalityVerifier {
     }
 }
 
-/// Verify one ABI-20 top-up proof using a process-wide bounded exact-roster
+/// Verify one ABI-21 top-up proof using a process-wide bounded exact-roster
 /// cache and the complete V4 anchor/manifest types.
 pub fn verify_kagemusha_topup_finality_v4(
     proof: &KagemushaTopUpFinalityProofV2,
@@ -402,7 +402,7 @@ pub fn verify_kagemusha_topup_finality_v4(
         )
 }
 
-/// Verify one ABI-20 top-up proof against a clean candidate using the same
+/// Verify one ABI-21 top-up proof against a clean candidate using the same
 /// cryptographic verifier and bounded roster cache as production.
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 pub fn verify_kagemusha_topup_finality_candidate_evidence_lab_v4(

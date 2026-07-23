@@ -12,7 +12,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
@@ -29,6 +31,17 @@ import org.hyperledger.iroha.norito.SchemaHash;
  * Every recursive lifecycle result is projected only through an ABI-21/V4 native decoder.
  */
 public final class KagemushaRecursiveSpendProver {
+  /** Retryable contention signal raised before a second proof request is copied. */
+  public static final class ProofWorkerBusyException extends IllegalStateException {
+    private ProofWorkerBusyException(final String message) {
+      super(message);
+    }
+
+    private ProofWorkerBusyException(final String message, final Throwable cause) {
+      super(message, cause);
+    }
+  }
+
   /** Closed first-release hardware assertion profiles for online operations. */
   public enum OnlineHardwareAssertionPlatform {
     ANDROID_KEYMINT(DeviceAttestationRegistration.ANDROID_KEYMINT_PLATFORM),
@@ -64,6 +77,7 @@ public final class KagemushaRecursiveSpendProver {
   public static final int V4_ARTIFACT_COUNT = 8;
   public static final int ARTIFACT_COUNT = V4_ARTIFACT_COUNT;
   public static final int MAX_MANIFEST_BYTES = 1024 * 1024;
+  public static final int MAX_ARTIFACT_CHUNK_BYTES = 1024 * 1024;
   public static final int MAX_TRUSTED_RELEASE_POLICY_BYTES = 64 * 1024;
   public static final int MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024;
   public static final int MAX_RELEASE_EVIDENCE_BYTES = 16 * 1024 * 1024;
@@ -97,7 +111,7 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS = MAXIMUM_INPUTS_PER_TRANSITION;
   public static final int MAXIMUM_BRANCH_CLAIMS = 2;
   public static final int MAXIMUM_PEER_HOPS = 8;
-  public static final int MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 16 * 1024 * 1024;
+  public static final int MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 21_764;
   public static final int CONFIDENTIAL_TREE_DEPTH = 16;
   public static final int MAX_OUTPUT_MEMBERSHIP_FRONTIER_ARCHIVE_BYTES_V4 = 4 * 1024;
   public static final int MAX_OUTPUT_MEMBERSHIP_PATHS_ARCHIVE_BYTES_V4 = 16 * 1024;
@@ -105,7 +119,40 @@ public final class KagemushaRecursiveSpendProver {
   private static final int EXACT_STATE_PROJECTION_VERSION = 1;
 
   private static final String LIBRARY_NAME = "connect_norito_bridge";
+  private static final String NATIVE_BUSY_MESSAGE =
+      " is busy; retry after the active proof completes";
+  private static final ReentrantLock HEAVY_PROOF_PERMIT = new ReentrantLock();
   private static final boolean ARTIFACT_BRIDGE_AVAILABLE = loadArtifactBridge();
+
+  private static <T> T withHeavyProofPermit(
+      final String label, final Supplier<T> action) {
+    if (!HEAVY_PROOF_PERMIT.tryLock()) {
+      throw new ProofWorkerBusyException(
+          "Kagemusha " + label + " is busy; retry after the active proof completes");
+    }
+    try {
+      return Objects.requireNonNull(action, "action").get();
+    } catch (final ProofWorkerBusyException failure) {
+      throw failure;
+    } catch (final IllegalStateException failure) {
+      if (failure.getMessage() != null
+          && failure.getMessage().contains(NATIVE_BUSY_MESSAGE)) {
+        throw new ProofWorkerBusyException(
+            "Kagemusha " + label + " is busy; retry after the active proof completes",
+            failure);
+      }
+      throw failure;
+    } finally {
+      HEAVY_PROOF_PERMIT.unlock();
+    }
+  }
+
+  static void withHeavyProofPermitForTest(final Runnable action) {
+    withHeavyProofPermit("test", () -> {
+      Objects.requireNonNull(action, "action").run();
+      return Boolean.TRUE;
+    });
+  }
 
   /** Canonical ABI-21 artifact roles. Declaration order is part of the native contract. */
   public enum ArtifactRoleV4 {
@@ -1625,16 +1672,23 @@ public final class KagemushaRecursiveSpendProver {
   /** Build the first spendable branch from a finalized top-up anchor. */
   public static InitResultV4 initSpendV4(final InitRequestV4 request) {
     final InitRequestV4 requiredRequest = Objects.requireNonNull(request, "request");
-    final byte[] secretArchive = requiredRequest.consumeAndDestroy();
-    try {
-      requireProofBackend();
-      return new InitResultV4(
-          requireNativeResult(nativeInitSpendV4(secretArchive), "init spend"));
-    } catch (final UnsatisfiedLinkError failure) {
-      throw new IllegalStateException("native Kagemusha init spend entrypoint is unavailable", failure);
-    } finally {
-      SecretArchiveWiper.wipe(secretArchive);
-    }
+    return withHeavyProofPermit("init spend", () -> {
+      byte[] secretArchive = null;
+      boolean terminal = true;
+      try {
+        requireProofBackend();
+        final byte[] borrowed = requiredRequest.borrowForNative();
+        secretArchive = borrowed;
+        return new InitResultV4(
+            callNativeLifecycle("init spend", () -> nativeInitSpendV4(borrowed)));
+      } catch (final ProofWorkerBusyException failure) {
+        terminal = false;
+        throw failure;
+      } finally {
+        SecretArchiveWiper.wipe(secretArchive);
+        if (terminal) requiredRequest.close();
+      }
+    });
   }
 
   /** Prove one exact recipient output and optional independently spendable sender change. */
@@ -1643,62 +1697,68 @@ public final class KagemushaRecursiveSpendProver {
       final RecipientPaymentRequest recipientRequest,
       final long verifiedAtMilliseconds) {
     final AppendRequestV4 requiredRequest = Objects.requireNonNull(request, "request");
-    return transferChangeOpeningOwnership(requiredRequest.takeChangeOpening(), changeOpening -> {
-      if (verifiedAtMilliseconds <= 0) {
-        throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
-      }
-      Objects.requireNonNull(recipientRequest, "recipientRequest");
-      requireProofBackend();
-      final byte[] secretArchive = requiredRequest.consumeAndDestroy();
+    return withHeavyProofPermit("append spend", () -> {
+      byte[] secretArchive = null;
+      boolean terminal = true;
       try {
-        return new SplitResultV4(
-            requireNativeResult(
-                nativeAppendSpendV4(
-                    secretArchive,
-                    recipientRequest.noritoEncoded(),
-                    verifiedAtMilliseconds),
-                "append spend"),
-            changeOpening);
-      } catch (final UnsatisfiedLinkError failure) {
-        throw new IllegalStateException(
-            "native Kagemusha append spend entrypoint is unavailable", failure);
+        if (verifiedAtMilliseconds <= 0) {
+          throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
+        }
+        final RecipientPaymentRequest requiredRecipient =
+            Objects.requireNonNull(recipientRequest, "recipientRequest");
+        requireProofBackend();
+        final byte[] borrowed = requiredRequest.borrowForNative();
+        secretArchive = borrowed;
+        final byte[] resultArchive = callNativeLifecycle(
+            "append spend",
+            () -> nativeAppendSpendV4(
+                borrowed,
+                requiredRecipient.noritoEncoded(),
+                verifiedAtMilliseconds));
+        return transferChangeOpeningOwnership(
+            requiredRequest.takeChangeOpening(),
+            changeOpening -> new SplitResultV4(resultArchive, changeOpening));
+      } catch (final ProofWorkerBusyException failure) {
+        terminal = false;
+        throw failure;
       } finally {
-        Arrays.fill(secretArchive, (byte) 0);
+        SecretArchiveWiper.wipe(secretArchive);
+        if (terminal) requiredRequest.close();
       }
     });
   }
 
   /** Verify the recursive proof, exact split bindings, membership, and hop limit. */
   public static VerifyResultV4 verifySpendV4(final VerifyRequestV4 request) {
-    Objects.requireNonNull(request, "request");
-    requireProofBackend();
-    try {
-      return new VerifyResultV4(
-          requireNativeResult(
-              nativeVerifySpendV4(request.noritoEncoded()),
-              "verify spend"));
-    } catch (final UnsatisfiedLinkError failure) {
-      throw new IllegalStateException("native Kagemusha verify spend entrypoint is unavailable", failure);
-    }
+    final VerifyRequestV4 requiredRequest = Objects.requireNonNull(request, "request");
+    return withHeavyProofPermit("verify spend", () -> {
+      requireProofBackend();
+      return new VerifyResultV4(callNativeLifecycle(
+          "verify spend", () -> nativeVerifySpendV4(requiredRequest.borrowForNative())));
+    });
   }
 
   /** Build a full or partial redemption and its optional proof-bound offline change. */
   public static RedeemBuildResultV4 buildRedeemV4(final RedeemRequestV4 request) {
     final RedeemRequestV4 requiredRequest = Objects.requireNonNull(request, "request");
-    return transferChangeOpeningOwnership(requiredRequest.takeChangeOpening(), changeOpening -> {
-      requireProofBackend();
-      final byte[] secretArchive = requiredRequest.consumeAndDestroy();
+    return withHeavyProofPermit("build redeem", () -> {
+      byte[] secretArchive = null;
+      boolean terminal = true;
       try {
-        return new RedeemBuildResultV4(
-            requireNativeResult(
-                nativeBuildRedeemV4(secretArchive),
-                "build redeem"),
-            changeOpening);
-      } catch (final UnsatisfiedLinkError failure) {
-        throw new IllegalStateException(
-            "native Kagemusha build redeem entrypoint is unavailable", failure);
+        requireProofBackend();
+        final byte[] borrowed = requiredRequest.borrowForNative();
+        secretArchive = borrowed;
+        final byte[] resultArchive = callNativeLifecycle(
+            "build redeem", () -> nativeBuildRedeemV4(borrowed));
+        return transferChangeOpeningOwnership(
+            requiredRequest.takeChangeOpening(),
+            changeOpening -> new RedeemBuildResultV4(resultArchive, changeOpening));
+      } catch (final ProofWorkerBusyException failure) {
+        terminal = false;
+        throw failure;
       } finally {
-        Arrays.fill(secretArchive, (byte) 0);
+        SecretArchiveWiper.wipe(secretArchive);
+        if (terminal) requiredRequest.close();
       }
     });
   }
@@ -1774,6 +1834,29 @@ public final class KagemushaRecursiveSpendProver {
       throw new IllegalStateException("native Kagemusha " + label + " returned no archive");
     }
     return result;
+  }
+
+  @FunctionalInterface
+  private interface NativeLifecycleCall {
+    byte[] call();
+  }
+
+  private static byte[] callNativeLifecycle(
+      final String label, final NativeLifecycleCall call) {
+    try {
+      return requireNativeResult(Objects.requireNonNull(call, "call").call(), label);
+    } catch (final IllegalStateException failure) {
+      if (failure.getMessage() != null
+          && failure.getMessage().contains(NATIVE_BUSY_MESSAGE)) {
+        throw new ProofWorkerBusyException(
+            "Kagemusha " + label + " is busy; retry after the active proof completes",
+            failure);
+      }
+      throw failure;
+    } catch (final UnsatisfiedLinkError failure) {
+      throw new IllegalStateException(
+          "native Kagemusha " + label + " entrypoint is unavailable", failure);
+    }
   }
 
   private static byte[] utf8(final String value, final String field) {
@@ -2082,9 +2165,10 @@ public final class KagemushaRecursiveSpendProver {
     return Arrays.copyOf(value, value.length);
   }
 
-  private static byte[] requireChunk(final byte[] value) {
-    if (value == null || value.length == 0) {
-      throw new IllegalArgumentException("chunk must not be empty");
+  static byte[] requireChunk(final byte[] value) {
+    if (value == null || value.length == 0 || value.length > MAX_ARTIFACT_CHUNK_BYTES) {
+      throw new IllegalArgumentException(
+          "chunk must contain 1.." + MAX_ARTIFACT_CHUNK_BYTES + " bytes");
     }
     return Arrays.copyOf(value, value.length);
   }
@@ -2141,6 +2225,14 @@ public final class KagemushaRecursiveSpendProver {
     }
 
     public final synchronized byte[] noritoEncoded() {
+      if (destroyed) {
+        throw new IllegalStateException("canonical archive has been destroyed");
+      }
+      return Arrays.copyOf(archive, archive.length);
+    }
+
+    /** Borrows one synchronized native-call copy without changing ownership. */
+    final synchronized byte[] borrowForNative() {
       if (destroyed) {
         throw new IllegalStateException("canonical archive has been destroyed");
       }
@@ -4271,10 +4363,15 @@ public final class KagemushaRecursiveSpendProver {
       nativeArtifactWriteV4(handle, requireChunk(chunk));
     }
 
-    public synchronized void finish() {
-      requireOpen(false);
-      nativeArtifactFinalizeV4(handle);
-      finalized = true;
+    public void finish() {
+      withHeavyProofPermit("artifact finalization", () -> {
+        synchronized (this) {
+          requireOpen(false);
+          nativeArtifactFinalizeV4(handle);
+          finalized = true;
+        }
+        return Boolean.TRUE;
+      });
     }
 
     public synchronized boolean isFinalized() {
@@ -4434,40 +4531,45 @@ public final class KagemushaRecursiveSpendProver {
       return ingest;
     }
 
-    public synchronized void install() {
-      requirePending();
-      if (artifacts.size() != ARTIFACT_COUNT) {
-        throw new IllegalStateException("artifact set must contain exactly eight streams");
-      }
-      requireCanonicalV4ArtifactRoleInventory(new ArrayList<>(artifacts.keySet()));
-      final ArtifactIngest[] ordered = artifacts.values().toArray(new ArtifactIngest[0]);
-      final long[] handles = new long[ARTIFACT_COUNT];
-      int claimed = 0;
-      try {
-        for (; claimed < ordered.length; claimed++) {
-          handles[claimed] = ordered[claimed].claimFinalizedHandle();
+    public void install() {
+      withHeavyProofPermit("artifact install", () -> {
+        synchronized (this) {
+          requirePending();
+          if (artifacts.size() != ARTIFACT_COUNT) {
+            throw new IllegalStateException("artifact set must contain exactly eight streams");
+          }
+          requireCanonicalV4ArtifactRoleInventory(new ArrayList<>(artifacts.keySet()));
+          final ArtifactIngest[] ordered = artifacts.values().toArray(new ArtifactIngest[0]);
+          final long[] handles = new long[ARTIFACT_COUNT];
+          int claimed = 0;
+          try {
+            for (; claimed < ordered.length; claimed++) {
+              handles[claimed] = ordered[claimed].claimFinalizedHandle();
+            }
+            nativeArtifactSetInstallV4(
+                manifestNorito,
+                manifestSha256,
+                trustedPolicyNorito,
+                releaseAttestationNorito,
+                benchmarkEvidence,
+                cryptographicReview,
+                promotionRecordNorito,
+                handles);
+          } catch (final RuntimeException | UnsatisfiedLinkError failure) {
+            for (int index = 0; index < claimed; index++) {
+              ordered[index].releaseInstallClaim(handles[index]);
+            }
+            throw failure;
+          }
+          for (int index = 0; index < ordered.length; index++) {
+            ordered[index].relinquishInstalledHandle(handles[index]);
+          }
+          artifacts.clear();
+          artifactDigests.clear();
+          installed = true;
         }
-        nativeArtifactSetInstallV4(
-            manifestNorito,
-            manifestSha256,
-            trustedPolicyNorito,
-            releaseAttestationNorito,
-            benchmarkEvidence,
-            cryptographicReview,
-            promotionRecordNorito,
-            handles);
-      } catch (final RuntimeException | UnsatisfiedLinkError failure) {
-        for (int index = 0; index < claimed; index++) {
-          ordered[index].releaseInstallClaim(handles[index]);
-        }
-        throw failure;
-      }
-      for (int index = 0; index < ordered.length; index++) {
-        ordered[index].relinquishInstalledHandle(handles[index]);
-      }
-      artifacts.clear();
-      artifactDigests.clear();
-      installed = true;
+        return Boolean.TRUE;
+      });
     }
 
     public synchronized boolean isInstalled() {
@@ -4482,13 +4584,17 @@ public final class KagemushaRecursiveSpendProver {
           nativeBuildArtifactBindingV4(manifestNorito, manifestSha256));
     }
 
-    public synchronized void uninstall() {
-      if (!installed || closed) {
-        return;
-      }
-      nativeArtifactSetUninstallV4(manifestSha256);
-      installed = false;
-      closed = true;
+    public void uninstall() {
+      withHeavyProofPermit("artifact uninstall", () -> {
+        synchronized (this) {
+          if (installed && !closed) {
+            nativeArtifactSetUninstallV4(manifestSha256);
+            installed = false;
+            closed = true;
+          }
+        }
+        return Boolean.TRUE;
+      });
     }
 
     @Override

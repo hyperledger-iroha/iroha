@@ -82,6 +82,35 @@ struct ArchiveSlice {
 }
 
 impl ArchiveSlice {
+    fn new_owned(src: &[u8], align: usize) -> Result<Self, Error> {
+        let align = align.max(1);
+        if src.is_empty() {
+            return Ok(Self {
+                ptr: align as *mut u8,
+                len: 0,
+                layout: None,
+            });
+        }
+
+        let layout =
+            Layout::from_size_align(src.len(), align).map_err(|_| Error::LengthMismatch)?;
+        core::reserve_decode_allocation(src.len())?;
+        unsafe {
+            let ptr = alloc(layout);
+            if ptr.is_null() {
+                return Err(Error::AllocationFailed {
+                    bytes: u64::try_from(src.len()).unwrap_or(u64::MAX),
+                });
+            }
+            ptr::copy_nonoverlapping(src.as_ptr(), ptr, src.len());
+            Ok(Self {
+                ptr,
+                len: src.len(),
+                layout: Some(layout),
+            })
+        }
+    }
+
     fn new(src: &[u8], align: usize) -> Result<Self, Error> {
         if src.is_empty() {
             Ok(Self {
@@ -96,25 +125,7 @@ impl ArchiveSlice {
                 layout: None,
             })
         } else {
-            let layout =
-                Layout::from_size_align(src.len(), align).map_err(|_| Error::LengthMismatch)?;
-            core::reserve_decode_allocation(src.len())?;
-            unsafe {
-                let ptr = alloc(layout);
-                if ptr.is_null() {
-                    return Err(Error::AllocationFailed {
-                        bytes: u64::try_from(src.len()).unwrap_or(u64::MAX),
-                    });
-                }
-                if !src.is_empty() {
-                    ptr::copy_nonoverlapping(src.as_ptr(), ptr, src.len());
-                }
-                Ok(Self {
-                    ptr,
-                    len: src.len(),
-                    layout: Some(layout),
-                })
-            }
+            Self::new_owned(src, align)
         }
     }
 
@@ -9647,6 +9658,58 @@ where
                     );
                 }
                 Err(Error::decode_panic(std::any::type_name::<T>()))
+            }
+        }
+    }
+}
+
+/// Run a type-erased field decoder with the same panic policy as
+/// [`guarded_try_deserialize`].
+///
+/// Keeping this executor non-generic lets field decoding share the panic and
+/// error machinery while retaining the concrete type name in diagnostics.
+#[inline(never)]
+pub(crate) fn guarded_try_deserialize_erased(
+    type_name: &'static str,
+    decode: &mut dyn FnMut() -> Result<(), Error>,
+) -> Result<(), Error> {
+    #[cfg(not(feature = "strict-safe"))]
+    {
+        let _ = type_name;
+        return decode();
+    }
+
+    #[cfg(feature = "strict-safe")]
+    {
+        install_decode_panic_hook();
+        struct PanicDepthGuard;
+        impl Drop for PanicDepthGuard {
+            fn drop(&mut self) {
+                DECODE_PANIC_DEPTH.with(|depth| {
+                    let current = depth.get();
+                    if current > 0 {
+                        depth.set(current - 1);
+                    }
+                });
+            }
+        }
+        DECODE_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+        let _guard = PanicDepthGuard;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode())) {
+            Ok(result) => result,
+            Err(payload) => {
+                if crate::debug_trace_enabled() {
+                    let msg = payload
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()))
+                        .unwrap_or("<non-string panic>");
+                    eprintln!(
+                        "norito.decode suppressed panic while decoding {}: {}",
+                        type_name, msg
+                    );
+                }
+                Err(Error::decode_panic(type_name))
             }
         }
     }

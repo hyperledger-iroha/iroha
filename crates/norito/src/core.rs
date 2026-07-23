@@ -5483,6 +5483,32 @@ impl<T> std::ops::Deref for ArchivedBox<T> {
     }
 }
 
+/// Decode an already length-bounded archived field from owned aligned storage.
+///
+/// This is an implementation detail shared by generated deserializers. It
+/// intentionally performs neither canonical-length validation nor legacy
+/// framing fallback: callers retain responsibility for those policies. The
+/// owned copy also keeps nested payload-context accounting isolated in the
+/// same way as the historical derive-generated allocation path.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_archived_field<T>(bytes: &[u8]) -> Result<T, Error>
+where
+    T: for<'de> NoritoDeserialize<'de>,
+{
+    let archived = ArchiveSlice::new_owned(bytes, core::mem::align_of::<Archived<T>>())?;
+    let archived_bytes = archived.as_slice();
+    let _payload_guard = PayloadCtxGuard::enter(archived_bytes);
+    let archived_ptr = if archived_bytes.is_empty() {
+        core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
+    } else {
+        archived_bytes.as_ptr().cast::<Archived<T>>()
+    };
+    // SAFETY: `ArchiveSlice::new_owned` keeps one allocation with the required
+    // `Archived<T>` alignment alive for this entire deserialization call.
+    T::try_deserialize(unsafe { &*archived_ptr })
+}
+
 /// Interpret `bytes` as an archived value and ensure the slice is large enough.
 ///
 /// Returns an error if `bytes` is shorter than the minimum archived header for `T`.
@@ -8723,28 +8749,153 @@ where
     with_decode_limits(limits, || decode_from_bytes(bytes))
 }
 
-/// Decode a field payload using the canonical codec implementation without
-/// requiring a specialized `DecodeFromSlice` implementation.
-///
-/// Returns both the decoded value and the number of bytes that were consumed
-/// from `bytes`.
-pub fn decode_field_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
+#[derive(Clone, Copy)]
+enum FieldDecodeBoundary {
+    Canonical,
+    Prefix,
+}
+
+trait ErasedFieldSlot {
+    fn archived_align(&self) -> usize;
+    fn archived_size(&self) -> usize;
+    fn dangling_archived(&self) -> *const u8;
+    fn type_name(&self) -> &'static str;
+    unsafe fn try_decode(&mut self, archived: *const u8) -> Result<(), Error>;
+    fn canonical_len(&self) -> Result<usize, Error>;
+}
+
+struct TypedFieldSlot<T> {
+    value: Option<T>,
+}
+
+impl<T> TypedFieldSlot<T> {
+    fn new() -> Self {
+        Self { value: None }
+    }
+
+    fn into_value(mut self) -> Result<T, Error> {
+        self.value.take().ok_or(Error::LengthMismatch)
+    }
+}
+
+impl<T> ErasedFieldSlot for TypedFieldSlot<T>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
 {
-    enforce_decode_field_length(u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?)?;
+    fn archived_align(&self) -> usize {
+        core::mem::align_of::<Archived<T>>()
+    }
+
+    fn archived_size(&self) -> usize {
+        core::mem::size_of::<Archived<T>>()
+    }
+
+    fn dangling_archived(&self) -> *const u8 {
+        core::ptr::NonNull::<Archived<T>>::dangling()
+            .as_ptr()
+            .cast::<u8>()
+    }
+
+    fn type_name(&self) -> &'static str {
+        core::any::type_name::<T>()
+    }
+
+    unsafe fn try_decode(&mut self, archived: *const u8) -> Result<(), Error> {
+        let archived = unsafe { &*archived.cast::<Archived<T>>() };
+        let value = T::try_deserialize(archived)?;
+        self.value = Some(value);
+        Ok(())
+    }
+
+    fn canonical_len(&self) -> Result<usize, Error> {
+        let value = self.value.as_ref().ok_or(Error::LengthMismatch)?;
+        recompute_canonical_len(value)
+    }
+}
+
+fn invoke_erased_field_decoder(
+    slot: &mut dyn ErasedFieldSlot,
+    archived: *const u8,
+) -> Result<(), Error> {
+    let type_name = slot.type_name();
+    let mut decode = || unsafe { slot.try_decode(archived) };
+    crate::guarded_try_deserialize_erased(type_name, &mut decode)
+}
+
+fn resolve_erased_field_used(
+    boundary: FieldDecodeBoundary,
+    slot: &dyn ErasedFieldSlot,
+    payload_len: usize,
+    used_ctx: Option<usize>,
+) -> Result<usize, Error> {
+    match boundary {
+        FieldDecodeBoundary::Canonical => match used_ctx {
+            Some(used) if used != 0 => {
+                if used == payload_len {
+                    Ok(used)
+                } else if used > payload_len {
+                    Err(Error::LengthMismatch)
+                } else {
+                    let recomputed = slot.canonical_len()?;
+                    if recomputed == payload_len {
+                        Ok(recomputed)
+                    } else {
+                        Err(Error::LengthMismatch)
+                    }
+                }
+            }
+            _ => {
+                let recomputed = slot.canonical_len()?;
+                if recomputed == payload_len {
+                    Ok(recomputed)
+                } else {
+                    Err(Error::LengthMismatch)
+                }
+            }
+        },
+        FieldDecodeBoundary::Prefix => match used_ctx {
+            Some(used) if used != 0 => {
+                if used > payload_len {
+                    return Err(Error::LengthMismatch);
+                }
+                let recomputed = slot.canonical_len()?;
+                if recomputed > payload_len || used > recomputed {
+                    return Err(Error::LengthMismatch);
+                }
+                Ok(recomputed)
+            }
+            _ => {
+                let recomputed = slot.canonical_len()?;
+                if recomputed > payload_len {
+                    return Err(Error::LengthMismatch);
+                }
+                Ok(recomputed)
+            }
+        },
+    }
+}
+
+#[inline(never)]
+fn decode_field_erased(
+    bytes: &[u8],
+    boundary: FieldDecodeBoundary,
+    slot: &mut dyn ErasedFieldSlot,
+) -> Result<usize, Error> {
+    if matches!(boundary, FieldDecodeBoundary::Canonical) {
+        enforce_decode_field_length(
+            u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?,
+        )?;
+    }
     let _depth = DecodeDepthGuard::enter()?;
+
     if bytes.is_empty() {
-        if core::mem::size_of::<Archived<T>>() == 0 {
-            let _guard = PayloadCtxGuard::enter(&[]);
-            let value = unsafe {
-                crate::guarded_try_deserialize(|| {
-                    T::try_deserialize(&*std::ptr::NonNull::<Archived<T>>::dangling().as_ptr())
-                })?
-            };
-            return Ok((value, 0));
+        if slot.archived_size() != 0 {
+            return Err(Error::LengthMismatch);
         }
-        return Err(Error::LengthMismatch);
+        let _guard = PayloadCtxGuard::enter(&[]);
+        let dangling = slot.dangling_archived();
+        invoke_erased_field_decoder(slot, dangling)?;
+        return Ok(0);
     }
 
     struct RootGuard(bool);
@@ -8762,179 +8913,63 @@ where
         None
     };
 
-    let bytes_len = bytes.len();
     let _flags_guard = if decode_flags_active() {
         None
     } else {
         Some(DecodeFlagsGuard::enter(default_encode_flags()))
     };
 
-    let align = core::mem::align_of::<Archived<T>>();
-    let ptr = bytes.as_ptr();
-    let ptr_us = ptr as usize;
+    let align = slot.archived_align();
+    let needs_realign = align > 1 && !(bytes.as_ptr() as usize).is_multiple_of(align);
+    let aligned = if needs_realign {
+        Some(ArchiveSlice::new(bytes, align)?)
+    } else {
+        None
+    };
+    let payload = match aligned.as_ref() {
+        Some(aligned) => aligned.as_slice(),
+        None => bytes,
+    };
 
-    if align <= 1 || ptr_us.is_multiple_of(align) {
-        if crate::debug_trace_enabled() {
-            eprintln!(
-                "decode_field_canonical::<{}> aligned path len={}",
-                core::any::type_name::<T>(),
-                bytes_len
-            );
-        }
-        let payload_guard = PayloadCtxGuard::enter(bytes);
-        let archived = unsafe { &*(ptr as *const Archived<T>) };
-        let value = crate::guarded_try_deserialize(|| T::try_deserialize(archived))?;
-        let used_ctx = payload_ctx_max_access();
-        drop(payload_guard);
-        let used = match used_ctx {
-            Some(used) if used != 0 => {
-                if used == bytes_len {
-                    Ok(used)
-                } else if used > bytes_len {
-                    if crate::debug_trace_enabled() {
-                        eprintln!(
-                            "decode_field_canonical::<{}>: max_access={} exceeds payload_len={}",
-                            core::any::type_name::<T>(),
-                            used,
-                            bytes_len
-                        );
-                    }
-                    Err(Error::LengthMismatch)
-                } else {
-                    let recomputed = recompute_canonical_len(&value)?;
-                    if recomputed != bytes_len {
-                        if crate::debug_trace_enabled() {
-                            eprintln!(
-                                "decode_field_canonical::<{}>: recomputed_len={} mismatches payload_len={} (max_access={used})",
-                                core::any::type_name::<T>(),
-                                recomputed,
-                                bytes_len
-                            );
-                        }
-                        Err(Error::LengthMismatch)
-                    } else {
-                        Ok(recomputed)
-                    }
-                }
-            }
-            _ => {
-                let recomputed = recompute_canonical_len(&value)?;
-                if recomputed != bytes_len {
-                    if crate::debug_trace_enabled() {
-                        eprintln!(
-                            "decode_field_canonical::<{}>: recomputed_len={} mismatches payload_len={}",
-                            core::any::type_name::<T>(),
-                            recomputed,
-                            bytes_len
-                        );
-                    }
-                    Err(Error::LengthMismatch)
-                } else {
-                    Ok(recomputed)
-                }
-            }
-        }?;
-        // Propagate canonical full-consumption to any parent payload context. Some deserializers
-        // (especially scalar-only) may not record payload accesses, which would otherwise cause
-        // parent decoders to fall back to expensive canonical-length recomputation.
-        note_payload_access(bytes, used);
-        return Ok((value, used));
-    }
-
-    struct TmpAlloc {
-        ptr: *mut u8,
-        layout: Layout,
-        len: usize,
-        needs_dealloc: bool,
-    }
-
-    impl Drop for TmpAlloc {
-        fn drop(&mut self) {
-            unsafe { dealloc_checked(self.ptr, self.layout, self.needs_dealloc) };
-        }
-    }
-
-    let layout =
-        Layout::from_size_align(bytes_len.max(1), align).map_err(|_| Error::LengthMismatch)?;
-    if crate::debug_trace_enabled() {
+    if crate::debug_trace_enabled() && matches!(boundary, FieldDecodeBoundary::Canonical) {
+        let path = if needs_realign {
+            "misaligned"
+        } else {
+            "aligned"
+        };
         eprintln!(
-            "decode_field_canonical::<{}> misaligned path len={} align={} layout_size={}",
-            core::any::type_name::<T>(),
-            bytes_len,
-            align,
-            layout.size()
+            "decode_field_canonical::<{}> {path} path len={} align={}",
+            slot.type_name(),
+            bytes.len(),
+            align
         );
     }
-    let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) }?;
-    let alloc = TmpAlloc {
-        ptr: tmp_ptr,
-        layout,
-        len: bytes_len,
-        needs_dealloc,
-    };
-    let (value, used) = unsafe {
-        core::ptr::copy(bytes.as_ptr(), alloc.ptr, bytes_len);
-        let tmp_slice = std::slice::from_raw_parts(alloc.ptr as *const u8, alloc.len);
-        let payload_guard = PayloadCtxGuard::enter(tmp_slice);
-        let archived = &*(alloc.ptr as *const Archived<T>);
-        let value = crate::guarded_try_deserialize(|| T::try_deserialize(archived))?;
-        let used_ctx = payload_ctx_max_access();
-        drop(payload_guard);
-        let used = match used_ctx {
-            Some(used) if used != 0 => {
-                if used == bytes_len {
-                    Ok(used)
-                } else if used > bytes_len {
-                    if crate::debug_trace_enabled() {
-                        eprintln!(
-                            "decode_field_canonical::<{}>: misaligned copy max_access={} exceeds payload_len={}",
-                            core::any::type_name::<T>(),
-                            used,
-                            bytes_len
-                        );
-                    }
-                    Err(Error::LengthMismatch)
-                } else {
-                    let recomputed = recompute_canonical_len(&value)?;
-                    if recomputed != bytes_len {
-                        if crate::debug_trace_enabled() {
-                            eprintln!(
-                                "decode_field_canonical::<{}>: misaligned recomputed_len={} mismatches payload_len={}",
-                                core::any::type_name::<T>(),
-                                recomputed,
-                                bytes_len
-                            );
-                        }
-                        Err(Error::LengthMismatch)
-                    } else {
-                        Ok(recomputed)
-                    }
-                }
-            }
-            _ => {
-                let recomputed = recompute_canonical_len(&value)?;
-                if recomputed != bytes_len {
-                    if crate::debug_trace_enabled() {
-                        eprintln!(
-                            "decode_field_canonical::<{}>: misaligned recomputed_len={} mismatches payload_len={}",
-                            core::any::type_name::<T>(),
-                            recomputed,
-                            bytes_len
-                        );
-                    }
-                    Err(Error::LengthMismatch)
-                } else {
-                    Ok(recomputed)
-                }
-            }
-        }?;
-        Result::<(T, usize), Error>::Ok((value, used))
-    }?;
-    // In the misaligned path, we decode from a temporary aligned copy, so the payload context
-    // cannot merge accesses into any parent decoder. Record canonical consumption in the restored
-    // parent payload context explicitly.
+
+    let payload_guard = PayloadCtxGuard::enter(payload);
+    invoke_erased_field_decoder(slot, payload.as_ptr())?;
+    let used_ctx = payload_ctx_max_access();
+    drop(payload_guard);
+
+    let used = resolve_erased_field_used(boundary, slot, bytes.len(), used_ctx)?;
+    // A realigned copy cannot merge its child context into the caller, and
+    // scalar decoders may not record an access at all. Record the resolved
+    // canonical consumption against the original field in both cases.
     note_payload_access(bytes, used);
-    Ok((value, used))
+    Ok(used)
+}
+
+/// Decode a field payload using the canonical codec implementation without
+/// requiring a specialized `DecodeFromSlice` implementation.
+///
+/// Returns both the decoded value and the number of bytes that were consumed
+/// from `bytes`.
+pub fn decode_field_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+{
+    let mut slot = TypedFieldSlot::<T>::new();
+    let used = decode_field_erased(bytes, FieldDecodeBoundary::Canonical, &mut slot)?;
+    Ok((slot.into_value()?, used))
 }
 
 /// Decode a single field from the front of `bytes`, permitting trailing bytes after the field.
@@ -8946,122 +8981,267 @@ pub fn decode_field_prefix<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
 {
-    let _depth = DecodeDepthGuard::enter()?;
-    #[inline]
-    fn resolve_prefix_used<T>(
-        value: &T,
-        payload_len: usize,
-        used_ctx: Option<usize>,
-    ) -> Result<usize, Error>
-    where
-        T: crate::NoritoSerialize,
-    {
-        match used_ctx {
-            Some(used) if used != 0 => {
-                if used > payload_len {
-                    return Err(Error::LengthMismatch);
-                }
-                let recomputed = recompute_canonical_len(value)?;
-                if recomputed > payload_len || used > recomputed {
-                    return Err(Error::LengthMismatch);
-                }
-                Ok(recomputed)
-            }
-            _ => {
-                let recomputed = recompute_canonical_len(value)?;
-                if recomputed > payload_len {
-                    return Err(Error::LengthMismatch);
-                }
-                Ok(recomputed)
-            }
-        }
-    }
+    let mut slot = TypedFieldSlot::<T>::new();
+    let used = decode_field_erased(bytes, FieldDecodeBoundary::Prefix, &mut slot)?;
+    Ok((slot.into_value()?, used))
+}
 
-    if bytes.is_empty() {
-        if core::mem::size_of::<Archived<T>>() == 0 {
-            let _guard = PayloadCtxGuard::enter(&[]);
-            let value = unsafe {
-                crate::guarded_try_deserialize(|| {
-                    T::try_deserialize(&*std::ptr::NonNull::<Archived<T>>::dangling().as_ptr())
-                })?
-            };
-            return Ok((value, 0));
-        }
+#[inline(never)]
+fn take_context_field(
+    ptr: *const u8,
+    offset: usize,
+    len: usize,
+) -> Result<(&'static [u8], usize), Error> {
+    let payload = payload_slice_from_ptr(ptr)?;
+    let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
+    let field = payload.get(offset..end).ok_or(Error::LengthMismatch)?;
+    Ok((field, end))
+}
+
+#[inline(never)]
+fn take_length_prefixed_context_field(
+    ptr: *const u8,
+    offset: usize,
+) -> Result<(&'static [u8], usize), Error> {
+    let payload = payload_slice_from_ptr(ptr)?;
+    let remaining = payload.get(offset..).ok_or(Error::LengthMismatch)?;
+    let (field_len, header_len) = read_len_dyn_slice(remaining)?;
+    let data_start = offset
+        .checked_add(header_len)
+        .ok_or(Error::LengthMismatch)?;
+    let data_end = data_start
+        .checked_add(field_len)
+        .ok_or(Error::LengthMismatch)?;
+    let field = payload
+        .get(data_start..data_end)
+        .ok_or(Error::LengthMismatch)?;
+    Ok((field, data_end))
+}
+
+#[inline(never)]
+fn remaining_context_field(ptr: *const u8, offset: usize) -> Result<&'static [u8], Error> {
+    let payload = payload_slice_from_ptr(ptr)?;
+    payload.get(offset..).ok_or(Error::LengthMismatch)
+}
+
+/// Decode one length-prefixed field relative to an active payload context.
+///
+/// This is a shared implementation detail for derive-generated decoders. It
+/// advances `offset` past the framing header and the canonically consumed
+/// field, while keeping all pointer/range validation in one non-generic path.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_field_canonical<T>(ptr: *const u8, offset: &mut usize) -> Result<T, Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+{
+    let (field, next_offset) = take_length_prefixed_context_field(ptr, *offset)?;
+    let (value, used) = decode_field_canonical::<T>(field)?;
+    if used != field.len() {
         return Err(Error::LengthMismatch);
     }
+    *offset = next_offset;
+    Ok(value)
+}
 
-    struct RootGuard(bool);
-    impl Drop for RootGuard {
-        fn drop(&mut self) {
-            if self.0 {
-                clear_decode_root();
+/// Decode one length-prefixed field through the archived-value compatibility path.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_field_archived<T>(ptr: *const u8, offset: &mut usize) -> Result<T, Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de>,
+{
+    let (field, next_offset) = take_length_prefixed_context_field(ptr, *offset)?;
+    let value = decode_archived_field::<T>(field)?;
+    *offset = next_offset;
+    Ok(value)
+}
+
+/// Decode one fixed-width field relative to an active payload context.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_field_fixed_archived<T>(
+    ptr: *const u8,
+    offset: &mut usize,
+    len: usize,
+) -> Result<T, Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de>,
+{
+    let (field, next_offset) = take_context_field(ptr, *offset, len)?;
+    let value = decode_archived_field::<T>(field)?;
+    *offset = next_offset;
+    Ok(value)
+}
+
+/// Canonically decode one fixed-width field relative to an active payload context.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_field_fixed_canonical<T>(
+    ptr: *const u8,
+    offset: &mut usize,
+    len: usize,
+) -> Result<T, Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+{
+    let (field, next_offset) = take_context_field(ptr, *offset, len)?;
+    let (value, used) = decode_field_canonical::<T>(field)?;
+    if used != field.len() {
+        return Err(Error::LengthMismatch);
+    }
+    *offset = next_offset;
+    Ok(value)
+}
+
+/// Copy one fixed-width byte-array field relative to an active payload context.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_byte_array<const N: usize>(
+    ptr: *const u8,
+    offset: &mut usize,
+) -> Result<[u8; N], Error> {
+    let (field, next_offset) = take_context_field(ptr, *offset, N)?;
+    let mut value = [0; N];
+    value.copy_from_slice(field);
+    *offset = next_offset;
+    Ok(value)
+}
+
+/// Copy one length-prefixed byte-array field relative to an active payload context.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_framed_byte_array<const N: usize>(
+    ptr: *const u8,
+    offset: &mut usize,
+) -> Result<[u8; N], Error> {
+    let (field, next_offset) = take_length_prefixed_context_field(ptr, *offset)?;
+    if field.len() != N {
+        return Err(Error::LengthMismatch);
+    }
+    let mut value = [0; N];
+    value.copy_from_slice(field);
+    *offset = next_offset;
+    Ok(value)
+}
+
+/// Decode one self-delimiting field from the remaining active payload.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_field_prefix<T>(ptr: *const u8, offset: &mut usize) -> Result<T, Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+{
+    let field = remaining_context_field(ptr, *offset)?;
+    let (value, used) = decode_field_prefix::<T>(field)?;
+    if used > field.len() {
+        return Err(Error::LengthMismatch);
+    }
+    *offset = offset.checked_add(used).ok_or(Error::LengthMismatch)?;
+    Ok(value)
+}
+
+/// Decode a bounded field canonically, retaining the archived compatibility fallback.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_field_canonical_or_archived<T>(
+    ptr: *const u8,
+    offset: &mut usize,
+) -> Result<T, Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+{
+    let (field, next_offset) = take_length_prefixed_context_field(ptr, *offset)?;
+    let value = match decode_field_canonical::<T>(field) {
+        Ok((value, used)) if used == field.len() => Ok(value),
+        Ok(_) => Err(Error::LengthMismatch),
+        Err(error) if error.is_decode_resource_limit() => Err(error),
+        Err(_) => decode_archived_field::<T>(field),
+    }?;
+    *offset = next_offset;
+    Ok(value)
+}
+
+/// Decode an archived field and retain the compact-length nested-frame fallback.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_field_archived_compat<T>(
+    ptr: *const u8,
+    offset: &mut usize,
+    len: usize,
+) -> Result<T, Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de>,
+{
+    let (field, next_offset) = take_context_field(ptr, *offset, len)?;
+    let value = match decode_archived_field::<T>(field) {
+        Ok(value) => Ok(value),
+        Err(error) if error.is_decode_resource_limit() => Err(error),
+        Err(error) => {
+            #[cfg(feature = "compact-len")]
+            {
+                if let Ok((inner_len, header_len)) = read_len_from_slice(field)
+                    && header_len.checked_add(inner_len) == Some(field.len())
+                {
+                    decode_archived_field::<T>(&field[header_len..])
+                } else {
+                    Err(error)
+                }
+            }
+            #[cfg(not(feature = "compact-len"))]
+            {
+                Err(error)
             }
         }
-    }
-    let _root_guard = if payload_root_span().is_none() {
-        set_decode_root(bytes);
-        Some(RootGuard(true))
-    } else {
-        None
-    };
+    }?;
+    *offset = next_offset;
+    Ok(value)
+}
 
-    let bytes_len = bytes.len();
-    let _flags_guard = if decode_flags_active() {
-        None
-    } else {
-        Some(DecodeFlagsGuard::enter(default_encode_flags()))
-    };
+/// Preserve the legacy enum-field retry that treats the remaining payload as canonical.
+#[doc(hidden)]
+#[inline(never)]
+pub fn decode_context_field_flexible<T>(ptr: *const u8, offset: &mut usize) -> Result<T, Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+{
+    let payload = payload_slice_from_ptr(ptr)?;
+    let start = *offset;
+    let remaining = payload.get(start..).ok_or(Error::LengthMismatch)?;
+    let (field_len, header_len) = read_len_dyn_slice(remaining)?;
+    let data_start = start.checked_add(header_len).ok_or(Error::LengthMismatch)?;
+    let data_end = data_start
+        .checked_add(field_len)
+        .ok_or(Error::LengthMismatch)?;
+    let bounded = payload
+        .get(data_start..data_end)
+        .ok_or(Error::LengthMismatch)?;
+    let full = payload.get(data_start..).ok_or(Error::LengthMismatch)?;
 
-    let align = core::mem::align_of::<Archived<T>>();
-    let ptr = bytes.as_ptr();
-    let ptr_us = ptr as usize;
-
-    if align <= 1 || ptr_us.is_multiple_of(align) {
-        let payload_guard = PayloadCtxGuard::enter(bytes);
-        let archived = unsafe { &*(ptr as *const Archived<T>) };
-        let value = crate::guarded_try_deserialize(|| T::try_deserialize(archived))?;
-        let used_ctx = payload_ctx_max_access();
-        drop(payload_guard);
-        let used = resolve_prefix_used(&value, bytes_len, used_ctx)?;
-        note_payload_access(bytes, used);
-        return Ok((value, used));
-    }
-
-    struct TmpAlloc {
-        ptr: *mut u8,
-        layout: Layout,
-        len: usize,
-        needs_dealloc: bool,
-    }
-
-    impl Drop for TmpAlloc {
-        fn drop(&mut self) {
-            unsafe { dealloc_checked(self.ptr, self.layout, self.needs_dealloc) };
+    match decode_field_canonical::<T>(full) {
+        Ok((value, used)) => {
+            *offset = data_start.checked_add(used).ok_or(Error::LengthMismatch)?;
+            Ok(value)
+        }
+        Err(error) if error.is_decode_resource_limit() => Err(error),
+        Err(_) => {
+            let value = decode_archived_field::<T>(bounded)?;
+            *offset = data_end;
+            Ok(value)
         }
     }
+}
 
-    let layout =
-        Layout::from_size_align(bytes_len.max(1), align).map_err(|_| Error::LengthMismatch)?;
-    let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) }?;
-    let alloc = TmpAlloc {
-        ptr: tmp_ptr,
-        layout,
-        len: bytes_len,
-        needs_dealloc,
-    };
-    let (value, used) = unsafe {
-        core::ptr::copy(bytes.as_ptr(), alloc.ptr, bytes_len);
-        let tmp_slice = std::slice::from_raw_parts(alloc.ptr as *const u8, alloc.len);
-        let payload_guard = PayloadCtxGuard::enter(tmp_slice);
-        let archived = &*(alloc.ptr as *const Archived<T>);
-        let value = crate::guarded_try_deserialize(|| T::try_deserialize(archived))?;
-        let used_ctx = payload_ctx_max_access();
-        drop(payload_guard);
-        let used = resolve_prefix_used(&value, bytes_len, used_ctx)?;
-        Result::<(T, usize), Error>::Ok((value, used))
-    }?;
-    note_payload_access(bytes, used);
-    Ok((value, used))
+/// Require a derive-generated field sequence to consume its complete payload.
+#[doc(hidden)]
+#[inline(never)]
+pub fn finish_context_fields(ptr: *const u8, offset: usize) -> Result<(), Error> {
+    let payload = payload_slice_from_ptr(ptr)?;
+    if offset != payload.len() {
+        return Err(Error::LengthMismatch);
+    }
+    note_payload_access(payload, offset);
+    Ok(())
 }
 
 /// Decode a field using its `DecodeFromSlice` implementation, ensuring full
@@ -9182,7 +9362,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crc64fast::Digest;
 
@@ -9250,6 +9430,192 @@ mod tests {
         let (value, used) = decode_field_canonical::<u32>(&buf).expect("scalar decode");
         assert_eq!(value, 0xDEADBEEF);
         assert_eq!(used, buf.len());
+    }
+
+    #[test]
+    fn decode_field_canonical_rejects_trailing_bytes() {
+        reset_decode_state();
+        let mut bytes = Vec::new();
+        7_u32.serialize(&mut bytes).expect("encode scalar");
+        bytes.push(0xFF);
+
+        let error = decode_field_canonical::<u32>(&bytes)
+            .expect_err("canonical field decode must consume the complete payload");
+        assert!(matches!(error, Error::LengthMismatch));
+    }
+
+    #[test]
+    fn decode_field_prefix_allows_trailing_bytes_and_reports_consumption() {
+        reset_decode_state();
+        let expected = String::from("prefix value");
+        let mut encoded = Vec::new();
+        expected.serialize(&mut encoded).expect("encode string");
+        let encoded_len = encoded.len();
+        encoded.extend_from_slice(&[0xAA, 0xBB]);
+
+        let (decoded, used) =
+            decode_field_prefix::<String>(&encoded).expect("decode string prefix");
+        assert_eq!(decoded, expected);
+        assert_eq!(used, encoded_len);
+    }
+
+    static FIELD_SLOT_DROPS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Debug)]
+    struct DropAfterLengthMismatch;
+
+    impl Drop for DropAfterLengthMismatch {
+        fn drop(&mut self) {
+            FIELD_SLOT_DROPS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl NoritoSerialize for DropAfterLengthMismatch {
+        fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
+            writer.write_all(&[0])?;
+            Ok(())
+        }
+    }
+
+    impl<'de> NoritoDeserialize<'de> for DropAfterLengthMismatch {
+        fn deserialize(_archived: &'de Archived<Self>) -> Self {
+            Self
+        }
+    }
+
+    #[test]
+    fn erased_field_slot_drops_value_after_consumption_error() {
+        FIELD_SLOT_DROPS.store(0, Ordering::Relaxed);
+
+        let error = decode_field_canonical::<DropAfterLengthMismatch>(&[0, 1])
+            .expect_err("recomputed canonical length must reject trailing data");
+        assert!(matches!(error, Error::LengthMismatch));
+        assert_eq!(FIELD_SLOT_DROPS.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(feature = "strict-safe")]
+    #[test]
+    fn erased_field_decoder_preserves_panic_type_name() {
+        #[derive(Debug)]
+        struct PanicDuringFieldDecode;
+
+        impl NoritoSerialize for PanicDuringFieldDecode {
+            fn serialize<W: Write>(&self, _writer: W) -> Result<(), Error> {
+                Ok(())
+            }
+        }
+
+        impl<'de> NoritoDeserialize<'de> for PanicDuringFieldDecode {
+            fn deserialize(_archived: &'de Archived<Self>) -> Self {
+                panic!("intentional field decode panic")
+            }
+        }
+
+        let error = decode_field_canonical::<PanicDuringFieldDecode>(&[0])
+            .expect_err("strict-safe field decode must suppress the panic");
+        assert!(matches!(
+            error,
+            Error::DecodePanic { context }
+                if context == core::any::type_name::<PanicDuringFieldDecode>()
+        ));
+    }
+
+    #[test]
+    fn decode_archived_field_owns_realigns_and_installs_payload_context() {
+        reset_decode_state();
+        let expected = String::from("shared archived field helper");
+        let mut encoded = Vec::new();
+        expected.serialize(&mut encoded).expect("encode string");
+
+        let mut storage = Vec::with_capacity(encoded.len() + 1);
+        storage.push(0xAA);
+        storage.extend_from_slice(&encoded);
+        let misaligned = &storage[1..];
+        assert_ne!(
+            misaligned.as_ptr() as usize % core::mem::align_of::<Archived<String>>(),
+            0,
+            "test payload must exercise the realignment path"
+        );
+
+        let decoded =
+            decode_archived_field::<String>(misaligned).expect("decode archived field copy");
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn decode_archived_field_uses_one_charged_overaligned_copy() {
+        static DECODED_ADDRESS: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(C, align(64))]
+        struct OveralignedField([u8; 64]);
+
+        impl<'de> NoritoDeserialize<'de> for OveralignedField {
+            fn deserialize(archived: &'de Archived<Self>) -> Self {
+                DECODED_ADDRESS.store(
+                    archived as *const Archived<Self> as usize,
+                    Ordering::Relaxed,
+                );
+                archived.0
+            }
+        }
+
+        assert_eq!(core::mem::size_of::<Archived<OveralignedField>>(), 64);
+        let bytes = [0xA5_u8; 64];
+        let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes.len(), usize::MAX);
+        let decoded =
+            with_decode_limits(limits, || decode_archived_field::<OveralignedField>(&bytes))
+                .expect("one exactly budgeted aligned copy should decode");
+        let decoded_address = DECODED_ADDRESS.load(Ordering::Relaxed);
+
+        assert_eq!(decoded, OveralignedField(bytes));
+        assert_ne!(decoded_address, bytes.as_ptr() as usize);
+        assert_eq!(
+            decoded_address % core::mem::align_of::<Archived<OveralignedField>>(),
+            0
+        );
+
+        DECODED_ADDRESS.store(0, Ordering::Relaxed);
+        let limits = DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            bytes.len() - 1,
+            usize::MAX,
+        );
+        let error =
+            with_decode_limits(limits, || decode_archived_field::<OveralignedField>(&bytes))
+                .expect_err("the owned copy must consume the active allocation budget");
+        assert!(matches!(
+            error,
+            Error::TotalAllocationExceeded { attempted, limit }
+                if attempted == bytes.len() as u64 && limit == (bytes.len() - 1) as u64
+        ));
+        assert_eq!(
+            DECODED_ADDRESS.load(Ordering::Relaxed),
+            0,
+            "budget rejection must happen before deserialization"
+        );
+    }
+
+    #[test]
+    fn decode_archived_field_preserves_deserializer_errors() {
+        #[derive(Debug)]
+        struct Rejected;
+
+        impl<'de> NoritoDeserialize<'de> for Rejected {
+            fn deserialize(_archived: &'de Archived<Self>) -> Self {
+                unreachable!("the fallible implementation is used by the helper")
+            }
+
+            fn try_deserialize(_archived: &'de Archived<Self>) -> Result<Self, Error> {
+                Err(Error::LengthMismatch)
+            }
+        }
+
+        let error = decode_archived_field::<Rejected>(&[0])
+            .expect_err("fallible archived decoder must reject the payload");
+        assert!(matches!(error, Error::LengthMismatch));
     }
 
     #[test]
@@ -9476,6 +9842,103 @@ mod tests {
             decode_field_canonical::<Vec<Vec<u64>>>(misaligned).expect("decode misaligned field");
         assert_eq!(decoded, value);
         assert_eq!(used, encoded.len());
+    }
+
+    #[test]
+    fn context_field_helpers_decode_framed_fields_and_require_full_consumption() {
+        reset_decode_state();
+        let first = 0x0102_0304_u32;
+        let second = 0xA0B0_C0D0_u32;
+        let mut first_bytes = Vec::new();
+        let mut second_bytes = Vec::new();
+        first.serialize(&mut first_bytes).expect("encode first");
+        second.serialize(&mut second_bytes).expect("encode second");
+
+        let mut payload = Vec::new();
+        write_len(&mut payload, first_bytes.len() as u64).expect("frame first");
+        payload.extend_from_slice(&first_bytes);
+        write_len(&mut payload, second_bytes.len() as u64).expect("frame second");
+        payload.extend_from_slice(&second_bytes);
+
+        let _guard = PayloadCtxGuard::enter(&payload);
+        let mut offset = 0;
+        assert_eq!(
+            decode_context_field_canonical::<u32>(payload.as_ptr(), &mut offset)
+                .expect("decode first"),
+            first
+        );
+        assert_eq!(
+            decode_context_field_archived::<u32>(payload.as_ptr(), &mut offset)
+                .expect("decode second"),
+            second
+        );
+        finish_context_fields(payload.as_ptr(), offset).expect("consume payload");
+        assert!(matches!(
+            finish_context_fields(payload.as_ptr(), offset - 1),
+            Err(Error::LengthMismatch)
+        ));
+    }
+
+    #[test]
+    fn context_field_helpers_bound_declared_lengths_before_decoding() {
+        reset_decode_state();
+        let mut payload = Vec::new();
+        write_len(&mut payload, 1024).expect("write oversized field length");
+        payload.push(0xAA);
+
+        let _guard = PayloadCtxGuard::enter(&payload);
+        let mut offset = 0;
+        assert!(matches!(
+            decode_context_field_archived::<u32>(payload.as_ptr(), &mut offset),
+            Err(Error::LengthMismatch)
+        ));
+        assert_eq!(offset, 0, "a rejected frame must not consume input");
+        drop(_guard);
+
+        let mut malformed = Vec::new();
+        write_len(&mut malformed, 1).expect("write short field length");
+        malformed.push(0xAA);
+        let _guard = PayloadCtxGuard::enter(&malformed);
+        assert!(matches!(
+            decode_context_field_canonical::<u32>(malformed.as_ptr(), &mut offset),
+            Err(Error::LengthMismatch)
+        ));
+        assert_eq!(
+            offset, 0,
+            "a framed value that fails typed decoding must not consume input"
+        );
+    }
+
+    #[test]
+    fn context_field_prefix_and_fixed_array_helpers_advance_exactly() {
+        reset_decode_state();
+        let first = String::from("alpha");
+        let second = String::from("beta");
+        let mut payload = Vec::new();
+        first.serialize(&mut payload).expect("encode first string");
+        second
+            .serialize(&mut payload)
+            .expect("encode second string");
+        payload.extend_from_slice(&[1, 2, 3, 4]);
+
+        let _guard = PayloadCtxGuard::enter(&payload);
+        let mut offset = 0;
+        assert_eq!(
+            decode_context_field_prefix::<String>(payload.as_ptr(), &mut offset)
+                .expect("decode first prefix"),
+            first
+        );
+        assert_eq!(
+            decode_context_field_prefix::<String>(payload.as_ptr(), &mut offset)
+                .expect("decode second prefix"),
+            second
+        );
+        assert_eq!(
+            decode_context_byte_array::<4>(payload.as_ptr(), &mut offset)
+                .expect("decode fixed bytes"),
+            [1, 2, 3, 4]
+        );
+        finish_context_fields(payload.as_ptr(), offset).expect("consume payload");
     }
 
     #[test]

@@ -7625,9 +7625,10 @@ impl Iroha {
                 iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
             }
             (Some(policy_path), Some(artifact_dir)) => {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load(
+                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
                     policy_path,
                     artifact_dir,
+                    config.settlement.offline.kagemusha_max_decoded_bytes,
                 )
                 .map_err(|error| {
                     Report::new(StartError::InitKura).attach(format!(

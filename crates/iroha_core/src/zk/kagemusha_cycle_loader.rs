@@ -6,6 +6,7 @@
 
 use std::{cell::RefCell, collections::BTreeMap, marker::PhantomData, ops::Deref, rc::Rc};
 
+use ff::PrimeField as _;
 use halo2_base::{
     AssignedValue,
     QuantumCell::{Constant, Existing},
@@ -503,13 +504,11 @@ where
             ctx.main()
                 .load_constant(Inner::<C>::from(u64::from(authenticated_round_count))),
         );
-        limbs.extend(bytes.chunks_exact(4).map(|chunk| {
+        limbs.extend(bytes.chunks_exact(16).map(|chunk| {
             gate.inner_product(
                 ctx.main(),
                 chunk.iter().copied().map(Existing),
-                [1_u64, 1 << 8, 1 << 16, 1 << 24]
-                    .into_iter()
-                    .map(|value| Constant(Inner::<C>::from(value))),
+                (0..16).map(|index| Constant(Inner::<C>::from_u128(1_u128 << (8 * index)))),
             )
         }));
         if limbs.len() != expected_len {

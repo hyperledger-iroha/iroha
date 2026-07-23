@@ -92,6 +92,11 @@ pub fn g_to_lagrange<C: PrimeCurveAffine>(g_projective: Vec<C::Curve>, k: u32) -
     let fft_data = FFTData::new(n, omega, omega_inv);
 
     best_fft(&mut g_lagrange_projective, omega_inv, k, &fft_data, true);
+    // Parameter construction performs only one projective FFT per curve type.
+    // On the recursive backend, retaining that degree-sized scratch buffer
+    // cannot accelerate later scalar-field FFTs and otherwise keeps several
+    // MiB live for every curve type until the worker thread exits.
+    crate::fft::recursive::clear_scratch::<C::Curve>();
     parallelize(&mut g_lagrange_projective, |g, _| {
         for g in g.iter_mut() {
             *g *= n_inv;

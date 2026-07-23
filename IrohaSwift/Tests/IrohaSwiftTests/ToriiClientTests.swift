@@ -1467,7 +1467,7 @@ final class ToriiClientTests: XCTestCase {
         "active_recursive_step_eq_verifier": {
           "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_eq_v4_verifier_record"},
           "version": 1,
-          "circuit_id": "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+          "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
           "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
           "public_inputs_schema_hash": "4545454545454545454545454545454545454545454545454545454545454545",
           "max_proof_bytes": 4096,
@@ -1477,7 +1477,7 @@ final class ToriiClientTests: XCTestCase {
         "active_recursive_step_ep_verifier": {
           "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_ep_v4_verifier_record"},
           "version": 1,
-          "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+          "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
           "commitment": "5555555555555555555555555555555555555555555555555555555555555555",
           "public_inputs_schema_hash": "5656565656565656565656565656565656565656565656565656565656565656",
           "max_proof_bytes": 4096,
@@ -11954,7 +11954,7 @@ final class ToriiClientTests: XCTestCase {
                 "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             ),
             (
-                changingArtifact { $0["max_proof_bytes"] = 16 * 1_024 * 1_024 + 1 },
+                changingArtifact { $0["max_proof_bytes"] = 21_765 },
                 "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             ),
             (

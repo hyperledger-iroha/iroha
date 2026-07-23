@@ -137,8 +137,8 @@ Each is null exactly with its matching unavailable blocker. Readiness requires
 exact bridge ABI 21. The recursive records use the exact logical V4 roles
 `kagemusha_recursive_step_eq_v4_verifier_record` and
 `kagemusha_recursive_step_ep_v4_verifier_record`, with circuits
-`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
-`kagemusha-recursive-spend-step-ep-authenticated-layout-v4` respectively, and
+`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
+`kagemusha-recursive-spend-step-ep-compact-lineage-v5` respectively, and
 backend `halo2/ipa`.
 
 `artifact_set` is required but nullable. When present, it binds the

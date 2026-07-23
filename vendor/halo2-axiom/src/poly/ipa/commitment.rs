@@ -3,7 +3,7 @@
 //!
 //! [halo]: https://eprint.iacr.org/2019/1021
 
-use crate::arithmetic::{best_multiexp, g_to_lagrange, parallelize, CurveAffine, CurveExt};
+use crate::arithmetic::{CurveAffine, CurveExt, best_multiexp, g_to_lagrange, parallelize};
 use crate::helpers::CurveRead;
 use crate::poly::commitment::{Blind, CommitmentScheme, Params, ParamsProver, ParamsVerifier};
 use crate::poly::ipa::msm::MSMIPA;
@@ -19,6 +19,20 @@ pub use prover::create_proof;
 pub use verifier::verify_proof;
 
 use std::io;
+
+fn commit_with_blind<C: CurveAffine>(
+    scalars: &[C::Scalar],
+    bases: &[C],
+    blind: Blind<C::Scalar>,
+    blind_base: C,
+) -> C::Curve {
+    // Keep the degree-n coefficient/base arrays borrowed. Appending the blind
+    // to temporary vectors duplicates both complete arrays at every
+    // commitment, which is particularly costly for the degree-16 recursive
+    // prover. The split computation is the same group expression as the
+    // former (n + 1)-pair MSM.
+    best_multiexp::<C>(scalars, bases) + &(blind_base * blind.0)
+}
 
 /// Public parameters for IPA commitment scheme
 #[derive(Debug, Clone)]
@@ -90,16 +104,7 @@ impl<'params, C: CurveAffine> Params<'params, C> for ParamsIPA<C> {
         poly: &Polynomial<C::Scalar, LagrangeCoeff>,
         r: Blind<C::Scalar>,
     ) -> C::Curve {
-        let mut tmp_scalars = Vec::with_capacity(poly.len() + 1);
-        let mut tmp_bases = Vec::with_capacity(poly.len() + 1);
-
-        tmp_scalars.extend(poly.iter());
-        tmp_scalars.push(r.0);
-
-        tmp_bases.extend(self.g_lagrange.iter());
-        tmp_bases.push(self.w);
-
-        best_multiexp::<C>(&tmp_scalars, &tmp_bases)
+        commit_with_blind::<C>(poly, &self.g_lagrange, r, self.w)
     }
 
     /// Writes params to a buffer.
@@ -210,16 +215,7 @@ impl<'params, C: CurveAffine> ParamsProver<'params, C> for ParamsIPA<C> {
     /// slice of coefficients. The commitment will be blinded by the blinding
     /// factor `r`.
     fn commit(&self, poly: &Polynomial<C::Scalar, Coeff>, r: Blind<C::Scalar>) -> C::Curve {
-        let mut tmp_scalars = Vec::with_capacity(poly.len() + 1);
-        let mut tmp_bases = Vec::with_capacity(poly.len() + 1);
-
-        tmp_scalars.extend(poly.iter());
-        tmp_scalars.push(r.0);
-
-        tmp_bases.extend(self.g.iter());
-        tmp_bases.push(self.w);
-
-        best_multiexp::<C>(&tmp_scalars, &tmp_bases)
+        commit_with_blind::<C>(poly, &self.g, r, self.w)
     }
 
     fn get_g(&self) -> &[C] {
@@ -229,13 +225,101 @@ impl<'params, C: CurveAffine> ParamsProver<'params, C> for ParamsIPA<C> {
 
 #[cfg(test)]
 mod test {
+    use crate::arithmetic::{CurveAffine, best_multiexp};
     use crate::poly::commitment::ParamsProver;
-    use crate::poly::commitment::{Blind, Params, MSM};
-    use crate::poly::ipa::commitment::{create_proof, verify_proof, ParamsIPA};
+    use crate::poly::commitment::{Blind, MSM, Params};
+    use crate::poly::ipa::commitment::{ParamsIPA, create_proof, verify_proof};
     use crate::poly::ipa::msm::MSMIPA;
 
     use ff::Field;
     use group::Curve;
+
+    fn appended_blind_reference<C: CurveAffine>(
+        scalars: &[C::Scalar],
+        bases: &[C],
+        blind: Blind<C::Scalar>,
+        blind_base: C,
+    ) -> C::Curve {
+        let mut appended_scalars = Vec::with_capacity(scalars.len() + 1);
+        appended_scalars.extend_from_slice(scalars);
+        appended_scalars.push(blind.0);
+
+        let mut appended_bases = Vec::with_capacity(bases.len() + 1);
+        appended_bases.extend_from_slice(bases);
+        appended_bases.push(blind_base);
+
+        best_multiexp::<C>(&appended_scalars, &appended_bases)
+    }
+
+    #[test]
+    fn coefficient_and_lagrange_commitments_match_appended_blind_reference_epaffine() {
+        const K: u32 = 6;
+
+        use crate::poly::EvaluationDomain;
+        use halo2curves::pasta::{EpAffine, Fq};
+
+        let params = ParamsIPA::<EpAffine>::new(K);
+        let domain = EvaluationDomain::new(1, K);
+        let mut coeff = domain.empty_coeff();
+        let mut lagrange = domain.empty_lagrange();
+        for (index, scalar) in coeff.iter_mut().enumerate() {
+            *scalar = Fq::from((index as u64).wrapping_mul(17).wrapping_add(3));
+        }
+        for (index, scalar) in lagrange.iter_mut().enumerate() {
+            *scalar = Fq::from((index as u64).wrapping_mul(29).wrapping_add(5));
+        }
+
+        for blind in [Blind(Fq::ZERO), Blind(Fq::from(37))] {
+            assert_eq!(
+                params.commit(&coeff, blind),
+                appended_blind_reference::<EpAffine>(&coeff, &params.g, blind, params.w)
+            );
+            assert_eq!(
+                params.commit_lagrange(&lagrange, blind),
+                appended_blind_reference::<EpAffine>(
+                    &lagrange,
+                    &params.g_lagrange,
+                    blind,
+                    params.w,
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn coefficient_and_lagrange_commitments_match_appended_blind_reference_eqaffine() {
+        const K: u32 = 6;
+
+        use crate::poly::EvaluationDomain;
+        use halo2curves::pasta::{EqAffine, Fp};
+
+        let params = ParamsIPA::<EqAffine>::new(K);
+        let domain = EvaluationDomain::new(1, K);
+        let mut coeff = domain.empty_coeff();
+        let mut lagrange = domain.empty_lagrange();
+        for (index, scalar) in coeff.iter_mut().enumerate() {
+            *scalar = Fp::from((index as u64).wrapping_mul(19).wrapping_add(7));
+        }
+        for (index, scalar) in lagrange.iter_mut().enumerate() {
+            *scalar = Fp::from((index as u64).wrapping_mul(31).wrapping_add(11));
+        }
+
+        for blind in [Blind(Fp::ZERO), Blind(Fp::from(41))] {
+            assert_eq!(
+                params.commit(&coeff, blind),
+                appended_blind_reference::<EqAffine>(&coeff, &params.g, blind, params.w)
+            );
+            assert_eq!(
+                params.commit_lagrange(&lagrange, blind),
+                appended_blind_reference::<EqAffine>(
+                    &lagrange,
+                    &params.g_lagrange,
+                    blind,
+                    params.w,
+                )
+            );
+        }
+    }
 
     #[test]
     fn test_commit_lagrange_epaffine() {

@@ -73,7 +73,8 @@ use super::kagemusha_v2::{
     I_TRANSFER_SCALE as O_TRANSFER_SCALE, I_UNSHIELD_PUBLIC_AMOUNT as O_UNSHIELD_PUBLIC_AMOUNT,
     I_UNSHIELD_PUBLIC_INPUTS_DIGEST as O_UNSHIELD_PUBLIC_INPUTS_DIGEST,
     I_VERIFIER_KEY_ID_DIGEST as O_VERIFIER_KEY_ID_DIGEST,
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_LIMBS_V2,
+    KAGEMUSHA_RECURSIVE_SPEND_STATE_HISTORY_SHA256_DOMAIN_V5,
+    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_ACCUMULATOR_LIMBS_V5,
     KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2,
     KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
     KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2,
@@ -84,7 +85,7 @@ use super::kagemusha_v2::{
     S_PROOF_STEP_COUNT, S_TOPUP_ANCHOR_COUNT, S_TOPUP_ANCHORS, S_VERIFIER_KEY_ID, S_VERSION,
 };
 
-/// Number of canonical Pallas-field elements in one ABI-20 V4 operation row.
+/// Number of canonical Pallas-field elements in one ABI-21 V4 operation row.
 pub const KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
 /// Exact number of little-endian `u32` limbs carrying the operation row.
 pub const KAGEMUSHA_STEP_OPERATION_LIMBS_V4: usize = KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4 * 8;
@@ -107,7 +108,7 @@ const CLAIM_SLOTS: usize = 2;
 const CLAIM_LINEAGE_ROOT: usize = 0;
 const CLAIM_DEPTH: usize = 8;
 const CLAIM_PATH: usize = 9;
-const CLAIM_HISTORY: usize = 11;
+const CLAIM_HISTORY_ACCUMULATOR: usize = 11;
 
 /// Exact fixed-size field-neutral operation vector shared by StepEq and StepEp.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
@@ -174,7 +175,7 @@ impl KagemushaStepOperationVectorV4 {
         Ok(fields)
     }
 
-    /// Match every operation field derivable from an ABI-20 terminal
+    /// Match every operation field derivable from an ABI-21 terminal
     /// statement before accepting the proof pair.
     ///
     /// The Step relation exposes the statement digest and the semantic
@@ -709,7 +710,7 @@ fn fill_statement_fields_v4(
 }
 
 impl KagemushaStepOperationVectorV4 {
-    /// Construct an ABI-20 initialization operation directly from the V4
+    /// Construct an ABI-21 initialization operation directly from the V4
     /// finalized receipt and V4 public statement. The V4 carriers are
     /// validated in place without projecting through a retired lifecycle carrier.
     pub fn from_init_v4(
@@ -821,7 +822,7 @@ impl KagemushaStepOperationVectorV4 {
         Ok(Self::from_fields(fields))
     }
 
-    /// Construct an ABI-20 append operation directly from the V4 split intent
+    /// Construct an ABI-21 append operation directly from the V4 split intent
     /// and selected V4 child statement.
     pub fn from_append_v4(
         split: &KagemushaRecursiveSpendSplitIntentV4,
@@ -1023,7 +1024,7 @@ impl KagemushaStepOperationVectorV4 {
         Ok(Self::from_fields(fields))
     }
 
-    /// Construct an ABI-20 partial-redemption operation directly from the V4
+    /// Construct an ABI-21 partial-redemption operation directly from the V4
     /// redemption intent and V4 change statement.
     pub fn from_redemption_change_v4(
         intent: &KagemushaRecursiveSpendRedemptionIntentV4,
@@ -1048,7 +1049,7 @@ impl KagemushaStepOperationVectorV4 {
         Self::from_redemption_change_public_v4(intent, statement)
     }
 
-    /// Reconstruct the exact public ABI-20 redemption-change operation at a
+    /// Reconstruct the exact public ABI-21 redemption-change operation at a
     /// terminal verifier. Confidential membership paths are proved inside the
     /// carried pair; no private witness is accepted or synthesized here.
     pub fn from_redemption_change_public_v4(
@@ -1603,8 +1604,16 @@ fn claim_path_less<F: BigPrimeField>(
     let mut rhs_key = native_bytes(ctx, range, &rhs[CLAIM_LINEAGE_ROOT..CLAIM_DEPTH]);
     lhs_key.push(lhs[CLAIM_DEPTH]);
     rhs_key.push(rhs[CLAIM_DEPTH]);
-    lhs_key.extend(native_bytes(ctx, range, &lhs[CLAIM_PATH..CLAIM_HISTORY]));
-    rhs_key.extend(native_bytes(ctx, range, &rhs[CLAIM_PATH..CLAIM_HISTORY]));
+    lhs_key.extend(native_bytes(
+        ctx,
+        range,
+        &lhs[CLAIM_PATH..CLAIM_HISTORY_ACCUMULATOR],
+    ));
+    rhs_key.extend(native_bytes(
+        ctx,
+        range,
+        &rhs[CLAIM_PATH..CLAIM_HISTORY_ACCUMULATOR],
+    ));
     // Depth is <= 64 and every other key component is a byte; eight bits cover both.
     lex_less(ctx, range, &lhs_key, &rhs_key, 8)
 }
@@ -1722,21 +1731,26 @@ fn extend_claim<F: BigPrimeField>(
         extended.push(gate.add(ctx, claim[CLAIM_PATH + path_limb], branch_bit));
     }
 
-    for history_limb in 0..KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_LIMBS_V2 {
-        let tag_index =
-            history_limb / KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2;
-        let tag_limb =
-            history_limb % KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2;
-        let before = range.is_less_than(
-            ctx,
-            QuantumCell::Constant(F::from(tag_index as u64)),
-            depth,
-            7,
-        );
-        let carried = gate.mul(ctx, before, claim[CLAIM_HISTORY + history_limb]);
-        let inserted = gate.mul(ctx, depth_selectors[tag_index], tag[tag_limb]);
-        extended.push(gate.add(ctx, carried, inserted));
-    }
+    let mut history_preimage = KAGEMUSHA_RECURSIVE_SPEND_STATE_HISTORY_SHA256_DOMAIN_V5
+        .iter()
+        .copied()
+        .chain(std::iter::once(0))
+        .map(|byte| ctx.load_constant(F::from(u64::from(byte))))
+        .collect::<Vec<_>>();
+    history_preimage.extend(native_bytes(
+        ctx,
+        range,
+        &claim[CLAIM_HISTORY_ACCUMULATOR
+            ..CLAIM_HISTORY_ACCUMULATOR
+                + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_ACCUMULATOR_LIMBS_V5],
+    ));
+    history_preimage.extend(native_bytes(ctx, range, tag));
+    let history_words = KagemushaSha256Chip::digest(ctx, range, &history_preimage);
+    extended.extend(
+        history_words
+            .into_iter()
+            .map(|word| byte_swap_u32(ctx, range, word)),
+    );
     extended
 }
 
@@ -2496,7 +2510,8 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     assert_zero_if(ctx, range, extends, tag_is_zero);
     assert_slice_zero_if(ctx, range, init, &tag);
 
-    // Init root claim is the exact anchor digest with empty path/history.
+    // Init root claim is the exact anchor digest with an empty path and the
+    // all-zero initial history accumulator.
     assert_slices_equal_if(
         ctx,
         range,
@@ -2580,7 +2595,8 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     );
 
     // Bind canonical first-claim operation fields deterministically while the
-    // complete histories remain in the exact result state.
+    // rolling history accumulators remain in the exact result state. The
+    // complete tag sequence remains in the public branch claim.
     bind_digest_to_state_if(
         ctx,
         range,
@@ -2595,8 +2611,11 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         fields[O_BRANCH_DEPTH],
         result_claims[0][CLAIM_DEPTH],
     );
-    let result_path =
-        operation_path_from_state(ctx, range, &result_claims[0][CLAIM_PATH..CLAIM_HISTORY]);
+    let result_path = operation_path_from_state(
+        ctx,
+        range,
+        &result_claims[0][CLAIM_PATH..CLAIM_HISTORY_ACCUMULATOR],
+    );
     assert_equal(ctx, range, fields[O_BRANCH_PATH_BITS], result_path);
     let expected_parent_depth = gate.sub(ctx, fields[O_BRANCH_DEPTH], extends);
     assert_equal(
@@ -2999,6 +3018,36 @@ mod tests {
         builder
     }
 
+    fn claim_extension_builder(
+        claim: &[u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2],
+        branch: u32,
+        tag: &[u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2],
+        expected: &[u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2],
+    ) -> BaseCircuitBuilder<Fp> {
+        let mut builder = BaseCircuitBuilder::new(false).use_k(18).use_lookup_bits(17);
+        let range = builder.range_chip();
+        let ctx = builder.main(0);
+        let claim =
+            ctx.assign_witnesses(claim.iter().copied().map(|limb| Fp::from(u64::from(limb))));
+        let tag: [AssignedValue<Fp>;
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2] = ctx
+            .assign_witnesses(tag.iter().copied().map(|limb| Fp::from(u64::from(limb))))
+            .try_into()
+            .expect("fixed transition tag");
+        let branch = ctx.load_witness(Fp::from(u64::from(branch)));
+        let extended = extend_claim(ctx, &range, &claim, branch, &tag);
+        let expected = ctx.assign_witnesses(
+            expected
+                .iter()
+                .copied()
+                .map(|limb| Fp::from(u64::from(limb))),
+        );
+        let one = ctx.load_constant(Fp::ONE);
+        assert_slices_equal_if(ctx, &range, one, &extended, &expected);
+        builder.calculate_params(Some(9));
+        builder
+    }
+
     #[test]
     fn operation_vector_round_trips_and_rejects_fp_modulus() {
         let (vector, _, _) = init_fixture();
@@ -3012,6 +3061,44 @@ mod tests {
         noncanonical.limbs[field_limb_range(O_CHAIN_TAG)]
             .copy_from_slice(&KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V4);
         assert!(noncanonical.to_fields().is_err());
+    }
+
+    #[test]
+    fn claim_extension_constrains_the_v5_rolling_history_accumulator() {
+        let mut claim = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2];
+        claim[..8].copy_from_slice(&exact_limbs([0x31; 32]));
+        let tag_bytes = [0x42; 24];
+        let tag = std::array::from_fn(|index| {
+            u32::from_le_bytes(
+                tag_bytes[index * 4..index * 4 + 4]
+                    .try_into()
+                    .expect("four-byte tag limb"),
+            )
+        });
+        let accumulator =
+            super::super::kagemusha_v2::kagemusha_recursive_spend_state_history_accumulator_v5(
+                &tag_bytes,
+            )
+            .expect("canonical one-tag accumulator");
+        let mut expected = claim;
+        expected[CLAIM_DEPTH] = 1;
+        expected[CLAIM_PATH] = 0x80;
+        expected[CLAIM_HISTORY_ACCUMULATOR..].copy_from_slice(&exact_limbs(accumulator));
+
+        let builder = claim_extension_builder(&claim, 1, &tag, &expected);
+        MockProver::run(builder.config_params.k as u32, &builder, vec![])
+            .expect("rolling-history claim-extension prover")
+            .assert_satisfied();
+
+        let mut substituted = expected;
+        substituted[CLAIM_HISTORY_ACCUMULATOR] ^= 1;
+        let builder = claim_extension_builder(&claim, 1, &tag, &substituted);
+        assert!(
+            MockProver::run(builder.config_params.k as u32, &builder, vec![])
+                .expect("rolling-history substitution prover")
+                .verify()
+                .is_err()
+        );
     }
 
     #[test]

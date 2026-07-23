@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -20,6 +23,63 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = REPO_ROOT / "scripts" / "bootstrap_sumeragi_v2_release.py"
 PYTHON = Path(sys.executable).resolve(strict=True)
 FINGERPRINT = "SHA256:" + "A" * 43
+
+
+def test_outer_abort_grace_exceeds_nested_tlaps_cleanup_window() -> None:
+    bootstrap_source = BOOTSTRAP.read_text(encoding="utf-8")
+    guard_source = (
+        REPO_ROOT / "scripts" / "formal" / "run_sumeragi_v2_tlapm_guard.py"
+    ).read_text(encoding="utf-8")
+    outer = re.search(
+        r"^_RUNNER_ABORT_TERM_GRACE_SECONDS\s*=\s*(\d+)$",
+        bootstrap_source,
+        re.MULTILINE,
+    )
+    inner = re.search(
+        r"^TERM_GRACE_SECONDS\s*=\s*([0-9.]+)$", guard_source, re.MULTILINE
+    )
+    assert outer is not None and inner is not None
+    # The nested guard has a TERM wait, two child wait/reap windows, and process
+    # snapshot overhead. The outer group must not SIGKILL that guard mid-cleanup.
+    assert int(outer.group(1)) >= 3 * float(inner.group(1)) + 10
+
+
+def test_release_runner_defers_launch_signal_until_process_is_owned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = importlib.util.spec_from_file_location("sumeragi_release_bootstrap", BOOTSTRAP)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    spawned: list[object] = []
+    aborted: list[object] = []
+
+    class FakeProcess:
+        pid = 424242
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            spawned.append(self)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        def wait(self) -> int:
+            raise AssertionError("interrupted launch must abort before waiting")
+
+    monkeypatch.setattr(module.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(module, "_abort", lambda process: aborted.append(process))
+
+    with pytest.raises(module.BootstrapError, match="interrupted by signal SIGTERM"):
+        module._run_release_runner(
+            tmp_path / "runner",
+            (),
+            cwd=tmp_path,
+            environment={},
+            stdout_descriptor=1,
+            stderr_descriptor=2,
+        )
+
+    assert len(spawned) == 1
+    assert aborted == spawned
 
 
 def _sha256(path: Path) -> str:
@@ -994,18 +1054,21 @@ def test_blocked_bootstrap_diagnostics_cannot_backpressure_runner_output(
     assert stdout == b""
 
 
-def test_bootstrap_interruption_preserves_active_runner_and_regular_file_evidence(
+def test_bootstrap_interruption_terminates_owned_runner_and_removes_evidence(
     release_fixture: Fixture,
 ) -> None:
-    completed = release_fixture.root / "interrupted-writer-completed"
+    runner_pid_path = release_fixture.root / "interrupted-runner-pid"
+    child_pid_path = release_fixture.root / "interrupted-child-pid"
     _write(
         release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
-        _continuous_writer_runner(
-            release_fixture.launch_count,
-            completed,
-            chunks=64,
-            hold_seconds=0.5,
-        ),
+        f"""#!/bin/bash
+set -eu
+printf '%s\n' "$$" > {runner_pid_path}
+sleep 60 &
+child=$!
+printf '%s\n' "$child" > {child_pid_path}
+wait "$child"
+""",
         0o500,
     )
     process = subprocess.Popen(
@@ -1016,26 +1079,22 @@ def test_bootstrap_interruption_preserves_active_runner_and_regular_file_evidenc
         text=False,
         env={"PATH": os.environ.get("PATH", "")},
     )
-    _wait_for(release_fixture.launch_count)
-    stdout_log = release_fixture.evidence / "runner-stdout.log"
-    _wait_for(stdout_log)
-    deadline = time.monotonic() + 10
-    while stdout_log.stat().st_size == 0 and time.monotonic() < deadline:
-        time.sleep(0.02)
-    # Signal only the bootstrap PID. The runner is in its own session and is
-    # deliberately neither signalled nor waited through a process-group API.
+    _wait_for(runner_pid_path)
+    _wait_for(child_pid_path)
+    runner_pid = int(runner_pid_path.read_text(encoding="utf-8"))
+    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+    assert runner_pid > 1
+    assert child_pid > 1
+
+    # Signal only the bootstrap PID. Its handler owns cleanup of the private
+    # release-runner session and must not leave either runner or descendant.
     process.terminate()
     process.wait(timeout=10)
     assert process.returncode != 0
-    _wait_for(completed)
-    expected_size = int(completed.read_text(encoding="utf-8"))
-    assert stdout_log.stat().st_size >= expected_size
-    assert (release_fixture.evidence / "runner-stderr.log").stat().st_size >= expected_size
-    assert stat.S_IMODE(stdout_log.stat().st_mode) == 0o600
-    assert not (
-        release_fixture.evidence / "BOOTSTRAP_RELEASE_COMPLETED.json"
-    ).exists()
-    time.sleep(0.7)
+    assert not release_fixture.evidence.exists()
+    for pid in (runner_pid, child_pid):
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
 
 
 @pytest.mark.parametrize(

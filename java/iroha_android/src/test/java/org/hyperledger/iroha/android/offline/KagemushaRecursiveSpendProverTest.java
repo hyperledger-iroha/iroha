@@ -13,6 +13,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
@@ -23,6 +25,7 @@ import org.hyperledger.iroha.norito.SchemaHash;
 /** Source-level contract checks for the typed ABI-21 Kagemusha V4 lifecycle bridge. */
 public final class KagemushaRecursiveSpendProverTest {
   public static void main(final String[] args) {
+    heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting();
     exactAbiIsRequired();
     appAttestNativeProjectionRejectsCorruptAuxiliaryFields();
     artifactContractIsFixed();
@@ -49,6 +52,54 @@ public final class KagemushaRecursiveSpendProverTest {
     nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade();
     toriiLifecycleRoutesAndHeadersAreExact();
     publicSurfaceIsKagemushaOnly();
+  }
+
+  private static void heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting() {
+    final CountDownLatch entered = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
+    final AtomicReference<Throwable> failure = new AtomicReference<>();
+    final Thread worker = new Thread(() -> {
+      try {
+        KagemushaRecursiveSpendProver.withHeavyProofPermitForTest(() -> {
+          entered.countDown();
+          try {
+            if (!release.await(5, TimeUnit.SECONDS)) {
+              throw new AssertionError("timed out waiting to release proof permit");
+            }
+          } catch (final InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(error);
+          }
+        });
+      } catch (final Throwable error) {
+        failure.set(error);
+      }
+    });
+    worker.start();
+    try {
+      assert entered.await(5, TimeUnit.SECONDS);
+    } catch (final InterruptedException error) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(error);
+    }
+    try {
+      KagemushaRecursiveSpendProver.withHeavyProofPermitForTest(() -> {});
+      throw new AssertionError("contending proof permit must fail without waiting");
+    } catch (final KagemushaRecursiveSpendProver.ProofWorkerBusyException expected) {
+      assert expected.getMessage().contains("retry");
+    } finally {
+      release.countDown();
+    }
+    try {
+      worker.join(5_000);
+    } catch (final InterruptedException error) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(error);
+    }
+    assert !worker.isAlive();
+    if (failure.get() != null) throw new AssertionError(failure.get());
+    KagemushaRecursiveSpendProver.withHeavyProofPermitForTest(() ->
+        KagemushaRecursiveSpendProver.withHeavyProofPermitForTest(() -> {}));
   }
 
   private static void exactAbiIsRequired() {
@@ -115,12 +166,20 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void artifactContractIsFixed() {
     assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 21;
     assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 8;
+    assert KagemushaRecursiveSpendProver.MAX_ARTIFACT_CHUNK_BYTES == 1024 * 1024;
+    try {
+      KagemushaRecursiveSpendProver.requireChunk(
+          new byte[KagemushaRecursiveSpendProver.MAX_ARTIFACT_CHUNK_BYTES + 1]);
+      throw new AssertionError("oversized artifact chunk must be rejected before JNI copying");
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("1..1048576 bytes");
+    }
     assert KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS == 8;
     assert KagemushaRecursiveSpendProver.MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4
-        == 16 * 1024 * 1024;
+        == 21_764;
     assert KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V2 == 32 * 1024;
     assert KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V4 == 32 * 1024 * 1024;
     assert KagemushaRecursiveSpendProver.MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4 == 6_488_064;
@@ -733,7 +792,7 @@ public final class KagemushaRecursiveSpendProverTest {
         null);
     final KagemushaRecursiveSpendProver.ActiveVerifier stepEq = readinessVerifier(
         "kagemusha_recursive_step_eq_v4_verifier_record",
-        "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+        "kagemusha-recursive-spend-step-eq-compact-layout-v5",
         4,
         30L);
     final KagemushaRecursiveSpendProver.AuthenticatedArtifactSet artifactSet =
@@ -768,7 +827,7 @@ public final class KagemushaRecursiveSpendProverTest {
             unshield,
             readinessVerifier(
                 "kagemusha_recursive_step_eq_v4_verifier_record",
-                "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+                "kagemusha-recursive-spend-step-eq-compact-layout-v5",
                 4,
                 20L),
             artifactSet,
@@ -850,7 +909,7 @@ public final class KagemushaRecursiveSpendProverTest {
         stepEq,
         readinessVerifier(
             "kagemusha_recursive_step_ep_v4_verifier_record",
-            "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+            "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
             5,
             30L),
         artifactSet,

@@ -1,19 +1,19 @@
 use ff::PrimeField;
 use group::{
-    ff::{BatchInvert, Field},
     Curve,
+    ff::{BatchInvert, Field},
 };
 use rand_core::RngCore;
 use std::iter::{self, ExactSizeIterator};
 
-use super::super::{circuit::Any, ChallengeBeta, ChallengeGamma, ChallengeX};
+use super::super::{ChallengeBeta, ChallengeGamma, ChallengeX, circuit::Any};
 use super::{Argument, ProvingKey};
 use crate::{
-    arithmetic::{eval_polynomial, parallelize, CurveAffine},
+    arithmetic::{CurveAffine, eval_polynomial, parallelize},
     plonk::{self, Error},
     poly::{
-        commitment::{Blind, Params},
         Coeff, LagrangeCoeff, Polynomial, ProverQuery, Rotation,
+        commitment::{Blind, Params},
     },
     transcript::{EncodedChallenge, TranscriptWrite},
 };
@@ -169,8 +169,10 @@ impl Argument {
 
             let permutation_product_commitment_projective = params.commit_lagrange(&z, blind);
             let permutation_product_blind = blind;
-            let z = domain.lagrange_to_coeff(z);
-            let permutation_product_poly = z.clone();
+            // `z` is no longer needed in Lagrange form after its commitment;
+            // move the coefficient polynomial into the retained set instead
+            // of cloning another degree-sized field vector at the prover peak.
+            let permutation_product_poly = domain.lagrange_to_coeff(z);
 
             let permutation_product_commitment =
                 permutation_product_commitment_projective.to_affine();
@@ -193,9 +195,9 @@ impl<C: CurveAffine> Committed<C> {
         Constructed {
             sets: self
                 .sets
-                .iter()
+                .into_iter()
                 .map(|set| ConstructedSet {
-                    permutation_product_poly: set.permutation_product_poly.clone(),
+                    permutation_product_poly: set.permutation_product_poly,
                     permutation_product_blind: set.permutation_product_blind,
                 })
                 .collect(),

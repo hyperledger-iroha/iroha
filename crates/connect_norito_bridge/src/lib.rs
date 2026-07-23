@@ -173,6 +173,7 @@ const ERR_JSON_SERIALIZE: c_int = -304;
 const ERR_KAGEMUSHA_PROVE: c_int = -311;
 const ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE: c_int = -316;
 const ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_ARTIFACT: c_int = -317;
+const ERR_KAGEMUSHA_BUSY: c_int = -318;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
@@ -211,6 +212,7 @@ enum BridgeError {
     KagemushaProve,
     KagemushaRecursiveSpendV4Unavailable,
     KagemushaRecursiveSpendV4Artifact,
+    KagemushaBusy,
     UnsupportedAlgorithm,
     MetadataTarget,
     MetadataKey,
@@ -264,6 +266,7 @@ impl BridgeError {
             BridgeError::KagemushaRecursiveSpendV4Artifact => {
                 ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_ARTIFACT
             }
+            BridgeError::KagemushaBusy => ERR_KAGEMUSHA_BUSY,
             BridgeError::UnsupportedAlgorithm => ERR_UNSUPPORTED_ALGORITHM,
             BridgeError::MetadataTarget => ERR_METADATA_TARGET,
             BridgeError::MetadataKey => ERR_METADATA_KEY,
@@ -7874,56 +7877,82 @@ impl KagemushaRecursiveSpendInstalledArtifactSetV4 {
         .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 
-    fn authenticated_verifier_artifacts(
+    fn authenticated_proving_key_spool(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>
-    {
-        use iroha_data_model::offline::{
-            KagemushaPastaCycleArtifactKindV4 as Kind, KagemushaPastaCycleParityV1 as Parity,
-        };
+        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    ) -> BridgeResult<File> {
+        use iroha_data_model::offline::KagemushaPastaCycleArtifactKindV4;
 
-        let artifacts =
-            iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4::new(
-                &self.authenticated_release,
-                self.authenticated_payload(Parity::StepEq, Kind::ParamsIpa)?,
-                self.authenticated_payload(Parity::StepEq, Kind::VerifyingKey)?,
-                self.authenticated_payload(Parity::StepEq, Kind::BootstrapWitness)?,
-                self.authenticated_payload(Parity::StepEp, Kind::ParamsIpa)?,
-                self.authenticated_payload(Parity::StepEp, Kind::VerifyingKey)?,
-                self.authenticated_payload(Parity::StepEp, Kind::BootstrapWitness)?,
-            )
+        self.validate_live_inventory()?;
+        let descriptor = iroha_core::zk::kagemusha_artifact_v4::kagemusha_artifact_descriptor_v4(
+            self.manifest(),
+            parity,
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        let artifact = self
+            .artifacts
+            .iter()
+            .find(|artifact| {
+                artifact
+                    .lock()
+                    .is_ok_and(|artifact| artifact.descriptor == *descriptor)
+            })
+            .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        let artifact = artifact
+            .lock()
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        if artifacts.manifest_sha256() != self.manifest_sha256 {
-            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-        }
-        Ok(artifacts)
+        artifact
+            .file
+            .as_ref()
+            .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?
+            .try_clone()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 
-    fn authenticated_prover_artifacts(
+    fn parsed_verifier(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>
-    {
+    ) -> BridgeResult<Arc<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4>> {
+        self.validate_live_inventory()?;
+        Ok(Arc::new(
+            iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifact_loader(
+                &self.authenticated_release,
+                |parity, kind| {
+                    self.authenticated_payload(parity, kind).map_err(|_| {
+                        "failed to load authenticated Kagemusha verifier role".to_owned()
+                    })
+                },
+            )
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?,
+        ))
+    }
+
+    fn parsed_prover(
+        &self,
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4> {
         use iroha_data_model::offline::{
-            KagemushaPastaCycleArtifactKindV4 as Kind, KagemushaPastaCycleParityV1 as Parity,
+            KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleParityV1,
         };
 
-        let artifacts =
-            iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4::new(
-                &self.authenticated_release,
-                self.authenticated_payload(Parity::StepEq, Kind::ParamsIpa)?,
-                self.authenticated_payload(Parity::StepEq, Kind::ProvingKey)?,
-                self.authenticated_payload(Parity::StepEq, Kind::VerifyingKey)?,
-                self.authenticated_payload(Parity::StepEq, Kind::BootstrapWitness)?,
-                self.authenticated_payload(Parity::StepEp, Kind::ParamsIpa)?,
-                self.authenticated_payload(Parity::StepEp, Kind::ProvingKey)?,
-                self.authenticated_payload(Parity::StepEp, Kind::VerifyingKey)?,
-                self.authenticated_payload(Parity::StepEp, Kind::BootstrapWitness)?,
-            )
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        if artifacts.manifest_sha256() != self.manifest_sha256 {
-            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-        }
-        Ok(artifacts)
+        self.validate_live_inventory()?;
+        let step_eq_proving_key_file =
+            self.authenticated_proving_key_spool(KagemushaPastaCycleParityV1::StepEq)?;
+        let step_ep_proving_key_file =
+            self.authenticated_proving_key_spool(KagemushaPastaCycleParityV1::StepEp)?;
+        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4::from_authenticated_artifact_spool_loader(
+            &self.authenticated_release,
+            step_eq_proving_key_file,
+            step_ep_proving_key_file,
+            |parity, kind| {
+                if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
+                    return Err("bounded Kagemusha role loader requested a proving key".to_owned());
+                }
+                self.authenticated_payload(parity, kind).map_err(|_| {
+                    "failed to load authenticated Kagemusha prover role".to_owned()
+                })
+            },
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 }
 
@@ -7935,12 +7964,12 @@ trait KagemushaRecursiveSpendArtifactSetViewV4 {
     fn manifest(&self) -> &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4;
     fn manifest_sha256(&self) -> [u8; 32];
     fn validate_live_inventory(&self) -> BridgeResult<()>;
-    fn runtime_verifier_artifacts(
+    fn runtime_verifier(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>;
-    fn runtime_prover_artifacts(
+    ) -> BridgeResult<Arc<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4>>;
+    fn runtime_prover(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>;
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4>;
     fn verify_topup_roster_binding(
         &self,
         roster: &iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
@@ -7972,18 +8001,16 @@ impl<T: KagemushaRecursiveSpendArtifactSetViewV4> KagemushaRecursiveSpendArtifac
         self.as_ref().validate_live_inventory()
     }
 
-    fn runtime_verifier_artifacts(
+    fn runtime_verifier(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>
-    {
-        self.as_ref().runtime_verifier_artifacts()
+    ) -> BridgeResult<Arc<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4>> {
+        self.as_ref().runtime_verifier()
     }
 
-    fn runtime_prover_artifacts(
+    fn runtime_prover(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>
-    {
-        self.as_ref().runtime_prover_artifacts()
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4> {
+        self.as_ref().runtime_prover()
     }
 
     fn verify_topup_roster_binding(
@@ -8023,18 +8050,16 @@ impl KagemushaRecursiveSpendArtifactSetViewV4 for KagemushaRecursiveSpendInstall
         self.validate_live_inventory()
     }
 
-    fn runtime_verifier_artifacts(
+    fn runtime_verifier(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>
-    {
-        self.authenticated_verifier_artifacts()
+    ) -> BridgeResult<Arc<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4>> {
+        self.parsed_verifier()
     }
 
-    fn runtime_prover_artifacts(
+    fn runtime_prover(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>
-    {
-        self.authenticated_prover_artifacts()
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4> {
+        self.parsed_prover()
     }
 
     fn verify_topup_roster_binding(
@@ -8256,58 +8281,93 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
         .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 
-    fn candidate_verifier_artifacts(
+    fn candidate_proving_key_spool(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>
-    {
-        use iroha_data_model::offline::{
-            KagemushaPastaCycleArtifactKindV4 as Kind, KagemushaPastaCycleParityV1 as Parity,
-        };
-        let artifacts = iroha_core::zk::kagemusha_artifact_v4::
-            KagemushaPastaCycleVerifierArtifactsV4::new_candidate_evidence_lab(
-                &self.candidate,
-                self.candidate_sha256,
-                self.manifest_sha256,
-                self.candidate_payload(Parity::StepEq, Kind::ParamsIpa)?,
-                self.candidate_payload(Parity::StepEq, Kind::VerifyingKey)?,
-                self.candidate_payload(Parity::StepEq, Kind::BootstrapWitness)?,
-                self.candidate_payload(Parity::StepEp, Kind::ParamsIpa)?,
-                self.candidate_payload(Parity::StepEp, Kind::VerifyingKey)?,
-                self.candidate_payload(Parity::StepEp, Kind::BootstrapWitness)?,
-            )
+        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    ) -> BridgeResult<File> {
+        use iroha_data_model::offline::KagemushaPastaCycleArtifactKindV4;
+
+        self.validate_live_inventory()?;
+        let descriptor = self
+            .manifest()
+            .profiles
+            .iter()
+            .find(|profile| profile.parity == parity)
+            .and_then(|profile| {
+                profile.artifacts.iter().find(|descriptor| {
+                    descriptor.kind == KagemushaPastaCycleArtifactKindV4::ProvingKey
+                })
+            })
+            .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        let artifact = self
+            .artifacts
+            .iter()
+            .find(|artifact| {
+                artifact
+                    .lock()
+                    .is_ok_and(|artifact| artifact.descriptor == *descriptor)
+            })
+            .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        let artifact = artifact
+            .lock()
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        if artifacts.manifest_sha256() != self.manifest_sha256 {
-            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-        }
-        Ok(artifacts)
+        artifact
+            .file
+            .as_ref()
+            .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?
+            .try_clone()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 
-    fn candidate_prover_artifacts(
+    fn parsed_verifier(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>
-    {
-        use iroha_data_model::offline::{
-            KagemushaPastaCycleArtifactKindV4 as Kind, KagemushaPastaCycleParityV1 as Parity,
-        };
-        let artifacts = iroha_core::zk::kagemusha_artifact_v4::
-            KagemushaPastaCycleProverArtifactsV4::new_candidate_evidence_lab(
+    ) -> BridgeResult<Arc<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4>> {
+        self.validate_live_inventory()?;
+        Ok(Arc::new(
+            iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_candidate_artifact_loader(
                 &self.candidate,
                 self.candidate_sha256,
                 self.manifest_sha256,
-                self.candidate_payload(Parity::StepEq, Kind::ParamsIpa)?,
-                self.candidate_payload(Parity::StepEq, Kind::ProvingKey)?,
-                self.candidate_payload(Parity::StepEq, Kind::VerifyingKey)?,
-                self.candidate_payload(Parity::StepEq, Kind::BootstrapWitness)?,
-                self.candidate_payload(Parity::StepEp, Kind::ParamsIpa)?,
-                self.candidate_payload(Parity::StepEp, Kind::ProvingKey)?,
-                self.candidate_payload(Parity::StepEp, Kind::VerifyingKey)?,
-                self.candidate_payload(Parity::StepEp, Kind::BootstrapWitness)?,
+                |parity, kind| {
+                    self.candidate_payload(parity, kind).map_err(|_| {
+                        "failed to load candidate Kagemusha verifier role".to_owned()
+                    })
+                },
             )
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        if artifacts.manifest_sha256() != self.manifest_sha256 {
-            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-        }
-        Ok(artifacts)
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?,
+        ))
+    }
+
+    fn parsed_prover(
+        &self,
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4> {
+        use iroha_data_model::offline::{
+            KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleParityV1,
+        };
+
+        self.validate_live_inventory()?;
+        let step_eq_proving_key_file =
+            self.candidate_proving_key_spool(KagemushaPastaCycleParityV1::StepEq)?;
+        let step_ep_proving_key_file =
+            self.candidate_proving_key_spool(KagemushaPastaCycleParityV1::StepEp)?;
+        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4::from_candidate_artifact_spool_loader(
+            &self.candidate,
+            self.candidate_sha256,
+            self.manifest_sha256,
+            step_eq_proving_key_file,
+            step_ep_proving_key_file,
+            |parity, kind| {
+                if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
+                    return Err(
+                        "bounded candidate Kagemusha role loader requested a proving key"
+                            .to_owned(),
+                    );
+                }
+                self.candidate_payload(parity, kind)
+                    .map_err(|_| "failed to load candidate Kagemusha prover role".to_owned())
+            },
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 }
 
@@ -8327,18 +8387,16 @@ impl KagemushaRecursiveSpendArtifactSetViewV4
         self.validate_live_inventory()
     }
 
-    fn runtime_verifier_artifacts(
+    fn runtime_verifier(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>
-    {
-        self.candidate_verifier_artifacts()
+    ) -> BridgeResult<Arc<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4>> {
+        self.parsed_verifier()
     }
 
-    fn runtime_prover_artifacts(
+    fn runtime_prover(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>
-    {
-        self.candidate_prover_artifacts()
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4> {
+        self.parsed_prover()
     }
 
     fn verify_topup_roster_binding(
@@ -8400,6 +8458,7 @@ impl KagemushaRecursiveSpendArtifactSetViewV4
 // through the V4 registry.
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLE_NAMESPACE_V4: u64 = 0x4b34_0000_0000_0000;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLE_COUNTER_MASK_V4: u64 = 0x0000_ffff_ffff_ffff;
+static KAGEMUSHA_HEAVY_PROOF_PERMIT_V4: Mutex<()> = Mutex::new(());
 static KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLES_V4: AtomicU64 = AtomicU64::new(1);
 static KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_REGISTRY_V4: OnceLock<
     Mutex<HashMap<u64, Arc<Mutex<KagemushaRecursiveSpendArtifactIngestV4>>>>,
@@ -8419,6 +8478,89 @@ static KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_ARTIFACT_REGISTRY_V4: OnceLock<
 static KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_INSTALLED_ARTIFACT_SET_V4: OnceLock<
     Mutex<Option<Arc<KagemushaCandidateEvidenceLabInstalledArtifactSetV4>>>,
 > = OnceLock::new();
+std::thread_local! {
+    /// Set only while a JNI boundary owns the process-wide permit and is about
+    /// to enter the corresponding C ABI boundary on the same thread.
+    static KAGEMUSHA_HEAVY_PROOF_PREACQUIRED_V4: std::cell::Cell<bool> = const {
+        std::cell::Cell::new(false)
+    };
+}
+
+/// Process-wide nonblocking permit for memory-intensive Kagemusha parsing and proving.
+///
+/// The guard deliberately has no waiting path: an FFI caller must receive a
+/// retryable busy result before its potentially large request is copied or
+/// decoded, rather than retaining another request while a proof is active.
+enum KagemushaHeavyProofPermitV4<'lock> {
+    Acquired {
+        _guard: std::sync::MutexGuard<'lock, ()>,
+    },
+    BorrowedFromJni,
+}
+
+fn try_acquire_kagemusha_heavy_proof_permit_from_v4(
+    permit: &Mutex<()>,
+) -> BridgeResult<KagemushaHeavyProofPermitV4<'_>> {
+    match permit.try_lock() {
+        Ok(guard) => Ok(KagemushaHeavyProofPermitV4::Acquired { _guard: guard }),
+        Err(std::sync::TryLockError::WouldBlock) => Err(BridgeError::KagemushaBusy),
+        Err(std::sync::TryLockError::Poisoned(error)) => {
+            Ok(KagemushaHeavyProofPermitV4::Acquired {
+                _guard: error.into_inner(),
+            })
+        }
+    }
+}
+
+fn try_acquire_or_borrow_kagemusha_heavy_proof_permit_from_v4(
+    permit: &Mutex<()>,
+) -> BridgeResult<KagemushaHeavyProofPermitV4<'_>> {
+    if KAGEMUSHA_HEAVY_PROOF_PREACQUIRED_V4.with(std::cell::Cell::get) {
+        return Ok(KagemushaHeavyProofPermitV4::BorrowedFromJni);
+    }
+    try_acquire_kagemusha_heavy_proof_permit_from_v4(permit)
+}
+
+fn try_acquire_kagemusha_heavy_proof_permit_v4()
+-> BridgeResult<KagemushaHeavyProofPermitV4<'static>> {
+    try_acquire_or_borrow_kagemusha_heavy_proof_permit_from_v4(&KAGEMUSHA_HEAVY_PROOF_PERMIT_V4)
+}
+
+struct KagemushaHeavyProofPreacquiredMarkerV4;
+
+impl Drop for KagemushaHeavyProofPreacquiredMarkerV4 {
+    fn drop(&mut self) {
+        KAGEMUSHA_HEAVY_PROOF_PREACQUIRED_V4.with(|preacquired| preacquired.set(false));
+    }
+}
+
+enum KagemushaHeavyProofPreacquiredScopeV4<'lock> {
+    Acquired {
+        // Clear the thread-local borrowing marker before releasing the mutex.
+        _marker: KagemushaHeavyProofPreacquiredMarkerV4,
+        _permit: KagemushaHeavyProofPermitV4<'lock>,
+    },
+    Borrowed,
+}
+
+fn try_preacquire_kagemusha_heavy_proof_permit_from_v4(
+    permit: &Mutex<()>,
+) -> BridgeResult<KagemushaHeavyProofPreacquiredScopeV4<'_>> {
+    if KAGEMUSHA_HEAVY_PROOF_PREACQUIRED_V4.with(std::cell::Cell::get) {
+        return Ok(KagemushaHeavyProofPreacquiredScopeV4::Borrowed);
+    }
+    let permit = try_acquire_kagemusha_heavy_proof_permit_from_v4(permit)?;
+    KAGEMUSHA_HEAVY_PROOF_PREACQUIRED_V4.with(|preacquired| preacquired.set(true));
+    Ok(KagemushaHeavyProofPreacquiredScopeV4::Acquired {
+        _marker: KagemushaHeavyProofPreacquiredMarkerV4,
+        _permit: permit,
+    })
+}
+
+fn try_preacquire_kagemusha_heavy_proof_permit_v4()
+-> BridgeResult<KagemushaHeavyProofPreacquiredScopeV4<'static>> {
+    try_preacquire_kagemusha_heavy_proof_permit_from_v4(&KAGEMUSHA_HEAVY_PROOF_PERMIT_V4)
+}
 // ABI-21 has exactly four authenticated files per parity: Params, PK, VK,
 // and Bootstrap. Circuit parameters are carried inside the manifest profile.
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4: usize = 8;
@@ -8428,6 +8570,26 @@ const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_DECLARED_BYTES_V4: u64 =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
         * KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4 as u64;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4: c_ulong = 1024 * 1024;
+// Bound every language boundary, including direct C/Swift callers, before a
+// release-sized slice can be materialized by the caller.
+const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_CHUNK_BYTES_V4: usize = 1024 * 1024;
+// Keep JNI staging to the same 1 MiB chunks used by the candidate harness so
+// one Java call cannot materialize an entire release-sized artifact in Rust.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_JNI_MAX_CHUNK_BYTES_V4: usize =
+    KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_CHUNK_BYTES_V4;
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+const KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4: usize = 32;
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 const KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4: c_ulong =
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4 + 4096;
@@ -8461,9 +8623,9 @@ const KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_RESULT_MAX_BYTES_V4: u
 const KAGEMUSHA_REDEMPTION_CHANGE_OPENING_DERIVATION_DOMAIN_V4: &str =
     "iroha.kagemusha.redemption-change-opening.v4";
 const KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_VERSION_V4: u16 = 4;
-const KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_REQUEST_MAX_BYTES_V4: usize =
-    2 * iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
-        + 3 * KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2;
+const KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_REQUEST_MAX_BYTES_V4: usize = 2
+    * iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+    + 3 * KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2;
 const KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_RESULT_MAX_BYTES_V4: usize = 64 * 1024;
 const KAGEMUSHA_PEER_SPLIT_CHANGE_OPENING_DERIVATION_DOMAIN_V4: &str =
     "iroha.kagemusha.peer-split-change-opening.v4";
@@ -9103,7 +9265,7 @@ enum KagemushaOutputMembershipOperationV4 {
 
 /// Exact V4 local output-update witness.
 ///
-/// This intentionally duplicates the stable path-shape checks at the ABI20
+/// This intentionally duplicates the stable path-shape checks at the ABI-21
 /// boundary. V4 never projects into a V3 carrier, so future V4 fields cannot
 /// be smuggled through a V3 decoder or silently ignored.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
@@ -10535,8 +10697,7 @@ fn prepare_kagemusha_peer_split_change_opening_v4(
     use iroha_core::zk::confidential_v2::default_confidential_diversifier_v2;
 
     if bundles.is_empty()
-        || bundles.len()
-            > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
+        || bundles.len() > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
         || bundles.len() != input_openings.len()
         || *operation_id == [0; 32]
         || *entropy == [0; 32]
@@ -10583,8 +10744,7 @@ fn prepare_kagemusha_peer_split_change_opening_v4(
             return Err(BridgeError::KagemushaProve);
         }
         if bundles[..index].iter().any(|prior| {
-            prior.statement.current_note.note_commitment
-                == statement.current_note.note_commitment
+            prior.statement.current_note.note_commitment == statement.current_note.note_commitment
                 || prior.statement.current_note.spend_nullifier
                     == statement.current_note.spend_nullifier
         }) {
@@ -10627,25 +10787,20 @@ fn prepare_kagemusha_peer_split_change_opening_v4(
         operation_id: *operation_id,
         entropy: *entropy,
     };
-    let canonical = Zeroizing::new(
-        norito::to_bytes(&derivation).map_err(|_| BridgeError::KagemushaProve)?,
-    );
+    let canonical =
+        Zeroizing::new(norito::to_bytes(&derivation).map_err(|_| BridgeError::KagemushaProve)?);
     let spend_key = Zeroizing::new(blake3::derive_key(
         KAGEMUSHA_PEER_SPLIT_CHANGE_SPEND_KEY_DERIVATION_CONTEXT_V4,
         canonical.as_slice(),
     ));
-    let rho = Zeroizing::new(
-        *blake3::keyed_hash(&spend_key, canonical.as_slice()).as_bytes(),
-    );
+    let rho = Zeroizing::new(*blake3::keyed_hash(&spend_key, canonical.as_slice()).as_bytes());
     let diversifier = default_confidential_diversifier_v2();
     if *spend_key == [0; 32]
         || *rho == [0; 32]
         || *rho == *spend_key
         || *rho == diversifier
         || input_openings.iter().any(|opening| {
-            *spend_key == opening.spend_key
-                || *rho == opening.rho
-                || *rho == opening.diversifier
+            *spend_key == opening.spend_key || *rho == opening.rho || *rho == opening.diversifier
         })
     {
         return Err(BridgeError::KagemushaProve);
@@ -11023,9 +11178,6 @@ fn execute_kagemusha_recursive_spend_init_v4(
     local: &KagemushaRecursiveSpendInitLocalRequestV4,
     installed: &impl KagemushaRecursiveSpendArtifactSetViewV4,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4> {
-    use iroha_core::zk::kagemusha_v2::{
-        KagemushaPastaCycleOpaqueProverV4, KagemushaPastaCycleOpaqueVerifierV4,
-    };
     use iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4;
 
     local.validate_shape()?;
@@ -11060,9 +11212,7 @@ fn execute_kagemusha_recursive_spend_init_v4(
         &statement,
         &output_membership,
     )?;
-    let prover_artifacts = installed.runtime_prover_artifacts()?;
-    let prover = KagemushaPastaCycleOpaqueProverV4::from_authenticated_artifacts(&prover_artifacts)
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    let prover = installed.runtime_prover()?;
     let pair_bytes = prover
         .prove_init_v4(
             &local.request,
@@ -11074,19 +11224,20 @@ fn execute_kagemusha_recursive_spend_init_v4(
             &output_membership,
         )
         .map_err(|_| BridgeError::KagemushaProve)?;
+    let verifier = prover
+        .shared_terminal_verifier_v5()
+        .map_err(|_| BridgeError::KagemushaProve)?;
     let bundle = build_kagemusha_recursive_spend_bundle_v4(
         installed,
         statement,
         &expected_operation,
         pair_bytes,
     )?;
-    let verifier_artifacts = installed.runtime_verifier_artifacts()?;
-    let verifier =
-        KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(&verifier_artifacts)
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
     verifier
         .verify_bundle_operation_v4(&bundle, &expected_operation)
         .map_err(|_| BridgeError::KagemushaProve)?;
+    drop(verifier);
+    drop(prover);
     let membership_witness = local.output_membership.note_membership_witness(insertion)?;
     let topup_provenance = iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4 {
         topup_finality_roster_artifact: local.request.topup_finality_roster_artifact.clone(),
@@ -11122,10 +11273,7 @@ fn execute_kagemusha_recursive_spend_append_v4(
             ConfidentialTransferOutputV2, build_confidential_transfer_proof_v2_with_paths,
             confidential_transfer_v2_vk_box, parse_transfer_public_inputs,
         },
-        kagemusha_v2::{
-            KagemushaPastaCycleOpaqueProverV4, KagemushaPastaCycleOpaqueVerifierV4,
-            KagemushaStepOperationVectorV4, KagemushaStepTransferPublicV4,
-        },
+        kagemusha_v2::{KagemushaStepOperationVectorV4, KagemushaStepTransferPublicV4},
     };
     use iroha_data_model::offline::{
         KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2, KagemushaRecursiveSpendAppendRequestV4,
@@ -11397,20 +11545,15 @@ fn execute_kagemusha_recursive_spend_append_v4(
                 )
             })
             .collect::<BridgeResult<Vec<_>>>()?;
-        let verifier_artifacts = installed.runtime_verifier_artifacts()?;
-        let verifier =
-            KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(&verifier_artifacts)
-                .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        let verifier = installed.runtime_verifier()?;
         for (_, index) in &ordered {
             let parent = &local.previous_inputs[*index].previous_bundle;
             verifier
                 .verify_bundle_v4(parent)
                 .map_err(|_| BridgeError::KagemushaProve)?;
         }
-        let prover_artifacts = installed.runtime_prover_artifacts()?;
-        let prover =
-            KagemushaPastaCycleOpaqueProverV4::from_authenticated_artifacts(&prover_artifacts)
-                .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        drop(verifier);
+        let prover = installed.runtime_prover()?;
         let recipient_pair = prover
             .prove_append_v4(
                 &split,
@@ -11430,9 +11573,6 @@ fn execute_kagemusha_recursive_spend_append_v4(
             &recipient_operation,
             recipient_pair,
         )?;
-        verifier
-            .verify_bundle_operation_v4(&recipient_bundle, &recipient_operation)
-            .map_err(|_| BridgeError::KagemushaProve)?;
         let recipient_membership_witness = local.output_membership.note_membership_witness(
             local
                 .output_membership
@@ -11443,9 +11583,9 @@ fn execute_kagemusha_recursive_spend_append_v4(
         recipient_membership_witness
             .validate_for_root(recipient_bundle.statement.final_root)
             .map_err(|_| BridgeError::KagemushaProve)?;
-        let (change_bundle, change_membership_witness) =
+        let (change_bundle, change_membership_witness, change_operation) =
             match (change_statement, local.output_membership.change.as_ref()) {
-                (None, None) => (None, None),
+                (None, None) => (None, None, None),
                 (Some(statement), Some(paths)) => {
                     let operation = KagemushaStepOperationVectorV4::from_append_v4(
                         &split,
@@ -11470,17 +11610,27 @@ fn execute_kagemusha_recursive_spend_append_v4(
                     let bundle = build_kagemusha_recursive_spend_bundle_v4(
                         installed, statement, &operation, pair,
                     )?;
-                    verifier
-                        .verify_bundle_operation_v4(&bundle, &operation)
-                        .map_err(|_| BridgeError::KagemushaProve)?;
                     let witness = local.output_membership.note_membership_witness(paths)?;
                     witness
                         .validate_for_root(bundle.statement.final_root)
                         .map_err(|_| BridgeError::KagemushaProve)?;
-                    (Some(bundle), Some(witness))
+                    (Some(bundle), Some(witness), Some(operation))
                 }
                 _ => return Err(BridgeError::KagemushaProve),
             };
+        let verifier = prover
+            .shared_terminal_verifier_v5()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        verifier
+            .verify_bundle_operation_v4(&recipient_bundle, &recipient_operation)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        if let (Some(bundle), Some(operation)) = (&change_bundle, &change_operation) {
+            verifier
+                .verify_bundle_operation_v4(bundle, operation)
+                .map_err(|_| BridgeError::KagemushaProve)?;
+        }
+        drop(verifier);
+        drop(prover);
         let split_binding_digest = split
             .binding_digest()
             .map_err(|_| BridgeError::KagemushaProve)?;
@@ -11518,10 +11668,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
             confidential_unshield_v3_vk_box, default_confidential_diversifier_v2,
             parse_unshield_public_inputs_v3,
         },
-        kagemusha_v2::{
-            KagemushaPastaCycleOpaqueProverV4, KagemushaPastaCycleOpaqueVerifierV4,
-            KagemushaStepOperationVectorV4,
-        },
+        kagemusha_v2::KagemushaStepOperationVectorV4,
     };
     use iroha_data_model::offline::{
         KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2, KagemushaRecursiveSpendRedeemBuildRequestV4,
@@ -11552,13 +11699,11 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
         return Err(BridgeError::KagemushaProve);
     }
 
-    let verifier_artifacts = installed.runtime_verifier_artifacts()?;
-    let verifier =
-        KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(&verifier_artifacts)
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    let verifier = installed.runtime_verifier()?;
     verifier
         .verify_bundle_v4(bundle)
         .map_err(|_| BridgeError::KagemushaProve)?;
+    drop(verifier);
 
     let input_amount = statement.current_note.amount.atomic_units;
     let change_amount = input_amount
@@ -11731,10 +11876,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
             )
             .map_err(|_| BridgeError::KagemushaProve)?;
             let parent_pair = kagemusha_recursive_spend_pair_bytes_v4(bundle)?;
-            let prover_artifacts = installed.runtime_prover_artifacts()?;
-            let prover =
-                KagemushaPastaCycleOpaqueProverV4::from_authenticated_artifacts(&prover_artifacts)
-                    .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+            let prover = installed.runtime_prover()?;
             let pair = prover
                 .prove_redemption_change_v4(
                     &redemption,
@@ -11747,6 +11889,9 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
                     &[parent_pair],
                 )
                 .map_err(|_| BridgeError::KagemushaProve)?;
+            let verifier = prover
+                .shared_terminal_verifier_v5()
+                .map_err(|_| BridgeError::KagemushaProve)?;
             let change_bundle = build_kagemusha_recursive_spend_bundle_v4(
                 installed,
                 change_statement,
@@ -11756,6 +11901,8 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
             verifier
                 .verify_bundle_operation_v4(&change_bundle, &change_operation)
                 .map_err(|_| BridgeError::KagemushaProve)?;
+            drop(verifier);
+            drop(prover);
             let membership = paths.note_membership_witness(
                 paths.change.as_ref().ok_or(BridgeError::KagemushaProve)?,
             )?;
@@ -11812,7 +11959,6 @@ fn execute_kagemusha_recursive_spend_verify_v4(
     local: &KagemushaRecursiveSpendVerifyLocalRequestV4,
     installed: &impl KagemushaRecursiveSpendArtifactSetViewV4,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4> {
-    use iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4;
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KagemushaRecursiveSpendVerifyResultV4,
     };
@@ -11831,10 +11977,7 @@ fn execute_kagemusha_recursive_spend_verify_v4(
             &evidence.topup_anchor,
         )?;
     }
-    let verifier_artifacts = installed.runtime_verifier_artifacts()?;
-    let verifier =
-        KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(&verifier_artifacts)
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    let verifier = installed.runtime_verifier()?;
     verifier
         .verify_bundle_v4(&request.bundle)
         .map_err(|_| BridgeError::KagemushaProve)?;
@@ -13050,12 +13193,7 @@ fn validate_kagemusha_recursive_spend_branch_against_installed_v4(
         block_height,
         installed,
     )?;
-    let verifier_artifacts = installed.runtime_verifier_artifacts()?;
-    let verifier =
-        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(
-            &verifier_artifacts,
-        )
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    let verifier = installed.runtime_verifier()?;
     verifier
         .verify_bundle_v4(bundle)
         .map_err(|_| BridgeError::KagemushaProve)?;
@@ -13079,6 +13217,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_branch_validat
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_frontier_ptr, out_frontier_len)?;
+        let _permit = try_acquire_kagemusha_heavy_proof_permit_v4()?;
         let bundle_bytes = unsafe {
             read_kagemusha_archive_bytes_bounded(
                 bundle_norito_ptr,
@@ -13274,6 +13413,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
 ///
 /// Symbol presence is not a readiness signal. Availability requires one live
 /// authenticated eight-artifact release with both verifier and prover material.
+/// Installation authenticates every role; readiness only rechecks the pinned
+/// spool inventory and never reopens or parses the large payloads.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v4(
     out_capabilities_ptr: *mut *mut c_uchar,
@@ -13291,8 +13432,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v
         ) {
             (true, Some(installed)) => {
                 installed.validate_live_inventory()?;
-                installed.authenticated_verifier_artifacts()?;
-                installed.authenticated_prover_artifacts()?;
                 (installed.manifest().max_proof_bytes, true, Vec::new())
             }
             (true, None) => (
@@ -13753,9 +13892,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_write
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
         let chunk_len_u64 =
             u64::try_from(chunk_len).map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        if chunk_len_u64
-            > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
-        {
+        if chunk_len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_CHUNK_BYTES_V4 {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
         }
         let artifact = kagemusha_recursive_spend_artifact_registry_v4()
@@ -13802,6 +13939,7 @@ pub extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_finalize_v4(
     handle: u64,
 ) -> c_int {
     let result = (|| {
+        let _permit = try_acquire_kagemusha_heavy_proof_permit_v4()?;
         require_kagemusha_recursive_spend_production_promotion_v4()?;
         if !is_kagemusha_recursive_spend_artifact_handle_v4(handle) {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
@@ -13948,19 +14086,16 @@ fn install_authenticated_kagemusha_recursive_spend_artifact_set_v4(
         artifacts,
     });
     installed.validate_live_inventory()?;
-    // The canonical KRV4 parser owns header and payload authentication. Parse
-    // every role against the verified release before the atomic registry swap;
-    // payloads are dropped one at a time to keep installation memory bounded.
-    for profile in &manifest.profiles {
-        for descriptor in &profile.artifacts {
-            drop(installed.authenticated_payload(profile.parity, descriptor.kind)?);
-        }
-    }
-    // Installation is live only when the exact eight-role set can be assembled
-    // as both verifier and prover material. This rejects verifier-only,
-    // prover-only, and cross-role-incomplete releases before the atomic swap.
-    drop(installed.authenticated_verifier_artifacts()?);
-    drop(installed.authenticated_prover_artifacts()?);
+    // The prover constructor authenticates both PK spools and transiently
+    // validates each bounded role, dropping every parsed VK/PK before it
+    // returns. Smoke validation then shares Params/circuit context and parses
+    // only the two bounded raw VKs, after no parsed proving key remains live.
+    let prover = installed.parsed_prover()?;
+    let verifier = prover
+        .shared_terminal_verifier_v5()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    drop(verifier);
+    drop(prover);
     let mut active = kagemusha_recursive_spend_installed_artifact_set_registry_v4()
         .lock()
         .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
@@ -13996,6 +14131,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_i
     handles_len: c_ulong,
 ) -> c_int {
     let result = (|| {
+        let _permit = try_acquire_kagemusha_heavy_proof_permit_v4()?;
         require_kagemusha_recursive_spend_production_promotion_v4()?;
         if trusted_policy_norito_ptr.is_null()
             || release_attestation_norito_ptr.is_null()
@@ -14495,6 +14631,9 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
         }
         let chunk_len = usize::try_from(chunk_len)
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        if chunk_len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_CHUNK_BYTES_V4 {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
         let chunk_len_u64 =
             u64::try_from(chunk_len).map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
         let artifact = kagemusha_candidate_evidence_lab_artifact_registry_v4()
@@ -14540,6 +14679,7 @@ pub extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_artifac
     handle: u64,
 ) -> c_int {
     let result = (|| {
+        let _permit = try_acquire_kagemusha_heavy_proof_permit_v4()?;
         require_kagemusha_candidate_evidence_lab_preproduction_v4()?;
         if !is_kagemusha_candidate_evidence_lab_artifact_handle_v4(handle) {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
@@ -14612,6 +14752,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     handles_len: c_ulong,
 ) -> c_int {
     let result = (|| {
+        let _permit = try_acquire_kagemusha_heavy_proof_permit_v4()?;
         if handles_ptr.is_null()
             || handles_len != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4 as c_ulong
         {
@@ -14695,13 +14836,16 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
             accepted_identity,
         });
         installed.validate_live_inventory()?;
-        for profile in &installed.manifest().profiles {
-            for descriptor in &profile.artifacts {
-                drop(installed.candidate_payload(profile.parity, descriptor.kind)?);
-            }
-        }
-        drop(installed.candidate_verifier_artifacts()?);
-        drop(installed.candidate_prover_artifacts()?);
+        // Candidate trust remains distinct. Its bounded spool constructor
+        // validates one PK at a time and drops it; smoke validation then
+        // shares Params/circuit context and parses only the bounded raw VKs,
+        // after no parsed proving key remains live.
+        let prover = installed.parsed_prover()?;
+        let verifier = prover
+            .shared_terminal_verifier_v5()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        drop(verifier);
+        drop(prover);
         let mut active = kagemusha_candidate_evidence_lab_installed_registry_v4()
             .lock()
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
@@ -14824,6 +14968,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_topup_shield_build_unsigned_v4
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_unsigned_ptr, out_unsigned_len)?;
+        let _permit = try_acquire_kagemusha_heavy_proof_permit_v4()?;
         let bytes = Zeroizing::new(unsafe {
             read_kagemusha_archive_bytes_bounded(
                 request_norito_ptr,
@@ -15017,7 +15162,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_v4(
     bridge_result_to_code(result)
 }
 
-/// ABI20 initialization boundary using only the authenticated V4 release.
+/// ABI-21 initialization boundary using only the authenticated V4 release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v4(
     request_norito_ptr: *const c_uchar,
@@ -15026,6 +15171,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v4(
     out_init_result_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_init_result_ptr, out_init_result_len);
+    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(error) => return error.code(),
+    };
     let request_bytes = match unsafe {
         read_kagemusha_archive_bytes_bounded(
             request_norito_ptr,
@@ -15090,7 +15239,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v4(
     }
 }
 
-/// ABI20 append boundary. It never falls back to the V2/V3 lifecycle.
+/// ABI-21 append boundary. It never falls back to the V2/V3 lifecycle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v4(
     request_norito_ptr: *const c_uchar,
@@ -15102,6 +15251,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v4(
     out_split_result_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_split_result_ptr, out_split_result_len);
+    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(error) => return error.code(),
+    };
     let request_bytes = match unsafe {
         read_kagemusha_archive_bytes_bounded(
             request_norito_ptr,
@@ -15189,7 +15342,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v4(
     }
 }
 
-/// ABI20 terminal-verification boundary over the installed V4 verifier set.
+/// ABI-21 terminal-verification boundary over the installed V4 verifier set.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify_v4(
     request_norito_ptr: *const c_uchar,
@@ -15198,6 +15351,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify_v4(
     out_result_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_result_ptr, out_result_len);
+    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(error) => return error.code(),
+    };
     if usize::try_from(request_norito_len).map_or(true, |len| {
         len == 0 || len > KAGEMUSHA_RECURSIVE_SPEND_VERIFY_LOCAL_MAX_BYTES_V4
     }) {
@@ -15280,7 +15437,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify_v4(
     }
 }
 
-/// ABI20 full-terminal or partial-with-change redemption boundary.
+/// ABI-21 full-terminal or partial-with-change redemption boundary.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_v4(
     request_norito_ptr: *const c_uchar,
@@ -15289,6 +15446,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_v4(
     out_build_result_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_build_result_ptr, out_build_result_len);
+    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(error) => return error.code(),
+    };
     let request_bytes = match unsafe {
         read_kagemusha_archive_bytes_bounded(
             request_norito_ptr,
@@ -15359,6 +15520,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     out_init_result_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_init_result_ptr, out_init_result_len);
+    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(error) => return error.code(),
+    };
     let request_bytes = match unsafe {
         read_kagemusha_archive_bytes_bounded(
             request_norito_ptr,
@@ -15433,6 +15598,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     out_split_result_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_split_result_ptr, out_split_result_len);
+    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(error) => return error.code(),
+    };
     let request_bytes = match unsafe {
         read_kagemusha_archive_bytes_bounded(
             request_norito_ptr,
@@ -15530,6 +15699,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     out_result_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_result_ptr, out_result_len);
+    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(error) => return error.code(),
+    };
     let request_bytes = match unsafe {
         read_kagemusha_archive_bytes_bounded(
             request_norito_ptr,
@@ -15614,6 +15787,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     out_build_result_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_build_result_ptr, out_build_result_len);
+    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(error) => return error.code(),
+    };
     let request_bytes = match unsafe {
         read_kagemusha_archive_bytes_bounded(
             request_norito_ptr,
@@ -16855,7 +17032,7 @@ mod kagemusha_bridge_tests {
     }
 
     #[test]
-    fn recursive_spend_v4_inventory_uses_the_dedicated_abi20_handle_namespace() {
+    fn recursive_spend_v4_inventory_uses_the_dedicated_abi21_handle_namespace() {
         assert_eq!(
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4,
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len()
@@ -16927,6 +17104,13 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_branch_restore_verifies_proof_before_returning_frontier() {
         let source = include_str!("lib.rs");
+        let validator = source
+            .split_once("fn validate_kagemusha_recursive_spend_branch_against_installed_v4(")
+            .expect("V4 branch validator")
+            .1
+            .split_once("/// Validate one persisted spendable branch")
+            .expect("end of V4 branch validator")
+            .0;
         let restore = source
             .split_once(
                 "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_branch_validate_v4",
@@ -16942,13 +17126,17 @@ mod kagemusha_bridge_tests {
             .find("require_kagemusha_recursive_spend_artifact_binding_v4(")
             .expect("branch restore authenticates the selected release");
         let complete_proof_verification = restore
-            .find(".verify_bundle_v4(&bundle)")
-            .expect("branch restore verifies the complete proof bundle");
-        let derive_frontier = restore
-            .find("kagemusha_output_membership_frontier_from_witness_v4(&bundle, &witness)")
-            .expect("branch restore derives the proof-bound frontier");
+            .find("validate_kagemusha_recursive_spend_branch_against_installed_v4(")
+            .expect("branch restore invokes the complete proof validator");
         assert!(authenticate_release < complete_proof_verification);
-        assert!(complete_proof_verification < derive_frontier);
+
+        let cached_verifier = validator
+            .find("installed.runtime_verifier()?")
+            .expect("branch validator loads the authenticated cached verifier");
+        let derive_frontier = validator
+            .find("kagemusha_output_membership_frontier_from_witness_v4(bundle, witness)")
+            .expect("branch restore derives the proof-bound frontier");
+        assert!(cached_verifier < derive_frontier);
     }
 
     #[test]
@@ -16974,11 +17162,706 @@ mod kagemusha_bridge_tests {
         for implementation in [capabilities, java_availability] {
             assert!(implementation.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE"));
             assert!(implementation.contains("validate_live_inventory"));
-            assert!(implementation.contains("authenticated_verifier_artifacts"));
-            assert!(implementation.contains("authenticated_prover_artifacts"));
+            assert!(!implementation.contains("authenticated_verifier_artifacts"));
+            assert!(!implementation.contains("authenticated_prover_artifacts"));
+            assert!(!implementation.contains("runtime_verifier"));
+            assert!(!implementation.contains("cached_verifier"));
         }
         assert!(!capabilities.contains("production-release-not-promoted"));
         assert!(capabilities.contains("authenticated-v4-artifact-installation"));
+    }
+
+    #[test]
+    fn kagemusha_heavy_proof_permit_is_nonblocking_and_released_on_drop() {
+        let permit = Mutex::new(());
+        let first = try_acquire_kagemusha_heavy_proof_permit_from_v4(&permit)
+            .expect("first proof operation acquires the permit");
+        let busy_code = match try_acquire_kagemusha_heavy_proof_permit_from_v4(&permit) {
+            Ok(_) => panic!("a concurrent proof operation must not acquire the permit"),
+            Err(error) => error.code(),
+        };
+        assert_eq!(busy_code, ERR_KAGEMUSHA_BUSY);
+
+        drop(first);
+        let second = try_acquire_kagemusha_heavy_proof_permit_from_v4(&permit)
+            .expect("dropping the first guard releases the permit");
+        drop(second);
+    }
+
+    #[test]
+    fn kagemusha_jni_preacquisition_is_thread_scoped_and_borrowed_by_nested_c_boundary() {
+        let permit = Arc::new(Mutex::new(()));
+        let outer = try_preacquire_kagemusha_heavy_proof_permit_from_v4(&permit)
+            .expect("JNI boundary acquires the process permit");
+        let nested_jni = try_preacquire_kagemusha_heavy_proof_permit_from_v4(&permit)
+            .expect("nested JNI helper borrows the outer JNI scope");
+        assert!(matches!(
+            nested_jni,
+            KagemushaHeavyProofPreacquiredScopeV4::Borrowed
+        ));
+        let nested = try_acquire_or_borrow_kagemusha_heavy_proof_permit_from_v4(&permit)
+            .expect("nested C boundary borrows the JNI-owned permit");
+        assert!(matches!(
+            nested,
+            KagemushaHeavyProofPermitV4::BorrowedFromJni
+        ));
+
+        let concurrent_permit = Arc::clone(&permit);
+        let concurrent_code = std::thread::spawn(move || {
+            match try_preacquire_kagemusha_heavy_proof_permit_from_v4(&concurrent_permit) {
+                Ok(_) => panic!("another thread must not borrow the JNI-owned permit"),
+                Err(error) => error.code(),
+            }
+        })
+        .join()
+        .expect("concurrent permit probe");
+        assert_eq!(concurrent_code, ERR_KAGEMUSHA_BUSY);
+
+        drop(outer);
+        let reacquired = try_acquire_or_borrow_kagemusha_heavy_proof_permit_from_v4(&permit)
+            .expect("JNI scope drop releases both the marker and process permit");
+        assert!(matches!(
+            &reacquired,
+            KagemushaHeavyProofPermitV4::Acquired { .. }
+        ));
+        drop(reacquired);
+    }
+
+    #[test]
+    fn kagemusha_heavy_proof_boundaries_take_permit_before_input_copy() {
+        let source = include_str!("lib.rs");
+        for symbol in [
+            "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
+            "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
+            "connect_norito_kagemusha_recursive_spend_init_v4",
+            "connect_norito_kagemusha_recursive_spend_append_v4",
+            "connect_norito_kagemusha_recursive_spend_verify_v4",
+            "connect_norito_kagemusha_recursive_spend_redeem_v4",
+            "connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4",
+            "connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4",
+            "connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4",
+            "connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4",
+        ] {
+            let implementation = source
+                .split_once(&format!("fn {symbol}("))
+                .unwrap_or_else(|| panic!("missing Kagemusha proof boundary {symbol}"))
+                .1
+                .split_once("#[unsafe(no_mangle)]")
+                .map_or_else(
+                    || panic!("missing end of Kagemusha proof boundary {symbol}"),
+                    |(implementation, _)| implementation,
+                );
+            let permit = implementation
+                .find("try_acquire_kagemusha_heavy_proof_permit_v4()")
+                .unwrap_or_else(|| panic!("{symbol} must acquire the proof permit"));
+            let input_copy = implementation
+                .find("read_kagemusha_archive_bytes_bounded(")
+                .unwrap_or_else(|| panic!("{symbol} must bound its input copy"));
+            assert!(
+                permit < input_copy,
+                "{symbol} must reject busy work before copying caller input"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_jni_boundaries_preacquire_before_copying_java_arrays() {
+        let source = include_str!("lib.rs");
+        for (symbol, input_copy) in [
+            (
+                "java_native_kagemusha_prepare_top_up_v4",
+                "java_kagemusha_text(",
+            ),
+            (
+                "java_native_kagemusha_artifact_set_install_v4",
+                "read_java_byte_array_bounded(",
+            ),
+            (
+                "java_native_kagemusha_candidate_lab_artifact_set_install_v4",
+                "read_java_byte_array_bounded(",
+            ),
+            (
+                "java_native_kagemusha_lifecycle_archive_bounded",
+                "read_java_byte_array_bounded(",
+            ),
+            (
+                "java_native_kagemusha_append_spend_v4",
+                "read_java_byte_array_bounded(",
+            ),
+            (
+                "java_native_kagemusha_candidate_lab_append_v4",
+                "read_java_byte_array_bounded(",
+            ),
+            (
+                "java_native_kagemusha_validate_spendable_branch_v4",
+                "read_java_byte_array_bounded(",
+            ),
+            (
+                "java_native_kagemusha_candidate_lab_validate_branch_v4",
+                "java_kagemusha_decode_archive_bounded::<",
+            ),
+        ] {
+            let signature = if symbol == "java_native_kagemusha_lifecycle_archive_bounded" {
+                format!("fn {symbol}<F>(")
+            } else {
+                format!("fn {symbol}(")
+            };
+            let implementation = source
+                .rsplit_once(&signature)
+                .unwrap_or_else(|| panic!("missing Kagemusha JNI boundary {symbol}"))
+                .1
+                .split_once("\n}\n")
+                .unwrap_or_else(|| panic!("missing end of Kagemusha JNI boundary {symbol}"))
+                .0;
+            let permit = implementation
+                .find("try_preacquire_kagemusha_heavy_proof_permit_v4()")
+                .unwrap_or_else(|| panic!("{symbol} must preacquire the proof permit"));
+            let input_copy = implementation
+                .find(input_copy)
+                .unwrap_or_else(|| panic!("{symbol} must retain its bounded Java input copy"));
+            assert!(
+                permit < input_copy,
+                "{symbol} must reject busy work before copying Java arrays"
+            );
+        }
+
+        let nested_c_acquisition = source
+            .split_once("fn try_acquire_or_borrow_kagemusha_heavy_proof_permit_from_v4(")
+            .expect("nested C permit helper")
+            .1
+            .split_once("fn try_acquire_kagemusha_heavy_proof_permit_v4()")
+            .expect("end of nested C permit helper")
+            .0;
+        assert!(nested_c_acquisition.contains("KAGEMUSHA_HEAVY_PROOF_PREACQUIRED_V4"));
+        assert!(nested_c_acquisition.contains("BorrowedFromJni"));
+
+        let assert_jni_route = |symbol: &str, helper: &str| {
+            let implementation = source
+                .rsplit_once(&format!("fn {symbol}("))
+                .unwrap_or_else(|| panic!("missing exported Kagemusha JNI boundary {symbol}"))
+                .1
+                .split_once("\n}\n")
+                .unwrap_or_else(|| panic!("missing end of exported JNI boundary {symbol}"))
+                .0;
+            assert!(
+                implementation.contains(helper),
+                "{symbol} must route through guarded helper {helper}"
+            );
+        };
+        for prefix in [
+            "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_",
+            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_",
+        ] {
+            for (suffix, helper) in [
+                (
+                    "nativeInitSpendV4",
+                    "java_native_kagemusha_lifecycle_archive_v4(",
+                ),
+                (
+                    "nativeAppendSpendV4",
+                    "java_native_kagemusha_append_spend_v4(",
+                ),
+                (
+                    "nativeVerifySpendV4",
+                    "java_native_kagemusha_lifecycle_archive_v4(",
+                ),
+                (
+                    "nativeBuildRedeemV4",
+                    "java_native_kagemusha_lifecycle_archive_v4(",
+                ),
+                (
+                    "nativeValidateSpendableBranchV4",
+                    "java_native_kagemusha_validate_spendable_branch_v4(",
+                ),
+            ] {
+                assert_jni_route(&format!("{prefix}{suffix}"), helper);
+            }
+        }
+        let candidate_prefix =
+            "Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_";
+        for (suffix, helper) in [
+            (
+                "nativeInitV4",
+                "java_native_kagemusha_lifecycle_archive_v4(",
+            ),
+            (
+                "nativeAppendV4",
+                "java_native_kagemusha_candidate_lab_append_v4(",
+            ),
+            (
+                "nativeVerifyV4",
+                "java_native_kagemusha_lifecycle_archive_v4(",
+            ),
+            (
+                "nativeRedeemV4",
+                "java_native_kagemusha_lifecycle_archive_v4(",
+            ),
+            (
+                "nativeValidateBranchV4",
+                "java_native_kagemusha_candidate_lab_validate_branch_v4(",
+            ),
+        ] {
+            assert_jni_route(&format!("{candidate_prefix}{suffix}"), helper);
+        }
+
+        let java_byte_readers = source
+            .rsplit_once("fn read_java_byte_array(")
+            .expect("Java byte-array reader")
+            .1
+            .split_once("fn java_sorafs_reference_generated_at(")
+            .expect("end of Java byte-array readers")
+            .0;
+        assert!(java_byte_readers.contains("env.convert_byte_array(array)"));
+        assert!(!java_byte_readers.contains("vec![0i8; len]"));
+        assert!(!java_byte_readers.contains("buf.into_iter().map"));
+    }
+
+    #[test]
+    fn kagemusha_artifact_parsers_take_permit_before_heavy_work() {
+        let source = include_str!("lib.rs");
+        for (symbol, heavy_work) in [
+            (
+                "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
+                "validate_kagemusha_recursive_spend_artifact_spool_v4(",
+            ),
+            (
+                "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
+                "decode_kagemusha_recursive_spend_manifest_v4(",
+            ),
+            (
+                "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_finalize_v4",
+                "validate_kagemusha_candidate_evidence_lab_artifact_spool_v4(",
+            ),
+            (
+                "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_install_v4",
+                "decode_kagemusha_candidate_evidence_lab_candidate_v4(",
+            ),
+        ] {
+            let implementation = source
+                .split_once(&format!("fn {symbol}("))
+                .unwrap_or_else(|| panic!("missing Kagemusha artifact boundary {symbol}"))
+                .1
+                .split_once("#[unsafe(no_mangle)]")
+                .map_or_else(
+                    || panic!("missing end of Kagemusha artifact boundary {symbol}"),
+                    |(implementation, _)| implementation,
+                );
+            let permit = implementation
+                .find("try_acquire_kagemusha_heavy_proof_permit_v4()")
+                .unwrap_or_else(|| panic!("{symbol} must acquire the proof permit"));
+            let heavy_work = implementation
+                .find(heavy_work)
+                .unwrap_or_else(|| panic!("{symbol} must retain its authenticated parser"));
+            assert!(
+                permit < heavy_work,
+                "{symbol} must reject busy work before parsing artifacts"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_artifact_jni_management_bounds_every_array_before_copy() {
+        let source = include_str!("lib.rs");
+        for (symbol, bounded_copies, limits) in [
+            (
+                "java_native_kagemusha_artifact_begin_v4",
+                3,
+                &[
+                    "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4",
+                    "KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4",
+                ][..],
+            ),
+            (
+                "java_native_kagemusha_artifact_write_v4",
+                1,
+                &["KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_JNI_MAX_CHUNK_BYTES_V4"][..],
+            ),
+            (
+                "java_native_kagemusha_artifact_set_install_v4",
+                7,
+                &[
+                    "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4",
+                    "KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4",
+                    "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_POLICY_BYTES_V1",
+                    "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_ATTESTATION_BYTES_V1",
+                    "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1",
+                    "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4",
+                ][..],
+            ),
+            (
+                "java_native_kagemusha_artifact_set_is_installed_v4",
+                2,
+                &[
+                    "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4",
+                    "KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4",
+                ][..],
+            ),
+            (
+                "java_native_kagemusha_build_artifact_binding_v4",
+                2,
+                &[
+                    "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4",
+                    "KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4",
+                ][..],
+            ),
+            (
+                "java_native_kagemusha_artifact_set_uninstall_v4",
+                1,
+                &["KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4"][..],
+            ),
+            (
+                "java_native_kagemusha_candidate_lab_artifact_begin_v4",
+                3,
+                &[
+                    "KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4",
+                    "KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4",
+                ][..],
+            ),
+            (
+                "java_native_kagemusha_candidate_lab_artifact_write_v4",
+                1,
+                &["KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_JNI_MAX_CHUNK_BYTES_V4"][..],
+            ),
+            (
+                "java_native_kagemusha_candidate_lab_artifact_set_install_v4",
+                2,
+                &[
+                    "KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4",
+                    "KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4",
+                ][..],
+            ),
+            (
+                "java_native_kagemusha_candidate_lab_artifact_set_is_installed_v4",
+                2,
+                &[
+                    "KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4",
+                    "KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4",
+                ][..],
+            ),
+            (
+                "java_native_kagemusha_candidate_lab_artifact_set_uninstall_v4",
+                1,
+                &["KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4"][..],
+            ),
+        ] {
+            let implementation = source
+                .rsplit_once(&format!("fn {symbol}("))
+                .unwrap_or_else(|| panic!("missing Kagemusha JNI ingest boundary {symbol}"))
+                .1
+                .split_once("\n}\n")
+                .unwrap_or_else(|| panic!("missing end of Kagemusha JNI ingest boundary {symbol}"))
+                .0;
+            assert_eq!(
+                implementation
+                    .matches("read_java_byte_array_bounded(")
+                    .count(),
+                bounded_copies,
+                "{symbol} must bound every Java byte-array copy"
+            );
+            assert!(
+                !implementation.contains("read_java_byte_array("),
+                "{symbol} must not retain an unbounded Java byte-array copy"
+            );
+            for limit in limits {
+                assert!(
+                    implementation.contains(limit),
+                    "{symbol} must enforce {limit} before copying"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kagemusha_busy_error_code_matches_c_and_swift_wrappers() {
+        assert_eq!(BridgeError::KagemushaBusy.code(), -318);
+
+        let header = include_str!("../include/connect_norito_bridge.h");
+        assert!(header.contains("#define CONNECT_NORITO_ERR_KAGEMUSHA_BUSY -318"));
+
+        let swift = include_str!("../../../IrohaSwift/Sources/IrohaSwift/NativeBridge.swift");
+        assert!(swift.contains("case kagemushaBusy"));
+        assert!(swift.contains("case -318: return .kagemushaBusy"));
+
+        let swift_lifecycle =
+            include_str!("../../../IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV4.swift");
+        assert!(swift_lifecycle.contains("catch NativeBridgeError.kagemushaBusy"));
+        assert!(swift_lifecycle.contains("KagemushaRecursiveSpendError.proofWorkerBusy"));
+
+        let top_up = swift_lifecycle
+            .split_once("    public func buildUnsigned() throws")
+            .expect("Swift top-up proof builder")
+            .1
+            .split_once("/// Canonical unsigned ABI-21 online-to-offline request fields.")
+            .expect("end of Swift top-up proof builder")
+            .0;
+        assert!(top_up.contains("catch NativeBridgeError.kagemushaBusy"));
+        assert!(top_up.contains("KagemushaRecursiveSpendError.proofWorkerBusy"));
+    }
+
+    #[test]
+    fn swift_kagemusha_artifact_busy_paths_preserve_retryable_state() {
+        let source =
+            include_str!("../../../IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift");
+        let finalize = source
+            .split_once("    public func finalize() throws {")
+            .expect("Swift artifact finalizer")
+            .1
+            .split_once("    public func cancel() throws {")
+            .expect("end of Swift artifact finalizer")
+            .0;
+        let busy_finalize = finalize
+            .split_once("catch NativeBridgeError.kagemushaBusy {")
+            .expect("Swift artifact finalizer maps the busy status")
+            .1
+            .split_once("} catch {")
+            .expect("Swift artifact finalizer retains its terminal-error cleanup")
+            .0;
+        assert!(busy_finalize.contains("KagemushaRecursiveSpendError.proofWorkerBusy"));
+        assert!(!busy_finalize.contains("kagemushaRecursiveSpendArtifactCancelV4"));
+        assert!(!busy_finalize.contains("self.handle = nil"));
+        let terminal_finalize = finalize
+            .split_once("} catch {")
+            .expect("Swift artifact finalizer terminal-error branch")
+            .1;
+        assert!(terminal_finalize.contains("kagemushaRecursiveSpendArtifactCancelV4"));
+        assert!(terminal_finalize.contains("self.handle = nil"));
+
+        let install = source
+            .split_once(
+                "    public func install() throws -> KagemushaRecursiveSpendInstalledArtifactSetV4 {",
+            )
+            .expect("Swift artifact-set installer")
+            .1
+            .split_once("    public func isInstalled() throws -> Bool {")
+            .expect("end of Swift artifact-set installer")
+            .0;
+        let native_install = install
+            .find("kagemushaRecursiveSpendArtifactSetInstallV4(")
+            .expect("Swift artifact-set native install call");
+        let busy_install = install
+            .find("catch NativeBridgeError.kagemushaBusy {")
+            .expect("Swift artifact-set installer maps the busy status");
+        let relinquish = install
+            .find("artifact.relinquishInstalledHandle(handle)")
+            .expect("Swift artifact-set installer transfers successful handles");
+        let close_session = install
+            .find("artifacts.removeAll()")
+            .expect("Swift artifact-set installer closes successful sessions");
+        assert!(native_install < busy_install);
+        assert!(busy_install < relinquish);
+        assert!(busy_install < close_session);
+        let busy_install_branch = &install[busy_install..relinquish];
+        assert!(busy_install_branch.contains("KagemushaRecursiveSpendError.proofWorkerBusy"));
+        assert!(!busy_install_branch.contains("artifact.relinquishInstalledHandle(handle)"));
+        assert!(!busy_install_branch.contains("artifacts.removeAll()"));
+        assert!(!busy_install_branch.contains("installed = true"));
+
+        let coordinator = include_str!(
+            "../../../IrohaSwift/Sources/IrohaSwift/KagemushaArtifactCoordinator.swift"
+        );
+        assert!(coordinator.contains("private struct PendingCandidate"));
+        let acquire = coordinator
+            .split_once("    public func acquire(")
+            .expect("Swift artifact coordinator acquire")
+            .1
+            .split_once("    /// Explicitly removes the coordinator's current native generation.")
+            .expect("end of Swift artifact coordinator acquire")
+            .0;
+        let pending_match = acquire
+            .find("if let pending {")
+            .expect("Swift coordinator checks a retained candidate");
+        let retry_install = acquire
+            .find("pending.artifacts == identity")
+            .expect("Swift coordinator pins the retained artifact identity");
+        let cancel_mismatch = acquire
+            .find("try cancelPendingCandidate()")
+            .expect("Swift coordinator cancels a different candidate");
+        let active_reuse = acquire
+            .find("if let active,")
+            .expect("Swift coordinator retains active-generation reuse");
+        assert!(pending_match < retry_install);
+        assert!(retry_install < cancel_mismatch);
+        assert!(cancel_mismatch < active_reuse);
+
+        let finalized_install = coordinator
+            .split_once("    private func installFinalizedCandidate(")
+            .expect("Swift finalized-candidate installer")
+            .1
+            .split_once("    private func cancelPendingCandidate() throws {")
+            .expect("end of Swift finalized-candidate installer")
+            .0;
+        let retain_busy = finalized_install
+            .split_once(
+                "catch KagemushaRecursiveSpendError.proofWorkerBusy where !installReturned {",
+            )
+            .expect("Swift coordinator retains only pre-install busy candidates")
+            .1
+            .split_once("} catch {")
+            .expect("Swift coordinator keeps terminal install cleanup separate")
+            .0;
+        assert!(retain_busy.contains("pending = PendingCandidate("));
+        assert!(retain_busy.contains("throw KagemushaRecursiveSpendError.proofWorkerBusy"));
+        assert!(!retain_busy.contains("candidate.cancel()"));
+        assert!(!retain_busy.contains("candidate.uninstall()"));
+
+        let uninstall = coordinator
+            .split_once("    public func uninstallCurrent() throws {")
+            .expect("Swift artifact coordinator uninstall")
+            .1
+            .split_once("    public func cancelPendingInstallation() throws {")
+            .expect("Swift artifact coordinator pending-cancel API")
+            .0;
+        assert!(uninstall.contains("try cancelPendingCandidate()"));
+
+        let coordinator_tests = include_str!(
+            "../../../IrohaSwift/Tests/IrohaSwiftTests/KagemushaArtifactCoordinatorTests.swift"
+        );
+        let busy_retry_test = coordinator_tests
+            .split_once(
+                "func testBusyInstallRetriesFinalizedSessionWithoutRestreamOrCancellation() throws {",
+            )
+            .expect("Swift fake-session busy retry test")
+            .1
+            .split_once("    func testRotationRejectsStaleLease")
+            .expect("end of Swift fake-session busy retry test")
+            .0;
+        assert!(busy_retry_test.contains("world.installAttemptCount, 2"));
+        assert!(busy_retry_test.contains("world.sessionCount, 1"));
+        assert!(busy_retry_test.contains("world.cancelCount, 0"));
+        assert!(busy_retry_test.contains(
+            "func testDifferentAcquireCancelAndUninstallDiscardBusyPendingSession() throws"
+        ));
+    }
+
+    #[test]
+    fn recursive_spend_v4_runtime_contexts_are_sequential_and_proving_keys_stay_spooled() {
+        let source = include_str!("lib.rs");
+        let installed_state = source
+            .split_once("struct KagemushaRecursiveSpendInstalledArtifactSetV4")
+            .expect("V4 installed artifact state")
+            .1
+            .split_once("trait KagemushaRecursiveSpendArtifactSetViewV4")
+            .expect("end of V4 installed artifact implementation")
+            .0;
+        assert!(!installed_state.contains("verifier: OnceLock<Arc<"));
+        assert!(!installed_state.contains("self.verifier.get()"));
+        assert!(!installed_state.contains("self.verifier.set("));
+        assert!(installed_state.contains("from_authenticated_artifact_loader("));
+        assert!(installed_state.contains("from_authenticated_artifact_spool_loader("));
+        assert!(installed_state.contains("fn authenticated_proving_key_spool("));
+        assert!(installed_state.contains("fn parsed_verifier("));
+        assert!(installed_state.contains("fn parsed_prover("));
+
+        let lifecycle = source
+            .split_once("fn execute_kagemusha_recursive_spend_init_v4(")
+            .expect("V4 lifecycle implementation")
+            .1
+            .split_once(
+                "pub unsafe extern \"C\" fn connect_norito_kagemusha_recipient_output_derive_v2",
+            )
+            .expect("end of V4 lifecycle implementation")
+            .0;
+        assert!(lifecycle.contains("installed.runtime_verifier()?"));
+        assert!(lifecycle.contains("installed.runtime_prover()?"));
+        assert!(!lifecycle.contains("runtime_verifier_artifacts"));
+        assert!(!lifecycle.contains("runtime_prover_artifacts"));
+        assert!(!lifecycle.contains("KagemushaPastaCycleProverArtifactsV4"));
+
+        let init = source
+            .split_once("fn execute_kagemusha_recursive_spend_init_v4(")
+            .expect("init lifecycle")
+            .1
+            .split_once("fn execute_kagemusha_recursive_spend_append_v4(")
+            .expect("end of init lifecycle")
+            .0;
+        let init_prover = init
+            .find("let prover = installed.runtime_prover()?")
+            .expect("init prover context");
+        let init_verifier = init
+            .find(".shared_terminal_verifier_v5()")
+            .expect("init shares the prover runtime context");
+        let init_drop_verifier = init.find("drop(verifier);").expect("init drops verifier");
+        let init_drop_prover = init.find("drop(prover);").expect("init drops prover");
+        assert!(
+            init_prover < init_verifier
+                && init_verifier < init_drop_verifier
+                && init_drop_verifier < init_drop_prover
+        );
+        assert!(!init.contains("installed.runtime_verifier()?"));
+
+        let append = source
+            .split_once("fn execute_kagemusha_recursive_spend_append_v4(")
+            .expect("append lifecycle")
+            .1
+            .split_once("fn execute_kagemusha_recursive_spend_redeem_v4(")
+            .expect("end of append lifecycle")
+            .0;
+        let append_first_verifier = append
+            .find("let verifier = installed.runtime_verifier()?")
+            .expect("append input verifier context");
+        let append_drop_verifier = append
+            .find("drop(verifier);")
+            .expect("append drops input verifier");
+        let append_prover = append
+            .find("let prover = installed.runtime_prover()?")
+            .expect("append prover context");
+        let append_output_verifier = append
+            .find(".shared_terminal_verifier_v5()")
+            .expect("append shares the prover runtime context");
+        let append_drop_output_verifier = append
+            .rfind("drop(verifier);")
+            .expect("append drops output verifier");
+        let append_drop_prover = append.find("drop(prover);").expect("append drops prover");
+        assert!(
+            append_first_verifier < append_drop_verifier
+                && append_drop_verifier < append_prover
+                && append_prover < append_output_verifier
+                && append_output_verifier < append_drop_output_verifier
+                && append_drop_output_verifier < append_drop_prover
+        );
+
+        let redeem = source
+            .split_once("fn execute_kagemusha_recursive_spend_redeem_v4(")
+            .expect("redeem lifecycle")
+            .1
+            .split_once("fn execute_kagemusha_recursive_spend_verify_v4(")
+            .expect("end of redeem lifecycle")
+            .0;
+        let redeem_first_verifier = redeem
+            .find("let verifier = installed.runtime_verifier()?")
+            .expect("redeem input verifier context");
+        let redeem_drop_verifier = redeem
+            .find("drop(verifier);")
+            .expect("redeem drops input verifier");
+        let redeem_prover = redeem
+            .find("let prover = installed.runtime_prover()?")
+            .expect("redeem prover context");
+        let redeem_output_verifier = redeem
+            .find(".shared_terminal_verifier_v5()")
+            .expect("redeem shares the prover runtime context");
+        let redeem_drop_output_verifier = redeem
+            .rfind("drop(verifier);")
+            .expect("redeem drops output verifier");
+        let redeem_drop_prover = redeem.find("drop(prover);").expect("redeem drops prover");
+        assert!(
+            redeem_first_verifier < redeem_drop_verifier
+                && redeem_drop_verifier < redeem_prover
+                && redeem_prover < redeem_output_verifier
+                && redeem_output_verifier < redeem_drop_output_verifier
+                && redeem_drop_output_verifier < redeem_drop_prover
+        );
+
+        let candidate_state = source
+            .split_once("impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4")
+            .expect("candidate-lab installed artifact state")
+            .1
+            .split_once("impl KagemushaRecursiveSpendArtifactSetViewV4")
+            .expect("end of candidate-lab installed artifact state")
+            .0;
+        assert!(candidate_state.contains("from_candidate_artifact_loader("));
+        assert!(candidate_state.contains("from_candidate_artifact_spool_loader("));
+        assert!(candidate_state.contains("fn candidate_proving_key_spool("));
+        assert!(candidate_state.contains("fn parsed_prover("));
     }
 
     #[test]
@@ -17073,10 +17956,44 @@ mod kagemusha_bridge_tests {
 
         assert!(install.contains("KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4"));
         assert!(install.contains("observed_descriptors != expected_descriptors"));
-        assert!(install.contains("installed.authenticated_verifier_artifacts()?"));
-        assert!(install.contains("installed.authenticated_prover_artifacts()?"));
-        assert!(capabilities.contains("installed.authenticated_verifier_artifacts()?"));
-        assert!(capabilities.contains("installed.authenticated_prover_artifacts()?"));
+        assert!(!install.contains("installed.authenticated_payload("));
+        assert!(!install.contains("installed.authenticated_verifier_artifacts()?"));
+        assert!(!install.contains("installed.authenticated_prover_artifacts()?"));
+        let parsed_prover = install
+            .find("let prover = installed.parsed_prover()?;")
+            .expect("install parses the streamed prover before activation");
+        let parsed_verifier = install
+            .find(".shared_terminal_verifier_v5()")
+            .expect("install derives a verifier from the parsed prover context");
+        let activation = install
+            .find("kagemusha_recursive_spend_installed_artifact_set_registry_v4()")
+            .expect("install atomically activates the validated release");
+        assert!(parsed_prover < parsed_verifier && parsed_verifier < activation);
+        assert!(capabilities.contains("installed.validate_live_inventory()?"));
+        assert!(!capabilities.contains("authenticated_verifier_artifacts"));
+        assert!(!capabilities.contains("authenticated_prover_artifacts"));
+
+        let candidate_install = source
+            .split_once(
+                "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_install_v4",
+            )
+            .expect("candidate-lab V4 atomic installer")
+            .1
+            .split_once(
+                "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_is_installed_v4",
+            )
+            .expect("end of candidate-lab V4 atomic installer")
+            .0;
+        let candidate_prover = candidate_install
+            .find("let prover = installed.parsed_prover()?;")
+            .expect("candidate install parses bounded PK spools");
+        let candidate_verifier = candidate_install
+            .find(".shared_terminal_verifier_v5()")
+            .expect("candidate install shares the parsed prover context");
+        let candidate_activation = candidate_install
+            .find("kagemusha_candidate_evidence_lab_installed_registry_v4()")
+            .expect("candidate install atomically activates validated material");
+        assert!(candidate_prover < candidate_verifier && candidate_verifier < candidate_activation);
 
         let exact = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.to_vec();
         let is_complete = |roles: &[&str]| {
@@ -25084,7 +26001,7 @@ fn read_java_byte_array(
     array: &jni::objects::JByteArray<'_>,
     context: &str,
 ) -> Option<Vec<u8>> {
-    let len = match env.get_array_length(array) {
+    let _len = match env.get_array_length(array) {
         Ok(value) => value,
         Err(err) => {
             throw_java_illegal_argument(
@@ -25094,15 +26011,16 @@ fn read_java_byte_array(
             return None;
         }
     } as usize;
-    let mut buf = vec![0i8; len];
-    if let Err(err) = env.get_byte_array_region(array, 0, &mut buf) {
-        throw_java_illegal_state(
-            env,
-            format!("{context} failed to read array contents: {err}"),
-        );
-        return None;
-    }
-    Some(buf.into_iter().map(|byte| byte as u8).collect())
+    env.convert_byte_array(array).map_or_else(
+        |err| {
+            throw_java_illegal_state(
+                env,
+                format!("{context} failed to read array contents: {err}"),
+            );
+            None
+        },
+        Some,
+    )
 }
 
 #[cfg(any(
@@ -25131,15 +26049,16 @@ fn read_java_byte_array_bounded(
         throw_java_illegal_argument(env, format!("{context} must contain 1..{maximum} bytes"));
         return None;
     }
-    let mut buf = vec![0i8; len];
-    if let Err(err) = env.get_byte_array_region(array, 0, &mut buf) {
-        throw_java_illegal_state(
-            env,
-            format!("{context} failed to read array contents: {err}"),
-        );
-        return None;
-    }
-    Some(buf.into_iter().map(|byte| byte as u8).collect())
+    env.convert_byte_array(array).map_or_else(
+        |err| {
+            throw_java_illegal_state(
+                env,
+                format!("{context} failed to read array contents: {err}"),
+            );
+            None
+        },
+        Some,
+    )
 }
 
 #[cfg(any(
@@ -26659,11 +27578,7 @@ fn java_native_kagemusha_pasta_cycle_v4_backend_available() -> jni::sys::jboolea
             .lock()
             .ok()
             .and_then(|installed| installed.clone())
-            .is_some_and(|installed| {
-                installed.validate_live_inventory().is_ok()
-                    && installed.authenticated_verifier_artifacts().is_ok()
-                    && installed.authenticated_prover_artifacts().is_ok()
-            });
+            .is_some_and(|installed| installed.validate_live_inventory().is_ok());
     if available {
         jni::sys::JNI_TRUE
     } else {
@@ -26684,12 +27599,27 @@ fn java_native_kagemusha_artifact_begin_v4(
     artifact_sha256: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jlong {
     let result = (|| -> Result<jni::sys::jlong, (bool, String)> {
-        let manifest = read_java_byte_array(env, &manifest_norito, "manifestNorito")
-            .ok_or_else(|| (true, "invalid Kagemusha V4 manifest bytes".to_owned()))?;
-        let manifest_digest = read_java_byte_array(env, &manifest_sha256, "manifestSha256")
-            .ok_or_else(|| (true, "invalid Kagemusha V4 manifest digest".to_owned()))?;
-        let artifact_digest = read_java_byte_array(env, &artifact_sha256, "artifactSha256")
-            .ok_or_else(|| (true, "invalid Kagemusha V4 artifact digest".to_owned()))?;
+        let manifest = read_java_byte_array_bounded(
+            env,
+            &manifest_norito,
+            "manifestNorito",
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4 as usize,
+        )
+        .ok_or_else(|| (true, "invalid Kagemusha V4 manifest bytes".to_owned()))?;
+        let manifest_digest = read_java_byte_array_bounded(
+            env,
+            &manifest_sha256,
+            "manifestSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .ok_or_else(|| (true, "invalid Kagemusha V4 manifest digest".to_owned()))?;
+        let artifact_digest = read_java_byte_array_bounded(
+            env,
+            &artifact_sha256,
+            "artifactSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .ok_or_else(|| (true, "invalid Kagemusha V4 artifact digest".to_owned()))?;
         if manifest.is_empty() || manifest_digest.len() != 32 || artifact_digest.len() != 32 {
             return Err((
                 true,
@@ -26755,9 +27685,13 @@ fn java_native_kagemusha_artifact_write_v4(
             .ok()
             .filter(|handle| *handle != 0)
             .ok_or_else(|| "Kagemusha V4 artifact handle must be positive".to_owned())?;
-        let chunk = read_java_byte_array(env, &chunk, "chunk")
-            .filter(|chunk| !chunk.is_empty())
-            .ok_or_else(|| "Kagemusha V4 artifact chunk must not be empty".to_owned())?;
+        let chunk = read_java_byte_array_bounded(
+            env,
+            &chunk,
+            "chunk",
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_JNI_MAX_CHUNK_BYTES_V4,
+        )
+        .ok_or_else(|| "Kagemusha V4 artifact chunk is invalid".to_owned())?;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_artifact_write_v4(
                 handle,
@@ -26833,22 +27767,59 @@ fn java_native_kagemusha_artifact_set_install_v4(
     handles: jni::objects::JLongArray<'_>,
 ) {
     let result = (|| -> Result<(), String> {
-        let manifest = read_java_byte_array(env, &manifest_norito, "manifestNorito")
-            .ok_or_else(|| "invalid Kagemusha V4 manifest".to_owned())?;
-        let manifest_digest = read_java_byte_array(env, &manifest_sha256, "manifestSha256")
-            .ok_or_else(|| "invalid Kagemusha V4 manifest digest".to_owned())?;
-        let policy = read_java_byte_array(env, &trusted_policy_norito, "trustedPolicyNorito")
-            .ok_or_else(|| "invalid Kagemusha V4 trusted policy".to_owned())?;
-        let attestation =
-            read_java_byte_array(env, &release_attestation_norito, "releaseAttestationNorito")
-                .ok_or_else(|| "invalid Kagemusha V4 release attestation".to_owned())?;
-        let benchmark = read_java_byte_array(env, &benchmark_evidence, "benchmarkEvidence")
-            .ok_or_else(|| "invalid Kagemusha V4 benchmark evidence".to_owned())?;
-        let review = read_java_byte_array(env, &cryptographic_review, "cryptographicReview")
-            .ok_or_else(|| "invalid Kagemusha V4 cryptographic review".to_owned())?;
-        let promotion =
-            read_java_byte_array(env, &promotion_record_norito, "promotionRecordNorito")
-                .ok_or_else(|| "invalid Kagemusha V4 promotion record".to_owned())?;
+        let _permit = try_preacquire_kagemusha_heavy_proof_permit_v4().map_err(|_| {
+            "Kagemusha V4 artifact-set install is busy; retry after the active proof completes"
+                .to_owned()
+        })?;
+        let manifest = read_java_byte_array_bounded(
+            env,
+            &manifest_norito,
+            "manifestNorito",
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha V4 manifest".to_owned())?;
+        let manifest_digest = read_java_byte_array_bounded(
+            env,
+            &manifest_sha256,
+            "manifestSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .ok_or_else(|| "invalid Kagemusha V4 manifest digest".to_owned())?;
+        let policy = read_java_byte_array_bounded(
+            env,
+            &trusted_policy_norito,
+            "trustedPolicyNorito",
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_POLICY_BYTES_V1 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha V4 trusted policy".to_owned())?;
+        let attestation = read_java_byte_array_bounded(
+            env,
+            &release_attestation_norito,
+            "releaseAttestationNorito",
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_ATTESTATION_BYTES_V1 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha V4 release attestation".to_owned())?;
+        let benchmark = read_java_byte_array_bounded(
+            env,
+            &benchmark_evidence,
+            "benchmarkEvidence",
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha V4 benchmark evidence".to_owned())?;
+        let review = read_java_byte_array_bounded(
+            env,
+            &cryptographic_review,
+            "cryptographicReview",
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha V4 cryptographic review".to_owned())?;
+        let promotion = read_java_byte_array_bounded(
+            env,
+            &promotion_record_norito,
+            "promotionRecordNorito",
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha V4 promotion record".to_owned())?;
         if manifest.is_empty()
             || manifest_digest.len() != 32
             || policy.is_empty()
@@ -26942,12 +27913,21 @@ fn java_native_kagemusha_artifact_set_is_installed_v4(
     manifest_sha256: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
     let result = (|| -> Result<bool, String> {
-        let manifest = read_java_byte_array(env, &manifest_norito, "manifestNorito")
-            .filter(|manifest| !manifest.is_empty())
-            .ok_or_else(|| "invalid Kagemusha V4 manifest".to_owned())?;
-        let digest = read_java_byte_array(env, &manifest_sha256, "manifestSha256")
-            .filter(|digest| digest.len() == 32)
-            .ok_or_else(|| "invalid Kagemusha V4 manifest digest".to_owned())?;
+        let manifest = read_java_byte_array_bounded(
+            env,
+            &manifest_norito,
+            "manifestNorito",
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha V4 manifest".to_owned())?;
+        let digest = read_java_byte_array_bounded(
+            env,
+            &manifest_sha256,
+            "manifestSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .filter(|digest| digest.len() == KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4)
+        .ok_or_else(|| "invalid Kagemusha V4 manifest digest".to_owned())?;
         let mut installed = 0_u8;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4(
@@ -27023,9 +28003,13 @@ fn java_native_kagemusha_build_artifact_binding_v4(
     manifest_sha256: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     java_kagemusha_archive_array_result(env, "V4 artifact binding", |env| {
-        let manifest_bytes = read_java_byte_array(env, &manifest_norito, "manifestNorito")
-            .filter(|bytes| !bytes.is_empty() && bytes.len() <= 1024 * 1024)
-            .ok_or_else(|| "manifestNorito is invalid".to_owned())?;
+        let manifest_bytes = read_java_byte_array_bounded(
+            env,
+            &manifest_norito,
+            "manifestNorito",
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4 as usize,
+        )
+        .ok_or_else(|| "manifestNorito is invalid".to_owned())?;
         let manifest = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
         >(&manifest_bytes)
@@ -27033,9 +28017,14 @@ fn java_native_kagemusha_build_artifact_binding_v4(
         manifest
             .validate()
             .map_err(|_| "manifestNorito is invalid".to_owned())?;
-        let digest = read_java_byte_array(env, &manifest_sha256, "manifestSha256")
-            .filter(|bytes| bytes.len() == 32)
-            .ok_or_else(|| "manifestSha256 must contain exactly 32 bytes".to_owned())?;
+        let digest = read_java_byte_array_bounded(
+            env,
+            &manifest_sha256,
+            "manifestSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .filter(|bytes| bytes.len() == KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4)
+        .ok_or_else(|| "manifestSha256 must contain exactly 32 bytes".to_owned())?;
         let digest: [u8; 32] = digest
             .try_into()
             .map_err(|_| "manifestSha256 must contain exactly 32 bytes".to_owned())?;
@@ -27069,9 +28058,14 @@ fn java_native_kagemusha_artifact_set_uninstall_v4(
     manifest_sha256: jni::objects::JByteArray<'_>,
 ) {
     let result = (|| -> Result<(), String> {
-        let digest = read_java_byte_array(env, &manifest_sha256, "manifestSha256")
-            .filter(|digest| digest.len() == 32)
-            .ok_or_else(|| "invalid Kagemusha V4 manifest digest".to_owned())?;
+        let digest = read_java_byte_array_bounded(
+            env,
+            &manifest_sha256,
+            "manifestSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .filter(|digest| digest.len() == KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4)
+        .ok_or_else(|| "invalid Kagemusha V4 manifest digest".to_owned())?;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4(digest.as_ptr(), 32)
         };
@@ -27104,20 +28098,29 @@ fn java_native_kagemusha_candidate_lab_artifact_begin_v4(
     artifact_sha256: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jlong {
     let result = (|| -> Result<jni::sys::jlong, String> {
-        let candidate = read_java_byte_array(env, &candidate_norito, "candidateRecordNorito")
-            .filter(|bytes| {
-                !bytes.is_empty()
-                    && bytes.len()
-                        <= KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4 as usize
-            })
-            .ok_or_else(|| "invalid Kagemusha candidate record bytes".to_owned())?;
-        let candidate_digest =
-            read_java_byte_array(env, &candidate_sha256, "candidateRecordSha256")
-                .filter(|digest| digest.len() == 32)
-                .ok_or_else(|| "candidateRecordSha256 must contain 32 bytes".to_owned())?;
-        let artifact_digest = read_java_byte_array(env, &artifact_sha256, "artifactSha256")
-            .filter(|digest| digest.len() == 32)
-            .ok_or_else(|| "artifactSha256 must contain 32 bytes".to_owned())?;
+        let candidate = read_java_byte_array_bounded(
+            env,
+            &candidate_norito,
+            "candidateRecordNorito",
+            KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha candidate record bytes".to_owned())?;
+        let candidate_digest = read_java_byte_array_bounded(
+            env,
+            &candidate_sha256,
+            "candidateRecordSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .filter(|digest| digest.len() == KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4)
+        .ok_or_else(|| "candidateRecordSha256 must contain 32 bytes".to_owned())?;
+        let artifact_digest = read_java_byte_array_bounded(
+            env,
+            &artifact_sha256,
+            "artifactSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .filter(|digest| digest.len() == KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4)
+        .ok_or_else(|| "artifactSha256 must contain 32 bytes".to_owned())?;
         let mut handle = 0_u64;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4(
@@ -27166,9 +28169,13 @@ fn java_native_kagemusha_candidate_lab_artifact_write_v4(
             .ok()
             .filter(|handle| *handle != 0)
             .ok_or_else(|| "candidate-lab artifact handle must be positive".to_owned())?;
-        let chunk = read_java_byte_array(env, &chunk, "chunk")
-            .filter(|chunk| !chunk.is_empty())
-            .ok_or_else(|| "candidate-lab artifact chunk must not be empty".to_owned())?;
+        let chunk = read_java_byte_array_bounded(
+            env,
+            &chunk,
+            "chunk",
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_JNI_MAX_CHUNK_BYTES_V4,
+        )
+        .ok_or_else(|| "candidate-lab artifact chunk is invalid".to_owned())?;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_write_v4(
                 handle,
@@ -27244,12 +28251,25 @@ fn java_native_kagemusha_candidate_lab_artifact_set_install_v4(
     handles: jni::objects::JLongArray<'_>,
 ) {
     let result = (|| -> Result<(), String> {
-        let candidate = read_java_byte_array(env, &candidate_norito, "candidateRecordNorito")
-            .filter(|bytes| !bytes.is_empty())
-            .ok_or_else(|| "invalid Kagemusha candidate record".to_owned())?;
-        let digest = read_java_byte_array(env, &candidate_sha256, "candidateRecordSha256")
-            .filter(|digest| digest.len() == 32)
-            .ok_or_else(|| "candidateRecordSha256 must contain 32 bytes".to_owned())?;
+        let _permit = try_preacquire_kagemusha_heavy_proof_permit_v4().map_err(|_| {
+            "candidate-lab Kagemusha artifact-set install is busy; retry after the active proof completes"
+                .to_owned()
+        })?;
+        let candidate = read_java_byte_array_bounded(
+            env,
+            &candidate_norito,
+            "candidateRecordNorito",
+            KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha candidate record".to_owned())?;
+        let digest = read_java_byte_array_bounded(
+            env,
+            &candidate_sha256,
+            "candidateRecordSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .filter(|digest| digest.len() == KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4)
+        .ok_or_else(|| "candidateRecordSha256 must contain 32 bytes".to_owned())?;
         if env
             .get_array_length(&handles)
             .map_err(|error| format!("failed to read candidate-lab handles: {error}"))?
@@ -27306,12 +28326,21 @@ fn java_native_kagemusha_candidate_lab_artifact_set_is_installed_v4(
     candidate_sha256: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
     let result = (|| -> Result<bool, String> {
-        let candidate = read_java_byte_array(env, &candidate_norito, "candidateRecordNorito")
-            .filter(|bytes| !bytes.is_empty())
-            .ok_or_else(|| "invalid Kagemusha candidate record".to_owned())?;
-        let digest = read_java_byte_array(env, &candidate_sha256, "candidateRecordSha256")
-            .filter(|digest| digest.len() == 32)
-            .ok_or_else(|| "candidateRecordSha256 must contain 32 bytes".to_owned())?;
+        let candidate = read_java_byte_array_bounded(
+            env,
+            &candidate_norito,
+            "candidateRecordNorito",
+            KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha candidate record".to_owned())?;
+        let digest = read_java_byte_array_bounded(
+            env,
+            &candidate_sha256,
+            "candidateRecordSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .filter(|digest| digest.len() == KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4)
+        .ok_or_else(|| "candidateRecordSha256 must contain 32 bytes".to_owned())?;
         let mut installed = 0_u8;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_is_installed_v4(
@@ -27417,9 +28446,14 @@ fn java_native_kagemusha_candidate_lab_artifact_set_uninstall_v4(
     candidate_sha256: jni::objects::JByteArray<'_>,
 ) {
     let result = (|| -> Result<(), String> {
-        let digest = read_java_byte_array(env, &candidate_sha256, "candidateRecordSha256")
-            .filter(|digest| digest.len() == 32)
-            .ok_or_else(|| "candidateRecordSha256 must contain 32 bytes".to_owned())?;
+        let digest = read_java_byte_array_bounded(
+            env,
+            &candidate_sha256,
+            "candidateRecordSha256",
+            KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4,
+        )
+        .filter(|digest| digest.len() == KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4)
+        .ok_or_else(|| "candidateRecordSha256 must contain 32 bytes".to_owned())?;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_uninstall_v4(
                 digest.as_ptr(),
@@ -27486,6 +28520,9 @@ fn java_kagemusha_lifecycle_status(label: &str, status: c_int) -> JavaKagemushaL
         ERR_KAGEMUSHA_PROVE => JavaKagemushaLifecycleFailure::Invalid(format!(
             "Kagemusha {label} request or proof binding was rejected"
         )),
+        ERR_KAGEMUSHA_BUSY => JavaKagemushaLifecycleFailure::Unavailable(format!(
+            "Kagemusha {label} is busy; retry after the active proof completes"
+        )),
         ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE => JavaKagemushaLifecycleFailure::Unavailable(
             format!("Kagemusha {label} V4 proof backend is unavailable"),
         ),
@@ -27518,6 +28555,8 @@ where
     F: FnOnce(*const c_uchar, c_ulong, *mut *mut c_uchar, *mut c_ulong) -> c_int,
 {
     let result = (|| -> Result<jni::sys::jbyteArray, JavaKagemushaLifecycleFailure> {
+        let _permit = try_preacquire_kagemusha_heavy_proof_permit_v4()
+            .map_err(|error| java_kagemusha_lifecycle_status(label, error.code()))?;
         let request = Zeroizing::new(
             read_java_byte_array_bounded(env, &request_norito, "requestNorito", request_max_bytes)
                 .ok_or_else(|| {
@@ -27620,6 +28659,17 @@ fn java_native_kagemusha_append_spend_v4(
     recipient_request_norito: jni::objects::JByteArray<'_>,
     verified_at_ms: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
+    let _permit = match try_preacquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(error) => {
+            let message = match java_kagemusha_lifecycle_status("V4 append spend", error.code()) {
+                JavaKagemushaLifecycleFailure::Invalid(message)
+                | JavaKagemushaLifecycleFailure::Unavailable(message) => message,
+            };
+            throw_java_illegal_state(env, message);
+            return std::ptr::null_mut();
+        }
+    };
     let recipient = match read_java_byte_array_bounded(
         env,
         &recipient_request_norito,
@@ -27691,6 +28741,18 @@ fn java_native_kagemusha_candidate_lab_append_v4(
     recipient_request_norito: jni::objects::JByteArray<'_>,
     verified_at_ms: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
+    let _permit = match try_preacquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(error) => {
+            let message =
+                match java_kagemusha_lifecycle_status("candidate-lab V4 append", error.code()) {
+                    JavaKagemushaLifecycleFailure::Invalid(message)
+                    | JavaKagemushaLifecycleFailure::Unavailable(message) => message,
+                };
+            throw_java_illegal_state(env, message);
+            return std::ptr::null_mut();
+        }
+    };
     let recipient = match read_java_byte_array_bounded(
         env,
         &recipient_request_norito,
@@ -28274,7 +29336,12 @@ fn java_native_kagemusha_prepare_peer_split_change_v4(
             preparation.opening.diversifier.to_vec(),
             preparation.output.note_commitment.to_vec(),
             preparation.output.spend_nullifier.to_vec(),
-            preparation.output.amount.atomic_units.to_string().into_bytes(),
+            preparation
+                .output
+                .amount
+                .atomic_units
+                .to_string()
+                .into_bytes(),
             preparation.output.amount.scale.to_string().into_bytes(),
         ];
         java_kagemusha_secret_byte_arrays(env, &mut fields)
@@ -29143,6 +30210,17 @@ fn java_native_kagemusha_validate_spendable_branch_v4(
     opening: jni::objects::JByteArray<'_>,
     block_height: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
+    let _permit = match try_preacquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(_) => {
+            throw_java_illegal_state(
+                env,
+                "Kagemusha V4 spendable branch validation is busy; retry after the active proof completes"
+                    .to_owned(),
+            );
+            return std::ptr::null_mut();
+        }
+    };
     java_kagemusha_archive_array_result(env, "V4 spendable branch validation", |env| {
         let block_height = u64::try_from(block_height)
             .ok()
@@ -29235,6 +30313,17 @@ fn java_native_kagemusha_candidate_lab_validate_branch_v4(
     opening: jni::objects::JByteArray<'_>,
     block_height: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
+    let _permit = match try_preacquire_kagemusha_heavy_proof_permit_v4() {
+        Ok(permit) => permit,
+        Err(_) => {
+            throw_java_illegal_state(
+                env,
+                "Candidate-lab Kagemusha V4 branch validation is busy; retry after the active proof completes"
+                    .to_owned(),
+            );
+            return std::ptr::null_mut();
+        }
+    };
     java_kagemusha_archive_array_result(env, "candidate-lab V4 branch validation", |env| {
         let bundle = java_kagemusha_decode_archive_bounded::<
             iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
@@ -31413,6 +32502,9 @@ fn java_native_kagemusha_finalize_redeem_v4(
 ))]
 fn java_kagemusha_bridge_failure(label: &str, error: BridgeError) -> JavaKagemushaLifecycleFailure {
     match error {
+        BridgeError::KagemushaBusy => JavaKagemushaLifecycleFailure::Unavailable(format!(
+            "Kagemusha {label} is busy; retry after the active proof completes"
+        )),
         BridgeError::KagemushaRecursiveSpendV4Unavailable => {
             JavaKagemushaLifecycleFailure::Unavailable(format!(
                 "Kagemusha {label} proof backend is unavailable"
@@ -31455,6 +32547,8 @@ fn java_native_kagemusha_prepare_top_up_v4(
     artifact_binding: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     let result = (|| -> Result<jni::sys::jobjectArray, JavaKagemushaLifecycleFailure> {
+        let _permit = try_preacquire_kagemusha_heavy_proof_permit_v4()
+            .map_err(|error| java_kagemusha_bridge_failure("top-up", error))?;
         let invalid = |message: String| JavaKagemushaLifecycleFailure::Invalid(message);
         let chain_id =
             ChainId::from(java_kagemusha_text(env, &chain_id, "chainId").map_err(invalid)?);

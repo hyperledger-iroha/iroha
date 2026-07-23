@@ -143,7 +143,9 @@ impl OfflineRecipientRegistrationLineage {
         if self.evaluated_block_height != expected_evaluated_block_height
             || &evaluated_block_hash != expected_evaluated_block_hash
         {
-            return Err("receiver lineage does not match the required readiness snapshot".to_owned());
+            return Err(
+                "receiver lineage does not match the required readiness snapshot".to_owned(),
+            );
         }
 
         let committed = &self.registration_transaction;
@@ -154,8 +156,7 @@ impl OfflineRecipientRegistrationLineage {
             || committed.result().as_ref().is_err()
             || committed.entrypoint_proof().audit_path().len() > MAX_MERKLE_HEIGHT
             || committed.result_proof().audit_path().len() > MAX_MERKLE_HEIGHT
-            || committed.entrypoint_proof().leaf_index()
-                != committed.result_proof().leaf_index()
+            || committed.entrypoint_proof().leaf_index() != committed.result_proof().leaf_index()
         {
             return Err("committed registration transaction is internally inconsistent".to_owned());
         }

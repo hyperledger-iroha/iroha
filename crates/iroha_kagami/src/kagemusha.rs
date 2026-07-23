@@ -10,10 +10,7 @@ use std::{
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
 use iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4;
-use iroha_core::zk::kagemusha_artifact_v4::{
-    KagemushaPastaCycleProverArtifactsV4, KagemushaValidatedArtifactPayloadV4,
-    read_kagemusha_pasta_cycle_artifact_v4,
-};
+use iroha_core::zk::kagemusha_artifact_v4::read_kagemusha_pasta_cycle_artifact_v4;
 use iroha_core::zk::kagemusha_v2::validate_kagemusha_step_bootstrap_payload_v4;
 use iroha_crypto::HashOf;
 use iroha_data_model::isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4};
@@ -28,7 +25,7 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
     KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2, KagemushaAuthenticatedReleaseV4,
-    KagemushaPastaCycleArtifactV4, KagemushaPastaCycleParityV1,
+    KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleParityV1,
     KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
     KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseAttestationV4,
     KagemushaRecursiveSpendReleasePolicyV1, KagemushaTopUpFinalityRosterArtifactV2,
@@ -52,6 +49,57 @@ const RECURSIVE_STEP_VERIFIER_COMMITMENT_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:recursive-step-verifier-commitment:v4";
 const REPORT_ROSTER_PURPOSE: &str = "topup_finality_roster";
 const REPORT_ARTIFACT_PURPOSES_V4: [&str; 8] = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4;
+const AUTHENTICATED_ARTIFACT_ROLES_V4: [(
+    KagemushaPastaCycleParityV1,
+    KagemushaPastaCycleArtifactKindV4,
+); 8] = [
+    (
+        KagemushaPastaCycleParityV1::StepEq,
+        KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+    ),
+    (
+        KagemushaPastaCycleParityV1::StepEq,
+        KagemushaPastaCycleArtifactKindV4::ProvingKey,
+    ),
+    (
+        KagemushaPastaCycleParityV1::StepEq,
+        KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+    ),
+    (
+        KagemushaPastaCycleParityV1::StepEq,
+        KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+    ),
+    (
+        KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+    ),
+    (
+        KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleArtifactKindV4::ProvingKey,
+    ),
+    (
+        KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+    ),
+    (
+        KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+    ),
+];
+
+fn validate_artifacts_sequentially<I, T, E, F>(
+    artifacts: I,
+    mut validate: F,
+) -> std::result::Result<(), E>
+where
+    I: IntoIterator,
+    F: FnMut(I::Item) -> std::result::Result<T, E>,
+{
+    for artifact in artifacts {
+        drop(validate(artifact)?);
+    }
+    Ok(())
+}
 
 /// Kagemusha release-management command group.
 #[derive(Debug, ClapArgs)]
@@ -498,85 +546,74 @@ fn verify_release_directory_v4(
     )
     .map_err(|error| eyre!("Kagemusha V4 release authentication failed: {error}"))?;
 
-    let descriptors: Vec<&KagemushaPastaCycleArtifactV4> = manifest
+    let descriptors: Vec<_> = manifest
         .profiles
         .iter()
-        .flat_map(|profile| profile.artifacts.iter())
+        .flat_map(|profile| {
+            profile
+                .artifacts
+                .iter()
+                .map(move |descriptor| (profile, descriptor))
+        })
         .collect();
-    if descriptors.len() != REPORT_ARTIFACT_PURPOSES_V4.len() {
+    if descriptors.len() != AUTHENTICATED_ARTIFACT_ROLES_V4.len() {
         bail!("Kagemusha V4 release does not contain the exact eight-artifact inventory");
     }
-    let mut validated = Vec::with_capacity(descriptors.len());
-    for descriptor in &descriptors {
-        let bytes = read_regular_bounded(
-            &root,
-            &descriptor.file_name,
-            usize::try_from(descriptor.size_bytes)
-                .map_err(|_| eyre!("Kagemusha V4 artifact size does not fit this host"))?,
-            "Kagemusha V4 artifact",
-        )?;
-        if u64::try_from(bytes.len()).ok() != Some(descriptor.size_bytes) {
-            bail!("Kagemusha V4 artifact size changed while it was read");
-        }
-        let payload = read_kagemusha_pasta_cycle_artifact_v4(
-            &mut std::io::Cursor::new(bytes),
-            &authenticated,
-            descriptor,
-        )
-        .map_err(|error| eyre!(error))?;
-        validated.push(payload);
+    let mut payload_digests = BTreeSet::new();
+    validate_artifacts_sequentially(
+        descriptors.into_iter().zip(AUTHENTICATED_ARTIFACT_ROLES_V4),
+        |((profile, descriptor), (expected_parity, expected_kind))| -> Result<_> {
+            if profile.parity != expected_parity || descriptor.kind != expected_kind {
+                bail!("Kagemusha V4 artifact inventory role order changed");
+            }
+            let maximum = usize::try_from(descriptor.size_bytes)
+                .map_err(|_| eyre!("Kagemusha V4 artifact size does not fit this host"))?;
+            let mut opened = open_regular_bounded(
+                &root,
+                &descriptor.file_name,
+                maximum,
+                "Kagemusha V4 artifact",
+            )?;
+            if u64::try_from(opened.length).ok() != Some(descriptor.size_bytes) {
+                bail!("Kagemusha V4 artifact size changed while it was read");
+            }
+            let payload = read_kagemusha_pasta_cycle_artifact_v4(
+                &mut opened.file,
+                &authenticated,
+                descriptor,
+            )
+            .map_err(|error| eyre!(error))?;
+            opened.verify_unchanged()?;
+            let header = payload.header();
+            if header.parity != expected_parity || header.kind != expected_kind {
+                bail!("Kagemusha V4 authenticated artifact header role changed");
+            }
+            if !payload_digests.insert(header.payload_sha256) {
+                bail!("Kagemusha V4 authenticated artifact payloads are not distinct");
+            }
+            if expected_kind == KagemushaPastaCycleArtifactKindV4::BootstrapWitness {
+                let measured = validate_kagemusha_step_bootstrap_payload_v4(
+                    payload.payload(),
+                    &profile.circuit_params,
+                    expected_parity,
+                    profile.compiled_protocol_structure_sha256,
+                )
+                .map_err(|error| eyre!(error))?;
+                if u32::try_from(measured) != Ok(profile.step_proof_size_bytes) {
+                    bail!(
+                        "Kagemusha V4 bootstrap proof size does not match its authenticated profile"
+                    );
+                }
+            }
+            Ok(payload)
+        },
+    )?;
+    if payload_digests.len() != AUTHENTICATED_ARTIFACT_ROLES_V4.len() {
+        bail!("Kagemusha V4 authenticated artifact payload inventory changed");
     }
-    let [
-        step_eq_parameters,
-        step_eq_proving_key,
-        step_eq_verifying_key,
-        step_eq_bootstrap_witness,
-        step_ep_parameters,
-        step_ep_proving_key,
-        step_ep_verifying_key,
-        step_ep_bootstrap_witness,
-    ]: [KagemushaValidatedArtifactPayloadV4; 8] = validated
-        .try_into()
-        .map_err(|_| eyre!("Kagemusha V4 artifact inventory length changed"))?;
-
-    for (bootstrap, profile, parity) in [
-        (
-            &step_eq_bootstrap_witness,
-            &manifest.profiles[0],
-            KagemushaPastaCycleParityV1::StepEq,
-        ),
-        (
-            &step_ep_bootstrap_witness,
-            &manifest.profiles[1],
-            KagemushaPastaCycleParityV1::StepEp,
-        ),
-    ] {
-        let measured = validate_kagemusha_step_bootstrap_payload_v4(
-            bootstrap.payload(),
-            &profile.circuit_params,
-            parity,
-            profile.compiled_protocol_structure_sha256,
-        )
-        .map_err(|error| eyre!(error))?;
-        if u32::try_from(measured) != Ok(profile.step_proof_size_bytes) {
-            bail!("Kagemusha V4 bootstrap proof size does not match its authenticated profile");
-        }
-    }
-
-    let material = KagemushaPastaCycleProverArtifactsV4::new(
-        &authenticated,
-        step_eq_parameters,
-        step_eq_proving_key,
-        step_eq_verifying_key,
-        step_eq_bootstrap_witness,
-        step_ep_parameters,
-        step_ep_proving_key,
-        step_ep_verifying_key,
-        step_ep_bootstrap_witness,
-    )
-    .map_err(|error| eyre!(error))?;
-    if material.manifest_sha256() != manifest_sha256
-        || material.max_proof_bytes() != manifest.max_proof_bytes
+    if authenticated.manifest_sha256() == [0; 32]
+        || authenticated.manifest_sha256() != manifest_sha256
+        || authenticated.manifest().max_proof_bytes != manifest.max_proof_bytes
     {
         bail!("authenticated Kagemusha V4 material does not bind the canonical manifest");
     }
@@ -709,7 +746,39 @@ fn canonical_release_root(path: &Path) -> Result<PathBuf> {
         .wrap_err("failed to canonicalize Kagemusha release directory")
 }
 
-fn read_regular_bounded(root: &Path, name: &str, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
+struct PinnedRegularFile {
+    file: File,
+    path: PathBuf,
+    before: fs::Metadata,
+    length: usize,
+    label: String,
+}
+
+impl PinnedRegularFile {
+    fn verify_unchanged(&self) -> Outcome {
+        let after_open = self
+            .file
+            .metadata()
+            .wrap_err_with(|| format!("failed to re-inspect {}", self.label))?;
+        let after_path = fs::symlink_metadata(&self.path)
+            .wrap_err_with(|| format!("failed to re-inspect {} path", self.label))?;
+        if after_path.file_type().is_symlink()
+            || !after_path.is_file()
+            || !same_file_snapshot(&self.before, &after_open)
+            || !same_file_snapshot(&self.before, &after_path)
+        {
+            bail!("{} changed while it was read", self.label);
+        }
+        Ok(())
+    }
+}
+
+fn open_regular_bounded(
+    root: &Path,
+    name: &str,
+    max_bytes: usize,
+    label: &str,
+) -> Result<PinnedRegularFile> {
     if name.is_empty()
         || Path::new(name).is_absolute()
         || Path::new(name).components().count() != 1
@@ -729,22 +798,33 @@ fn read_regular_bounded(root: &Path, name: &str, max_bytes: usize, label: &str) 
     if length == 0 || length > max_bytes {
         bail!("{label} violates its size bound");
     }
-    let mut file = File::open(&path).wrap_err_with(|| format!("failed to open {label}"))?;
+    let file = File::open(&path).wrap_err_with(|| format!("failed to open {label}"))?;
     if !same_file_snapshot(
         &before,
         &file.metadata().wrap_err("failed to inspect open file")?,
     ) {
         bail!("{label} changed while it was opened");
     }
-    let mut bytes = Vec::with_capacity(length);
-    Read::by_ref(&mut file)
+    Ok(PinnedRegularFile {
+        file,
+        path,
+        before,
+        length,
+        label: label.to_owned(),
+    })
+}
+
+fn read_regular_bounded(root: &Path, name: &str, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
+    let mut opened = open_regular_bounded(root, name, max_bytes, label)?;
+    let mut bytes = Vec::with_capacity(opened.length);
+    Read::by_ref(&mut opened.file)
         .take(u64::try_from(max_bytes).expect("file bound fits u64") + 1)
         .read_to_end(&mut bytes)
         .wrap_err_with(|| format!("failed to read {label}"))?;
-    let after = file.metadata().wrap_err("failed to re-inspect open file")?;
-    if bytes.len() != length || bytes.len() > max_bytes || !same_file_snapshot(&before, &after) {
+    if bytes.len() != opened.length || bytes.len() > max_bytes {
         bail!("{label} changed while it was read");
     }
+    opened.verify_unchanged()?;
     Ok(bytes)
 }
 
@@ -992,15 +1072,28 @@ impl VerificationReportV4 {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, rc::Rc};
+
     use iroha_data_model::offline::{
         OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
         OfflineDeviceAttestationTrustedRoot, OfflineIosAppAttestationPolicy,
     };
 
     use super::{
-        REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE, parse_manifest_sha256,
+        AUTHENTICATED_ARTIFACT_ROLES_V4, REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE,
+        parse_manifest_sha256, validate_artifacts_sequentially,
         validate_device_attestation_policy_for_atomic_activation,
     };
+
+    struct LivePayload {
+        live: Rc<Cell<usize>>,
+    }
+
+    impl Drop for LivePayload {
+        fn drop(&mut self) {
+            self.live.set(self.live.get() - 1);
+        }
+    }
 
     fn valid_device_attestation_policy() -> OfflineDeviceAttestationPolicy {
         OfflineDeviceAttestationPolicy {
@@ -1061,7 +1154,43 @@ mod tests {
             ]
         );
         assert_eq!(REPORT_ARTIFACT_PURPOSES_V4.len(), 8);
+        assert_eq!(AUTHENTICATED_ARTIFACT_ROLES_V4.len(), 8);
         assert_eq!(REPORT_ROSTER_PURPOSE, "topup_finality_roster");
+    }
+
+    #[test]
+    fn authenticated_artifact_validation_drops_each_payload_before_loading_the_next() {
+        let live = Rc::new(Cell::new(0));
+        let peak = Rc::new(Cell::new(0));
+
+        validate_artifacts_sequentially(0..AUTHENTICATED_ARTIFACT_ROLES_V4.len(), |_| {
+            assert_eq!(live.get(), 0, "the prior artifact payload must be dropped");
+            live.set(1);
+            peak.set(peak.get().max(live.get()));
+            Ok::<_, ()>(LivePayload {
+                live: Rc::clone(&live),
+            })
+        })
+        .expect("sequential validation succeeds");
+
+        assert_eq!(live.get(), 0);
+        assert_eq!(peak.get(), 1);
+    }
+
+    #[test]
+    fn release_verifier_uses_the_sequential_artifact_path() {
+        let source = include_str!("kagemusha.rs");
+        let verifier = source
+            .split_once("fn verify_release_directory_v4(")
+            .expect("release verifier exists")
+            .1
+            .split_once("\nfn verify_roster_v4(")
+            .expect("release verifier boundary exists")
+            .0;
+
+        assert!(verifier.contains("validate_artifacts_sequentially("));
+        assert!(!verifier.contains("validated.push("));
+        assert!(!verifier.contains("KagemushaPastaCycleProverArtifactsV4::new("));
     }
 
     #[test]

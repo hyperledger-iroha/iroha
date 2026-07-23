@@ -8,24 +8,36 @@ archives.
 ## Source identity
 
 The candidate `source_tree_sha256` is the output of the full source-tree seal,
-not the Apple bridge dependency-closure fingerprint:
+not the Apple bridge dependency-closure fingerprint. Build through the sealed
+helper rather than invoking Cargo directly:
 
 ```sh
 SOURCE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
-SOURCE_TREE_SHA256=$(
-  python3 -I scripts/kagemusha_source_tree_seal.py fingerprint --root "$PWD"
-)
 git verify-commit "$SOURCE_COMMIT"
+python3 -I scripts/build_kagemusha_v4_candidate_bundle.py --root "$PWD"
 ```
 
 The seal requires an entirely clean checkout, including untracked files. It
 hashes the canonical Git-index path, mode, and exact regular-file bytes or
 symlink-target bytes for the complete source tree. Candidate generation,
 candidate validation, Android staging, and the candidate-only native build all
-recompute this same seal.
+recompute this same seal. Commit-signature verification is the explicit Git
+step above; require the helper report's `source_commit` to equal the verified
+`SOURCE_COMMIT`. The helper verifies the clean exact source identity before,
+during, and after a locked release build; sanitizes ambient compiler controls;
+requires at least 24 GiB of installed physical memory; and prints canonical
+JSON containing the exact `binary_path`, binary digest, source commit, and
+source-tree digest. The memory check is build admission, not an OS-hard compiler
+limit. Pass those returned identities and that exact prebuilt binary through
+`scripts/run_kagemusha_v4_generation.py` with the `generate-candidate`
+subcommand.
 
-Pass those two values to
-`kagemusha_recursive_spend_v4_bundle generate-candidate`. The generator emits
+The separate `kagemusha_recursive_spend_v4_memory_benchmark` is calibration
+only. It emits no candidate and its report is rejected as Android-lab,
+promotion, or release evidence.
+
+Direct unsupervised generation is rejected; the launcher rejects Cargo, shell
+wrappers, and every subcommand except `generate-candidate`. The guarded generator emits
 an owner-private directory containing exactly:
 
 - `candidate-manifest.norito`, the canonical `CandidateV4` record;

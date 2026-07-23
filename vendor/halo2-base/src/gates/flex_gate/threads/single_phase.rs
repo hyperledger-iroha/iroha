@@ -7,7 +7,7 @@ use crate::{
         circuit::CircuitBuilderStage,
         flex_gate::{BasicGateConfig, ThreadBreakPoints},
     },
-    utils::halo2::{raw_assign_advice, raw_constrain_equal},
+    utils::halo2::{raw_assign_advice_discarding_value, raw_constrain_equal},
     utils::ScalarField,
     virtual_region::copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
     Context, ContextCell,
@@ -305,7 +305,12 @@ pub fn assign_witnesses<F: ScalarField>(
     for ctx in threads {
         // Assign advice values to the advice columns in each [Context]
         for advice in &ctx.advice {
-            raw_assign_advice(region, column, row_offset, Value::known(advice));
+            raw_assign_advice_discarding_value(
+                region,
+                column,
+                row_offset,
+                Value::known(advice),
+            );
 
             if break_point == Some(row_offset) {
                 break_point = break_points.next();
@@ -313,7 +318,12 @@ pub fn assign_witnesses<F: ScalarField>(
                 gate_index += 1;
                 column = basic_gates[gate_index].value;
 
-                raw_assign_advice(region, column, row_offset, Value::known(advice));
+                raw_assign_advice_discarding_value(
+                    region,
+                    column,
+                    row_offset,
+                    Value::known(advice),
+                );
             }
 
             row_offset += 1;

@@ -43,6 +43,18 @@ fn release_scratch<G: 'static>(mut scratch: Vec<G>) {
     });
 }
 
+/// Release the cached scratch allocation for one element type on this thread.
+///
+/// Most field FFTs benefit from reusing their degree-sized allocation across a
+/// proof. Some transforms, however, operate on a large temporary element type
+/// only once. Keeping those buffers in the type-indexed pool would retain them
+/// until the worker exits without avoiding any later allocation.
+pub(crate) fn clear_scratch<G: 'static>() {
+    FFT_SCRATCH_POOL.with(|pool| {
+        pool.borrow_mut().remove(&TypeId::of::<G>());
+    });
+}
+
 /// FFTStage
 #[derive(Clone, Debug)]
 pub struct FFTStage {
@@ -530,5 +542,47 @@ mod tests {
         assert!(larger.capacity() >= larger_len);
         assert!(larger.iter().all(|&v| v == 9));
         release_scratch(larger);
+    }
+
+    #[test]
+    fn scratch_pool_releases_one_element_type() {
+        clear_scratch::<u16>();
+        release_scratch(vec![1_u16; 8]);
+        assert!(
+            FFT_SCRATCH_POOL.with(|pool| pool.borrow().contains_key(&TypeId::of::<u16>()))
+        );
+
+        clear_scratch::<u16>();
+        assert!(
+            !FFT_SCRATCH_POOL.with(|pool| pool.borrow().contains_key(&TypeId::of::<u16>()))
+        );
+    }
+
+    #[test]
+    fn g_to_lagrange_releases_only_its_projective_scratch() {
+        use group::{Group as _, prime::PrimeCurveAffine as _};
+        use halo2curves::pasta::{Eq, EqAffine, Fp};
+
+        clear_scratch::<Eq>();
+        clear_scratch::<Fp>();
+        release_scratch(vec![Eq::identity(); 8]);
+        release_scratch(vec![Fp::ONE; 8]);
+
+        let generator = EqAffine::generator().to_curve();
+        let lagrange = crate::arithmetic::g_to_lagrange::<EqAffine>(vec![generator; 8], 3);
+
+        assert_eq!(lagrange.len(), 8);
+        FFT_SCRATCH_POOL.with(|pool| {
+            let pool = pool.borrow();
+            assert!(
+                !pool.contains_key(&TypeId::of::<Eq>()),
+                "projective FFT scratch must be evicted after g_to_lagrange"
+            );
+            assert!(
+                pool.contains_key(&TypeId::of::<Fp>()),
+                "eviction must not remove unrelated scalar scratch"
+            );
+        });
+        clear_scratch::<Fp>();
     }
 }

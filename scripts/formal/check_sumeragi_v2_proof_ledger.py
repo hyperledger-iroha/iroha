@@ -24,8 +24,53 @@ LEDGER_PATH = FORMAL_DIR / "proof_coverage.json"
 VERUS_SOURCE_DIR = ROOT_DIR / "crates" / "iroha_sumeragi_core" / "src"
 TLAPM_COMMIT = "3ab43c7ff31db4ced850619d4746fa4c841a7681"
 LEDGER_SCHEMA_VERSION = 2
-EVIDENCE_SCHEMA_VERSION = 1
+EVIDENCE_SCHEMA_VERSION = 2
 CROSS_TOOL_EVIDENCE_SCHEMA_VERSION = 2
+
+ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
+ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
+    "2c161330a64361ec04eacf1e42fa985591536e8083a1b1bdbb1c1eca2180a50d"
+)
+ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
+ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
+ASYNC_LIVENESS_SHARD_MAX_THEOREMS = 150
+ASYNC_LIVENESS_THEOREM_MAX_LINES = 600
+ASYNC_LIVENESS_THEOREM_MAX_STEPS = 256
+ASYNC_LIVENESS_SHARDS = (
+    ("SumeragiV2AsyncRankAndInitProofs", "AsyncInitEstablishesSchedulerType"),
+    (
+        "SumeragiV2AsyncSchedulerPrimitiveTypeProofs",
+        "HistoricalRecoveryOnlyChangePreservesSchedulerType",
+    ),
+    ("SumeragiV2AsyncIngressRunnerTypeProofs", None),
+    ("SumeragiV2AsyncRuntimeAdmissionTypeProofs", None),
+    ("SumeragiV2AsyncInstallRunnerProofs", None),
+    ("SumeragiV2AsyncTimeoutKernelProofs", None),
+    ("SumeragiV2AsyncRecoveryVoteEpochProofs", None),
+    ("SumeragiV2AsyncFairServiceProofs", None),
+    ("SumeragiV2AsyncProgressOwnershipProofs", None),
+    ("SumeragiV2AsyncProtectedSlotProofs", None),
+    ("SumeragiV2AsyncSchedulerCompositionProofs", None),
+    ("SumeragiV2AsyncRecoveryProgressWitnessProofs", None),
+    ("SumeragiV2AsyncTemporalRankProofs", None),
+    ("SumeragiV2AsyncStage4RefinementProofs", None),
+    ("SumeragiV2AsyncStage3Proofs", None),
+    ("SumeragiV2AsyncStage6Proofs", None),
+    ("SumeragiV2AsyncStage2Proofs", None),
+    ("SumeragiV2AsyncDeadlockProofs", None),
+    ("SumeragiV2AsyncTimeoutOwnershipProofs", None),
+    ("SumeragiV2AsyncOutstandingLivenessDebt", None),
+    ("SumeragiV2AsyncDecisionApplicationProofs", "OneHeightCompletionObligation"),
+)
+ASYNC_LIVENESS_DEBT_SHARD = "SumeragiV2AsyncOutstandingLivenessDebt"
+ASYNC_LIVENESS_PROOF_SHARDS = tuple(
+    module for module, _ in ASYNC_LIVENESS_SHARDS if module != ASYNC_LIVENESS_DEBT_SHARD
+)
+ASYNC_LIVENESS_DEBT_THEOREMS = (
+    "TimeoutViewProgressObligation",
+    "LockedBodyReproposalProgressObligation",
+    "RotatingLeaderProgressObligation",
+)
 
 # Exact source seal for the bounded effect-capacity ownership mutation matrix.
 # This matrix is finite regression evidence only; it is intentionally separate
@@ -3394,7 +3439,7 @@ RELEASE_PROOF_MODULES = (
     "SumeragiV2AsyncFairnessRefinementProofs",
     "SumeragiV2CertifiedRequestHashAuthorityProofs",
     "SumeragiV2DurableDecisionRecoveryProofs",
-    "SumeragiV2AsyncLivenessProofs",
+    *ASYNC_LIVENESS_PROOF_SHARDS,
     "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
     "SumeragiTimeoutIngressGuardTest",
 )
@@ -3639,7 +3684,8 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2AsyncFairnessRefinementProofs",
     "SumeragiV2CertifiedRequestHashAuthorityProofs",
     "SumeragiV2DurableDecisionRecoveryProofs",
-    "SumeragiV2AsyncLivenessProofs",
+    *(module for module, _ in ASYNC_LIVENESS_SHARDS),
+    ASYNC_LIVENESS_FACADE,
     "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
     "SumeragiTimeoutIngressGuardTest",
 )
@@ -4079,6 +4125,7 @@ TLAPM_COMPLETE_RE = re.compile(
     r"\[INFO\]: All ([1-9][0-9]*) obligation(?:s)? proved\."
 )
 TLAPM_RUNNER_MARKER_PREFIX = "SUMERAGI_TLAPS_BACKEND_COMPLETE"
+TLAPM_PREFLIGHT_MARKER_PREFIX = "SUMERAGI_TLAPS_FRONTEND_COMPLETE"
 
 
 class DuplicateKeyError(ValueError):
@@ -6502,6 +6549,32 @@ def _tlapm_runner_marker(module: str, source_manifest_sha256: str) -> str:
     return (
         f"{TLAPM_RUNNER_MARKER_PREFIX} module={module} commit={TLAPM_COMMIT} "
         f"source_manifest_sha256={source_manifest_sha256}"
+    )
+
+
+def _tlapm_preflight_marker(module: str, source_manifest_sha256: str) -> str:
+    """Return the source-bound marker for a successful strict frontend pass."""
+
+    return (
+        f"{TLAPM_PREFLIGHT_MARKER_PREFIX} module={module} commit={TLAPM_COMMIT} "
+        f"source_manifest_sha256={source_manifest_sha256}"
+    )
+
+
+def _valid_tlapm_preflight_log(
+    log_source: str, *, module: str, source_manifest_sha256: str
+) -> bool:
+    """Require one nonempty frontend transcript and its exact final marker."""
+
+    if not log_source.endswith("\n"):
+        return False
+    lines = log_source.splitlines()
+    expected = _tlapm_preflight_marker(module, source_manifest_sha256)
+    return (
+        len(lines) >= 2
+        and lines[-1] == expected
+        and sum(line.startswith(TLAPM_PREFLIGHT_MARKER_PREFIX) for line in lines) == 1
+        and any(line.strip() for line in lines[:-1])
     )
 
 
@@ -9289,6 +9362,19 @@ def build_release_evidence(
     source_manifest_sha256 = source_manifest["sha256"]
     modules: list[dict[str, Any]] = []
     for module in RELEASE_PROOF_MODULES:
+        preflight_path = log_dir / f"{module}.preflight.log"
+        if not preflight_path.is_file() or preflight_path.is_symlink():
+            raise ValueError(f"missing regular TLAPM preflight log: {preflight_path}")
+        preflight_source = preflight_path.read_text(encoding="utf-8")
+        if not _valid_tlapm_preflight_log(
+            preflight_source,
+            module=module,
+            source_manifest_sha256=source_manifest_sha256,
+        ):
+            raise ValueError(
+                "TLAPM preflight log lacks the exact manifest-bound successful "
+                f"suffix: {preflight_path}"
+            )
         log_path = log_dir / f"{module}.log"
         if not log_path.is_file() or log_path.is_symlink():
             raise ValueError(f"missing regular TLAPM proof log: {log_path}")
@@ -9307,6 +9393,8 @@ def build_release_evidence(
             {
                 "module": module,
                 "obligations_proved": count,
+                "preflight_log": _relative_to_root(preflight_path, root_dir),
+                "preflight_log_sha256": _sha256_file(preflight_path),
                 "log": _relative_to_root(log_path, root_dir),
                 "log_sha256": _sha256_file(log_path),
                 "source_manifest_sha256": source_manifest_sha256,
@@ -9323,7 +9411,267 @@ def build_release_evidence(
         },
         "source_manifest": source_manifest,
         "modules": modules,
+        "facade_providers": _facade_provider_entries(formal_dir, root_dir),
     }
+
+
+def _module_extends(source: str) -> tuple[str, ...]:
+    """Return the root module's syntactic ``EXTENDS`` list."""
+
+    match = re.match(
+        r"\A---- MODULE [A-Za-z_][A-Za-z0-9_]* ----\n"
+        r"EXTENDS (?P<modules>.*?)\n\n",
+        source,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        return ()
+    return tuple(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", match.group("modules")))
+
+
+def _top_level_declarations(source: str) -> list[tuple[str, str, int, int]]:
+    """Return top-level operator/theorem declarations and their source spans."""
+
+    stripped = strip_tla_comments(source)
+    declaration = re.compile(
+        r"(?m)^(?:(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+)?"
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
+        r"(?:\([^)=\n]*\))?\s*=="
+    )
+    theorem = re.compile(
+        r"^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
+    )
+    matches = list(declaration.finditer(stripped))
+    result: list[tuple[str, str, int, int]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(stripped)
+        kind = "theorem" if theorem.match(match.group(0)) else "operator"
+        result.append((match.group("name"), kind, match.start(), end))
+    return result
+
+
+def _async_liveness_shard_contract(
+    sources: dict[str, str],
+) -> tuple[list[str], dict[str, str]]:
+    """Validate the ordered bounded shard chain and return symbol providers."""
+
+    errors: list[str] = []
+    providers: dict[str, str] = {}
+    provider_indices: dict[str, int] = {}
+    facade = sources.get(ASYNC_LIVENESS_FACADE)
+    expected_facade = (
+        f"---- MODULE {ASYNC_LIVENESS_FACADE} ----\n"
+        f"EXTENDS {ASYNC_LIVENESS_SHARDS[-1][0]}\n\n"
+        "=============================================================================\n"
+    )
+    if facade is not None and facade != expected_facade:
+        errors.append(
+            f"{ASYNC_LIVENESS_FACADE}.tla must be the exact declaration-free "
+            "compatibility facade over the final async proof shard"
+        )
+
+    reconstructed_parts: list[str] = []
+    footer = "=============================================================================\n"
+    for index, (module, _) in enumerate(ASYNC_LIVENESS_SHARDS):
+        source = sources.get(module)
+        if source is None:
+            errors.append(f"missing required async liveness shard {module}.tla")
+            continue
+        if index == 0:
+            prefix = f"---- MODULE {module} ----\n"
+        else:
+            prefix = (
+                f"---- MODULE {module} ----\n"
+                f"EXTENDS {ASYNC_LIVENESS_SHARDS[index - 1][0]}\n\n"
+            )
+        if source.startswith(prefix) and source.endswith(footer):
+            reconstructed_parts.append(source[len(prefix) : -len(footer)])
+    if len(reconstructed_parts) == len(ASYNC_LIVENESS_SHARDS):
+        reconstructed = "".join(reconstructed_parts)
+        corrected_quantifier = (
+            "  \\A source \\in AsyncCurrentResponsiveVoters,\n"
+            "     recipient \\in CurrentVoters:\n"
+            "    \\A minimumView:\n"
+            "      ResponsiveViewCertificateAuthority(source, minimumView)\n"
+            "        => TcFrontier(recipient, minimumView)"
+        )
+        original_quantifier = (
+            "  \\A source \\in AsyncCurrentResponsiveVoters,\n"
+            "     recipient \\in CurrentVoters, minimumView:\n"
+            "    ResponsiveViewCertificateAuthority(source, minimumView)\n"
+            "      => TcFrontier(recipient, minimumView)"
+        )
+        if reconstructed.count(corrected_quantifier) != 1:
+            errors.append(
+                "async liveness shards must contain the corrected nested "
+                "ResponsiveAuthoritySuppliesEveryTcFrontier quantifier exactly once"
+            )
+        sealed_reconstruction = reconstructed.replace(
+            corrected_quantifier, original_quantifier
+        )
+        actual_seal = hashlib.sha256(sealed_reconstruction.encode("utf-8")).hexdigest()
+        if actual_seal != ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256:
+            errors.append(
+                "async liveness shards are not a mechanical partition of the "
+                "reviewed pre-split body: expected SHA-256 "
+                f"{ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256}, found {actual_seal}"
+            )
+
+    expected_base_extends = (
+        "SumeragiV2ServiceRankLemmas",
+        "SumeragiV2AsyncFairnessRefinementProofs",
+        "SumeragiV2DurableDecisionRecoveryProofs",
+        "SumeragiV2EffectiveLockAcquisitionProofs",
+        "SequenceTheorems",
+        "FunctionTheorems",
+    )
+    proofless: list[tuple[str, str]] = []
+    for index, (module, _) in enumerate(ASYNC_LIVENESS_SHARDS):
+        source = sources.get(module)
+        if source is None:
+            continue
+        encoded_size = len(source.encode("utf-8"))
+        line_count = len(source.splitlines())
+        if encoded_size > ASYNC_LIVENESS_SHARD_MAX_BYTES:
+            errors.append(
+                f"{module}.tla exceeds {ASYNC_LIVENESS_SHARD_MAX_BYTES} bytes: "
+                f"found {encoded_size}"
+            )
+        if line_count > ASYNC_LIVENESS_SHARD_MAX_LINES:
+            errors.append(
+                f"{module}.tla exceeds {ASYNC_LIVENESS_SHARD_MAX_LINES} lines: "
+                f"found {line_count}"
+            )
+        expected_extends = (
+            expected_base_extends
+            if index == 0
+            else (ASYNC_LIVENESS_SHARDS[index - 1][0],)
+        )
+        actual_extends = _module_extends(source)
+        if actual_extends != expected_extends:
+            errors.append(
+                f"{module}.tla must EXTEND exactly {list(expected_extends)}, "
+                f"found {list(actual_extends)}"
+            )
+
+        declarations = _top_level_declarations(source)
+        theorem_declarations = [item for item in declarations if item[1] == "theorem"]
+        if len(theorem_declarations) > ASYNC_LIVENESS_SHARD_MAX_THEOREMS:
+            errors.append(
+                f"{module}.tla exceeds {ASYNC_LIVENESS_SHARD_MAX_THEOREMS} "
+                f"top-level theorems: found {len(theorem_declarations)}"
+            )
+        stripped = strip_tla_comments(source)
+        for name, kind, start, end in declarations:
+            prior = providers.get(name)
+            if prior is not None:
+                errors.append(
+                    f"async liveness declaration {name} is duplicated by "
+                    f"{prior}.tla and {module}.tla"
+                )
+                continue
+            providers[name] = module
+            provider_indices[name] = index
+            if kind != "theorem":
+                continue
+            theorem_source = stripped[start:end]
+            theorem_lines = theorem_source.count("\n") + 1
+            if theorem_lines > ASYNC_LIVENESS_THEOREM_MAX_LINES:
+                errors.append(
+                    f"{module}.tla theorem {name} exceeds "
+                    f"{ASYNC_LIVENESS_THEOREM_MAX_LINES} lines: found {theorem_lines}"
+                )
+            structured_steps = len(
+                re.findall(r"(?m)^[ \t]*<\d+>(?:\d+\.|[ \t]+QED\b)", theorem_source)
+            )
+            if structured_steps > ASYNC_LIVENESS_THEOREM_MAX_STEPS:
+                errors.append(
+                    f"{module}.tla theorem {name} exceeds "
+                    f"{ASYNC_LIVENESS_THEOREM_MAX_STEPS} structured steps: "
+                    f"found {structured_steps}"
+                )
+            body = _top_level_theorem_body(source, name)
+            if body is not None and THEOREM_PROOF_MARKER_RE.search(body[0]) is None:
+                proofless.append((module, name))
+
+    expected_proofless = [
+        (ASYNC_LIVENESS_DEBT_SHARD, theorem)
+        for theorem in ASYNC_LIVENESS_DEBT_THEOREMS
+    ]
+    if proofless != expected_proofless:
+        errors.append(
+            "async liveness proofless theorems must equal the ordered explicit "
+            f"debt inventory {expected_proofless}, found {proofless}"
+        )
+
+    identifier = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+    for index, (module, _) in enumerate(ASYNC_LIVENESS_SHARDS):
+        source = sources.get(module)
+        if source is None:
+            continue
+        for symbol in sorted(set(identifier.findall(strip_tla_comments(source)))):
+            provider_index = provider_indices.get(symbol)
+            if provider_index is not None and provider_index > index:
+                errors.append(
+                    f"{module}.tla has forward async-family reference {symbol} "
+                    f"provided by {ASYNC_LIVENESS_SHARDS[provider_index][0]}.tla"
+                )
+    return errors, providers
+
+
+def _async_liveness_source(formal_dir: Path) -> str:
+    """Read the virtual façade source, falling back for compact test fixtures."""
+
+    shard_paths = [formal_dir / f"{module}.tla" for module, _ in ASYNC_LIVENESS_SHARDS]
+    if all(path.is_file() for path in shard_paths):
+        return "\n".join(path.read_text(encoding="utf-8") for path in shard_paths)
+    return (formal_dir / f"{ASYNC_LIVENESS_FACADE}.tla").read_text(encoding="utf-8")
+
+
+def _facade_provider_entries(
+    formal_dir: Path, root_dir: Path = ROOT_DIR
+) -> list[dict[str, Any]]:
+    """Resolve every ledger-facing façade symbol to its unique physical shard."""
+
+    sources = {
+        module: (formal_dir / f"{module}.tla").read_text(encoding="utf-8")
+        for module, _ in ASYNC_LIVENESS_SHARDS
+    }
+    errors, providers = _async_liveness_shard_contract(
+        {
+            **sources,
+            ASYNC_LIVENESS_FACADE: (
+                formal_dir / f"{ASYNC_LIVENESS_FACADE}.tla"
+            ).read_text(encoding="utf-8"),
+        }
+    )
+    if errors:
+        raise ValueError("invalid async liveness shard contract: " + "; ".join(errors))
+    ledger = load_ledger(formal_dir / "proof_coverage.json")
+    obligations = ledger.get("obligations")
+    if not isinstance(obligations, list):
+        raise ValueError("proof coverage obligations must be an array")
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for obligation in obligations:
+        if not isinstance(obligation, dict) or obligation.get("module") != ASYNC_LIVENESS_FACADE:
+            continue
+        for symbol in _symbol_names(obligation.get("symbol", "")):
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            provider = providers.get(symbol)
+            if provider is None:
+                raise ValueError(
+                    f"facade ledger symbol {symbol} has no unique async shard provider"
+                )
+            log = (
+                f"target/formal/sumeragi_v2/tlaps/{provider}.log"
+                if provider in RELEASE_PROOF_MODULES
+                else None
+            )
+            entries.append({"symbol": symbol, "module": provider, "log": log})
+    return entries
 
 
 def _module_sources(formal_dir: Path) -> tuple[dict[str, str], list[str]]:
@@ -9346,6 +9694,12 @@ def _module_sources(formal_dir: Path) -> tuple[dict[str, str], list[str]]:
         ):
             errors.append(f"{path}: release proof module must declare a theorem")
         sources[module] = source
+    shard_errors, _ = _async_liveness_shard_contract(sources)
+    errors.extend(shard_errors)
+    if all(module in sources for module, _ in ASYNC_LIVENESS_SHARDS):
+        sources[ASYNC_LIVENESS_FACADE] = "\n".join(
+            sources[module] for module, _ in ASYNC_LIVENESS_SHARDS
+        )
     return sources, errors
 
 
@@ -9949,7 +10303,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
     path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
     if not path.is_file():
         return []
-    source = path.read_text(encoding="utf-8")
+    source = _async_liveness_source(formal_dir)
     stripped = strip_tla_comments(source)
     has_strong_type_architecture = (
         _top_level_operator_body(source, "AsyncStrongTypeInvariant") is not None
@@ -11157,7 +11511,7 @@ def _application_completion_source_fidelity_errors(
     if not proof_path.is_file() or not vocabulary_path.is_file():
         return []
 
-    proof_source = proof_path.read_text(encoding="utf-8")
+    proof_source = _async_liveness_source(formal_dir)
     vocabulary_source = vocabulary_path.read_text(encoding="utf-8")
     errors: list[str] = []
 
@@ -11962,7 +12316,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     async_path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
     if not async_path.is_file():
         return errors
-    async_source = async_path.read_text(encoding="utf-8")
+    async_source = _async_liveness_source(formal_dir)
 
     # A responsive crash clears process-local body work before Restart advances
     # the consumer generation.  Pin the generation-free ghost projection of
@@ -24002,7 +24356,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
 
     async_liveness_path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
     if async_liveness_path.is_file():
-        async_liveness_source = async_liveness_path.read_text(encoding="utf-8")
+        async_liveness_source = _async_liveness_source(formal_dir)
         restart_theorems = {
             "RestartDecisionOwnsOneFetchFrontier": (
                 '\\A node: RestartDecisions(node) # {} => '
@@ -31584,7 +31938,7 @@ def _local_runner_service_contract_source_fidelity_errors(
         else ""
     )
     liveness_source = (
-        liveness_path.read_text(encoding="utf-8")
+        _async_liveness_source(formal_dir)
         if liveness_path.is_file() and not liveness_path.is_symlink()
         else ""
     )
@@ -36527,6 +36881,7 @@ def _release_evidence_errors(
         "tool",
         "source_manifest",
         "modules",
+        "facade_providers",
     }
     if set(evidence) != expected_top_level_keys:
         errors.append(
@@ -36573,6 +36928,8 @@ def _release_evidence_errors(
         if set(entry) != {
             "module",
             "obligations_proved",
+            "preflight_log",
+            "preflight_log_sha256",
             "log",
             "log_sha256",
             "source_manifest_sha256",
@@ -36595,6 +36952,41 @@ def _release_evidence_errors(
             errors.append(
                 f"proof evidence module {module} is not bound to the current source manifest"
             )
+
+        preflight_value = entry.get("preflight_log")
+        expected_preflight = (
+            f"target/formal/sumeragi_v2/tlaps/{module}.preflight.log"
+        )
+        if preflight_value != expected_preflight:
+            errors.append(
+                f"proof evidence module {module} must use preflight log "
+                f"{expected_preflight}"
+            )
+        else:
+            preflight_path = root_dir / expected_preflight
+            if not preflight_path.is_file() or preflight_path.is_symlink():
+                errors.append(
+                    f"proof evidence preflight log is not a regular file: {preflight_path}"
+                )
+            elif entry.get("preflight_log_sha256") != _sha256_file(preflight_path):
+                errors.append(f"proof evidence preflight log digest mismatch for {module}")
+            else:
+                try:
+                    preflight_source = preflight_path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    errors.append(
+                        f"proof evidence preflight log is not UTF-8: {preflight_path}"
+                    )
+                else:
+                    if not _valid_tlapm_preflight_log(
+                        preflight_source,
+                        module=module,
+                        source_manifest_sha256=source_manifest_sha256,
+                    ):
+                        errors.append(
+                            "proof evidence preflight log lacks the exact "
+                            f"manifest-bound successful suffix for {module}"
+                        )
 
         log_value = entry.get("log")
         expected_log = f"target/formal/sumeragi_v2/tlaps/{module}.log"
@@ -36630,6 +37022,16 @@ def _release_evidence_errors(
             "proof evidence must cover the release proof modules in canonical order; "
             f"expected {list(RELEASE_PROOF_MODULES)}, found {observed}"
         )
+    try:
+        expected_providers = _facade_provider_entries(formal_dir, root_dir)
+    except (OSError, ValueError, json.JSONDecodeError, DuplicateKeyError) as error:
+        errors.append(f"could not resolve async liveness facade providers: {error}")
+    else:
+        if evidence.get("facade_providers") != expected_providers:
+            errors.append(
+                "proof evidence async liveness facade providers do not match "
+                "the current ordered shard contract"
+            )
     return errors
 
 
@@ -36836,7 +37238,11 @@ def validate_ledger(
             "cross_tool_proved",
             "specified_unproved",
         }:
-            if status == "tlaps_proved" and module not in RELEASE_PROOF_MODULES:
+            if (
+                status == "tlaps_proved"
+                and module not in RELEASE_PROOF_MODULES
+                and module != ASYNC_LIVENESS_FACADE
+            ):
                 errors.append(
                     f"{where} claims TLAPS proof in non-release module {module}"
                 )

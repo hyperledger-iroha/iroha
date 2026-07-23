@@ -31,11 +31,11 @@ struct Commitment<F: Field, T: PartialEq + Clone>((T, Vec<F>));
 
 impl<F: Field, T: PartialEq + Clone> Commitment<F, T> {
     fn get(&self) -> T {
-        self.0 .0.clone()
+        self.0.0.clone()
     }
 
     fn evals(&self) -> Vec<F> {
-        self.0 .1.clone()
+        self.0.1.clone()
     }
 }
 
@@ -150,7 +150,7 @@ where
 
 #[cfg(test)]
 mod proptests {
-    use super::{construct_intermediate_sets, Commitment, IntermediateSets};
+    use super::{Commitment, IntermediateSets, construct_intermediate_sets};
     use ff::FromUniformBytes;
     use halo2curves::bn256::Fr;
     use proptest::{

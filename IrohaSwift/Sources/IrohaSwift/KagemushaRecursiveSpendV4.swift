@@ -333,11 +333,15 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
         var archive = try KagemushaRecursiveSpendCodecs
             .encodeTopUpShieldBuildRequestV4(self)
         defer { archive.resetBytes(in: 0..<archive.count) }
-        guard let result = try NoritoNativeBridge.shared
-            .kagemushaTopUpShieldBuildUnsignedV4(requestArchive: archive) else {
-            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        do {
+            guard let result = try NoritoNativeBridge.shared
+                .kagemushaTopUpShieldBuildUnsignedV4(requestArchive: archive) else {
+                throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+            }
+            return try KagemushaRecursiveSpendCodecs.decodeTopUpUnsignedV4(result)
+        } catch NativeBridgeError.kagemushaBusy {
+            throw KagemushaRecursiveSpendError.proofWorkerBusy
         }
-        return try KagemushaRecursiveSpendCodecs.decodeTopUpUnsignedV4(result)
     }
 }
 
@@ -688,17 +692,21 @@ public struct KagemushaRecursiveSpendSpendableBranchV4: Equatable, Sendable {
         var openingArchive = try opening.noritoEncoded()
         defer { openingArchive.resetBytes(in: 0..<openingArchive.count) }
         let witnessArchive = try membershipWitness.noritoEncoded()
-        guard let frontier = try NoritoNativeBridge.shared
-            .kagemushaRecursiveSpendBranchValidateV4(
-                bundleArchive: bundle.noritoArchive,
-                provenanceArchive: topUpProvenance.noritoArchive,
-                witnessArchive: witnessArchive,
-                openingArchive: openingArchive,
-                blockHeight: blockHeight
-            ) else {
-            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        do {
+            guard let frontier = try NoritoNativeBridge.shared
+                .kagemushaRecursiveSpendBranchValidateV4(
+                    bundleArchive: bundle.noritoArchive,
+                    provenanceArchive: topUpProvenance.noritoArchive,
+                    witnessArchive: witnessArchive,
+                    openingArchive: openingArchive,
+                    blockHeight: blockHeight
+                ) else {
+                throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+            }
+            return try KagemushaOutputMembershipFrontierV4(noritoArchive: frontier)
+        } catch NativeBridgeError.kagemushaBusy {
+            throw KagemushaRecursiveSpendError.proofWorkerBusy
         }
-        return try KagemushaOutputMembershipFrontierV4(noritoArchive: frontier)
     }
 }
 
@@ -1355,21 +1363,25 @@ public extension KagemushaRecursiveSpend {
         request: KagemushaRecursiveSpendInitLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendInitResultV4 {
-        try installedArtifacts.requireInstalled()
-        guard request.artifactBinding == installedArtifacts.binding else {
-            throw KagemushaRecursiveSpendError.invalidField("artifactBindingV4")
-        }
-        var requestArchive = try request.noritoEncoded()
-        defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
-        try ensureProofBackendAvailableV4()
-        do {
-            guard let output = try NoritoNativeBridge.shared
-                .kagemushaRecursiveSpendInitV4(requestArchive: requestArchive) else {
-                throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        return try KagemushaRecursiveSpendWorkerPermit.withPermit {
+            try installedArtifacts.requireInstalled()
+            guard request.artifactBinding == installedArtifacts.binding else {
+                throw KagemushaRecursiveSpendError.invalidField("artifactBindingV4")
             }
-            return try KagemushaRecursiveSpendInitResultV4(noritoArchive: output)
-        } catch NativeBridgeError.kagemushaRecursiveSpendV4Unavailable {
-            throw KagemushaRecursiveSpendError.proofBackendUnavailable
+            var requestArchive = try request.noritoEncoded()
+            defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
+            try ensureProofBackendAvailableV4()
+            do {
+                guard let output = try NoritoNativeBridge.shared
+                    .kagemushaRecursiveSpendInitV4(requestArchive: requestArchive) else {
+                    throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+                }
+                return try KagemushaRecursiveSpendInitResultV4(noritoArchive: output)
+            } catch NativeBridgeError.kagemushaRecursiveSpendV4Unavailable {
+                throw KagemushaRecursiveSpendError.proofBackendUnavailable
+            } catch NativeBridgeError.kagemushaBusy {
+                throw KagemushaRecursiveSpendError.proofWorkerBusy
+            }
         }
     }
 
@@ -1378,24 +1390,28 @@ public extension KagemushaRecursiveSpend {
         signedRecipientRequest: KagemushaVerifiedRecipientPaymentRequest,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendSplitResultV4 {
-        try installedArtifacts.requireInstalled()
-        guard request.outputArtifactBinding == installedArtifacts.binding else {
-            throw KagemushaRecursiveSpendError.invalidField("artifactBindingV4")
-        }
-        var requestArchive = try request.noritoEncoded()
-        defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
-        try ensureProofBackendAvailableV4()
-        do {
-            guard let output = try NoritoNativeBridge.shared.kagemushaRecursiveSpendAppendV4(
-                requestArchive: requestArchive,
-                recipientRequestArchive: signedRecipientRequest.request.archive,
-                verifiedAtMilliseconds: signedRecipientRequest.verifiedAtMilliseconds
-            ) else {
-                throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        return try KagemushaRecursiveSpendWorkerPermit.withPermit {
+            try installedArtifacts.requireInstalled()
+            guard request.outputArtifactBinding == installedArtifacts.binding else {
+                throw KagemushaRecursiveSpendError.invalidField("artifactBindingV4")
             }
-            return try KagemushaRecursiveSpendSplitResultV4(noritoArchive: output)
-        } catch NativeBridgeError.kagemushaRecursiveSpendV4Unavailable {
-            throw KagemushaRecursiveSpendError.proofBackendUnavailable
+            var requestArchive = try request.noritoEncoded()
+            defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
+            try ensureProofBackendAvailableV4()
+            do {
+                guard let output = try NoritoNativeBridge.shared.kagemushaRecursiveSpendAppendV4(
+                    requestArchive: requestArchive,
+                    recipientRequestArchive: signedRecipientRequest.request.archive,
+                    verifiedAtMilliseconds: signedRecipientRequest.verifiedAtMilliseconds
+                ) else {
+                    throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+                }
+                return try KagemushaRecursiveSpendSplitResultV4(noritoArchive: output)
+            } catch NativeBridgeError.kagemushaRecursiveSpendV4Unavailable {
+                throw KagemushaRecursiveSpendError.proofBackendUnavailable
+            } catch NativeBridgeError.kagemushaBusy {
+                throw KagemushaRecursiveSpendError.proofWorkerBusy
+            }
         }
     }
 
@@ -1403,20 +1419,24 @@ public extension KagemushaRecursiveSpend {
         request: KagemushaRecursiveSpendVerifyLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendVerifyResultV4 {
-        try installedArtifacts.requireInstalled()
-        guard request.request.artifactBinding == installedArtifacts.binding else {
-            throw KagemushaRecursiveSpendError.invalidField("artifactBindingV4")
-        }
-        let requestArchive = try request.noritoEncoded()
-        try ensureProofBackendAvailableV4()
-        do {
-            guard let output = try NoritoNativeBridge.shared
-                .kagemushaRecursiveSpendVerifyV4(requestArchive: requestArchive) else {
-                throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        return try KagemushaRecursiveSpendWorkerPermit.withPermit {
+            try installedArtifacts.requireInstalled()
+            guard request.request.artifactBinding == installedArtifacts.binding else {
+                throw KagemushaRecursiveSpendError.invalidField("artifactBindingV4")
             }
-            return try KagemushaRecursiveSpendVerifyResultV4(noritoArchive: output)
-        } catch NativeBridgeError.kagemushaRecursiveSpendV4Unavailable {
-            throw KagemushaRecursiveSpendError.proofBackendUnavailable
+            let requestArchive = try request.noritoEncoded()
+            try ensureProofBackendAvailableV4()
+            do {
+                guard let output = try NoritoNativeBridge.shared
+                    .kagemushaRecursiveSpendVerifyV4(requestArchive: requestArchive) else {
+                    throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+                }
+                return try KagemushaRecursiveSpendVerifyResultV4(noritoArchive: output)
+            } catch NativeBridgeError.kagemushaRecursiveSpendV4Unavailable {
+                throw KagemushaRecursiveSpendError.proofBackendUnavailable
+            } catch NativeBridgeError.kagemushaBusy {
+                throw KagemushaRecursiveSpendError.proofWorkerBusy
+            }
         }
     }
 
@@ -1424,18 +1444,22 @@ public extension KagemushaRecursiveSpend {
         request: KagemushaRecursiveSpendRedeemLocalRequestV4,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendRedeemBuildResultV4 {
-        try installedArtifacts.requireInstalled()
-        var requestArchive = try request.noritoEncoded()
-        defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
-        try ensureProofBackendAvailableV4()
-        do {
-            guard let output = try NoritoNativeBridge.shared
-                .kagemushaRecursiveSpendRedeemV4(requestArchive: requestArchive) else {
-                throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        return try KagemushaRecursiveSpendWorkerPermit.withPermit {
+            try installedArtifacts.requireInstalled()
+            var requestArchive = try request.noritoEncoded()
+            defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
+            try ensureProofBackendAvailableV4()
+            do {
+                guard let output = try NoritoNativeBridge.shared
+                    .kagemushaRecursiveSpendRedeemV4(requestArchive: requestArchive) else {
+                    throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+                }
+                return try KagemushaRecursiveSpendRedeemBuildResultV4(noritoArchive: output)
+            } catch NativeBridgeError.kagemushaRecursiveSpendV4Unavailable {
+                throw KagemushaRecursiveSpendError.proofBackendUnavailable
+            } catch NativeBridgeError.kagemushaBusy {
+                throw KagemushaRecursiveSpendError.proofWorkerBusy
             }
-            return try KagemushaRecursiveSpendRedeemBuildResultV4(noritoArchive: output)
-        } catch NativeBridgeError.kagemushaRecursiveSpendV4Unavailable {
-            throw KagemushaRecursiveSpendError.proofBackendUnavailable
         }
     }
 }

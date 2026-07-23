@@ -21,6 +21,7 @@ extern "C" {
 #define CONNECT_NORITO_ERR_KAGEMUSHA_PROVE -311
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE -316
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_ARTIFACT -317
+#define CONNECT_NORITO_ERR_KAGEMUSHA_BUSY -318
 #define CONNECT_NORITO_ERR_SORAFS_REFERENCE -114
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SCAFFOLD -501
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SIGNATURE -502
@@ -166,7 +167,7 @@ int32_t connect_norito_decode_ciphertext_frame(
 #define CONNECT_NORITO_KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS 2
 
 // Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV4`.
-// ABI20 callers must require `proof_backend_available`; this build reports
+// ABI21 callers must require `proof_backend_available`; this build reports
 // false until authenticated V4 artifacts and every external evidence gate are
 // complete.
 int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
@@ -195,7 +196,7 @@ int32_t connect_norito_kagemusha_topup_finality_verify_v4(
     const uint8_t* expected_manifest_sha256_ptr,
     unsigned long expected_manifest_sha256_len);
 
-// ABI20 uses a distinct exact eight-artifact KRV4 inventory. Canonical order is
+// ABI21 uses a distinct exact eight-artifact KRV4 inventory. Canonical order is
 // Eq then Ep and, within each parity: ParamsIPA, proving key, verifying key, and
 // BootstrapV4. Circuit configuration lives only in the signed manifest profile;
 // every framed header binds its domain-separated digest. These entrypoints

@@ -1,12 +1,12 @@
 use ff::{Field, PrimeField};
 use std::iter;
 
-use super::super::{circuit::Any, ChallengeBeta, ChallengeGamma, ChallengeX};
+use super::super::{ChallengeBeta, ChallengeGamma, ChallengeX, circuit::Any};
 use super::{Argument, VerifyingKey};
 use crate::{
     arithmetic::CurveAffine,
     plonk::{self, Error},
-    poly::{commitment::MSM, Rotation, VerifierQuery},
+    poly::{Rotation, VerifierQuery, commitment::MSM},
     transcript::{EncodedChallenge, TranscriptRead},
 };
 

@@ -1,26 +1,26 @@
 #![allow(clippy::int_plus_one)]
 
-use std::ops::Range;
+use std::{fmt, ops::Range};
 
-use ff::{Field, FromUniformBytes};
+use ff::{Field, FromUniformBytes, WithSmallOrderMulGroup};
 use group::Curve;
 
 use super::{
+    Assigned, Challenge, Error, LagrangeCoeff, Polynomial, ProvingKey, VerifyingKey,
     circuit::{
         Advice, Any, Assignment, Circuit, Column, ConstraintSystem, Fixed, FloorPlanner, Instance,
         Selector,
     },
     evaluation::Evaluator,
-    permutation, Assigned, Challenge, Error, LagrangeCoeff, Polynomial, ProvingKey, VerifyingKey,
+    permutation,
 };
 use crate::{
-    arithmetic::{parallelize, CurveAffine},
+    arithmetic::{CurveAffine, parallelize},
     circuit::Value,
     multicore::{IntoParallelIterator, ParallelIterator},
     poly::{
-        batch_invert_assigned,
+        EvaluationDomain, batch_invert_assigned_consuming,
         commitment::{Blind, Params},
-        EvaluationDomain,
     },
 };
 
@@ -47,6 +47,56 @@ where
     let domain = EvaluationDomain::new(degree as u32, k);
 
     (domain, cs, config)
+}
+
+/// Construct the three canonical row-mask polynomials retained by a proving key.
+///
+/// Keeping the formula in one helper prevents key construction and regression
+/// tests from drifting on the exact inactive/blinding-row boundary.
+pub(super) fn create_proving_key_masks<F>(
+    domain: &EvaluationDomain<F>,
+    blinding_factors: usize,
+) -> (
+    Polynomial<F, super::Coeff>,
+    Polynomial<F, super::Coeff>,
+    Polynomial<F, super::Coeff>,
+)
+where
+    F: WithSmallOrderMulGroup<3>,
+{
+    let domain_rows = usize::try_from(domain.get_n()).expect("domain size fits usize");
+    let last_active_row = domain_rows
+        .checked_sub(blinding_factors + 1)
+        .expect("constraint-system blinding rows fit the evaluation domain");
+
+    // Compute l_0(X) directly without an FFT.
+    let l0 = domain.lagrange_basis_0_coeff();
+
+    // Compute l_blind(X), which evaluates to one for each blinding-factor row
+    // and zero otherwise over the domain.
+    let mut l_blind = domain.empty_lagrange();
+    for evaluation in l_blind[..].iter_mut().rev().take(blinding_factors) {
+        *evaluation = F::ONE;
+    }
+
+    // Compute l_last(X), which evaluates to one on the first inactive row
+    // immediately before the blinding factors and zero otherwise.
+    let mut l_last = domain.empty_lagrange();
+    l_last[last_active_row] = F::ONE;
+
+    // Compute l_active_row(X).
+    let mut l_active_row = domain.empty_lagrange();
+    parallelize(&mut l_active_row, |values, start| {
+        for (i, value) in values.iter_mut().enumerate() {
+            let idx = i + start;
+            *value = F::ONE - (l_last[idx] + l_blind[idx]);
+        }
+    });
+    drop(l_blind);
+
+    let l_last = domain.lagrange_to_coeff(l_last);
+    let l_active_row = domain.lagrange_to_coeff(l_active_row);
+    (l0, l_last, l_active_row)
 }
 
 /// Assembly to be used in circuit synthesis.
@@ -187,6 +237,142 @@ impl<F: Field> Assignment<F> for Assembly<F> {
     }
 }
 
+/// Failure returned by consuming key generation with a post-synthesis extractor.
+#[derive(Debug)]
+pub enum KeygenWithExtractorError<E> {
+    /// Circuit configuration or synthesis failed.
+    Keygen(Error),
+    /// The caller's post-synthesis extractor rejected the synthesized circuit.
+    Extractor(E),
+}
+
+impl<E: fmt::Display> fmt::Display for KeygenWithExtractorError<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Keygen(error) => error.fmt(formatter),
+            Self::Extractor(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl<E> std::error::Error for KeygenWithExtractorError<E> where E: fmt::Debug + fmt::Display {}
+
+fn synthesize_keygen_assembly<'params, C, P, ConcreteCircuit>(
+    params: &P,
+    supplied_domain: Option<&EvaluationDomain<C::Scalar>>,
+    circuit: &ConcreteCircuit,
+) -> Result<
+    (
+        ConstraintSystem<C::Scalar>,
+        Assembly<C::Scalar>,
+        Option<EvaluationDomain<C::Scalar>>,
+    ),
+    Error,
+>
+where
+    C: CurveAffine,
+    C::Scalar: FromUniformBytes<64>,
+    P: Params<'params, C> + Sync,
+    ConcreteCircuit: Circuit<C::Scalar>,
+{
+    let mut cs = ConstraintSystem::default();
+    #[cfg(feature = "circuit-params")]
+    let config = ConcreteCircuit::configure_with_params(&mut cs, circuit.params());
+    #[cfg(not(feature = "circuit-params"))]
+    let config = ConcreteCircuit::configure(&mut cs);
+
+    // A supplied verifier key already owns the exact evaluation domain that
+    // the proving key will retain. Only key generation that must also produce
+    // a verifier key needs to construct another domain.
+    let generated_domain = supplied_domain
+        .is_none()
+        .then(|| EvaluationDomain::new(cs.degree() as u32, params.k()));
+    let domain = supplied_domain.unwrap_or_else(|| {
+        generated_domain
+            .as_ref()
+            .expect("key generation constructs an evaluation domain")
+    });
+
+    if (params.n() as usize) < cs.minimum_rows() {
+        return Err(Error::not_enough_rows_available(params.k()));
+    }
+
+    let mut assembly: Assembly<C::Scalar> = Assembly {
+        k: params.k(),
+        fixed: vec![domain.empty_lagrange_assigned(); cs.num_fixed_columns],
+        permutation: permutation::keygen::Assembly::new(params.n() as usize, &cs.permutation),
+        selectors: vec![vec![false; params.n() as usize]; cs.num_selectors],
+        usable_rows: 0..params.n() as usize - (cs.blinding_factors() + 1),
+        _marker: std::marker::PhantomData,
+    };
+
+    ConcreteCircuit::FloorPlanner::synthesize(
+        &mut assembly,
+        circuit,
+        config,
+        cs.constants.clone(),
+    )?;
+
+    Ok((cs, assembly, generated_domain))
+}
+
+fn keygen_vk_from_assembly<'params, C, P>(
+    params: &P,
+    domain: EvaluationDomain<C::Scalar>,
+    cs: ConstraintSystem<C::Scalar>,
+    mut assembly: Assembly<C::Scalar>,
+    compress_selectors: bool,
+) -> VerifyingKey<C>
+where
+    C: CurveAffine,
+    C::Scalar: FromUniformBytes<64>,
+    P: Params<'params, C> + Sync,
+{
+    // The permutation verifier key only retains commitments. Build it while
+    // fixed assignments and bit-packed selector activations are still in their
+    // compact synthesis representation; expanding selectors into field
+    // polynomials first would keep every fixed polynomial live through the
+    // first degree-sized permutation commitment.
+    let permutation_vk = assembly
+        .permutation
+        .build_vk(params, &domain, &cs.permutation);
+
+    let mut fixed = batch_invert_assigned_consuming(
+        assembly
+            .fixed
+            .into_iter()
+            .map(|polynomial| polynomial.values)
+            .collect(),
+    );
+    let (cs, selector_polys) = if compress_selectors {
+        cs.compress_selectors(assembly.selectors.clone())
+    } else {
+        // The verifier does not need selectors, and keygen_pk regenerates its
+        // constraint system from the circuit.
+        let selectors = std::mem::take(&mut assembly.selectors);
+        cs.directly_convert_selectors_to_fixed(selectors)
+    };
+    fixed.extend(
+        selector_polys
+            .into_iter()
+            .map(|poly| domain.lagrange_from_vec(poly)),
+    );
+
+    let fixed_commitments = (&fixed)
+        .into_par_iter()
+        .map(|poly| params.commit_lagrange(poly, Blind::default()).to_affine())
+        .collect();
+
+    VerifyingKey::from_parts(
+        domain,
+        fixed_commitments,
+        permutation_vk,
+        cs,
+        assembly.selectors,
+        compress_selectors,
+    )
+}
+
 /// Generate a `VerifyingKey` from an instance of `Circuit`.
 /// By default, selector compression is turned **off**.
 pub fn keygen_vk<'params, C, P, ConcreteCircuit>(
@@ -216,64 +402,53 @@ where
     ConcreteCircuit: Circuit<C::Scalar>,
     C::Scalar: FromUniformBytes<64>,
 {
-    let (domain, cs, config) = create_domain::<C, ConcreteCircuit>(
-        params.k(),
-        #[cfg(feature = "circuit-params")]
-        circuit.params(),
-    );
-
-    if (params.n() as usize) < cs.minimum_rows() {
-        return Err(Error::not_enough_rows_available(params.k()));
-    }
-
-    let mut assembly: Assembly<C::Scalar> = Assembly {
-        k: params.k(),
-        fixed: vec![domain.empty_lagrange_assigned(); cs.num_fixed_columns],
-        permutation: permutation::keygen::Assembly::new(params.n() as usize, &cs.permutation),
-        selectors: vec![vec![false; params.n() as usize]; cs.num_selectors],
-        usable_rows: 0..params.n() as usize - (cs.blinding_factors() + 1),
-        _marker: std::marker::PhantomData,
-    };
-
-    // Synthesize the circuit to obtain URS
-    ConcreteCircuit::FloorPlanner::synthesize(
-        &mut assembly,
-        circuit,
-        config,
-        cs.constants.clone(),
-    )?;
-
-    let mut fixed = batch_invert_assigned(assembly.fixed);
-    let (cs, selector_polys) = if compress_selectors {
-        cs.compress_selectors(assembly.selectors.clone())
-    } else {
-        // After this, the ConstraintSystem should not have any selectors: `verify` does not need them, and `keygen_pk` regenerates `cs` from scratch anyways.
-        let selectors = std::mem::take(&mut assembly.selectors);
-        cs.directly_convert_selectors_to_fixed(selectors)
-    };
-    fixed.extend(
-        selector_polys
-            .into_iter()
-            .map(|poly| domain.lagrange_from_vec(poly)),
-    );
-
-    let permutation_vk = assembly
-        .permutation
-        .build_vk(params, &domain, &cs.permutation);
-
-    let fixed_commitments = (&fixed)
-        .into_par_iter()
-        .map(|poly| params.commit_lagrange(poly, Blind::default()).to_affine())
-        .collect();
-
-    Ok(VerifyingKey::from_parts(
+    let (cs, assembly, generated_domain) =
+        synthesize_keygen_assembly::<C, _, _>(params, None, circuit)?;
+    let domain = generated_domain.expect("verifier-key generation constructs a domain");
+    Ok(keygen_vk_from_assembly(
+        params,
         domain,
-        fixed_commitments,
-        permutation_vk,
         cs,
-        assembly.selectors,
+        assembly,
         compress_selectors,
     ))
+}
+
+/// Generate a verifier key while releasing an owned circuit before key assembly.
+///
+/// `extractor` runs immediately after successful synthesis. Its result must own
+/// any data it retains. If it succeeds, `circuit` is dropped before permutation
+/// polynomials and commitments are constructed. Selector compression is off,
+/// matching [`keygen_vk`].
+pub fn keygen_vk_consuming_with<
+    'params,
+    C,
+    P,
+    ConcreteCircuit,
+    Extracted,
+    ExtractError,
+    Extractor,
+>(
+    params: &P,
+    circuit: ConcreteCircuit,
+    extractor: Extractor,
+) -> Result<(VerifyingKey<C>, Extracted), KeygenWithExtractorError<ExtractError>>
+where
+    C: CurveAffine,
+    C::Scalar: FromUniformBytes<64>,
+    P: Params<'params, C> + Sync,
+    ConcreteCircuit: Circuit<C::Scalar>,
+    Extractor: FnOnce(&ConcreteCircuit) -> Result<Extracted, ExtractError>,
+{
+    let (cs, assembly, generated_domain) =
+        synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
+            .map_err(KeygenWithExtractorError::Keygen)?;
+    let extracted = extractor(&circuit).map_err(KeygenWithExtractorError::Extractor)?;
+    drop(circuit);
+
+    let domain = generated_domain.expect("verifier-key generation constructs a domain");
+    let vk = keygen_vk_from_assembly(params, domain, cs, assembly, false);
+    Ok((vk, extracted))
 }
 
 /// Generate a `ProvingKey` from a `VerifyingKey` and an instance of `Circuit`.
@@ -290,6 +465,50 @@ where
 {
     let compress_selectors = vk.compress_selectors;
     keygen_pk_impl(params, Some(vk), circuit, compress_selectors)
+}
+
+/// Generate a proving key while releasing an owned circuit before key assembly.
+///
+/// `extractor` runs immediately after successful synthesis. Its result must own
+/// any data it retains. If it succeeds, `circuit` is dropped before fixed and
+/// permutation proving-key polynomials are constructed.
+pub fn keygen_pk_consuming_with<
+    'params,
+    C,
+    P,
+    ConcreteCircuit,
+    Extracted,
+    ExtractError,
+    Extractor,
+>(
+    params: &P,
+    vk: VerifyingKey<C>,
+    circuit: ConcreteCircuit,
+    extractor: Extractor,
+) -> Result<(ProvingKey<C>, Extracted), KeygenWithExtractorError<ExtractError>>
+where
+    C: CurveAffine,
+    C::Scalar: FromUniformBytes<64>,
+    P: Params<'params, C> + Sync,
+    ConcreteCircuit: Circuit<C::Scalar>,
+    Extractor: FnOnce(&ConcreteCircuit) -> Result<Extracted, ExtractError>,
+{
+    let compress_selectors = vk.compress_selectors;
+    let (cs, assembly, generated_domain) =
+        synthesize_keygen_assembly::<C, _, _>(params, Some(&vk.domain), &circuit)
+            .map_err(KeygenWithExtractorError::Keygen)?;
+    let extracted = extractor(&circuit).map_err(KeygenWithExtractorError::Extractor)?;
+    drop(circuit);
+
+    let pk = keygen_pk_from_assembly(
+        params,
+        Some(vk),
+        generated_domain,
+        cs,
+        assembly,
+        compress_selectors,
+    );
+    Ok((pk, extracted))
 }
 
 /// Generate a `ProvingKey` from an instance of `Circuit`. `VerifyingKey` is generated in the process.
@@ -322,34 +541,45 @@ where
     P: Params<'params, C> + Sync,
     ConcreteCircuit: Circuit<C::Scalar>,
 {
-    let (domain, cs, config) = create_domain::<C, ConcreteCircuit>(
-        params.k(),
-        #[cfg(feature = "circuit-params")]
-        circuit.params(),
-    );
+    let supplied_domain = vk.as_ref().map(|vk| &vk.domain);
+    let (cs, assembly, generated_domain) =
+        synthesize_keygen_assembly::<C, _, _>(params, supplied_domain, circuit)?;
+    Ok(keygen_pk_from_assembly(
+        params,
+        vk,
+        generated_domain,
+        cs,
+        assembly,
+        compress_selectors,
+    ))
+}
 
-    if (params.n() as usize) < cs.minimum_rows() {
-        return Err(Error::not_enough_rows_available(params.k()));
-    }
-
-    let mut assembly: Assembly<C::Scalar> = Assembly {
-        k: params.k(),
-        fixed: vec![domain.empty_lagrange_assigned(); cs.num_fixed_columns],
-        permutation: permutation::keygen::Assembly::new(params.n() as usize, &cs.permutation),
-        selectors: vec![vec![false; params.n() as usize]; cs.num_selectors],
-        usable_rows: 0..params.n() as usize - (cs.blinding_factors() + 1),
-        _marker: std::marker::PhantomData,
+fn keygen_pk_from_assembly<'params, C, P>(
+    params: &P,
+    mut vk: Option<VerifyingKey<C>>,
+    mut generated_domain: Option<EvaluationDomain<C::Scalar>>,
+    cs: ConstraintSystem<C::Scalar>,
+    mut assembly: Assembly<C::Scalar>,
+    compress_selectors: bool,
+) -> ProvingKey<C>
+where
+    C: CurveAffine,
+    C::Scalar: FromUniformBytes<64>,
+    P: Params<'params, C> + Sync,
+{
+    let domain = match vk.as_ref() {
+        Some(vk) => &vk.domain,
+        None => generated_domain
+            .as_ref()
+            .expect("keygen_pk2 constructs an evaluation domain"),
     };
-
-    // Synthesize the circuit to obtain URS
-    ConcreteCircuit::FloorPlanner::synthesize(
-        &mut assembly,
-        circuit,
-        config,
-        cs.constants.clone(),
-    )?;
-
-    let mut fixed = batch_invert_assigned(assembly.fixed);
+    let mut fixed = batch_invert_assigned_consuming(
+        assembly
+            .fixed
+            .into_iter()
+            .map(|polynomial| polynomial.values)
+            .collect(),
+    );
     let (cs, selector_polys) = if compress_selectors {
         if vk.is_some() {
             let selectors = std::mem::take(&mut assembly.selectors);
@@ -368,19 +598,22 @@ where
     );
 
     #[cfg(not(feature = "thread-safe-region"))]
-    let (permutation_pk, vk) = match vk {
-        Some(vk) => {
+    let (permutation_pk, vk) = if let Some(vk) = vk.take() {
+        {
             let permutation_pk = assembly
                 .permutation
-                .build_pk(params, &domain, &cs.permutation);
+                .build_pk(params, &vk.domain, &cs.permutation);
             (permutation_pk, vk)
         }
-        None => {
-            let permutation = assembly.permutation;
-            let permutation_pk = permutation
-                .clone()
-                .build_pk(params, &domain, &cs.permutation);
-            let permutation_vk = permutation.build_vk(params, &domain, &cs.permutation);
+    } else {
+        {
+            let domain = generated_domain
+                .take()
+                .expect("keygen_pk2 constructs an evaluation domain");
+            let (permutation_pk, permutation_vk) =
+                assembly
+                    .permutation
+                    .build_pk_and_vk(params, &domain, &cs.permutation);
 
             let fixed_commitments = (&fixed)
                 .into_par_iter()
@@ -401,32 +634,37 @@ where
 
     #[cfg(feature = "thread-safe-region")]
     let (permutation_pk, vk) = {
-        let permutation_pk = assembly
-            .permutation
-            .build_pk(params, &domain, &cs.permutation);
-        let vk = match vk {
-            Some(vk) => vk,
-            None => {
-                let permutation_vk = assembly
-                    .permutation
-                    .build_vk(params, &domain, &cs.permutation);
+        if let Some(vk) = vk.take() {
+            let permutation_pk = assembly
+                .permutation
+                .build_pk(params, &vk.domain, &cs.permutation);
+            (permutation_pk, vk)
+        } else {
+            let domain = generated_domain
+                .take()
+                .expect("keygen_pk2 constructs an evaluation domain");
+            let permutation_vk = assembly
+                .permutation
+                .build_vk(params, &domain, &cs.permutation);
+            let permutation_pk = assembly
+                .permutation
+                .build_pk(params, &domain, &cs.permutation);
 
-                let fixed_commitments = (&fixed)
-                    .into_par_iter()
-                    .map(|poly| params.commit_lagrange(poly, Blind::default()).to_affine())
-                    .collect();
+            let fixed_commitments = (&fixed)
+                .into_par_iter()
+                .map(|poly| params.commit_lagrange(poly, Blind::default()).to_affine())
+                .collect();
 
-                VerifyingKey::from_parts(
-                    domain,
-                    fixed_commitments,
-                    permutation_vk,
-                    cs,
-                    assembly.selectors,
-                    compress_selectors,
-                )
-            }
-        };
-        (permutation_pk, vk)
+            let vk = VerifyingKey::from_parts(
+                domain,
+                fixed_commitments,
+                permutation_vk,
+                cs,
+                assembly.selectors,
+                compress_selectors,
+            );
+            (permutation_pk, vk)
+        }
     };
 
     let fixed_polys: Vec<_> = fixed
@@ -434,38 +672,13 @@ where
         .map(|poly| vk.domain.lagrange_to_coeff(poly.clone()))
         .collect();
 
-    // Compute l_0(X) directly without an FFT.
-    let l0 = vk.domain.lagrange_basis_0_coeff();
-
-    // Compute l_blind(X) which evaluates to 1 for each blinding factor row
-    // and 0 otherwise over the domain.
-    let mut l_blind = vk.domain.empty_lagrange();
-    for evaluation in l_blind[..].iter_mut().rev().take(vk.cs.blinding_factors()) {
-        *evaluation = C::Scalar::ONE;
-    }
-
-    // Compute l_last(X) which evaluates to 1 on the first inactive row (just
-    // before the blinding factors) and 0 otherwise over the domain
-    let mut l_last = vk.domain.empty_lagrange();
-    l_last[params.n() as usize - vk.cs.blinding_factors() - 1] = C::Scalar::ONE;
-
-    // Compute l_active_row(X)
-    let one = C::Scalar::ONE;
-    let mut l_active_row = vk.domain.empty_lagrange();
-    parallelize(&mut l_active_row, |values, start| {
-        for (i, value) in values.iter_mut().enumerate() {
-            let idx = i + start;
-            *value = one - (l_last[idx] + l_blind[idx]);
-        }
-    });
-
-    let l_last = vk.domain.lagrange_to_coeff(l_last);
-    let l_active_row = vk.domain.lagrange_to_coeff(l_active_row);
+    let (l0, l_last, l_active_row) =
+        create_proving_key_masks(&vk.domain, vk.cs.blinding_factors());
 
     // Compute the optimized evaluation data structure
     let ev = Evaluator::new(&vk.cs);
 
-    Ok(ProvingKey {
+    ProvingKey {
         vk,
         l0,
         l_last,
@@ -474,5 +687,5 @@ where
         fixed_polys,
         permutation: permutation_pk,
         ev,
-    })
+    }
 }

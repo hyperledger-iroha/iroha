@@ -189,17 +189,16 @@ The Pasta commitment cycle needs two current-proof artifact roles. Every
 logical transition carries an `EqAffine`/Vesta proof and an `EpAffine`/Pallas
 proof for the same exact transition. The next pair closes both parent halves;
 it never replaces one current parity with a temporal predecessor proof.
-Artifacts bind both VKs, both parameter generations, and the complete 890-limb
-field-neutral state. The supported same-scalar-field tuples compile: an
-`EqAffine` proof can be loaded in an `Fp` circuit and the reciprocal `EpAffine`
-proof in an `Fq` circuit. This is not a trait blocker. It is still structurally
-outside the release budget. The fixed direct `Eq/Fp` verifier measured
-4,659,490 advice cells at degree 12; a degree-18 outer proof was 7,296 bytes
-ordinary and 7,328 bytes after appending the folded generator, with roughly
-4 GiB live RSS. The release slot is 1,600 bytes per parity.
+Artifacts bind both VKs, both parameter generations, and the complete 138-limb
+compact V5 field-neutral state nested inside ABI-21/V4. Each parity exposes an
+exact 64-element public column at authenticated degree 16. The supported
+same-scalar-field tuples compile: an `EqAffine` proof can be loaded in an `Fp`
+circuit and the reciprocal `EpAffine` proof in an `Fq` circuit. Earlier direct
+verifier prototypes measured multi-gigabyte RSS and are retained only as
+historical evidence; they are not a runtime or generation fallback.
 
-The production route must therefore be the reviewed fixed-key split described
-by `paired_deferred_verifier`, not the generic `Halo2Loader` fallback. Its
+The production route is the reviewed compact fixed-key split described by
+`paired_deferred_verifier`, not the generic `Halo2Loader` fallback. Its
 native-scalar half must derive every transcript challenge and residual
 coefficient, its reciprocal native-point half must constrain the identical
 proof/VK point stream and complete MSM, and both halves must bind the same exact
@@ -213,15 +212,15 @@ decisions are mandatory before `CircuitVerifierUnavailable` can be removed.
 
 The current contract is bridge ABI `21`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v4`, proof backend
-`halo2/ipa-pasta-cycle-v4`, and transcript profile
-`kagemusha-pasta-cycle-poseidon-v4`. These values carry no mode field. The two
+`halo2/ipa-pasta-cycle-compact-v5`, and transcript profile
+`kagemusha-pasta-cycle-poseidon-compact-v5`. These values carry no mode field. The two
 fixed recursive circuit roles are:
 
 - registry role `kagemusha_recursive_step_eq_v4_verifier_record` with circuit
-  `kagemusha-recursive-spend-step-eq-authenticated-layout-v4`, the EqAffine/Vesta
+  `kagemusha-recursive-spend-step-eq-compact-layout-v5`, the EqAffine/Vesta
   half; and
 - registry role `kagemusha_recursive_step_ep_v4_verifier_record` with circuit
-  `kagemusha-recursive-spend-step-ep-authenticated-layout-v4`, the EpAffine/Pallas
+  `kagemusha-recursive-spend-step-ep-compact-lineage-v5`, the EpAffine/Pallas
   half.
 
 Both registry records use backend `halo2/ipa`. They must be selected atomically,
@@ -229,18 +228,79 @@ remain independently keyed, and agree with one authenticated release's
 activation window and proof-pair limit.
 
 `KagemushaRecursiveSpendStateBoundaryV2` still crosses the field boundary as a
-layout version followed by all 890 explicit little-endian `u32` result-state
-limbs. Layout V2 adds the statement's append-only `next_zero_leaf_index` to the
-exact state. This is a deliberate pre-production reset: ABI 21 and manifest V4
-remain the only lifecycle, but keys, bootstrap witnesses, proofs, manifests,
-and schema hashes from the former 889-limb layout are incompatible and must not
-be reused. V4 derives the single public-instance-column layout from each
-authenticated `KagemushaStepCircuitParamsV4`. That inline structure binds the
+compact V5 layout version followed by all 138 explicit little-endian `u32`
+result-state limbs, including the statement's append-only
+`next_zero_leaf_index`. ABI 21 and manifest V4 remain the only lifecycle, but
+keys, bootstrap witnesses, proofs, manifests, and schema hashes from the former
+large layout are incompatible and must not be reused. The nested compact
+profile fixes the single public-instance column at 64 field elements and degree
+16. Each authenticated `KagemushaStepCircuitParamsV4` still binds the
 parameter-layout version, IPA degree, advice and lookup-advice columns by
 phase, fixed and instance columns, lookup width, exact public-input length,
 minimum unusable rows, and parent-proof byte bound. Its default value is an
 invalid sentinel; neither local configuration nor FFI input may replace the
 value authenticated by the manifest.
+
+Bootstrap payload version 5 also authenticates the exact cumulative
+virtual-region breakpoints captured from the final key-generation circuit for
+each phase. Decoding rejects a phase-count mismatch, non-increasing or
+out-of-domain segments, and more boundaries than the authenticated advice
+columns permit. Live proof construction installs those breakpoints into a
+witness-generation-only builder and verifies that its advice and lookup
+population fits them. It does not retain or reconstruct the key-generation
+constraint graph beside a processed proving key.
+
+Full-size key generation uses consuming verifier- and proving-key entrypoints.
+Their post-synthesis extractor copies or validates the populated breakpoints,
+then releases the owned key-generation circuit before fixed and permutation
+key assembly. Proving-key assembly reuses the supplied verifier key's domain;
+permutation construction moves out only the completed mapping so union-find
+scratch is released, keeps omega and delta factors separate instead of
+materializing an n-by-m grid, and converts one coefficient column at a time.
+Empty-bootstrap assembly keeps an identity permutation implicit and
+materializes union-find state only on the first nontrivial copy, avoiding
+17,301,504 bytes for the reviewed k16, 11-column mapping. Verifier-key
+construction builds, commits, and drops one permutation polynomial at a time,
+removing 20,971,520 bytes of retained permutation columns and lowering the first
+commitment's live field payload by approximately 18 MiB after accounting for
+the shared omega and delta tables. Those streamed commitments complete before
+assigned fixed columns and bit-packed selectors expand into ten degree-sized
+field polynomials, removing another 11,468,800 bytes from the reviewed
+first-MSM peak. The ordinary borrowed Halo2 entrypoints remain available, and
+the consuming paths produce byte-identical compressed and uncompressed
+processed keys.
+
+The proof engine also takes ownership of that witness-only circuit and its
+single processed proving key. It releases the circuit immediately after
+witness synthesis, then releases the domain-sized fixed-value and permutation
+Lagrange preprocessing as soon as their commitments are complete. The
+remaining proof stages consume the key and return its embedded verifying key;
+the caller finalizes the transcript, immediately verifies the new proof with
+that returned key, and then drops it. This avoids borrowing a live circuit and
+the complete processed key through proof finalization or reparsing a duplicate
+verifier domain alongside them.
+
+The consuming quotient evaluator preserves the ordinary prover's constraint
+and Horner order but transforms only one degree-sized copy-permutation sigma
+chunk at a time. For the reviewed 11-column permutation this replaces 11 live
+sigma cosets with two, removing roughly 18 MiB of avoidable transient field
+storage. Instance conversion is deferred until its Lagrange allocation can be
+consumed, and configure metadata, selector polynomials, and the evaluator graph
+are released at their final use. Borrowed and consuming proofs are regression-
+checked byte for byte. Parameter construction also evicts each one-shot
+projective FFT cache after the corresponding Eq/Ep transform, removing roughly
+12 MiB of worker-lifetime retention on ARM at k16. Evaluation domains eagerly
+initialize only the base FFT table and leave unused 2n/4n tables lazy, avoiding
+roughly 24 MiB at k16. Quotient parts are written directly into their final
+interleaved polynomial instead of through a transpose allocation, avoiding
+roughly 8 MiB, and cached recursive FFT scratch is evicted before h-piece MSMs,
+removing another roughly 8 MiB from that overlap. The outer lifecycle remains
+in a disposable one-worker pool. Large MSMs alone acquire process-wide
+admission before scalar/base preprocessing and run in a fixed two-worker
+window pool, bounding concurrent preprocessing, window buckets, and allocator
+caches without changing accumulator order. The checked static admission
+estimate is 232 MiB, not a physical RSS prediction; the 256 MiB supervisor
+remains authoritative.
 
 Each live V4 step carries the exact operation vector, ordered parent state and
 lineage slots, post-proof and branch folds, deferred-equation audit words, and
@@ -270,7 +330,15 @@ is not a trust anchor.
 The supported two-stage packager is:
 
 ```text
-cargo run -p iroha_core --bin kagemusha_recursive_spend_v4_bundle -- \
+cd <clean-checkout>
+SOURCE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
+git verify-commit "$SOURCE_COMMIT"
+python3 -I scripts/build_kagemusha_v4_candidate_bundle.py --root "$PWD"
+# Require source_commit in the build report to equal $SOURCE_COMMIT.
+
+python3 scripts/run_kagemusha_v4_generation.py \
+  --resource-report <new-resource-report-directory> -- \
+  <binary_path-from-sealed-build-report> \
   generate-candidate \
   --out-dir <new-directory> \
   --chain-id <chain> --asset-definition-id <asset> --asset-scale <u32> \
@@ -281,7 +349,7 @@ cargo run -p iroha_core --bin kagemusha_recursive_spend_v4_bundle -- \
   --step-ep-circuit-params <canonical-norito-file> \
   --topup-finality-roster <canonical-norito-file>
 
-cargo run -p iroha_core --bin kagemusha_recursive_spend_v4_bundle -- \
+<binary_path-from-sealed-build-report> \
   finalize-release \
   --candidate-dir <generated-candidate> \
   --out-dir <new-final-directory> \
@@ -290,6 +358,81 @@ cargo run -p iroha_core --bin kagemusha_recursive_spend_v4_bundle -- \
   --benchmark-evidence <exact-file> \
   --cryptographic-review <canonical-signed-norito-file>
 ```
+
+Direct unsupervised `generate-candidate` execution is rejected. The launcher
+holds the per-user heavy-job lock shared with the strict TLAPS runner and applies
+a bounded polling ceiling at the lower of 256 MiB or half of physical RAM, with a
+target 50 ms cadence and 200 ms per-inspection timeout. Inspection failure is
+terminal and a supervisor lifeline cleans the exact process group, but this
+portable userspace polling is not an operating-system hard allocation limit.
+Every sample reuses one process snapshot for memory accounting and detection of
+same-user TLAPM, Isabelle, Poly/ML, or Kagemusha work outside the owned group.
+A conflict terminates only the owned generation group with status 74, and a
+final exclusion check runs before successful candidate finalization so a late
+direct job cannot produce valid evidence.
+The launcher writes owner-private JSONL and summary evidence. A lower
+`--max-memory-gib` is accepted; the ceiling cannot be raised. Its one-shot
+inherited launch capability prevents stale environment markers from bypassing
+the wrapper, but is not a security boundary against a malicious same-UID
+process. The launcher injects an unguessable per-run staging id; after every
+normal, failed, signalled, or memory-limited return it securely removes only
+owner-private residue carrying that exact id. Build the binary first: the
+launcher accepts only the prebuilt bundle
+executable followed by `generate-candidate`, so Cargo and rustc are never
+included in the 256 MiB process group. Finalization and candidate validation do
+not require this generation guard. Commit-signature verification is the
+separate Git step above, and the returned `source_commit` must equal that
+verified commit. The sealed build helper requires the same clean exact source
+identity before, during, and after the locked release build, sanitizes ambient
+compiler controls, and returns the exact source and binary digests. Its 24 GiB
+installed-memory floor is compiler-build admission, not an OS-hard allocation
+limit.
+
+For diagnostic RSS calibration on a dirty or unsigned development tree, build
+and run the separate non-shipping benchmark. It executes the complete compact
+k16 key-generation, bootstrap, live-proof, and verification lifecycle, streams
+both proving keys to anonymous files, and emits only validated byte counts. It
+cannot frame, publish, or promote a candidate, and its resource report is not
+release evidence:
+
+```text
+cargo build --release -p iroha_core \
+  --features kagemusha-generation-memory-lab \
+  --bin kagemusha_recursive_spend_v4_memory_benchmark --jobs 1
+
+python3 scripts/run_kagemusha_v4_generation_benchmark.py \
+  --resource-report <new-diagnostic-report-directory> -- \
+  target/release/kagemusha_recursive_spend_v4_memory_benchmark \
+  measure-compact-k16
+```
+
+Use the optimized binary for calibration. An `opt-level=0` debug build derives
+the same deterministic public parameters and byte geometry, but its sequential
+hash-to-curve setup is intentionally slow and is not representative runtime
+evidence. Proof payload bytes use fresh prover randomness and need not match
+between runs.
+
+Generation also computes every ParamsIPA, processed verifier-key, and processed
+proving-key length from the authenticated circuit shape before allocating IPA
+parameters. The reviewed compact profile is degree 16 with `[8]` advice,
+`[1]` lookup-advice, one fixed, and one instance column. Its exact per-parity
+encodings are 4,194,372 bytes for ParamsIPA, 682 bytes for the processed VK,
+and 94,372,718 bytes for the processed PK. Proving keys serialize directly into
+bounded owner-private staging files and are framed by streaming reads; Eq and Ep
+processed keys are never retained together or copied through a release-sized
+`Vec`. The final verifier- and proving-key circuits are consumed after
+post-synthesis breakpoint extraction or validation and before key assembly.
+Generation then stages the exact processed key before handing its owned value
+and the witness-only calibration circuit to the consuming prover. The 96 MiB
+PK role cap and 256 MiB aggregate generation guard are fixed. The complete
+outer generation lifecycle runs inside a disposable one-worker Rayon pool, so
+FFT and quotient scratch cannot multiply the resident key and worker-local FFT
+caches are released at the end of the attempt. Large MSMs use the process-wide
+admitted two-worker window pool described above; their fixed accumulator order
+is unchanged. These are safety ceilings, not operator-tunable capacity targets.
+The dedicated physical degree-16 run and its observed peak-RSS evidence are
+still pending; the checked estimate and userspace guard are not substitutes for
+that measurement.
 
 Candidate generation records the clean source and exact inline Eq/Ep circuit
 parameters and emits the eight role-separated artifacts. The candidate is not

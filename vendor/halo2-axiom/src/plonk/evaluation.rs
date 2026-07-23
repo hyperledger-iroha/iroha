@@ -1,10 +1,10 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::multicore;
-use crate::plonk::{lookup, permutation, Any, ProvingKey};
+use crate::plonk::{Any, ProvingKey, lookup, permutation};
 use crate::poly::Basis;
 use crate::{
-    arithmetic::{parallelize, CurveAffine},
+    arithmetic::{CurveAffine, parallelize},
     poly::{Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation},
 };
 #[cfg(feature = "profile")]
@@ -17,6 +17,19 @@ use super::{ConstraintSystem, Expression};
 /// Return the index in the polynomial of size `isize` after rotation `rot`.
 fn get_rotation_idx(idx: usize, rot: i32, rot_scale: i32, isize: i32) -> usize {
     (((idx as i32) + (rot * rot_scale)).rem_euclid(isize)) as usize
+}
+
+fn store_extended_lagrange_part<F: Field>(
+    extended: &mut Polynomial<F, ExtendedLagrangeCoeff>,
+    part: &Polynomial<F, LagrangeCoeff>,
+    part_index: usize,
+    num_parts: usize,
+) {
+    assert!(part_index < num_parts);
+    assert_eq!(extended.len(), part.len() * num_parts);
+    for (row, value) in part.iter().enumerate() {
+        extended[row * num_parts + part_index] = *value;
+    }
 }
 
 /// Value used in a calculation
@@ -275,6 +288,7 @@ impl<C: CurveAffine> Evaluator<C> {
         theta: C::ScalarExt,
         lookups: &[Vec<lookup::prover::Committed<C>>],
         permutations: &[permutation::prover::Committed<C>],
+        stream_permutation_cosets: bool,
     ) -> Polynomial<C::ScalarExt, ExtendedLagrangeCoeff> {
         let domain = &pk.vk.domain;
         let size = 1 << domain.k() as usize;
@@ -288,8 +302,8 @@ impl<C: CurveAffine> Evaluator<C> {
 
         // Calculate the quotient polynomial for each part
         let mut current_extended_omega = one;
-        let value_parts: Vec<Polynomial<C::ScalarExt, LagrangeCoeff>> = (0..num_parts)
-            .map(|_| {
+        let mut extended_values = domain.empty_extended();
+        (0..num_parts).for_each(|part_index| {
                 #[cfg(feature = "profile")]
                 let fixed_timer = start_timer!(|| "Fixed coeff_to_extended_part");
                 let fixed: Vec<Polynomial<C::ScalarExt, LagrangeCoeff>> = (&pk.fixed_polys)
@@ -401,97 +415,218 @@ impl<C: CurveAffine> Evaluator<C> {
                                 )
                             })
                             .collect();
-                        let permutation_cosets: Vec<Polynomial<C::ScalarExt, LagrangeCoeff>> =
-                            (&pk.permutation.polys)
-                                .into_par_iter()
-                                .map(|p| {
-                                    domain.coeff_to_extended_part(p.clone(), current_extended_omega)
-                                })
-                                .collect();
+                        if stream_permutation_cosets {
+                            let first_set_permutation_product_coset =
+                                permutation_product_cosets.first().unwrap();
+                            let last_set_permutation_product_coset =
+                                permutation_product_cosets.last().unwrap();
 
-                        let first_set_permutation_product_coset =
-                            permutation_product_cosets.first().unwrap();
-                        let last_set_permutation_product_coset =
-                            permutation_product_cosets.last().unwrap();
+                            // These boundary and set-link constraints only use product
+                            // cosets. Complete them in their original Horner order before
+                            // allocating any sigma cosets.
+                            parallelize(&mut values, |values, start| {
+                                for (i, value) in values.iter_mut().enumerate() {
+                                    let idx = start + i;
+                                    let r_last =
+                                        get_rotation_idx(idx, last_rotation.0, rot_scale, isize);
 
-                        // Permutation constraints
-                        parallelize(&mut values, |values, start| {
-                            let mut beta_term =
-                                current_extended_omega * omega.pow_vartime([start as u64]);
-                            for (i, value) in values.iter_mut().enumerate() {
-                                let idx = start + i;
-                                let r_next = get_rotation_idx(idx, 1, rot_scale, isize);
-                                let r_last =
-                                    get_rotation_idx(idx, last_rotation.0, rot_scale, isize);
-
-                                // Enforce only for the first set.
-                                // l_0(X) * (1 - z_0(X)) = 0
-                                *value = *value * y
-                                    + ((one - first_set_permutation_product_coset[idx]) * l0[idx]);
-                                // Enforce only for the last set.
-                                // l_last(X) * (z_l(X)^2 - z_l(X)) = 0
-                                *value = *value * y
-                                    + ((last_set_permutation_product_coset[idx]
-                                        * last_set_permutation_product_coset[idx]
-                                        - last_set_permutation_product_coset[idx])
-                                        * l_last[idx]);
-                                // Except for the first set, enforce.
-                                // l_0(X) * (z_i(X) - z_{i-1}(\omega^(last) X)) = 0
-                                for (set_idx, permutation_product_coset) in
-                                    permutation_product_cosets.iter().enumerate()
-                                {
-                                    if set_idx != 0 {
-                                        *value = *value * y
-                                            + ((permutation_product_coset[idx]
-                                                - permutation_product_cosets[set_idx - 1][r_last])
-                                                * l0[idx]);
+                                    // Enforce only for the first set.
+                                    // l_0(X) * (1 - z_0(X)) = 0
+                                    *value = *value * y
+                                        + ((one - first_set_permutation_product_coset[idx])
+                                            * l0[idx]);
+                                    // Enforce only for the last set.
+                                    // l_last(X) * (z_l(X)^2 - z_l(X)) = 0
+                                    *value = *value * y
+                                        + ((last_set_permutation_product_coset[idx]
+                                            * last_set_permutation_product_coset[idx]
+                                            - last_set_permutation_product_coset[idx])
+                                            * l_last[idx]);
+                                    // Except for the first set, enforce.
+                                    // l_0(X) * (z_i(X) - z_{i-1}(\omega^(last) X)) = 0
+                                    for (set_idx, permutation_product_coset) in
+                                        permutation_product_cosets.iter().enumerate()
+                                    {
+                                        if set_idx != 0 {
+                                            *value = *value * y
+                                                + ((permutation_product_coset[idx]
+                                                    - permutation_product_cosets[set_idx - 1]
+                                                        [r_last])
+                                                    * l0[idx]);
+                                        }
                                     }
                                 }
-                                // And for all the sets we enforce:
-                                // (1 - (l_last(X) + l_blind(X))) * (
-                                //   z_i(\omega X) \prod_j (p(X) + \beta s_j(X) + \gamma)
-                                // - z_i(X) \prod_j (p(X) + \delta^j \beta X + \gamma)
-                                // )
-                                let mut current_delta = delta_start * beta_term;
-                                for (
-                                    (columns, permutation_product_coset),
-                                    permutation_coset_chunk,
-                                ) in p
-                                    .columns
-                                    .chunks(chunk_len)
-                                    .zip(permutation_product_cosets.iter())
-                                    .zip(permutation_cosets.chunks(chunk_len))
-                                {
-                                    let mut left = permutation_product_coset[r_next];
-                                    for (values, permutation) in columns
-                                        .iter()
-                                        .map(|&column| match column.column_type() {
-                                            Any::Advice(_) => &advice[column.index()],
-                                            Any::Fixed => &fixed[column.index()],
-                                            Any::Instance => &instance[column.index()],
-                                        })
-                                        .zip(permutation_coset_chunk.iter())
-                                    {
-                                        left *= values[idx] + beta * permutation[idx] + gamma;
-                                    }
+                            });
 
-                                    let mut right = permutation_product_coset[idx];
-                                    for values in
-                                        columns.iter().map(|&column| match column.column_type() {
-                                            Any::Advice(_) => &advice[column.index()],
-                                            Any::Fixed => &fixed[column.index()],
-                                            Any::Instance => &instance[column.index()],
-                                        })
-                                    {
-                                        right *= values[idx] + current_delta + gamma;
-                                        current_delta *= &C::Scalar::DELTA;
-                                    }
+                            // One degree-sized sigma chunk is the final input needed for
+                            // each set relation. Transform and consume one chunk at a time
+                            // rather than retaining one n-element coset for every equality
+                            // column. The compact Kagemusha shape therefore keeps two sigma
+                            // cosets live here instead of eleven.
+                            let mut set_delta_start = delta_start;
+                            for (
+                                (columns, permutation_product_coset),
+                                permutation_polynomial_chunk,
+                            ) in p
+                                .columns
+                                .chunks(chunk_len)
+                                .zip(permutation_product_cosets.iter())
+                                .zip(pk.permutation.polys.chunks(chunk_len))
+                            {
+                                let permutation_coset_chunk: Vec<
+                                    Polynomial<C::ScalarExt, LagrangeCoeff>,
+                                > = permutation_polynomial_chunk
+                                    .into_par_iter()
+                                    .map(|polynomial| {
+                                        domain.coeff_to_extended_part(
+                                            polynomial.clone(),
+                                            current_extended_omega,
+                                        )
+                                    })
+                                    .collect();
+                                let current_set_delta_start = set_delta_start;
 
-                                    *value = *value * y + ((left - right) * l_active_row[idx]);
+                                // Processing complete sets serially preserves every row's
+                                // Horner sequence while bounding transient sigma storage.
+                                parallelize(&mut values, |values, start| {
+                                    let mut beta_term =
+                                        current_extended_omega * omega.pow_vartime([start as u64]);
+                                    for (i, value) in values.iter_mut().enumerate() {
+                                        let idx = start + i;
+                                        let r_next = get_rotation_idx(idx, 1, rot_scale, isize);
+                                        let mut left = permutation_product_coset[r_next];
+                                        for (values, permutation) in columns
+                                            .iter()
+                                            .map(|&column| match column.column_type() {
+                                                Any::Advice(_) => &advice[column.index()],
+                                                Any::Fixed => &fixed[column.index()],
+                                                Any::Instance => &instance[column.index()],
+                                            })
+                                            .zip(permutation_coset_chunk.iter())
+                                        {
+                                            left *= values[idx] + beta * permutation[idx] + gamma;
+                                        }
+
+                                        let mut right = permutation_product_coset[idx];
+                                        let mut current_delta = current_set_delta_start * beta_term;
+                                        for values in columns.iter().map(|&column| {
+                                            match column.column_type() {
+                                                Any::Advice(_) => &advice[column.index()],
+                                                Any::Fixed => &fixed[column.index()],
+                                                Any::Instance => &instance[column.index()],
+                                            }
+                                        }) {
+                                            right *= values[idx] + current_delta + gamma;
+                                            current_delta *= &C::Scalar::DELTA;
+                                        }
+
+                                        *value = *value * y + ((left - right) * l_active_row[idx]);
+                                        beta_term *= &omega;
+                                    }
+                                });
+
+                                for _ in columns {
+                                    set_delta_start *= &C::Scalar::DELTA;
                                 }
-                                beta_term *= &omega;
                             }
-                        });
+                        } else {
+                            let permutation_cosets: Vec<Polynomial<C::ScalarExt, LagrangeCoeff>> =
+                                (&pk.permutation.polys)
+                                    .into_par_iter()
+                                    .map(|p| {
+                                        domain.coeff_to_extended_part(
+                                            p.clone(),
+                                            current_extended_omega,
+                                        )
+                                    })
+                                    .collect();
+
+                            let first_set_permutation_product_coset =
+                                permutation_product_cosets.first().unwrap();
+                            let last_set_permutation_product_coset =
+                                permutation_product_cosets.last().unwrap();
+
+                            // Permutation constraints
+                            parallelize(&mut values, |values, start| {
+                                let mut beta_term =
+                                    current_extended_omega * omega.pow_vartime([start as u64]);
+                                for (i, value) in values.iter_mut().enumerate() {
+                                    let idx = start + i;
+                                    let r_next = get_rotation_idx(idx, 1, rot_scale, isize);
+                                    let r_last =
+                                        get_rotation_idx(idx, last_rotation.0, rot_scale, isize);
+
+                                    // Enforce only for the first set.
+                                    // l_0(X) * (1 - z_0(X)) = 0
+                                    *value = *value * y
+                                        + ((one - first_set_permutation_product_coset[idx])
+                                            * l0[idx]);
+                                    // Enforce only for the last set.
+                                    // l_last(X) * (z_l(X)^2 - z_l(X)) = 0
+                                    *value = *value * y
+                                        + ((last_set_permutation_product_coset[idx]
+                                            * last_set_permutation_product_coset[idx]
+                                            - last_set_permutation_product_coset[idx])
+                                            * l_last[idx]);
+                                    // Except for the first set, enforce.
+                                    // l_0(X) * (z_i(X) - z_{i-1}(\omega^(last) X)) = 0
+                                    for (set_idx, permutation_product_coset) in
+                                        permutation_product_cosets.iter().enumerate()
+                                    {
+                                        if set_idx != 0 {
+                                            *value = *value * y
+                                                + ((permutation_product_coset[idx]
+                                                    - permutation_product_cosets[set_idx - 1]
+                                                        [r_last])
+                                                    * l0[idx]);
+                                        }
+                                    }
+                                    // And for all the sets we enforce:
+                                    // (1 - (l_last(X) + l_blind(X))) * (
+                                    //   z_i(\omega X) \prod_j (p(X) + \beta s_j(X) + \gamma)
+                                    // - z_i(X) \prod_j (p(X) + \delta^j \beta X + \gamma)
+                                    // )
+                                    let mut current_delta = delta_start * beta_term;
+                                    for (
+                                        (columns, permutation_product_coset),
+                                        permutation_coset_chunk,
+                                    ) in p
+                                        .columns
+                                        .chunks(chunk_len)
+                                        .zip(permutation_product_cosets.iter())
+                                        .zip(permutation_cosets.chunks(chunk_len))
+                                    {
+                                        let mut left = permutation_product_coset[r_next];
+                                        for (values, permutation) in columns
+                                            .iter()
+                                            .map(|&column| match column.column_type() {
+                                                Any::Advice(_) => &advice[column.index()],
+                                                Any::Fixed => &fixed[column.index()],
+                                                Any::Instance => &instance[column.index()],
+                                            })
+                                            .zip(permutation_coset_chunk.iter())
+                                        {
+                                            left *= values[idx] + beta * permutation[idx] + gamma;
+                                        }
+
+                                        let mut right = permutation_product_coset[idx];
+                                        for values in columns.iter().map(|&column| {
+                                            match column.column_type() {
+                                                Any::Advice(_) => &advice[column.index()],
+                                                Any::Fixed => &fixed[column.index()],
+                                                Any::Instance => &instance[column.index()],
+                                            }
+                                        }) {
+                                            right *= values[idx] + current_delta + gamma;
+                                            current_delta *= &C::Scalar::DELTA;
+                                        }
+
+                                        *value = *value * y + ((left - right) * l_active_row[idx]);
+                                    }
+                                    beta_term *= &omega;
+                                }
+                            });
+                        }
                     }
                     #[cfg(feature = "profile")]
                     end_timer!(timer);
@@ -582,12 +717,41 @@ impl<C: CurveAffine> Evaluator<C> {
                     end_timer!(timer);
                 }
                 current_extended_omega *= extended_omega;
-                values
-            })
-            .collect();
+                store_extended_lagrange_part(
+                    &mut extended_values,
+                    &values,
+                    part_index,
+                    num_parts,
+                );
+            });
 
-        domain.extended_from_lagrange_vec(value_parts)
+        extended_values
     }
+}
+
+#[test]
+fn streamed_extended_parts_match_transposed_reference() {
+    use crate::poly::EvaluationDomain;
+    use halo2curves::bn256::Fr;
+
+    let domain = EvaluationDomain::<Fr>::new(4, 3);
+    let num_parts = domain.extended_len() >> domain.k();
+    let parts = (0..num_parts)
+        .map(|part_index| {
+            domain.lagrange_from_vec(
+                (0..domain.get_n() as usize)
+                    .map(|row| Fr::from((row * num_parts + part_index) as u64))
+                    .collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = domain.extended_from_lagrange_vec(parts.clone());
+    let mut streamed = domain.empty_extended();
+    for (part_index, part) in parts.iter().enumerate() {
+        store_extended_lagrange_part(&mut streamed, part, part_index, num_parts);
+    }
+
+    assert_eq!(streamed.values, expected.values);
 }
 
 impl<C: CurveAffine> Default for GraphEvaluator<C> {

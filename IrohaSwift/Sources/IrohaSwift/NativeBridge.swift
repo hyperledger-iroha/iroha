@@ -576,6 +576,7 @@ enum NativeBridgeError: Error, Equatable {
     case kagemushaProve
     case kagemushaRecursiveSpendV4Unavailable
     case kagemushaRecursiveSpendV4Artifact
+    case kagemushaBusy
     case invalidKagemushaVerifierOutput
     case unsupportedAlgorithm
     case metadataTarget
@@ -643,6 +644,7 @@ enum NativeBridgeError: Error, Equatable {
         case -311: return .kagemushaProve
         case -316: return .kagemushaRecursiveSpendV4Unavailable
         case -317: return .kagemushaRecursiveSpendV4Artifact
+        case -318: return .kagemushaBusy
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
         case -408: return .accountOnboardingBody

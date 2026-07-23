@@ -1,4 +1,4 @@
-use crate::arithmetic::{best_multiexp, CurveAffine};
+use crate::arithmetic::{CurveAffine, best_multiexp};
 use crate::poly::{commitment::MSM, ipa::commitment::ParamsVerifierIPA};
 use ff::Field;
 use group::Group;
@@ -219,12 +219,12 @@ impl<'a, C: CurveAffine> MSMIPA<'a, C> {
 #[cfg(test)]
 mod tests {
     use crate::poly::{
-        commitment::{ParamsProver, MSM},
+        commitment::{MSM, ParamsProver},
         ipa::{commitment::ParamsIPA, msm::MSMIPA},
     };
     use halo2curves::{
-        pasta::{Ep, EpAffine, Fp, Fq},
         CurveAffine,
+        pasta::{Ep, EpAffine, Fp, Fq},
     };
 
     #[test]

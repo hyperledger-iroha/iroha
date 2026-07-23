@@ -1551,7 +1551,7 @@ retired_or_extra = sorted(actual - expected)
 if missing:
     print(
         f"[mobile-sdk-artifacts] ERROR: client-android {abi} bridge is missing "
-        "ABI20/V4 symbols: " + ", ".join(missing),
+        "ABI21/V4 symbols: " + ", ".join(missing),
         file=sys.stderr,
     )
 if retired_or_extra:

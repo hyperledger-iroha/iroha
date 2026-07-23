@@ -82,6 +82,19 @@ pub trait RegionLayouter<F: Field>: fmt::Debug + SyncDeps {
         to: Value<Assigned<F>>, // &'v mut (dyn FnMut() -> Value<Assigned<F>> + 'v),
     ) -> AssignedCell<&'v Assigned<F>, F>;
 
+    /// Assign an advice value without returning an assigned-cell value.
+    ///
+    /// Implementations may forward this to a backend path that stores a compact
+    /// proving representation. The default preserves ordinary assignment.
+    fn assign_advice_discarding_value(
+        &mut self,
+        column: Column<Advice>,
+        offset: usize,
+        to: Value<Assigned<F>>,
+    ) {
+        let _ = self.assign_advice(column, offset, to);
+    }
+
     /// Assigns a constant value to the column `advice` at `offset` within this region.
     ///
     /// The constant value will be assigned to a cell within one of the fixed columns
