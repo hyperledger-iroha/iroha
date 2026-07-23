@@ -629,7 +629,11 @@ async fn wait_for_route_probe_approval(
     expected_dataspace_id: DataSpaceId,
     context: &str,
 ) -> Result<HashOf<TransactionEntrypoint>> {
-    let transaction = submitter.build_transaction([instruction], Metadata::default());
+    let transaction = submitter.build_transaction(
+        [instruction],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
     let hash = transaction.hash();
     let entry_hash = transaction.hash_as_entrypoint();
 
@@ -734,7 +738,11 @@ async fn wait_for_route_probe_rejection(
     expected_dataspace_id: DataSpaceId,
     context: &str,
 ) -> Result<String> {
-    let transaction = submitter.build_transaction([instruction], Metadata::default());
+    let transaction = submitter.build_transaction(
+        [instruction],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
     let hash = transaction.hash();
 
     let mut events = timeout(

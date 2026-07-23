@@ -1947,6 +1947,11 @@ impl TieredStateBackend {
             AssetDefinition,
             world.asset_definitions
         );
+        collect_map!(
+            TieredSegment::AssetDefinitionAliasBindings,
+            AssetDefinitionAliasBinding,
+            world.asset_definition_alias_bindings
+        );
         collect_map!(TieredSegment::Assets, Asset, world.assets);
         collect_map!(
             TieredSegment::AssetMetadata,
@@ -2059,6 +2064,11 @@ impl TieredStateBackend {
                 )?;
             }
         }
+        collect_map!(
+            TieredSegment::ContractAliasBindings,
+            ContractAliasBinding,
+            world.contract_alias_bindings
+        );
         collect_map!(
             TieredSegment::SmartContractState,
             SmartContractState,
@@ -2641,8 +2651,9 @@ mod measured_bytes_impls {
     use iroha_data_model::{
         account::{
             AccountAlias, AccountController, AccountDetails, AccountId, AccountRecoveryPolicy,
-            AccountRecoveryRequest, AccountRecoveryStatus, AccountRekeyRecord, MultisigMember,
-            MultisigPolicy, OpaqueAccountId, RecoveryGuardian, rekey::AccountAliasDomain,
+            AccountRecoveryRequest, AccountRecoveryStatus, AccountRekeyRecord,
+            AccountRekeyTransitionProvenance, MultisigMember, MultisigPolicy, OpaqueAccountId,
+            RecoveryGuardian, rekey::AccountAliasDomain,
         },
         asset::{
             AssetDefinition, AssetDefinitionId, AssetId,
@@ -2714,6 +2725,7 @@ mod measured_bytes_impls {
         governance::state::ParliamentTerm,
         smartcontracts::code::ContractSubjectBinding,
         state::{
+            AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord,
             DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
             FrontierCheckpoint, GovernanceLockRecord, GovernanceLocksForReferendum,
             GovernanceParliamentSnapshot, GovernancePipeline, GovernanceProposalRecord,
@@ -2762,6 +2774,7 @@ mod measured_bytes_impls {
         i128,
         isize,
         AbiVersion,
+        AccountRekeyTransitionProvenance,
         BackendTag,
         BridgeHashFunction,
         BridgeNativeProofBackendV1,
@@ -2906,6 +2919,18 @@ mod measured_bytes_impls {
     impl MeasuredBytes for ContractSubjectBinding {
         fn measured_bytes(&self) -> usize {
             size_of::<ContractSubjectBinding>().saturating_add(self.subject.measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for AssetDefinitionAliasBindingRecord {
+        fn measured_bytes(&self) -> usize {
+            size_of::<AssetDefinitionAliasBindingRecord>().saturating_add(self.alias.as_ref().len())
+        }
+    }
+
+    impl MeasuredBytes for ContractAliasBindingRecord {
+        fn measured_bytes(&self) -> usize {
+            size_of::<ContractAliasBindingRecord>().saturating_add(self.alias.as_ref().len())
         }
     }
 
@@ -3186,7 +3211,9 @@ mod measured_bytes_impls {
             let mut total = size_of::<AccountRekeyRecord>();
             total = total.saturating_add(self.label.measured_bytes_extra());
             total = total.saturating_add(self.active_signatory.measured_bytes_extra());
+            total = total.saturating_add(self.previous_account_ids.measured_bytes_extra());
             total = total.saturating_add(self.previous_signatories.measured_bytes_extra());
+            total = total.saturating_add(self.transition_provenance.measured_bytes_extra());
             total
         }
     }
@@ -4174,6 +4201,7 @@ enum TieredSegment {
     AccountRecoveryPolicies,
     AccountRecoveryRequests,
     AssetDefinitions,
+    AssetDefinitionAliasBindings,
     Assets,
     AssetMetadata,
     Nfts,
@@ -4200,6 +4228,7 @@ enum TieredSegment {
     ContractCodeUploadChunks,
     ContractInstances,
     ContractSubjectBindings,
+    ContractAliasBindings,
     SmartContractState,
     ZkAssets,
     Elections,
@@ -4223,6 +4252,7 @@ impl TieredSegment {
             TieredSegment::AccountRecoveryPolicies => "account_recovery_policies",
             TieredSegment::AccountRecoveryRequests => "account_recovery_requests",
             TieredSegment::AssetDefinitions => "asset_definitions",
+            TieredSegment::AssetDefinitionAliasBindings => "asset_definition_alias_bindings",
             TieredSegment::Assets => "assets",
             TieredSegment::AssetMetadata => "asset_metadata",
             TieredSegment::Nfts => "nfts",
@@ -4249,6 +4279,7 @@ impl TieredSegment {
             TieredSegment::ContractCodeUploadChunks => "contract_code_upload_chunks",
             TieredSegment::ContractInstances => "contract_instances",
             TieredSegment::ContractSubjectBindings => "contract_subject_bindings",
+            TieredSegment::ContractAliasBindings => "contract_alias_bindings",
             TieredSegment::SmartContractState => "smart_contract_state",
             TieredSegment::ZkAssets => "zk_assets",
             TieredSegment::Elections => "elections",
@@ -4285,6 +4316,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "account_recovery_policies" => TieredSegment::AccountRecoveryPolicies,
             "account_recovery_requests" => TieredSegment::AccountRecoveryRequests,
             "asset_definitions" => TieredSegment::AssetDefinitions,
+            "asset_definition_alias_bindings" => TieredSegment::AssetDefinitionAliasBindings,
             "assets" => TieredSegment::Assets,
             "asset_metadata" => TieredSegment::AssetMetadata,
             "nfts" => TieredSegment::Nfts,
@@ -4311,6 +4343,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "contract_code_upload_chunks" => TieredSegment::ContractCodeUploadChunks,
             "contract_instances" => TieredSegment::ContractInstances,
             "contract_subject_bindings" => TieredSegment::ContractSubjectBindings,
+            "contract_alias_bindings" => TieredSegment::ContractAliasBindings,
             "smart_contract_state" => TieredSegment::SmartContractState,
             "zk_assets" => TieredSegment::ZkAssets,
             "elections" => TieredSegment::Elections,
@@ -4490,6 +4523,7 @@ pub(crate) enum TieredKeyHandle {
     AccountRecoveryPolicy(iroha_data_model::account::AccountAlias),
     AccountRecoveryRequest(iroha_data_model::account::AccountAlias),
     AssetDefinition(iroha_data_model::asset::AssetDefinitionId),
+    AssetDefinitionAliasBinding(iroha_data_model::asset::AssetDefinitionId),
     Asset(iroha_data_model::asset::AssetId),
     AssetMetadata(iroha_data_model::asset::AssetId),
     Nft(iroha_data_model::nft::NftId),
@@ -4516,6 +4550,7 @@ pub(crate) enum TieredKeyHandle {
     ContractCodeUploadChunk(super::SmartContractCodeUploadChunkKey),
     ContractInstance(iroha_data_model::smart_contract::ContractAddress),
     ContractSubjectBinding(iroha_data_model::smart_contract::ContractAddress),
+    ContractAliasBinding(iroha_data_model::smart_contract::ContractAddress),
     SmartContractState(Name),
     ZkAsset(iroha_data_model::asset::AssetDefinitionId),
     Election(String),
@@ -4539,6 +4574,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::AccountRecoveryPolicy(_) => TieredSegment::AccountRecoveryPolicies,
             TieredKeyHandle::AccountRecoveryRequest(_) => TieredSegment::AccountRecoveryRequests,
             TieredKeyHandle::AssetDefinition(_) => TieredSegment::AssetDefinitions,
+            TieredKeyHandle::AssetDefinitionAliasBinding(_) => {
+                TieredSegment::AssetDefinitionAliasBindings
+            }
             TieredKeyHandle::Asset(_) => TieredSegment::Assets,
             TieredKeyHandle::AssetMetadata(_) => TieredSegment::AssetMetadata,
             TieredKeyHandle::Nft(_) => TieredSegment::Nfts,
@@ -4569,6 +4607,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::ContractCodeUploadChunk(_) => TieredSegment::ContractCodeUploadChunks,
             TieredKeyHandle::ContractInstance(_) => TieredSegment::ContractInstances,
             TieredKeyHandle::ContractSubjectBinding(_) => TieredSegment::ContractSubjectBindings,
+            TieredKeyHandle::ContractAliasBinding(_) => TieredSegment::ContractAliasBindings,
             TieredKeyHandle::SmartContractState(_) => TieredSegment::SmartContractState,
             TieredKeyHandle::ZkAsset(_) => TieredSegment::ZkAssets,
             TieredKeyHandle::Election(_) => TieredSegment::Elections,
@@ -4590,12 +4629,16 @@ impl TieredKeyHandle {
         match self {
             TieredKeyHandle::ContractInstance(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ContractSubjectBinding(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ContractAliasBinding(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Domain(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Account(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRekey(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRecoveryPolicy(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRecoveryRequest(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AssetDefinition(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AssetDefinitionAliasBinding(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
             TieredKeyHandle::Asset(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AssetMetadata(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Nft(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4675,6 +4718,9 @@ impl TieredKeyHandle {
                 fetch!(world.account_recovery_requests, id)
             }
             TieredKeyHandle::AssetDefinition(id) => fetch!(world.asset_definitions, id),
+            TieredKeyHandle::AssetDefinitionAliasBinding(id) => {
+                fetch!(world.asset_definition_alias_bindings, id)
+            }
             TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
             TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
             TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
@@ -4714,6 +4760,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::ContractInstance(key) => fetch!(world.contract_instances, key),
             TieredKeyHandle::ContractSubjectBinding(key) => {
                 fetch!(world.contract_subject_bindings, key)
+            }
+            TieredKeyHandle::ContractAliasBinding(key) => {
+                fetch!(world.contract_alias_bindings, key)
             }
             TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
             TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
@@ -4761,6 +4810,9 @@ impl TieredKeyHandle {
                 fetch!(world.account_recovery_requests, id)
             }
             TieredKeyHandle::AssetDefinition(id) => fetch!(world.asset_definitions, id),
+            TieredKeyHandle::AssetDefinitionAliasBinding(id) => {
+                fetch!(world.asset_definition_alias_bindings, id)
+            }
             TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
             TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
             TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
@@ -4801,6 +4853,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::ContractSubjectBinding(key) => {
                 fetch!(world.contract_subject_bindings, key)
             }
+            TieredKeyHandle::ContractAliasBinding(key) => {
+                fetch!(world.contract_alias_bindings, key)
+            }
             TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
             TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
             TieredKeyHandle::Election(id) => fetch!(world.elections, id),
@@ -4836,6 +4891,9 @@ impl fmt::Display for TieredKeyHandle {
                 write!(f, "account_recovery_request:{id:?}")
             }
             TieredKeyHandle::AssetDefinition(id) => write!(f, "asset_definition:{id}"),
+            TieredKeyHandle::AssetDefinitionAliasBinding(id) => {
+                write!(f, "asset_definition_alias_binding:{id}")
+            }
             TieredKeyHandle::Asset(id) => write!(f, "asset:{id}"),
             TieredKeyHandle::AssetMetadata(id) => write!(f, "asset_metadata:{id}"),
             TieredKeyHandle::Nft(id) => write!(f, "nft:{id}"),
@@ -4913,6 +4971,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::ContractInstance(key) => write!(f, "contract_instance:{key:?}"),
             TieredKeyHandle::ContractSubjectBinding(key) => {
                 write!(f, "contract_subject_binding:{key:?}")
+            }
+            TieredKeyHandle::ContractAliasBinding(key) => {
+                write!(f, "contract_alias_binding:{key:?}")
             }
             TieredKeyHandle::SmartContractState(key) => write!(f, "smart_contract_state:{key}"),
             TieredKeyHandle::ZkAsset(id) => write!(f, "zk_asset:{id}"),
@@ -5008,7 +5069,7 @@ mod tests {
             },
         },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
-        nexus::{LaneCatalog, LaneConfig, LaneId},
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId},
         peer::PeerId,
     };
     use nonzero_ext::nonzero;
@@ -5348,6 +5409,104 @@ mod tests {
             .is_err(),
             "first-release persistence must not default or migrate missing descriptor fields"
         );
+    }
+
+    #[test]
+    fn alias_binding_records_roundtrip_through_cold_tier_disk() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        let mut backend = TieredStateBackend::new(true, 0, 1, 0, Some(root.clone()), None, 0, 0);
+        let mut world = World::default();
+
+        let definition_id =
+            iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes_unchecked([
+                0x31, 0x42, 0x53, 0x64, 0x75, 0x86, 0x47, 0x98, 0x80, 0x19, 0x2a, 0x3b, 0x4c, 0x5d,
+                0x6e, 0x7f,
+            ]);
+        let asset_binding = crate::state::AssetDefinitionAliasBindingRecord {
+            alias: "tiered_cold_asset#universal".parse().expect("asset alias"),
+            lease_expiry_ms: Some(2_000),
+            grace_until_ms: Some(2_500),
+            bound_at_ms: 1_000,
+        };
+        world
+            .asset_definition_alias_bindings
+            .insert(definition_id.clone(), asset_binding.clone());
+
+        let keypair = iroha_crypto::KeyPair::try_from_seed(
+            b"tiered contract alias binding".to_vec(),
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("fixture seed derives a valid keypair");
+        let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            91,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let contract_binding = crate::state::ContractAliasBindingRecord {
+            alias: "tiered_cold_router::universal"
+                .parse()
+                .expect("contract alias"),
+            lease_expiry_ms: Some(3_000),
+            grace_until_ms: Some(3_500),
+            bound_at_ms: 1_000,
+        };
+        world
+            .contract_alias_bindings
+            .insert(contract_address.clone(), contract_binding.clone());
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("persist alias binding snapshot");
+        let snapshot_index = backend
+            .last_manifest()
+            .expect("snapshot manifest recorded")
+            .snapshot_index;
+        drop(backend);
+
+        let snapshot_dir = root.join(format!("{snapshot_index:020}"));
+        let manifest_bytes =
+            fs::read(snapshot_dir.join("manifest.json")).expect("read persisted manifest");
+        let manifest: TieredSnapshotManifest =
+            json::from_slice(&manifest_bytes).expect("decode persisted manifest");
+        let asset_entry = manifest
+            .cold_entries
+            .iter()
+            .find(|entry| entry.segment == TieredSegment::AssetDefinitionAliasBindings)
+            .expect("asset alias binding is persisted in the cold tier");
+        let contract_entry = manifest
+            .cold_entries
+            .iter()
+            .find(|entry| entry.segment == TieredSegment::ContractAliasBindings)
+            .expect("contract alias binding is persisted in the cold tier");
+        assert_eq!(
+            asset_entry.key_payload,
+            norito::codec::Encode::encode(&definition_id)
+        );
+        assert_eq!(
+            contract_entry.key_payload,
+            norito::codec::Encode::encode(&contract_address)
+        );
+
+        let reader = TieredStateBackend::new(true, 0, 1, 0, Some(root), None, 0, 0);
+        let restored_asset_bytes = reader
+            .read_cold_payload(snapshot_index, asset_entry)
+            .expect("read asset alias binding")
+            .expect("asset alias binding payload exists");
+        let restored_asset: crate::state::AssetDefinitionAliasBindingRecord =
+            json::from_slice(&restored_asset_bytes).expect("decode asset alias binding");
+        assert_eq!(restored_asset, asset_binding);
+
+        let restored_contract_bytes = reader
+            .read_cold_payload(snapshot_index, contract_entry)
+            .expect("read contract alias binding")
+            .expect("contract alias binding payload exists");
+        let restored_contract: crate::state::ContractAliasBindingRecord =
+            json::from_slice(&restored_contract_bytes).expect("decode contract alias binding");
+        assert_eq!(restored_contract, contract_binding);
     }
 
     #[test]

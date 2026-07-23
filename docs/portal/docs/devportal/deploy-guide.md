@@ -243,7 +243,7 @@ DG-3 automation inputs by enumerating canonical wildcard hosts,
 pretty-host SANs, DNS-01 labels, and recommended ACME challenges:
 
 ```bash
-cargo xtask soradns-acme-plan \
+cargo run -p xtask --bin xtask -- soradns-acme-plan \
   --name docs.sora \
   --json-out artifacts/sorafs/portal.acme-plan.json
 ```
@@ -257,14 +257,14 @@ canonical/pretty mappings without re-running host derivations. Add additional
 ## Step 6b — Derive canonical host mappings
 
 Before templating GAR payloads, record the deterministic host mapping for every
-alias. `cargo xtask soradns-hosts` hashes each `--name` into its canonical
+alias. `cargo run -p xtask --bin xtask -- soradns-hosts` hashes each `--name` into its canonical
 label (`<base32>.gw.sora.id`), emits the required wildcard
 (`*.gw.sora.id`), and derives the pretty host (`<alias>.gw.sora.name`). Persist
 the output in the release artefacts so DG-3 reviewers can diff the mapping
 alongside the GAR submission:
 
 ```bash
-cargo xtask soradns-hosts \
+cargo run -p xtask --bin xtask -- soradns-hosts \
   --name docs.sora \
   --json-out artifacts/sorafs/portal.canonical-hosts.json
 ```
@@ -275,7 +275,7 @@ verification files, making it easy to lint both the GAR template and the
 stapled `portal.gateway.binding.json` in the same invocation:
 
 ```bash
-cargo xtask soradns-hosts \
+cargo run -p xtask --bin xtask -- soradns-hosts \
   --name docs.sora \
   --json-out artifacts/sorafs/portal.canonical-hosts.json \
   --verify-host-patterns artifacts/sorafs/portal.gar.json \
@@ -316,7 +316,7 @@ When the release requires cache purges, generate a canonical plan alongside the
 cutover descriptor:
 
 ```bash
-cargo xtask soradns-cache-plan \
+cargo run -p xtask --bin xtask -- soradns-cache-plan \
   --name docs.sora \
   --path / \
   --path /gateway/manifest.json \
@@ -332,11 +332,11 @@ this file directly, keeping change-control reviewers aligned on exactly which
 endpoints are flushed during a cutover.
 
 Every DG-3 packet also needs a promotion + rollback checklist. Generate it via
-`cargo xtask soradns-route-plan` so change-control reviewers can trace the exact
+`cargo run -p xtask --bin xtask -- soradns-route-plan` so change-control reviewers can trace the exact
 preflight, cutover, and rollback steps per alias:
 
 ```bash
-cargo xtask soradns-route-plan \
+cargo run -p xtask --bin xtask -- soradns-route-plan \
   --name docs.sora \
   --json-out artifacts/sorafs/gateway.route_plan.json
 ```
@@ -478,12 +478,12 @@ gateway-content-binding requirement:
   scraping shell output.
 
 They are generated automatically via
-`cargo xtask soradns-binding-template`
+`cargo run -p xtask --bin xtask -- soradns-binding-template`
 and capture the alias, manifest digest, and gateway hostname that were supplied
 to `sorafs-pin-release.sh`. To regenerate or customise the header block, run:
 
 ```bash
-cargo xtask soradns-binding-template \
+cargo run -p xtask --bin xtask -- soradns-binding-template \
   --manifest artifacts/sorafs/portal.manifest.json \
   --alias docs.sora \
   --hostname docs.sora.link \
@@ -506,7 +506,7 @@ always include recent evidence. Re-run it manually whenever you tweak the
 binding JSON by hand:
 
 ```bash
-cargo xtask soradns-verify-binding \
+cargo run -p xtask --bin xtask -- soradns-verify-binding \
   --binding artifacts/sorafs/portal.gateway.binding.json \
   --alias docs.sora.link \
   --hostname docs.sora.link \
@@ -547,7 +547,7 @@ npm run monitor:publishing -- \
   `docs/portal/docs/devportal/publishing-monitoring.md` for the schema) and
   executes three checks: portal path probes + CSP/Permissions-Policy validation,
   Try it proxy probes (optionally hitting its `/metrics` endpoint), and the
-  gateway binding verifier (`cargo xtask soradns-verify-binding`) which checks
+  gateway binding verifier (`cargo run -p xtask --bin xtask -- soradns-verify-binding`) which checks
   the captured binding bundle against the expected alias, host, proof status,
   and manifest JSON.
 - The command exits non-zero whenever any probe fails so CI, cron jobs, or
@@ -599,8 +599,10 @@ through the same deterministic pipeline. The existing helpers cover all three:
 1. **Regenerate & sign the spec.**
 
    ```bash
-   npm run sync-openapi -- --version=2025-q3 --mirror=current --latest
-   cargo xtask openapi --sign docs/portal/static/openapi/manifest.json
+   cargo run -p xtask --bin xtask -- openapi \
+     --output docs/portal/static/openapi/torii.json \
+     --sign <ed25519-key-path>
+   (cd docs/portal && npm run sync-openapi -- --version=2025-q3 --mirror=current --latest)
    ```
 
    Pass a release label via `--version=<label>` whenever you want to preserve a
@@ -681,8 +683,8 @@ Flags worth knowing:
 - `--out <dir>` – override the artefact root (default keeps timestamped folders).
 - `--skip-build` – reuse an existing `docs/portal/build` (handy when CI cannot
   rebuild due to offline mirrors).
-- `--skip-sync-openapi` – skip `npm run sync-openapi` when `cargo xtask openapi`
-  cannot reach crates.io.
+- `--skip-sync-openapi` – skip `npm run sync-openapi` when
+  `cargo run -p xtask --bin xtask -- openapi` cannot reach crates.io.
 - `--skip-sbom` – avoid calling `syft` when the binary is not installed (the
   script prints a warning instead).
 - `--proof` – run `sorafs_cli proof verify` for each CAR/manifest pair. Multi-
@@ -712,7 +714,7 @@ Before announcing a cutover, prove the new alias resolves via SoraDNS and that
 gateways staple fresh proofs:
 
 1. **Run the probe gate.** `ci/check_sorafs_gateway_probe.sh` exercises
-   `cargo xtask sorafs-gateway-probe` against the demo fixtures in
+   `cargo run -p xtask --bin xtask -- sorafs-gateway-probe` against the demo fixtures in
    `fixtures/sorafs_gateway/probe_demo/`. For real deployments, point the probe
    at the target hostname:
 
@@ -731,7 +733,7 @@ gateways staple fresh proofs:
    TTLs, or GAR bindings drift.
 
    For lightweight spot checks (for example, when only the binding bundle
-   changed), run `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
+   changed), run `cargo run -p xtask --bin xtask -- soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
    The helper validates the captured binding bundle and is handy for release
    tickets that only need binding confirmation instead of a full probe drill.
 
@@ -747,12 +749,12 @@ gateways staple fresh proofs:
    evidence. Resolver owners can mirror the same input through
    `tools/soradns-resolver` to ensure cached entries honour the new manifest.
    Before attaching the JSON, run
-   `cargo xtask soradns-verify-gar --gar <path> --name <alias> [--manifest-cid <cid>] [--telemetry-label <label>]`
+   `cargo run -p xtask --bin xtask -- soradns-verify-gar --gar <path> --name <alias> [--manifest-cid <cid>] [--telemetry-label <label>]`
    so the deterministic host mapping, manifest metadata, and telemetry labels are
    validated offline. The helper can emit a `--json-out` summary alongside the
    signed GAR so reviewers have verifiable evidence without opening the binary.
   When drafting a new GAR, prefer
-  `cargo xtask soradns-gar-template --name <alias> --manifest <portal.manifest.json> --telemetry-label <label> ...`
+  `cargo run -p xtask --bin xtask -- soradns-gar-template --name <alias> --manifest <portal.manifest.json> --telemetry-label <label> ...`
   (fall back to `--manifest-cid <cid>` only when a manifest file is not
   available). The helper now derives the CID **and** BLAKE3 digest directly from
   the manifest JSON, trims whitespace, deduplicates repeated `--telemetry-label`

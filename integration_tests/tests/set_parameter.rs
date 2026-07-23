@@ -28,9 +28,10 @@ fn parameter_update_scenarios() -> Result<()> {
         assert_eq!(old_params.block().max_transactions(), nonzero!(16u64));
 
         let new_value = nonzero!(32u64);
-        test_client.submit_blocking(SetParameter::new(Parameter::Block(
-            BlockParameter::MaxTransactions(new_value),
-        )))?;
+        test_client.submit_blocking(
+            SetParameter::new(Parameter::Block(BlockParameter::MaxTransactions(new_value))),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let params = test_client.query_single(FindParameters::new())?;
         assert_eq!(params.block().max_transactions(), new_value);
@@ -46,9 +47,12 @@ fn parameter_update_scenarios() -> Result<()> {
             current_depth + 1
         };
 
-        test_client.submit_blocking(SetParameter::new(Parameter::Executor(
-            SmartContractParameter::ExecutionDepth(new_depth),
-        )))?;
+        test_client.submit_blocking(
+            SetParameter::new(Parameter::Executor(SmartContractParameter::ExecutionDepth(
+                new_depth,
+            ))),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let params: Parameters = test_client.query_single(FindParameters::new())?;
         assert_eq!(params.executor().execution_depth(), new_depth);

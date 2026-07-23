@@ -1,6 +1,7 @@
 use std::{
     env,
     error::Error,
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -15,6 +16,9 @@ use crate::workspace_root;
 
 const MOCHI_UI_MANIFEST_REL: &str = "mochi/mochi-ui-egui/Cargo.toml";
 const MOCHI_BIN_NAME: &str = "mochi";
+const MOCHI_UI_FEATURE: &str = "gui";
+const MOCHI_HELP_HEADER: &str = "MOCHI usage:";
+const MOCHI_SANDBOX_HELP: &str = "mochi sandbox serve [options]";
 
 #[derive(Debug, Clone)]
 pub(crate) struct MochiBundleResult {
@@ -105,20 +109,40 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
         return Err(format!("missing mochi binary at {}", mochi_bin.display()).into());
     }
 
-    let status = Command::new(&mochi_bin)
-        .arg("--help")
+    let output = Command::new(&mochi_bin)
+        .args(["sandbox", "serve", "--help"])
         .env("MOCHI_DATA_ROOT", result.bundle_root.join(".smoke"))
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
+        .output()?;
+    if !output.status.success() {
         Err(format!(
-            "`{}` --help exited with status {:?}",
+            "`{}` sandbox serve --help exited with status {:?}: {}",
             mochi_bin.display(),
-            status
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
         )
         .into())
+    } else {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Err(reason) = validate_mochi_help_output(&stdout) {
+            return Err(format!(
+                "`{}` sandbox serve --help did not expose the packaged MOCHI CLI: {reason}; stdout: {}",
+                mochi_bin.display(),
+                stdout.trim()
+            )
+            .into());
+        }
+        Ok(())
     }
+}
+
+fn validate_mochi_help_output(stdout: &str) -> Result<(), String> {
+    if !stdout.contains(MOCHI_HELP_HEADER) {
+        return Err(format!("missing `{MOCHI_HELP_HEADER}`"));
+    }
+    if !stdout.contains(MOCHI_SANDBOX_HELP) {
+        return Err(format!("missing `{MOCHI_SANDBOX_HELP}`"));
+    }
+    Ok(())
 }
 
 pub(crate) fn update_bundle_matrix(
@@ -283,22 +307,34 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<(), Box<dyn Error
 
 fn build_mochi_ui(profile: &str) -> Result<(), Box<dyn Error>> {
     let mut command = Command::new("cargo");
-    command.arg("build");
-    if profile == "release" {
-        command.arg("--release");
-    } else if profile != "debug" {
-        command.args(["--profile", profile]);
-    }
-    command
-        .arg("--manifest-path")
-        .arg(mochi_ui_manifest_path())
-        .args(["--bin", MOCHI_BIN_NAME]);
+    command.args(mochi_ui_build_args(profile));
     command.current_dir(workspace_root());
     let status = command.status()?;
     if !status.success() {
-        return Err(format!("cargo build --manifest-path {MOCHI_UI_MANIFEST_REL} failed").into());
+        return Err(format!(
+            "cargo build --manifest-path {MOCHI_UI_MANIFEST_REL} --features {MOCHI_UI_FEATURE} --bin {MOCHI_BIN_NAME} failed"
+        )
+        .into());
     }
     Ok(())
+}
+
+fn mochi_ui_build_args(profile: &str) -> Vec<OsString> {
+    let mut args = vec![OsString::from("build")];
+    if profile == "release" {
+        args.push(OsString::from("--release"));
+    } else if profile != "debug" {
+        args.extend([OsString::from("--profile"), OsString::from(profile)]);
+    }
+    args.extend([
+        OsString::from("--manifest-path"),
+        mochi_ui_manifest_path().into_os_string(),
+        OsString::from("--features"),
+        OsString::from(MOCHI_UI_FEATURE),
+        OsString::from("--bin"),
+        OsString::from(MOCHI_BIN_NAME),
+    ]);
+    args
 }
 
 fn mochi_ui_manifest_path() -> PathBuf {
@@ -496,8 +532,12 @@ fn create_archive(
 
 #[cfg(test)]
 mod tests {
-    use super::{MOCHI_BIN_NAME, MOCHI_UI_MANIFEST_REL, create_archive, mochi_ui_manifest_path};
-    use std::{fs, process::Command};
+    use super::{
+        MOCHI_BIN_NAME, MOCHI_HELP_HEADER, MOCHI_SANDBOX_HELP, MOCHI_UI_FEATURE,
+        MOCHI_UI_MANIFEST_REL, create_archive, mochi_ui_build_args, mochi_ui_manifest_path,
+        validate_mochi_help_output,
+    };
+    use std::{ffi::OsString, fs, process::Command};
 
     use tempfile::tempdir;
 
@@ -518,6 +558,75 @@ mod tests {
                 && manifest.contains(&format!("name = \"{MOCHI_BIN_NAME}\"")),
             "MOCHI UI manifest must declare the packaged `{MOCHI_BIN_NAME}` binary"
         );
+    }
+
+    #[test]
+    fn mochi_ui_build_args_enable_gui_for_the_packaged_binary() {
+        let args = mochi_ui_build_args("debug");
+        let expected_tail = [
+            OsString::from("--features"),
+            OsString::from(MOCHI_UI_FEATURE),
+            OsString::from("--bin"),
+            OsString::from(MOCHI_BIN_NAME),
+        ];
+
+        assert_eq!(args.first(), Some(&OsString::from("build")));
+        assert_eq!(
+            args.get(args.len() - expected_tail.len()..),
+            Some(&expected_tail)
+        );
+    }
+
+    #[test]
+    fn mochi_ui_build_args_preserve_named_profiles() {
+        let args = mochi_ui_build_args("profiling");
+
+        assert_eq!(
+            args.get(0..3),
+            Some(
+                [
+                    OsString::from("build"),
+                    OsString::from("--profile"),
+                    OsString::from("profiling"),
+                ]
+                .as_slice()
+            )
+        );
+    }
+
+    #[test]
+    fn mochi_ui_build_args_preserve_release_profile() {
+        let args = mochi_ui_build_args("release");
+
+        assert_eq!(
+            args.get(0..2),
+            Some([OsString::from("build"), OsString::from("--release")].as_slice())
+        );
+    }
+
+    #[test]
+    fn mochi_help_validation_accepts_headless_cli_usage() {
+        let stdout = format!("{MOCHI_HELP_HEADER}\n  {MOCHI_SANDBOX_HELP}\n");
+
+        assert_eq!(validate_mochi_help_output(&stdout), Ok(()));
+    }
+
+    #[test]
+    fn mochi_help_validation_rejects_default_feature_stub() {
+        let error = validate_mochi_help_output(
+            "MOCHI GUI is not enabled in the default workspace build.\n",
+        )
+        .expect_err("default-feature stub must not pass bundle smoke");
+
+        assert_eq!(error, format!("missing `{MOCHI_HELP_HEADER}`"));
+    }
+
+    #[test]
+    fn mochi_help_validation_requires_sandbox_command() {
+        let error = validate_mochi_help_output(MOCHI_HELP_HEADER)
+            .expect_err("generic help without the sandbox command must fail");
+
+        assert_eq!(error, format!("missing `{MOCHI_SANDBOX_HELP}`"));
     }
 
     #[test]

@@ -13,6 +13,11 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class ToriiClientTests
 {
+    private const string AccountOnboardingToken = "0123456789abcdef0123456789ABCDEF";
+    private const string OnboardingFixtureAuthority = "sorauﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U";
+    private const string OnboardingFixtureAccountId = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
+    private const string OnboardingFixtureChainId = "alias-fixture-chain";
+    private const string OnboardingFixtureAlias = "merchant@banka.paynet";
     private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private static readonly string MultisigMemberAccountId1 = TestAccountId(0x41);
@@ -41,7 +46,15 @@ public sealed class ToriiClientTests
     private static readonly string UaidManifestAccountId = TestAccountId(0x51);
     private static readonly string OnboardingAccountId = TestAccountId(0x52);
     private static readonly string FaucetAccountId = TestAccountId(0x53);
-    private static readonly string MultisigOnboardingAccountId = TestAccountId(0x54);
+    private static FeePaymentIntent EmptyAuthorityFeePayment =>
+        FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>());
+
+    private static FeePaymentIntent SponsorFeePayment(string sponsor, ulong? gasLimit = null) =>
+        FeePaymentIntent.Sponsor(
+            new FeeSponsorProgramId(sponsor, "default"),
+            1,
+            Array.Empty<FeeChargeLimit>(),
+            gasLimit);
     private static readonly string AliasLookupAccountId = TestAccountId(0x55);
     private static readonly string AliasResolutionAccountId = TestAccountId(0x56);
     private static readonly string AliasIndexAccountId = TestAccountId(0x57);
@@ -62,6 +75,7 @@ public sealed class ToriiClientTests
     private static readonly string VpnPaymentTransactionHashHex = new('2', 64);
     private static readonly string VpnMeteringPublicKeyHex = new('3', 64);
     private static readonly string VpnSpkiSha256Hex = new('7', 64);
+    private static readonly string VpnHelperTicketHex = "5356504e48543100" + new string('0', (664 - 8) * 2);
     private static readonly string SoraFsManifestDigestHex = new('d', 64);
     private static readonly string SoraFsManifestIdHex = new('e', 64);
     private static readonly string ExplorerBlockHashHex = new('8', 64);
@@ -3271,9 +3285,6 @@ public sealed class ToriiClientTests
             AssertOriginal(getNode(dto));
         }
 
-        AssertSnapshot(
-            node => new ToriiAccountOnboardingRequest { Identity = node },
-            dto => dto.Identity);
         AssertSnapshot(
             node => new ToriiAccountPermission { Name = "can_update_metadata", Payload = node },
             dto => dto.Payload);
@@ -6536,9 +6547,9 @@ public sealed class ToriiClientTests
                   "fee_asset_id": "xor#universal.universal",
                   "escrow_account_id": "{{VpnEscrowAccountId}}",
                   "operator_account_id": "{{VpnOperatorAccountId}}",
-                  "lease_fee_nanos": 1000000,
+                  "lease_fee": "1000000.25",
                   "settlement_grace_secs": 120,
-                  "flow_label_bits": 20,
+                  "flow_label_bits": 24,
                   "padding_budget_ms": 80,
                   "relay_tls_spki_sha256_hex": "1111111111111111111111111111111111111111111111111111111111111111"
                 }
@@ -6556,9 +6567,81 @@ public sealed class ToriiClientTests
         Assert.Equal("xor#universal.universal", profile.FeeAssetId);
         Assert.Equal(VpnEscrowAccountId, profile.EscrowAccountId);
         Assert.Equal(VpnOperatorAccountId, profile.OperatorAccountId);
-        Assert.Equal((ulong)1000000, profile.LeaseFeeNanos);
+        Assert.Equal("1000000.25", profile.LeaseFee);
         Assert.Equal((ushort)80, profile.PaddingBudgetMilliseconds);
         Assert.Equal("/v1/vpn/profile", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Theory]
+    [InlineData("quote")]
+    [InlineData("session-create")]
+    [InlineData("session-get")]
+    [InlineData("receipt-submit")]
+    [InlineData("receipt-list")]
+    [InlineData("receipt-delete")]
+    public async Task SignedVpnRoutesRequireCanonicalCredentialsBeforeDispatch(string operation)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("unsigned VPN request reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            InvokeVpnResponseOperationAsync(client, operation));
+
+        Assert.Contains(nameof(ToriiClientOptions.CanonicalRequestCredentials), error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [InlineData("profile", 201)]
+    [InlineData("quote", 200)]
+    [InlineData("session-create", 200)]
+    [InlineData("session-get", 201)]
+    [InlineData("receipt-submit", 200)]
+    [InlineData("receipt-list", 201)]
+    [InlineData("receipt-delete", 204)]
+    public async Task VpnRoutesRejectUndocumentedSuccessStatuses(
+        string operation,
+        int unexpectedStatusCode)
+    {
+        var statusCode = (HttpStatusCode)unexpectedStatusCode;
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent("{}"),
+        });
+        using var client = operation == "profile"
+            ? new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler))
+            : CreateSignedVpnClient(handler);
+
+        var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            InvokeVpnResponseOperationAsync(client, operation));
+
+        Assert.Equal(statusCode, error.StatusCode);
+        Assert.NotNull(handler.LastRequest);
+    }
+
+    [Fact]
+    public void VpnRequestDtosRejectUnknownJsonProperties()
+    {
+        (Type Type, string Json)[] payloads =
+        [
+            (
+                typeof(ToriiVpnQuoteCreateRequest),
+                $$"""{"metering_public_key_hex":"{{VpnMeteringPublicKeyHex}}","unexpected":true}"""),
+            (
+                typeof(ToriiVpnSessionCreateRequest),
+                $$"""{"quote_id":"{{VpnQuoteIdHex}}","payment_tx_hash":"{{VpnPaymentTransactionHashHex}}","metering_public_key_hex":"{{VpnMeteringPublicKeyHex}}","unexpected":true}"""),
+            (
+                typeof(ToriiVpnReceiptSubmitRequest),
+                """{"relay_receipt_hex":"abcd","client_voucher_hex":"beef","unexpected":true}"""),
+        ];
+
+        foreach (var (type, json) in payloads)
+        {
+            var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(json, type));
+
+            Assert.Contains("unexpected", error.Message);
+        }
     }
 
     [Fact]
@@ -6743,14 +6826,14 @@ public sealed class ToriiClientTests
                       "fee_asset_id": "xor#universal.universal",
                       "escrow_account_id": "{{VpnEscrowAccountId}}",
                       "operator_account_id": "{{VpnOperatorAccountId}}",
-                      "lease_fee_nanos": 1000000,
+                      "lease_fee": "1000000.25",
                       "route_pushes": ["10.0.0.0/8"],
                       "excluded_routes": ["127.0.0.0/8"],
                       "dns_servers": ["1.1.1.1"],
                       "tunnel_addresses": ["10.208.0.2/32"],
                       "mtu_bytes": 1280,
                       "meter_family": "vpn-standard",
-                      "flow_label_bits": 20,
+                      "flow_label_bits": 24,
                       "padding_budget_ms": 80,
                       "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
                       "metering_public_key_hex": "{{meteringPublicKeyHex}}",
@@ -6769,11 +6852,11 @@ public sealed class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var quote = await client.CreateVpnQuoteAsync(new ToriiVpnQuoteCreateRequest
         {
             ExitClass = "low-latency",
-            MeteringPublicKeyHex = meteringPublicKeyHex.ToUpperInvariant(),
+            MeteringPublicKeyHex = "0X" + meteringPublicKeyHex.ToUpperInvariant(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(quoteId, quote.QuoteId);
@@ -6806,7 +6889,6 @@ public sealed class ToriiClientTests
         yield return new object[] { valid with { MeteringPublicKeyHex = new string('a', 63) }, "MeteringPublicKeyHex", "32-byte hex string" };
         yield return new object[] { valid with { MeteringPublicKeyHex = new string('a', 65) }, "MeteringPublicKeyHex", "32-byte hex string" };
         yield return new object[] { valid with { MeteringPublicKeyHex = new string('g', 64) }, "MeteringPublicKeyHex", "32-byte hex string" };
-        yield return new object[] { valid with { MeteringPublicKeyHex = "0x" + new string('a', 64) }, "MeteringPublicKeyHex", "32-byte hex string" };
         yield return new object[] { valid with { MeteringPublicKeyHex = new string('a', 63) + "\u0001" }, "MeteringPublicKeyHex", "control characters" };
     }
 
@@ -6819,7 +6901,7 @@ public sealed class ToriiClientTests
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed VPN quote request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
             client.CreateVpnQuoteAsync(request, cancellationToken: TestContext.Current.CancellationToken));
@@ -6864,8 +6946,8 @@ public sealed class ToriiClientTests
                       "fee_asset_id": "xor#universal.universal",
                       "escrow_account_id": "{{VpnEscrowAccountId}}",
                       "operator_account_id": "{{VpnOperatorAccountId}}",
-                      "lease_fee_nanos": 1000000,
-                      "flow_label_bits": 20,
+                      "lease_fee": "1000000.25",
+                      "flow_label_bits": 24,
                       "padding_budget_ms": 80,
                       "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
                       "route_pushes": ["10.0.0.0/8"],
@@ -6873,7 +6955,7 @@ public sealed class ToriiClientTests
                       "dns_servers": ["1.1.1.1"],
                       "tunnel_addresses": ["10.208.0.2/32"],
                       "mtu_bytes": 1280,
-                      "helper_ticket_hex": "deadbeef",
+                      "helper_ticket_hex": "{{VpnHelperTicketHex}}",
                       "bytes_in": 123,
                       "bytes_out": 456,
                       "status": "active"
@@ -6882,13 +6964,13 @@ public sealed class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var session = await client.CreateVpnSessionAsync(new ToriiVpnSessionCreateRequest
         {
             ExitClass = "low-latency",
             QuoteId = quoteId.ToUpperInvariant(),
-            PaymentTransactionHash = paymentTxHash.ToUpperInvariant(),
-            MeteringPublicKeyHex = meteringPublicKeyHex.ToUpperInvariant(),
+            PaymentTransactionHash = "0X" + paymentTxHash.ToUpperInvariant(),
+            MeteringPublicKeyHex = "0x" + meteringPublicKeyHex.ToUpperInvariant(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(sessionId, session.SessionId);
@@ -6900,7 +6982,9 @@ public sealed class ToriiClientTests
         Assert.Equal((ulong)1700000000000, session.ExpiresAtMilliseconds);
         Assert.Equal(quoteId, session.QuoteId);
         Assert.Equal(paymentTxHash, session.PaymentTransactionHash);
-        Assert.Equal((ulong)1000000, session.LeaseFeeNanos);
+        Assert.Equal("1000000.25", session.LeaseFee);
+        Assert.Equal(VpnHelperTicketHex, session.HelperTicketHex);
+        Assert.Equal(1328, session.HelperTicketHex.Length);
     }
 
     public static IEnumerable<object[]> InvalidVpnSessionCreateRequests()
@@ -6940,7 +7024,7 @@ public sealed class ToriiClientTests
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed VPN session request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
             client.CreateVpnSessionAsync(request, cancellationToken: TestContext.Current.CancellationToken));
@@ -6986,8 +7070,8 @@ public sealed class ToriiClientTests
                       "fee_asset_id": "xor#universal.universal",
                       "escrow_account_id": "{{VpnEscrowAccountId}}",
                       "operator_account_id": "{{VpnOperatorAccountId}}",
-                      "lease_fee_nanos": 1000000,
-                      "flow_label_bits": 20,
+                      "lease_fee": "1000000.25",
+                      "flow_label_bits": 24,
                       "padding_budget_ms": 80,
                       "relay_tls_spki_sha256_hex": null,
                       "route_pushes": [],
@@ -6995,7 +7079,7 @@ public sealed class ToriiClientTests
                       "dns_servers": [],
                       "tunnel_addresses": [],
                       "mtu_bytes": 1280,
-                      "helper_ticket_hex": "deadbeef",
+                      "helper_ticket_hex": "{{VpnHelperTicketHex}}",
                       "bytes_in": 0,
                       "bytes_out": 0,
                       "status": "active"
@@ -7004,7 +7088,7 @@ public sealed class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var missing = await client.GetVpnSessionAsync(missingSessionId, cancellationToken: TestContext.Current.CancellationToken);
         var active = await client.GetVpnSessionAsync(sessionId, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -7051,9 +7135,9 @@ public sealed class ToriiClientTests
                       "fee_asset_id": "xor#universal.universal",
                       "escrow_account_id": "{{VpnEscrowAccountId}}",
                       "operator_account_id": "{{VpnOperatorAccountId}}",
-                      "lease_fee_nanos": 1000000,
-                      "earned_fee_nanos": 500000,
-                      "refunded_fee_nanos": 500000,
+                      "lease_fee": "1000000.25",
+                      "earned_fee": "500000.125",
+                      "refunded_fee": "500000.125",
                       "lease_id_hex": "{{quoteId}}",
                       "settle_lease_instruction": {
                         "wire_id": "SettleVpnLease",
@@ -7070,12 +7154,12 @@ public sealed class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var receipt = await client.SubmitVpnReceiptAsync(new ToriiVpnReceiptSubmitRequest
         {
-            RelayReceiptHex = "ABCD",
-            ClientVoucherHex = "BEEF",
-            LeaseIdHex = quoteId.ToUpperInvariant(),
+            RelayReceiptHex = "0XABCD",
+            ClientVoucherHex = "0xbeef",
+            LeaseIdHex = "0X" + quoteId.ToUpperInvariant(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(sessionId, receipt.SessionId);
@@ -7088,7 +7172,7 @@ public sealed class ToriiClientTests
         Assert.Single(receiptInstructions);
         receiptInstructions[0] = new ToriiVpnTxInstruction { WireId = "Mutated", PayloadHex = "ff" };
         Assert.Equal("SettleVpnLease", receipt.TxInstructions[0].WireId);
-        Assert.Equal((ulong)500000, receipt.EarnedFeeNanos);
+        Assert.Equal("500000.125", receipt.EarnedFee);
     }
 
     public static IEnumerable<object[]> InvalidVpnReceiptSubmitRequests()
@@ -7116,7 +7200,6 @@ public sealed class ToriiClientTests
         yield return new object[] { valid with { LeaseIdHex = " " + new string('d', 64) }, "LeaseIdHex", "whitespace" };
         yield return new object[] { valid with { LeaseIdHex = new string('d', 63) }, "LeaseIdHex", "32-byte hex string" };
         yield return new object[] { valid with { LeaseIdHex = new string('j', 64) }, "LeaseIdHex", "32-byte hex string" };
-        yield return new object[] { valid with { LeaseIdHex = "0x" + new string('d', 64) }, "LeaseIdHex", "32-byte hex string" };
     }
 
     [Theory]
@@ -7128,7 +7211,7 @@ public sealed class ToriiClientTests
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed VPN receipt request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
             client.SubmitVpnReceiptAsync(request, cancellationToken: TestContext.Current.CancellationToken));
@@ -7171,9 +7254,9 @@ public sealed class ToriiClientTests
                           "fee_asset_id": "xor#universal.universal",
                           "escrow_account_id": "{{VpnEscrowAccountId}}",
                           "operator_account_id": "{{VpnOperatorAccountId}}",
-                          "lease_fee_nanos": 1000000,
-                          "earned_fee_nanos": 500000,
-                          "refunded_fee_nanos": 500000,
+                          "lease_fee": "1000000.25",
+                          "earned_fee": "500000.125",
+                          "refunded_fee": "500000.125",
                           "lease_id_hex": "{{quoteId}}",
                           "settle_lease_instruction": {
                             "wire_id": "SettleVpnLease",
@@ -7193,7 +7276,7 @@ public sealed class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var receipts = await client.ListVpnReceiptsAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal((ulong)1, receipts.Total);
@@ -7222,7 +7305,7 @@ public sealed class ToriiClientTests
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var response = await client.DeleteVpnSessionAsync(missingSessionId, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(response);
@@ -7257,9 +7340,9 @@ public sealed class ToriiClientTests
                   "fee_asset_id": "xor#universal.universal",
                   "escrow_account_id": "{{VpnEscrowAccountId}}",
                   "operator_account_id": "{{VpnOperatorAccountId}}",
-                  "lease_fee_nanos": 1000000,
-                  "earned_fee_nanos": 0,
-                  "refunded_fee_nanos": 1000000,
+                  "lease_fee": "1000000.25",
+                  "earned_fee": "0",
+                  "refunded_fee": "1000000.25",
                   "lease_id_hex": "{{quoteId}}",
                   "settle_lease_instruction": null,
                   "tx_instructions": []
@@ -7272,14 +7355,14 @@ public sealed class ToriiClientTests
                 .Replace("{{VpnOperatorAccountId}}", VpnOperatorAccountId));
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var response = await client.DeleteVpnSessionAsync(sessionId, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(response);
         Assert.Equal(sessionId, response.SessionId);
         Assert.Equal(VpnAccountId, response.AccountId);
         Assert.Equal("disconnected", response.Status);
-        Assert.Equal((ulong)1000000, response.RefundedFeeNanos);
+        Assert.Equal("1000000.25", response.RefundedFee);
     }
 
     public static IEnumerable<object[]> InvalidVpnResponses()
@@ -7287,16 +7370,25 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", " " + VpnSpkiSha256Hex, "surrounding whitespace" };
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", new string('A', 64), "lowercase" };
         yield return new object[] { "quote", "quote_id", new string('1', 63), "32-byte hex string" };
-        yield return new object[] { "quote", "session_id_hex", "abc", "even-length hex string" };
+        yield return new object[] { "quote", "session_id_hex", "abc", "16-byte hex string" };
+        yield return new object[] { "quote", "quote_id", new string('A', 64), "lowercase" };
+        yield return new object[] { "quote", "session_id_hex", new string('A', 32), "lowercase" };
         yield return new object[] { "quote", "metering_public_key_hex", new string('g', 64), "32-byte hex string" };
         yield return new object[] { "quote", "open_lease_instruction.payload_hex", "0xcafe", "even-length hex string" };
         yield return new object[] { "quote", "open_lease_instruction.payload_hex", "CAFE", "lowercase" };
         yield return new object[] { "session-create", "session_id", "session-1", "32-byte hex string" };
-        yield return new object[] { "session-create", "helper_ticket_hex", string.Empty, "non-empty even-length hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", string.Empty, "non-empty string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", "0x" + VpnHelperTicketHex, "664-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant(), "lowercase 664-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^1], "664-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^2], "664-byte hex string" };
         yield return new object[] { "session-get", "payment_tx_hash", VpnPaymentTransactionHashHex[..32] + " " + VpnPaymentTransactionHashHex[32..], "whitespace" };
+        yield return new object[] { "session-get", "payment_tx_hash", new string('A', 64), "lowercase" };
         yield return new object[] { "session-get", "relay_tls_spki_sha256_hex", "0x" + VpnSpkiSha256Hex, "32-byte hex string" };
         yield return new object[] { "receipt-submit", "lease_id_hex", new string('1', 63), "32-byte hex string" };
+        yield return new object[] { "receipt-submit", "lease_id_hex", new string('A', 64), "lowercase" };
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", new string('z', 64), "32-byte hex string" };
+        yield return new object[] { "receipt-list", "items[0].payment_tx_hash", new string('A', 64), "lowercase" };
         yield return new object[] { "receipt-list", "tx_instructions[0].payload_hex", "ca fe", "whitespace" };
         yield return new object[] { "receipt-delete", "settle_lease_instruction.payload_hex", "caf", "even-length hex string" };
     }
@@ -7309,12 +7401,12 @@ public sealed class ToriiClientTests
         string value,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(VpnSuccessStatusCode(operation))
         {
             Content = new StringContent(VpnResponseJson(operation, field, value)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -7330,20 +7422,21 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "lease_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "profile", "lease_secs", VpnProfileRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "profile", "dns_push_interval_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("dns_push_interval_secs", 30), "dns_push_interval_secs"), "must not be null" };
-        yield return new object[] { "profile", "dns_push_interval_secs", VpnProfileRawResponseJson("dns_push_interval_secs", 0), "positive" };
+        yield return new object[] { "profile", "dns_push_interval_secs", VpnProfileRawResponseJson("dns_push_interval_secs", 29), "at least 30" };
         yield return new object[] { "profile", "mtu_bytes", RemoveTopLevelJsonField(VpnProfileRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "profile", "mtu_bytes", VpnProfileRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "profile", "lease_fee_nanos", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
+        yield return new object[] { "profile", "lease_fee", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
+        yield return new object[] { "profile", "lease_fee", VpnProfileRawResponseJson("lease_fee", 1000000), "string" };
         yield return new object[] { "profile", "settlement_grace_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("settlement_grace_secs", 120), "settlement_grace_secs"), "must not be null" };
-        yield return new object[] { "profile", "flow_label_bits", RemoveTopLevelJsonField(VpnProfileRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "profile", "flow_label_bits", RemoveTopLevelJsonField(VpnProfileRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
         yield return new object[] { "profile", "padding_budget_ms", RemoveTopLevelJsonField(VpnProfileRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "quote", "lease_secs", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "quote", "lease_secs", VpnQuoteRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "quote", "quote_expires_at_ms", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_expires_at_ms", 1700000000000), "quote_expires_at_ms"), "must not be null" };
-        yield return new object[] { "quote", "lease_fee_nanos", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
+        yield return new object[] { "quote", "lease_fee", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
         yield return new object[] { "quote", "mtu_bytes", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "quote", "mtu_bytes", VpnQuoteRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "quote", "flow_label_bits", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "quote", "flow_label_bits", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
         yield return new object[] { "quote", "padding_budget_ms", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "session-get", "lease_secs", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "session-get", "lease_secs", VpnSessionRawResponseJson("lease_secs", 0), "positive" };
@@ -7351,17 +7444,17 @@ public sealed class ToriiClientTests
         yield return new object[] { "session-get", "connected_at_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("connected_at_ms", 1699999400000), "connected_at_ms"), "must not be null" };
         yield return new object[] { "session-get", "mtu_bytes", RemoveTopLevelJsonField(VpnSessionRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "session-get", "mtu_bytes", VpnSessionRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "session-get", "flow_label_bits", RemoveTopLevelJsonField(VpnSessionRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "session-get", "flow_label_bits", RemoveTopLevelJsonField(VpnSessionRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
         yield return new object[] { "session-get", "padding_budget_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "session-get", "bytes_in", RemoveTopLevelJsonField(VpnSessionRawResponseJson("bytes_in", 123), "bytes_in"), "must not be null" };
         yield return new object[] { "session-get", "bytes_out", RemoveTopLevelJsonField(VpnSessionRawResponseJson("bytes_out", 456), "bytes_out"), "must not be null" };
         yield return new object[] { "receipt-submit", "connected_at_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("connected_at_ms", 1699999400000), "connected_at_ms"), "must not be null" };
         yield return new object[] { "receipt-submit", "disconnected_at_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("disconnected_at_ms", 1700000000000), "disconnected_at_ms"), "must not be null" };
         yield return new object[] { "receipt-submit", "duration_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("duration_ms", 600000), "duration_ms"), "must not be null" };
-        yield return new object[] { "receipt-submit", "earned_fee_nanos", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("earned_fee_nanos", 500000), "earned_fee_nanos"), "must not be null" };
+        yield return new object[] { "receipt-submit", "earned_fee", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("earned_fee", "500000.125"), "earned_fee"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].connected_at_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "connected_at_ms"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].disconnected_at_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "disconnected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].refunded_fee_nanos", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "refunded_fee_nanos"), "must not be null" };
+        yield return new object[] { "receipt-list", "items[0].refunded_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "refunded_fee"), "must not be null" };
     }
 
     public static IEnumerable<object[]> InvalidVpnRequiredCollectionResponses()
@@ -7392,11 +7485,62 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "quote_id", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_id", VpnQuoteIdHex), "quote_id"), "must not be null" };
         yield return new object[] { "quote", "metering_public_key_hex", VpnQuoteRawResponseJson("metering_public_key_hex", null), "must not be null" };
         yield return new object[] { "session-get", "session_id", VpnSessionRawResponseJson("session_id", null), "must not be null" };
-        yield return new object[] { "session-get", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", "deadbeef"), "helper_ticket_hex"), "must not be null" };
+        yield return new object[] { "session-get", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex), "helper_ticket_hex"), "must not be null" };
         yield return new object[] { "receipt-submit", "status", VpnReceiptRawResponseJson("status", null), "must not be null" };
         yield return new object[] { "receipt-submit", "receipt_source", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("receipt_source", "relay"), "receipt_source"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].session_id", VpnReceiptListRawNestedReceiptJson("session_id", null), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "payment_tx_hash"), "must not be null" };
+    }
+
+    public static IEnumerable<object[]> InvalidVpnMinLengthResponseStrings()
+    {
+        yield return new object[]
+        {
+            "tx-instruction",
+            "wire_id",
+            VpnTxInstructionJson(string.Empty, "abcd").ToJsonString(),
+        };
+
+        foreach (var field in new[]
+        {
+            "relay_endpoint",
+            "meter_family",
+            "display_billing_label",
+            "fee_asset_id",
+            "escrow_account_id",
+            "operator_account_id",
+        })
+        {
+            yield return new object[] { "profile", field, VpnProfileRawResponseJson(field, string.Empty) };
+        }
+
+        foreach (var field in new[]
+        {
+            "payment_reference",
+            "account_id",
+            "relay_endpoint",
+            "fee_asset_id",
+            "escrow_account_id",
+            "operator_account_id",
+            "meter_family",
+        })
+        {
+            yield return new object[] { "quote", field, VpnQuoteRawResponseJson(field, string.Empty) };
+            yield return new object[] { "session", field, VpnSessionRawResponseJson(field, string.Empty) };
+        }
+
+        foreach (var field in new[]
+        {
+            "account_id",
+            "relay_endpoint",
+            "meter_family",
+            "fee_asset_id",
+            "escrow_account_id",
+            "operator_account_id",
+        })
+        {
+            yield return new object[] { "receipt", field, VpnReceiptRawResponseJson(field, string.Empty) };
+        }
     }
 
     public static IEnumerable<object[]> InvalidVpnCanonicalAccountResponses()
@@ -7433,12 +7577,12 @@ public sealed class ToriiClientTests
         string json,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(VpnSuccessStatusCode(operation))
         {
             Content = new StringContent(json),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -7456,12 +7600,12 @@ public sealed class ToriiClientTests
         string json,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(VpnSuccessStatusCode(operation))
         {
             Content = new StringContent(json),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -7479,12 +7623,12 @@ public sealed class ToriiClientTests
         string json,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(VpnSuccessStatusCode(operation))
         {
             Content = new StringContent(json),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -7495,6 +7639,29 @@ public sealed class ToriiClientTests
     }
 
     [Theory]
+    [MemberData(nameof(InvalidVpnMinLengthResponseStrings))]
+    public void VpnResponsesRejectEmptyMinLengthStrings(
+        string operation,
+        string expectedField,
+        string json)
+    {
+        var error = Assert.Throws<JsonException>(() =>
+        {
+            if (operation == "tx-instruction")
+            {
+                _ = JsonSerializer.Deserialize<ToriiVpnTxInstruction>(json);
+            }
+            else
+            {
+                _ = DeserializeRawVpnResponse(operation, json);
+            }
+        });
+
+        Assert.Contains(expectedField, error.Message);
+        Assert.Contains("non-empty", error.Message);
+    }
+
+    [Theory]
     [MemberData(nameof(InvalidVpnCanonicalAccountResponses))]
     public async Task VpnEndpointsRejectNoncanonicalAccountResponses(
         string operation,
@@ -7502,12 +7669,12 @@ public sealed class ToriiClientTests
         string json,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(VpnSuccessStatusCode(operation))
         {
             Content = new StringContent(json),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -7522,7 +7689,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "vpn profile", "null", "must not be null" };
         yield return new object[] { "profile", "vpn profile", "[]", "object" };
         yield return new object[] { "profile", "available", VpnProfileDuplicatePropertyJson("available"), "must not appear more than once" };
-        yield return new object[] { "profile", "vpn profile.audit.nonce", VpnProfileUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "profile", "vpn profile.audit", VpnProfileUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "profile", "available", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "available"), "must not be null" };
         yield return new object[] { "profile", "available", VpnProfileRawResponseJson("available", "true"), "boolean" };
         yield return new object[] { "profile", "relay_endpoint", RemoveTopLevelJsonField(VpnProfileRawResponseJson("relay_endpoint", "/dns4/vpn.sora.org/tcp/443/wss"), "relay_endpoint"), "must not be null" };
@@ -7531,8 +7698,11 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "supported_exit_classes", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "supported_exit_classes"), "required" };
         yield return new object[] { "profile", "supported_exit_classes[0]", VpnProfileRawResponseJson("supported_exit_classes[0]", null), "must not be null" };
         yield return new object[] { "profile", "supported_exit_classes[0]", VpnProfileRawResponseJson("supported_exit_classes[0]", "low latency"), "whitespace" };
+        yield return new object[] { "profile", "supported_exit_classes", VpnProfileSupportedExitClassesJson("standard", "low-latency"), "exactly 3" };
+        yield return new object[] { "profile", "supported_exit_classes[1]", VpnProfileSupportedExitClassesJson("standard", "standard", "high-security"), "unique" };
         yield return new object[] { "profile", "default_exit_class", RemoveTopLevelJsonField(VpnProfileRawResponseJson("default_exit_class", "standard"), "default_exit_class"), "must not be null" };
         yield return new object[] { "profile", "default_exit_class", VpnProfileRawResponseJson("default_exit_class", null), "must not be null" };
+        yield return new object[] { "profile", "default_exit_class", VpnProfileRawResponseJson("default_exit_class", "premium"), "must be one of" };
         yield return new object[] { "profile", "route_pushes", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "route_pushes"), "required" };
         yield return new object[] { "profile", "excluded_routes", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "excluded_routes"), "required" };
         yield return new object[] { "profile", "dns_servers", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "dns_servers"), "required" };
@@ -7545,16 +7715,21 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "lease_secs", VpnProfileRawResponseJson("lease_secs", "3600"), "unsigned integer" };
         yield return new object[] { "profile", "lease_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "profile", "lease_secs", VpnProfileRawResponseJson("lease_secs", 0), "positive" };
+        yield return new object[] { "profile", "lease_secs", VpnProfileRawResponseJson("lease_secs", (ulong)uint.MaxValue + 1), "between 1" };
         yield return new object[] { "profile", "dns_push_interval_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("dns_push_interval_secs", 30), "dns_push_interval_secs"), "must not be null" };
-        yield return new object[] { "profile", "dns_push_interval_secs", VpnProfileRawResponseJson("dns_push_interval_secs", 0), "positive" };
+        yield return new object[] { "profile", "dns_push_interval_secs", VpnProfileRawResponseJson("dns_push_interval_secs", 29), "at least 30" };
         yield return new object[] { "profile", "mtu_bytes", RemoveTopLevelJsonField(VpnProfileRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "profile", "mtu_bytes", VpnProfileRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "profile", "lease_fee_nanos", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
+        yield return new object[] { "profile", "lease_fee", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
         yield return new object[] { "profile", "settlement_grace_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("settlement_grace_secs", 120), "settlement_grace_secs"), "must not be null" };
-        yield return new object[] { "profile", "flow_label_bits", RemoveTopLevelJsonField(VpnProfileRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "profile", "settlement_grace_secs", VpnProfileRawResponseJson("settlement_grace_secs", 0), "positive" };
+        yield return new object[] { "profile", "flow_label_bits", RemoveTopLevelJsonField(VpnProfileRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "profile", "flow_label_bits", VpnProfileRawResponseJson("flow_label_bits", 23), "equal 24" };
         yield return new object[] { "profile", "flow_label_bits", VpnProfileRawResponseJson("flow_label_bits", 256), "unsigned 8-bit" };
         yield return new object[] { "profile", "padding_budget_ms", RemoveTopLevelJsonField(VpnProfileRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
+        yield return new object[] { "profile", "padding_budget_ms", VpnProfileRawResponseJson("padding_budget_ms", 0), "between 1" };
         yield return new object[] { "profile", "padding_budget_ms", VpnProfileRawResponseJson("padding_budget_ms", 65536), "unsigned 16-bit" };
+        yield return new object[] { "profile", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnProfileRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", VpnProfileRawResponseJson("relay_tls_spki_sha256_hex", "0x" + VpnSpkiSha256Hex), "32-byte hex string" };
         foreach (var invalidAccountId in new[]
         {
@@ -7578,8 +7753,8 @@ public sealed class ToriiClientTests
             yield return new object[] { "receipt-list", "items[0].escrow_account_id", VpnReceiptListRawNestedReceiptJson("escrow_account_id", invalidAccountId), "canonical I105" };
             yield return new object[] { "receipt-list", "items[0].operator_account_id", VpnReceiptListRawNestedReceiptJson("operator_account_id", invalidAccountId), "canonical I105" };
         }
-        yield return new object[] { "quote", "vpn quote.audit.nonce", VpnQuoteUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "quote", "vpn quote.open_lease_instruction.audit.nonce", VpnQuoteOpenLeaseInstructionUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "quote", "vpn quote.audit", VpnQuoteUnknownExtensionDuplicateJson(), "not allowed" };
+        yield return new object[] { "quote", "vpn quote.open_lease_instruction.audit", VpnQuoteOpenLeaseInstructionUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "quote", "quote_id", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_id", VpnQuoteIdHex), "quote_id"), "must not be null" };
         yield return new object[] { "quote", "quote_id", VpnQuoteRawResponseJson("quote_id", null), "must not be null" };
         yield return new object[] { "quote", "lease_id_hex", VpnQuoteRawResponseJson("lease_id_hex", null), "must not be null" };
@@ -7594,11 +7769,11 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "lease_secs", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "quote", "lease_secs", VpnQuoteRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "quote", "quote_expires_at_ms", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_expires_at_ms", 1700000000000), "quote_expires_at_ms"), "must not be null" };
-        yield return new object[] { "quote", "quote_expires_at_ms", VpnQuoteRawResponseJson("quote_expires_at_ms", 0), "positive" };
-        yield return new object[] { "quote", "lease_fee_nanos", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
+        yield return new object[] { "quote", "lease_fee", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
+        yield return new object[] { "quote", "lease_fee", VpnQuoteRawResponseJson("lease_fee", "01"), "canonical" };
         yield return new object[] { "quote", "mtu_bytes", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "quote", "mtu_bytes", VpnQuoteRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "quote", "flow_label_bits", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "quote", "flow_label_bits", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
         yield return new object[] { "quote", "padding_budget_ms", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "quote", "route_pushes", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "route_pushes"), "required" };
         yield return new object[] { "quote", "route_pushes[0]", VpnQuoteRawResponseJson("route_pushes[0]", null), "must not be null" };
@@ -7613,7 +7788,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "tx_instructions", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "tx_instructions"), "required" };
         yield return new object[] { "quote", "tx_instructions[0]", VpnQuoteRawResponseJson("tx_instructions[0]", null), "must not be null" };
         yield return new object[] { "session", "session_id", VpnSessionDuplicatePropertyJson("session_id"), "must not appear more than once" };
-        yield return new object[] { "session", "vpn session.audit.nonce", VpnSessionUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "session", "vpn session.audit", VpnSessionUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "session", "session_id", RemoveTopLevelJsonField(VpnSessionRawResponseJson("session_id", VpnSessionIdHex), "session_id"), "must not be null" };
         yield return new object[] { "session", "session_id", VpnSessionRawResponseJson("session_id", null), "must not be null" };
         yield return new object[] { "session", "account_id", VpnSessionRawResponseJson("account_id", null), "must not be null" };
@@ -7622,9 +7797,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "session", "lease_secs", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "session", "lease_secs", VpnSessionRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "session", "expires_at_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("expires_at_ms", 1700003000000), "expires_at_ms"), "must not be null" };
-        yield return new object[] { "session", "expires_at_ms", VpnSessionRawResponseJson("expires_at_ms", 0), "positive" };
         yield return new object[] { "session", "connected_at_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("connected_at_ms", 1699999400000), "connected_at_ms"), "must not be null" };
-        yield return new object[] { "session", "connected_at_ms", VpnSessionRawResponseJson("connected_at_ms", 0), "positive" };
         yield return new object[] { "session", "expires_at_ms", VpnSessionRawResponseJson("expires_at_ms", 1699999399999), "greater than connected_at_ms" };
         yield return new object[] { "session", "meter_family", VpnSessionRawResponseJson("meter_family", null), "must not be null" };
         yield return new object[] { "session", "quote_id", VpnSessionRawResponseJson("quote_id", null), "must not be null" };
@@ -7635,8 +7808,9 @@ public sealed class ToriiClientTests
         yield return new object[] { "session", "operator_account_id", VpnSessionRawResponseJson("operator_account_id", null), "must not be null" };
         yield return new object[] { "session", "mtu_bytes", RemoveTopLevelJsonField(VpnSessionRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "session", "mtu_bytes", VpnSessionRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "session", "lease_fee_nanos", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
-        yield return new object[] { "session", "flow_label_bits", RemoveTopLevelJsonField(VpnSessionRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "session", "lease_fee", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
+        yield return new object[] { "session", "lease_fee", VpnSessionRawResponseJson("lease_fee", "1.0"), "canonical" };
+        yield return new object[] { "session", "flow_label_bits", RemoveTopLevelJsonField(VpnSessionRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
         yield return new object[] { "session", "padding_budget_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "session", "route_pushes", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "route_pushes"), "required" };
         yield return new object[] { "session", "excluded_routes", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "excluded_routes"), "required" };
@@ -7645,12 +7819,15 @@ public sealed class ToriiClientTests
         yield return new object[] { "session", "bytes_in", RemoveTopLevelJsonField(VpnSessionRawResponseJson("bytes_in", 123), "bytes_in"), "must not be null" };
         yield return new object[] { "session", "bytes_in", VpnSessionRawResponseJson("bytes_in", "123"), "unsigned integer" };
         yield return new object[] { "session", "bytes_out", RemoveTopLevelJsonField(VpnSessionRawResponseJson("bytes_out", 456), "bytes_out"), "must not be null" };
-        yield return new object[] { "session", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", "deadbeef"), "helper_ticket_hex"), "must not be null" };
+        yield return new object[] { "session", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex), "helper_ticket_hex"), "must not be null" };
         yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", null), "must not be null" };
-        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", "0xdeadbeef"), "even-length hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", "0x" + VpnHelperTicketHex), "664-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant()), "lowercase 664-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^1]), "664-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^2]), "664-byte hex string" };
         yield return new object[] { "session", "status", VpnSessionRawResponseJson("status", null), "must not be null" };
-        yield return new object[] { "receipt", "vpn receipt.audit.nonce", VpnReceiptUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "receipt", "vpn receipt.settle_lease_instruction.audit.nonce", VpnReceiptSettleInstructionUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "receipt", "vpn receipt.audit", VpnReceiptUnknownExtensionDuplicateJson(), "not allowed" };
+        yield return new object[] { "receipt", "vpn receipt.settle_lease_instruction.audit", VpnReceiptSettleInstructionUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "receipt", "session_id", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("session_id", VpnSessionIdHex), "session_id"), "must not be null" };
         yield return new object[] { "receipt", "session_id", VpnReceiptRawResponseJson("session_id", null), "must not be null" };
         yield return new object[] { "receipt", "account_id", VpnReceiptRawResponseJson("account_id", null), "must not be null" };
@@ -7658,9 +7835,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt", "relay_endpoint", VpnReceiptRawResponseJson("relay_endpoint", null), "must not be null" };
         yield return new object[] { "receipt", "meter_family", VpnReceiptRawResponseJson("meter_family", null), "must not be null" };
         yield return new object[] { "receipt", "connected_at_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("connected_at_ms", 1699999400000), "connected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt", "connected_at_ms", VpnReceiptRawResponseJson("connected_at_ms", 0), "positive" };
         yield return new object[] { "receipt", "disconnected_at_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("disconnected_at_ms", 1700000000000), "disconnected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt", "disconnected_at_ms", VpnReceiptRawResponseJson("disconnected_at_ms", 0), "positive" };
         yield return new object[] { "receipt", "disconnected_at_ms", VpnReceiptRawResponseJson("disconnected_at_ms", 1699999399999), "greater than or equal to connected_at_ms" };
         yield return new object[] { "receipt", "duration_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("duration_ms", 600000), "duration_ms"), "must not be null" };
         yield return new object[] { "receipt", "bytes_in", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("bytes_in", 123), "bytes_in"), "must not be null" };
@@ -7673,31 +7848,57 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt", "fee_asset_id", VpnReceiptRawResponseJson("fee_asset_id", null), "must not be null" };
         yield return new object[] { "receipt", "escrow_account_id", VpnReceiptRawResponseJson("escrow_account_id", null), "must not be null" };
         yield return new object[] { "receipt", "operator_account_id", VpnReceiptRawResponseJson("operator_account_id", null), "must not be null" };
-        yield return new object[] { "receipt", "lease_fee_nanos", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
-        yield return new object[] { "receipt", "earned_fee_nanos", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("earned_fee_nanos", 500000), "earned_fee_nanos"), "must not be null" };
-        yield return new object[] { "receipt", "refunded_fee_nanos", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("refunded_fee_nanos", 500000), "refunded_fee_nanos"), "must not be null" };
+        yield return new object[] { "receipt", "lease_fee", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
+        yield return new object[] { "receipt", "earned_fee", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("earned_fee", "500000.125"), "earned_fee"), "must not be null" };
+        yield return new object[] { "receipt", "refunded_fee", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("refunded_fee", "500000.125"), "refunded_fee"), "must not be null" };
+        yield return new object[] { "receipt", "earned_fee", VpnReceiptRawResponseJson("earned_fee", "-1"), "canonical" };
+        yield return new object[] { "receipt", "lease_id_hex", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("lease_id_hex", VpnQuoteIdHex), "lease_id_hex"), "must not be null" };
+        yield return new object[] { "receipt", "lease_id_hex", VpnReceiptRawResponseJson("lease_id_hex", null), "must not be null" };
+        yield return new object[] { "receipt", "lease_id_hex", VpnReceiptRawResponseJson("lease_id_hex", new string('A', 64)), "lowercase" };
         yield return new object[] { "receipt", "lease_id_hex", VpnReceiptRawResponseJson("lease_id_hex", "0x" + VpnQuoteIdHex), "32-byte hex string" };
         yield return new object[] { "receipt", "tx_instructions", VpnReceiptRawResponseJson("tx_instructions", null), "required" };
         yield return new object[] { "receipt", "tx_instructions", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("connected_at_ms", 1699999400000), "tx_instructions"), "required" };
-        yield return new object[] { "receipt-list", "vpn receipt list response.audit.nonce", VpnReceiptListUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "receipt-list", "vpn receipt list response.items[0].audit.nonce", VpnReceiptListReceiptUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "receipt-list", "vpn receipt list response.audit", VpnReceiptListUnknownExtensionDuplicateJson(), "not allowed" };
+        yield return new object[] { "receipt-list", "vpn receipt list response.items[0].audit", VpnReceiptListReceiptUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "receipt-list", "items", RemoveTopLevelJsonField(VpnReceiptListRawResponseJson("total", 1), "items"), "required" };
         yield return new object[] { "receipt-list", "items", VpnReceiptListRawResponseJson("items", null), "required" };
         yield return new object[] { "receipt-list", "items[0].session_id", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "session_id"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].session_id", VpnReceiptListRawNestedReceiptJson("session_id", null), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].connected_at_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "connected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].connected_at_ms", VpnReceiptListRawNestedReceiptJson("connected_at_ms", 0), "positive" };
         yield return new object[] { "receipt-list", "items[0].disconnected_at_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "disconnected_at_ms"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].duration_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "duration_ms"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].bytes_in", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "bytes_in"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].bytes_out", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "bytes_out"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].lease_fee_nanos", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "lease_fee_nanos"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].earned_fee_nanos", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "earned_fee_nanos"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].refunded_fee_nanos", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "refunded_fee_nanos"), "must not be null" };
+        yield return new object[] { "receipt-list", "items[0].lease_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "lease_fee"), "must not be null" };
+        yield return new object[] { "receipt-list", "items[0].earned_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "earned_fee"), "must not be null" };
+        yield return new object[] { "receipt-list", "items[0].refunded_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "refunded_fee"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].tx_instructions", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "tx_instructions"), "required" };
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", VpnReceiptListRawNestedReceiptJson("payment_tx_hash", new string('z', 64)), "32-byte hex string" };
         yield return new object[] { "receipt-list", "total", RemoveTopLevelJsonField(VpnReceiptListRawResponseJson("total", 1), "total"), "must not be null" };
         yield return new object[] { "receipt-list", "total", VpnReceiptListRawResponseJson("total", 0), "item count" };
+        yield return new object[] { "quote", "exit_class", VpnQuoteRawResponseJson("exit_class", "premium"), "must be one of" };
+        yield return new object[] { "quote", "lease_secs", VpnQuoteRawResponseJson("lease_secs", (ulong)uint.MaxValue + 1), "between 1" };
+        yield return new object[] { "quote", "mtu_bytes", VpnQuoteRawResponseJson("mtu_bytes", 1279), "equal 1280" };
+        yield return new object[] { "quote", "flow_label_bits", VpnQuoteRawResponseJson("flow_label_bits", 23), "equal 24" };
+        yield return new object[] { "quote", "padding_budget_ms", VpnQuoteRawResponseJson("padding_budget_ms", 0), "between 1" };
+        yield return new object[] { "quote", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
+        yield return new object[] { "quote", "open_lease_instruction", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("open_lease_instruction", null), "open_lease_instruction"), "required" };
+        yield return new object[] { "quote", "tx_instructions", VpnQuoteInstructionCountJson(0), "exactly 1" };
+        yield return new object[] { "quote", "tx_instructions", VpnQuoteInstructionCountJson(2), "exactly 1" };
+        yield return new object[] { "session", "exit_class", VpnSessionRawResponseJson("exit_class", "premium"), "must be one of" };
+        yield return new object[] { "session", "lease_secs", VpnSessionRawResponseJson("lease_secs", (ulong)uint.MaxValue + 1), "between 1" };
+        yield return new object[] { "session", "mtu_bytes", VpnSessionRawResponseJson("mtu_bytes", 1279), "equal 1280" };
+        yield return new object[] { "session", "flow_label_bits", VpnSessionRawResponseJson("flow_label_bits", 23), "equal 24" };
+        yield return new object[] { "session", "padding_budget_ms", VpnSessionRawResponseJson("padding_budget_ms", 0), "between 1" };
+        yield return new object[] { "session", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
+        yield return new object[] { "session", "status", VpnSessionRawResponseJson("status", "connected"), "equal active" };
+        yield return new object[] { "receipt", "exit_class", VpnReceiptRawResponseJson("exit_class", "premium"), "must be one of" };
+        yield return new object[] { "receipt", "status", VpnReceiptRawResponseJson("status", "active"), "must be one of" };
+        yield return new object[] { "receipt", "receipt_source", VpnReceiptRawResponseJson("receipt_source", "peer"), "must be one of" };
+        yield return new object[] { "receipt", "settle_lease_instruction", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("settle_lease_instruction", null), "settle_lease_instruction"), "required" };
+        yield return new object[] { "receipt", "tx_instructions", VpnReceiptInstructionCountJson(2), "between 0 and 1" };
+        yield return new object[] { "receipt-list", "items", VpnReceiptListCountJson(25, 25), "at most 24" };
+        yield return new object[] { "receipt-list", "total", VpnReceiptListCountJson(1, 25), "at most 24" };
     }
 
     [Theory]
@@ -7729,62 +7930,63 @@ public sealed class ToriiClientTests
     [Fact]
     public void RawVpnProfileWriteRejectsNonPositiveOperationalParameters()
     {
-        foreach (var (fieldName, field) in new[]
+        foreach (var (fieldName, field, expectedMessage) in new[]
         {
-            ("leaseSeconds", "lease_secs"),
-            ("dnsPushIntervalSeconds", "dns_push_interval_secs"),
-            ("mtuBytes", "mtu_bytes"),
+            ("leaseSeconds", "lease_secs", "between 1"),
+            ("mtuBytes", "mtu_bytes", "equal 1280"),
         })
         {
             var error = Assert.Throws<JsonException>(() =>
                 SerializeWithPrivateField(ValidVpnProfile(), fieldName, 0UL));
 
             Assert.Contains(field, error.Message);
-            Assert.Contains("positive", error.Message);
+            Assert.Contains(expectedMessage, error.Message);
         }
+
+        var dnsError = Assert.Throws<JsonException>(() =>
+            SerializeWithPrivateField(ValidVpnProfile(), "dnsPushIntervalSeconds", 29UL));
+
+        Assert.Contains("dns_push_interval_secs", dnsError.Message);
+        Assert.Contains("at least 30", dnsError.Message);
     }
 
     [Fact]
-    public void RawVpnQuoteWriteRejectsZeroExpiration()
+    public void RawVpnQuoteWriteAcceptsZeroUnsignedExpiration()
     {
         var quote = ValidVpnQuote();
 
-        var error = Assert.Throws<JsonException>(() =>
-            SerializeWithPrivateField(quote, "quoteExpiresAtMilliseconds", 0UL));
+        var json = SerializeWithPrivateField(quote, "quoteExpiresAtMilliseconds", 0UL);
 
-        Assert.Contains("quote_expires_at_ms", error.Message);
-        Assert.Contains("positive", error.Message);
+        Assert.Contains("\"quote_expires_at_ms\":0", json);
     }
 
     [Fact]
     public void RawVpnQuoteWriteRejectsNonPositiveOperationalParameters()
     {
-        foreach (var (fieldName, field) in new[]
+        foreach (var (fieldName, field, expectedMessage) in new[]
         {
-            ("leaseSeconds", "lease_secs"),
-            ("mtuBytes", "mtu_bytes"),
+            ("leaseSeconds", "lease_secs", "between 1"),
+            ("mtuBytes", "mtu_bytes", "equal 1280"),
         })
         {
             var error = Assert.Throws<JsonException>(() =>
                 SerializeWithPrivateField(ValidVpnQuote(), fieldName, 0UL));
 
             Assert.Contains(field, error.Message);
-            Assert.Contains("positive", error.Message);
+            Assert.Contains(expectedMessage, error.Message);
         }
     }
 
     [Fact]
-    public void RawVpnSessionWriteRejectsZeroAndReversedTimestamps()
+    public void RawVpnSessionWriteAcceptsZeroConnectedTimestampAndRejectsReversedTimestamps()
     {
         var zeroConnected = ValidVpnSession();
         var reversedExpiry = ValidVpnSession() with { ExpiresAtMilliseconds = 1699999399999 };
 
-        var zeroError = Assert.Throws<JsonException>(() =>
-            SerializeWithPrivateField(zeroConnected, "connectedAtMilliseconds", 0UL));
+        var zeroJson = SerializeWithPrivateField(zeroConnected, "connectedAtMilliseconds", 0UL);
         var orderError = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(reversedExpiry));
 
-        Assert.Contains("connected_at_ms", zeroError.Message);
-        Assert.Contains("positive", zeroError.Message);
+        Assert.Contains("\"connected_at_ms\":0", zeroJson);
         Assert.Contains("expires_at_ms", orderError.Message);
         Assert.Contains("greater than connected_at_ms", orderError.Message);
     }
@@ -7792,17 +7994,17 @@ public sealed class ToriiClientTests
     [Fact]
     public void RawVpnSessionWriteRejectsNonPositiveOperationalParameters()
     {
-        foreach (var (fieldName, field) in new[]
+        foreach (var (fieldName, field, expectedMessage) in new[]
         {
-            ("leaseSeconds", "lease_secs"),
-            ("mtuBytes", "mtu_bytes"),
+            ("leaseSeconds", "lease_secs", "between 1"),
+            ("mtuBytes", "mtu_bytes", "equal 1280"),
         })
         {
             var error = Assert.Throws<JsonException>(() =>
                 SerializeWithPrivateField(ValidVpnSession(), fieldName, 0UL));
 
             Assert.Contains(field, error.Message);
-            Assert.Contains("positive", error.Message);
+            Assert.Contains(expectedMessage, error.Message);
         }
     }
 
@@ -7819,17 +8021,18 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public void RawVpnReceiptWriteRejectsZeroAndReversedTimestamps()
+    public void RawVpnReceiptWriteAcceptsZeroTimestampsAndRejectsReversedTimestamps()
     {
-        var zeroDisconnected = ValidVpnReceipt();
+        var zeroTimestamps = ValidVpnReceipt();
+        SetPrivateField(zeroTimestamps, "connectedAtMilliseconds", 0UL);
+        SetPrivateField(zeroTimestamps, "disconnectedAtMilliseconds", 0UL);
         var reversedDisconnect = ValidVpnReceipt() with { DisconnectedAtMilliseconds = 1699999399999 };
 
-        var zeroError = Assert.Throws<JsonException>(() =>
-            SerializeWithPrivateField(zeroDisconnected, "disconnectedAtMilliseconds", 0UL));
+        var zeroJson = JsonSerializer.Serialize(zeroTimestamps);
         var orderError = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(reversedDisconnect));
 
-        Assert.Contains("disconnected_at_ms", zeroError.Message);
-        Assert.Contains("positive", zeroError.Message);
+        Assert.Contains("\"connected_at_ms\":0", zeroJson);
+        Assert.Contains("\"disconnected_at_ms\":0", zeroJson);
         Assert.Contains("disconnected_at_ms", orderError.Message);
         Assert.Contains("greater than or equal to connected_at_ms", orderError.Message);
     }
@@ -7893,6 +8096,7 @@ public sealed class ToriiClientTests
     {
         yield return new object?[] { "profile", "SupportedExitClasses[0]", "low latency" };
         yield return new object?[] { "profile", "LeaseSeconds", 0UL };
+        yield return new object?[] { "profile", "DnsPushIntervalSeconds", 29UL };
         yield return new object?[] { "profile", "EscrowAccountId", "merchant@sora" };
         yield return new object?[] { "profile", "RelayTlsSpkiSha256Hex", "0x" + VpnSpkiSha256Hex };
         yield return new object?[] { "tx-instruction", "WireId", " OpenVpnLeaseEscrow" };
@@ -7905,8 +8109,12 @@ public sealed class ToriiClientTests
         yield return new object?[] { "session", "SessionId", "session-1" };
         yield return new object?[] { "session", "ConnectedAtMilliseconds", 0UL };
         yield return new object?[] { "session", "RoutePushes[0]", "10.0.0.0 /8" };
-        yield return new object?[] { "session", "HelperTicketHex", "CAFE" };
+        yield return new object?[] { "session", "HelperTicketHex", "0x" + VpnHelperTicketHex };
+        yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex.ToUpperInvariant() };
+        yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex[..^1] };
+        yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex[..^2] };
         yield return new object?[] { "receipt", "DisconnectedAtMilliseconds", 0UL };
+        yield return new object?[] { "receipt", "LeaseIdHex", string.Empty };
         yield return new object?[] { "receipt", "LeaseIdHex", "0x" + VpnQuoteIdHex };
         yield return new object?[] { "receipt", "SettleLeaseInstruction.PayloadHex", "CAFE" };
         yield return new object?[] { "receipt-list", "Items[0].PaymentTransactionHash", new string('z', 64) };
@@ -7935,7 +8143,7 @@ public sealed class ToriiClientTests
             "{\"wire_id\":\"OpenVpnLeaseEscrow\",\"wire_id\":\"OpenVpnLeaseEscrow\",\"payload_hex\":\"abcd\"}",
             "must not appear more than once",
         };
-        yield return new object[] { "vpn tx instruction.audit.nonce", VpnTxInstructionUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "vpn tx instruction.audit", VpnTxInstructionUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "wire_id", VpnTxInstructionJson(" OpenVpnLeaseEscrow", "abcd").ToJsonString(), "surrounding whitespace" };
         yield return new object[] { "wire_id", VpnTxInstructionJson("OpenVpnLeaseEscrow\u0001", "abcd").ToJsonString(), "control characters" };
         yield return new object[] { "wire_id", "{\"wire_id\":1,\"payload_hex\":\"abcd\"}", "string" };
@@ -8949,7 +9157,6 @@ public sealed class ToriiClientTests
             valid with { SuccessorOfHex = new string('c', 63) },
             valid with { SuccessorOfHex = new string('0', 64) },
             valid with { SubmittedEpoch = null },
-            valid with { GasAssetId = " " },
             valid with { Alias = valid.Alias! with { Namespace = "" } },
             valid with { Alias = valid.Alias! with { Namespace = new string('a', 129) } },
             valid with { Alias = valid.Alias! with { Namespace = "Docs" } },
@@ -8989,7 +9196,6 @@ public sealed class ToriiClientTests
             (valid with { PrivateKey = "ed25519:dead beef" }, "PrivateKey", "whitespace"),
             (valid with { ManifestPayloadBase64 = manifestBase64 + " ", ManifestBytes = null }, "ManifestPayloadBase64", "whitespace"),
             (valid with { ManifestPayloadBase64 = "AR==", ManifestBytes = null }, "ManifestPayloadBase64", "canonical base64"),
-            (valid with { GasAssetId = " xor#universal" }, "GasAssetId", "whitespace"),
             (valid with { Alias = valid.Alias! with { Namespace = "docs " } }, "Alias.Namespace", "whitespace"),
             (valid with { Alias = valid.Alias! with { Name = " main" } }, "Alias.Name", "whitespace"),
             (valid with { Alias = valid.Alias! with { ProofBase64 = aliasProofBase64 + "\u0001" } }, "Alias.ProofBase64", "control characters"),
@@ -10396,7 +10602,7 @@ public sealed class ToriiClientTests
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed VPN/SoraFS route identifier reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
             InvokeVpnAndSoraFsRouteReadOperationAsync(client, operation, value));
@@ -13679,7 +13885,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [Fact]
     public async Task SubmitTransactionAsyncPostsNoritoPayload()
     {
-        var transaction = new TransactionBuilder("00000042", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+        var transaction = new TransactionBuilder(
+            "00000042",
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+            EmptyAuthorityFeePayment)
             .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.75", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
@@ -14169,60 +14378,144 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task RegisterAccountAsyncPostsJsonAndDeserializesQueuedResponse()
+    public async Task PlanAccountOnboardingAsyncPostsSecretFreeIntentAndVerifiesPinnedReceipt()
     {
         using var handler = new RecordingHandler(request =>
         {
             var payload = ReadBodyAsJson(request);
+            Assert.Equal("/v1/accounts/onboard/plan", request.RequestUri!.AbsolutePath);
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(
+                AccountOnboardingToken,
+                Assert.Single(request.Headers.GetValues(ToriiClient.AccountOnboardingTokenHeaderName)));
+            Assert.Equal("global-api-token", Assert.Single(request.Headers.GetValues("X-API-Token")));
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
+            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
+            Assert.Equal(1, payload.RootElement.GetProperty("version").GetByte());
+            Assert.Equal(OnboardingFixtureAlias, payload.RootElement.GetProperty("alias").GetString());
+            Assert.Equal(OnboardingFixtureAccountId, payload.RootElement.GetProperty("account_id").GetString());
+            Assert.False(payload.RootElement.TryGetProperty("private_key", out _));
+            Assert.False(payload.RootElement.TryGetProperty("token", out _));
+            Assert.False(payload.RootElement.TryGetProperty("identity", out _));
+            Assert.DoesNotContain(AccountOnboardingToken, request.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(SharedOnboardingReceiptJson()),
+            };
+        });
+
+        using var httpClient = new HttpClient(handler);
+        httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Token", "global-api-token");
+        httpClient.DefaultRequestHeaders.TryAddWithoutValidation(
+            ToriiClient.AccountOnboardingTokenHeaderName,
+            ["stale-default-token-one", "stale-default-token-two"]);
+        using var client = new ToriiClient(new Uri("https://torii.example"), httpClient);
+        Assert.False(httpClient.DefaultRequestHeaders.Contains(
+            ToriiClient.AccountOnboardingTokenHeaderName));
+        var receipt = await client.PlanAccountOnboardingAsync(new ToriiAccountOnboardingPlanRequest
+        {
+            Alias = "Merchant@Banka.Paynet",
+            AccountId = OnboardingFixtureAccountId,
+            Permissions = [],
+        }, AccountOnboardingToken, OnboardingFixtureAuthority, OnboardingFixtureChainId,
+            SharedOnboardingBodyEncoder,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(OnboardingFixtureAuthority, receipt.Body.Authority);
+        Assert.Equal(OnboardingFixtureChainId, receipt.Body.ChainId);
+        Assert.Equal(OnboardingFixtureAccountId, receipt.Body.Request.AccountId);
+    }
+
+    [Fact]
+    public async Task ApplyAccountOnboardingAsyncPostsOnlyPinnedReceipt()
+    {
+        var receipt = SharedOnboardingReceipt();
+        using var handler = new RecordingHandler(request =>
+        {
+            using var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/onboard", request.RequestUri!.AbsolutePath);
             Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("merchant@paynet", payload.RootElement.GetProperty("alias").GetString());
-            Assert.Equal(CanonicalAccountId, payload.RootElement.GetProperty("account_id").GetString());
+            Assert.Equal(["receipt"], payload.RootElement.EnumerateObject().Select(static item => item.Name));
             Assert.Equal(
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                payload.RootElement.GetProperty("identity_commitment_hex").GetString());
-            Assert.Equal(
-                "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                payload.RootElement.GetProperty("uaid").GetString());
+                receipt.PlanHash,
+                payload.RootElement.GetProperty("receipt").GetProperty("plan_hash").GetString());
+            Assert.DoesNotContain(AccountOnboardingToken, request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
 
             return new HttpResponseMessage(HttpStatusCode.Accepted)
             {
                 Content = new StringContent($$"""
                     {
-                      "account_id": "{{CanonicalAccountId}}",
-                      "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                      "account_id": "{{OnboardingFixtureAccountId}}",
+                      "alias": "{{OnboardingFixtureAlias}}",
                       "tx_hash_hex": "{{ToriiTransactionHashHex}}",
-                      "status": "QUEUED"
+                      "status": "Queued",
+                      "disposition": { "kind": "create", "value": null }
                     }
                     """),
             };
         });
-
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.RegisterAccountAsync(new ToriiAccountOnboardingRequest
-        {
-            Alias = "merchant@paynet",
-            AccountId = CanonicalAccountId,
-            IdentityCommitmentHex = new string('A', 64),
-            Uaid = "UAID:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
-            Permissions = ["CanResolveAccountAlias"],
-        }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(CanonicalAccountId, response.AccountId);
-        Assert.Equal(ToriiTransactionHashHex, response.TransactionHashHex);
-        Assert.Equal("QUEUED", response.Status);
+        var response = await client.ApplyAccountOnboardingAsync(
+            receipt,
+            AccountOnboardingToken,
+            OnboardingFixtureAuthority,
+            OnboardingFixtureChainId,
+            SharedOnboardingBodyEncoder,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(OnboardingFixtureAccountId, response.AccountId);
+        Assert.Equal(OnboardingFixtureAlias, response.Alias);
+        Assert.Equal("Queued", response.Status);
     }
 
     [Fact]
-    public void AccountOnboardingRequestSnapshotsPermissionListsOnInitAndAccess()
+    public async Task ApplyAccountOnboardingAsyncRejectsUnpinnedOrInvalidReceiptBeforeDispatch()
+    {
+        var receipt = SharedOnboardingReceipt();
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("invalid onboarding receipt reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
+            receipt,
+            AccountOnboardingToken,
+            OnboardingFixtureAuthority,
+            "wrong-chain",
+            SharedOnboardingBodyEncoder,
+            cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
+            receipt with { Signature = "00" + receipt.Signature[2..] },
+            AccountOnboardingToken,
+            OnboardingFixtureAuthority,
+            OnboardingFixtureChainId,
+            SharedOnboardingBodyEncoder,
+            cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.ApplyAccountOnboardingAsync(
+            receipt,
+            AccountOnboardingToken,
+            OnboardingFixtureAuthority,
+            OnboardingFixtureChainId,
+            body =>
+            {
+                var encoded = SharedOnboardingBodyEncoder(body);
+                encoded[^1] ^= 1;
+                return encoded;
+            },
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public void AccountOnboardingPlanRequestSnapshotsPermissionListsOnInitAndAccess()
     {
         string[] permissions = ["CanResolveAccountAlias"];
-        var request = new ToriiAccountOnboardingRequest
+        var request = new ToriiAccountOnboardingPlanRequest
         {
-            Alias = "merchant@paynet",
-            AccountId = CanonicalAccountId,
-            IdentityCommitmentHex = new string('a', 64),
-            Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            Alias = OnboardingFixtureAlias,
+            AccountId = OnboardingFixtureAccountId,
             Permissions = permissions,
         };
 
@@ -14233,7 +14526,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal(["CanResolveAccountAlias"], request.Permissions);
         Assert.NotSame(returnedPermissions, request.Permissions);
 
-        var nullElementError = Assert.Throws<ArgumentException>(() => new ToriiAccountOnboardingRequest
+        var nullElementError = Assert.Throws<ArgumentException>(() => new ToriiAccountOnboardingPlanRequest
         {
             Permissions = ["CanResolveAccountAlias", null!],
         });
@@ -14241,48 +14534,28 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Contains("must not be null", nullElementError.Message);
     }
 
-    public static IEnumerable<object[]> InvalidAccountOnboardingRequests()
+    public static IEnumerable<object[]> InvalidAccountOnboardingPlanRequests()
     {
-        var valid = ValidAccountOnboardingRequest();
-        yield return new object[] { valid with { Alias = " merchant@paynet" }, "Alias", "whitespace" };
-        yield return new object[] { valid with { Alias = "merchant@paynet\u0001" }, "Alias", "control characters" };
-        yield return new object[] { valid with { AccountId = null, PublicKeyHex = null }, "AccountId", "either account_id or public_key_hex" };
-        yield return new object[]
-        {
-            valid with { PublicKeyHex = new string('1', 64) },
-            "AccountId",
-            "exactly one of account_id or public_key_hex",
-        };
+        var valid = ValidAccountOnboardingPlanRequest();
+        yield return new object[] { valid with { Version = 2 }, "Version", "Version must be 1" };
+        yield return new object[] { valid with { Alias = " merchant@paynet" }, "Alias", "exact text" };
+        yield return new object[] { valid with { Alias = "merchant@paynet\u0001" }, "Alias", "exact text" };
+        yield return new object[] { valid with { Alias = "merchant@pay!net" }, "Alias", "invalid segment" };
         yield return new object[] { valid with { AccountId = " " + CanonicalAccountId }, "AccountId", "whitespace" };
         yield return new object[] { valid with { AccountId = CanonicalAccountId + "\u0001" }, "AccountId", "control characters" };
         yield return new object[] { valid with { AccountId = "merchant@sora" }, "AccountId", "canonical I105" };
         yield return new object[] { valid with { AccountId = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "AccountId", "canonical I105" };
         yield return new object[] { valid with { AccountId = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "AccountId", "canonical I105" };
-        yield return new object[] { valid with { AccountId = null, PublicKeyHex = "11" }, "PublicKeyHex", "32-byte hex string" };
-        yield return new object[] { valid with { AccountId = null, PublicKeyHex = new string('g', 64) }, "PublicKeyHex", "32-byte hex string" };
-        yield return new object[]
-        {
-            valid with { Identity = new JsonObject { ["email"] = "merchant@example.com" } },
-            "Identity",
-            "Raw identity metadata is not accepted",
-        };
-        yield return new object[] { valid with { IdentityCommitmentHex = "abcd" }, "IdentityCommitmentHex", "32-byte hex string" };
-        yield return new object[] { valid with { IdentityCommitmentHex = new string('g', 64) }, "IdentityCommitmentHex", "32-byte hex string" };
-        yield return new object[] { valid with { IdentityCommitmentHex = " " + new string('a', 64) }, "IdentityCommitmentHex", "whitespace" };
-        yield return new object[] { valid with { Uaid = null }, "Uaid", "null or whitespace" };
-        yield return new object[] { valid with { Uaid = " UAID:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF" }, "Uaid", "whitespace" };
-        yield return new object[] { valid with { Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\u0001" }, "Uaid", "control characters" };
-        yield return new object[] { valid with { Uaid = "uaid:1234" }, "Uaid", "64 hex chars" };
-        yield return new object[] { valid with { Uaid = $"uaid:{new string('0', 64)}" }, "Uaid", "canonical low bit" };
-        yield return new object[] { valid with { Permissions = null! }, "Permissions", "cannot be null" };
-        yield return new object[] { valid with { Permissions = ["CanResolveAccountAlias "] }, "Permissions[0]", "whitespace" };
-        yield return new object[] { valid with { Permissions = ["CanResolve\u0001AccountAlias"] }, "Permissions[0]", "control characters" };
+        yield return new object[] { valid with { Permissions = ["CanResolveAccountAlias "] }, "Permissions[0]", "exact text" };
+        yield return new object[] { valid with { Permissions = ["CanResolve\u0001AccountAlias"] }, "Permissions[0]", "exact text" };
+        yield return new object[] { valid with { Permissions = ["Can ResolveAccountAlias"] }, "Permissions[0]", "forbidden character" };
+        yield return new object[] { valid with { Permissions = ["CanResolveAccountAlias", "CanResolveAccountAlias"] }, "Permissions", "unique" };
     }
 
     [Theory]
-    [MemberData(nameof(InvalidAccountOnboardingRequests))]
-    public async Task RegisterAccountAsyncRejectsMalformedOnboardingRequestsBeforeDispatch(
-        ToriiAccountOnboardingRequest request,
+    [MemberData(nameof(InvalidAccountOnboardingPlanRequests))]
+    public async Task PlanAccountOnboardingAsyncRejectsMalformedRequestsBeforeDispatch(
+        ToriiAccountOnboardingPlanRequest request,
         string expectedParamName,
         string expectedMessage)
     {
@@ -14291,11 +14564,126 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.RegisterAccountAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+            client.PlanAccountOnboardingAsync(
+                request,
+                AccountOnboardingToken,
+                OnboardingFixtureAuthority,
+                OnboardingFixtureChainId,
+                SharedOnboardingBodyEncoder,
+                cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(expectedParamName, error.ParamName);
         Assert.Contains(expectedMessage, error.Message);
         Assert.Null(handler.LastRequest);
+    }
+
+    public static IEnumerable<object?[]> InvalidAccountOnboardingTokens()
+    {
+        yield return new object?[] { null };
+        yield return new object?[] { string.Empty };
+        yield return new object?[] { new string('T', 31) };
+        yield return new object?[] { new string('T', 257) };
+        yield return new object?[] { new string('T', 31) + " " };
+        yield return new object?[] { new string('T', 31) + "é" };
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidAccountOnboardingTokens))]
+    public async Task AccountOnboardingApisRejectMalformedCredentialBeforeDispatch(string? onboardingToken)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("malformed onboarding token reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        foreach (var operation in new Func<Task>[]
+                 {
+                     () => client.PlanAccountOnboardingAsync(
+                         ValidAccountOnboardingPlanRequest(),
+                         onboardingToken!,
+                         OnboardingFixtureAuthority,
+                         OnboardingFixtureChainId,
+                         SharedOnboardingBodyEncoder,
+                         cancellationToken: TestContext.Current.CancellationToken),
+                     () => client.ApplyAccountOnboardingAsync(
+                         SharedOnboardingReceipt(),
+                         onboardingToken!,
+                         OnboardingFixtureAuthority,
+                         OnboardingFixtureChainId,
+                         SharedOnboardingBodyEncoder,
+                         cancellationToken: TestContext.Current.CancellationToken),
+                 })
+        {
+            var error = await Assert.ThrowsAnyAsync<ArgumentException>(operation);
+            Assert.Equal("onboardingToken", error.ParamName);
+            if (!string.IsNullOrEmpty(onboardingToken))
+            {
+                Assert.DoesNotContain(onboardingToken, error.Message);
+            }
+        }
+
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task PlanAccountOnboardingAsyncRejectsRedirectWithoutReplayingCredential()
+    {
+        var requestCount = 0;
+        using var handler = new RecordingHandler(_ =>
+        {
+            requestCount++;
+            return new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
+            {
+                Headers = { Location = new Uri("https://redirect.example/v1/accounts/onboard/plan") },
+                ReasonPhrase = AccountOnboardingToken,
+                Content = new StringContent($"server echoed {AccountOnboardingToken}"),
+            };
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            client.PlanAccountOnboardingAsync(
+                ValidAccountOnboardingPlanRequest(),
+                AccountOnboardingToken,
+                OnboardingFixtureAuthority,
+                OnboardingFixtureChainId,
+                SharedOnboardingBodyEncoder,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.TemporaryRedirect, error.StatusCode);
+        Assert.DoesNotContain(AccountOnboardingToken, error.Message);
+        Assert.DoesNotContain(AccountOnboardingToken, error.ResponseBody);
+        Assert.Equal("server echoed <redacted>", error.ResponseBody);
+        Assert.Equal(1, requestCount);
+    }
+
+    [Fact]
+    public async Task PlanAccountOnboardingAsyncRedactsCredentialBeforeDecodingSuccessResponse()
+    {
+        var escapedOnboardingToken = new string('"', 32);
+        var responseJson = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["account_id"] = OnboardingAccountId,
+            ["uaid"] = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ["tx_hash_hex"] = ToriiTransactionHashHex,
+            ["status"] = escapedOnboardingToken,
+        });
+        Assert.DoesNotContain(escapedOnboardingToken, responseJson);
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.Accepted)
+        {
+            Content = new StringContent(responseJson),
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAnyAsync<Exception>(() =>
+            client.PlanAccountOnboardingAsync(
+                ValidAccountOnboardingPlanRequest(),
+                escapedOnboardingToken,
+                OnboardingFixtureAuthority,
+                OnboardingFixtureChainId,
+                SharedOnboardingBodyEncoder,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(escapedOnboardingToken, error.Message);
     }
 
     [Fact]
@@ -14999,127 +15387,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal("QUEUED", response.Status);
     }
 
-    [Fact]
-    public async Task RegisterMultisigAccountAsyncPostsMembersAndAcceptsExistsResponse()
-    {
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal("/v1/accounts/onboard/multisig", request.RequestUri!.AbsolutePath);
-            Assert.Equal("treasury@paynet", payload.RootElement.GetProperty("alias").GetString());
-            Assert.Equal(2, payload.RootElement.GetProperty("required_signers").GetInt32());
-            Assert.Equal(MultisigMemberAccountId1, payload.RootElement.GetProperty("member_account_ids")[0].GetString());
-            Assert.Equal(MultisigMemberAccountId2, payload.RootElement.GetProperty("member_account_ids")[1].GetString());
-            Assert.Equal(2, payload.RootElement.GetProperty("member_weights")[1].GetInt32());
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent($$"""
-                    {
-                      "account_id": "{{MultisigOnboardingAccountId}}",
-                      "tx_hash_hex": "",
-                      "status": "EXISTS"
-                    }
-                    """),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.RegisterMultisigAccountAsync(new ToriiMultisigAccountOnboardingRequest
-        {
-            Alias = "treasury@paynet",
-            RequiredSigners = 2,
-            MemberAccountIds = [MultisigMemberAccountId1, MultisigMemberAccountId2],
-            MemberWeights = [1, 2],
-            TransactionTtlMilliseconds = 60_000,
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(MultisigOnboardingAccountId, response.AccountId);
-        Assert.Equal(string.Empty, response.TransactionHashHex);
-        Assert.Equal("EXISTS", response.Status);
-    }
-
-    [Fact]
-    public async Task RegisterMultisigAccountAsyncSnapshotsMemberListsBeforeDispatch()
-    {
-        string[] memberAccountIds = [MultisigMemberAccountId1, MultisigMemberAccountId2];
-        byte[] memberWeights = [1, 2];
-
-        using var handler = new RecordingHandler(request =>
-        {
-            memberAccountIds[0] = "merchant@sora";
-            memberWeights[1] = 9;
-
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal(MultisigMemberAccountId1, payload.RootElement.GetProperty("member_account_ids")[0].GetString());
-            Assert.Equal(MultisigMemberAccountId2, payload.RootElement.GetProperty("member_account_ids")[1].GetString());
-            Assert.Equal(1, payload.RootElement.GetProperty("member_weights")[0].GetInt32());
-            Assert.Equal(2, payload.RootElement.GetProperty("member_weights")[1].GetInt32());
-
-            return new HttpResponseMessage(HttpStatusCode.Accepted)
-            {
-                Content = new StringContent($$"""
-                    {
-                      "account_id": "{{MultisigOnboardingAccountId}}",
-                      "tx_hash_hex": "{{ToriiTransactionHashHex}}",
-                      "status": "QUEUED"
-                    }
-                    """),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.RegisterMultisigAccountAsync(new ToriiMultisigAccountOnboardingRequest
-        {
-            Alias = "treasury@paynet",
-            RequiredSigners = 2,
-            MemberAccountIds = memberAccountIds,
-            MemberWeights = memberWeights,
-            TransactionTtlMilliseconds = 60_000,
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(MultisigOnboardingAccountId, response.AccountId);
-        Assert.Equal(ToriiTransactionHashHex, response.TransactionHashHex);
-        Assert.Equal("QUEUED", response.Status);
-    }
-
-    [Fact]
-    public void MultisigAccountOnboardingRequestSnapshotsMemberListsOnInitAndAccess()
-    {
-        string[] memberAccountIds = [MultisigMemberAccountId1, MultisigMemberAccountId2];
-        byte[] memberWeights = [1, 2];
-        var request = new ToriiMultisigAccountOnboardingRequest
-        {
-            Alias = "treasury@paynet",
-            RequiredSigners = 2,
-            MemberAccountIds = memberAccountIds,
-            MemberWeights = memberWeights,
-            TransactionTtlMilliseconds = 60_000,
-        };
-
-        memberAccountIds[0] = "merchant@sora";
-        memberWeights[1] = 9;
-        var returnedMemberAccountIds = Assert.IsType<string[]>(request.MemberAccountIds);
-        returnedMemberAccountIds[1] = "merchant@sora";
-        var returnedMemberWeights = Assert.IsType<byte[]>(request.MemberWeights);
-        returnedMemberWeights[0] = 9;
-
-        Assert.Equal([MultisigMemberAccountId1, MultisigMemberAccountId2], request.MemberAccountIds);
-        Assert.Equal([1, 2], request.MemberWeights);
-        Assert.NotSame(returnedMemberAccountIds, request.MemberAccountIds);
-        Assert.NotSame(returnedMemberWeights, request.MemberWeights);
-
-        var nullElementError = Assert.Throws<ArgumentException>(() => new ToriiMultisigAccountOnboardingRequest
-        {
-            MemberAccountIds = [MultisigMemberAccountId1, null!],
-        });
-        Assert.Equal("MemberAccountIds[1]", nullElementError.ParamName);
-        Assert.Contains("must not be null", nullElementError.Message);
-    }
-
     public static IEnumerable<object[]> InvalidToriiTransactionHashResponses()
     {
-        yield return new object[] { "account-onboarding", "tx_hash_hex", " " + ToriiTransactionHashHex, "surrounding whitespace" };
         yield return new object[] { "account-faucet", "tx_hash_hex", ToriiTransactionHashHex + " ", "surrounding whitespace" };
         yield return new object[] { "contract-call", "tx_hash_hex", ToriiTransactionHashHex[..32] + " " + ToriiTransactionHashHex[32..], "whitespace" };
         yield return new object[] { "multisig-propose", "tx_hash_hex", ToriiTransactionHashHex + "\u0001", "control characters" };
@@ -15154,18 +15423,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     public static IEnumerable<object[]> InvalidOnboardingRequiredStringResponses()
     {
-        yield return new object[] { "account-onboarding", "account_id", OnboardingTransactionHashResponseJson("account-onboarding", "account_id", null), "must not be null" };
-        yield return new object[] { "account-onboarding", "account_id", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-onboarding", "account_id", OnboardingAccountId), "account_id"), "must not be null" };
-        yield return new object[] { "account-onboarding", "account_id", OnboardingTransactionHashResponseJson("account-onboarding", "account_id", ""), "non-empty" };
-        yield return new object[] { "account-onboarding", "account_id", OnboardingTransactionHashResponseJson("account-onboarding", "account_id", "merchant@sora"), "canonical I105" };
-        yield return new object[] { "account-onboarding", "account_id", OnboardingTransactionHashResponseJson("account-onboarding", "account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
-        yield return new object[] { "account-onboarding", "account_id", OnboardingTransactionHashResponseJson("account-onboarding", "account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
-        yield return new object[] { "account-onboarding", "uaid", OnboardingTransactionHashResponseJson("account-onboarding", "uaid", null), "must not be null" };
-        yield return new object[] { "account-onboarding", "uaid", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-onboarding", "uaid", "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), "uaid"), "must not be null" };
-        yield return new object[] { "account-onboarding", "uaid", OnboardingTransactionHashResponseJson("account-onboarding", "uaid", " uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), "surrounding whitespace" };
-        yield return new object[] { "account-onboarding", "status", OnboardingTransactionHashResponseJson("account-onboarding", "status", null), "must not be null" };
-        yield return new object[] { "account-onboarding", "status", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-onboarding", "status", "QUEUED"), "status"), "must not be null" };
-        yield return new object[] { "account-onboarding", "status", OnboardingTransactionHashResponseJson("account-onboarding", "status", "QUEUED\u0001"), "control characters" };
         yield return new object[] { "account-faucet", "account_id", OnboardingTransactionHashResponseJson("account-faucet", "account_id", null), "must not be null" };
         yield return new object[] { "account-faucet", "account_id", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-faucet", "account_id", FaucetAccountId), "account_id"), "must not be null" };
         yield return new object[] { "account-faucet", "account_id", OnboardingTransactionHashResponseJson("account-faucet", "account_id", "merchant@sora"), "canonical I105" };
@@ -15182,15 +15439,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "account-faucet", "status", OnboardingTransactionHashResponseJson("account-faucet", "status", null), "must not be null" };
         yield return new object[] { "account-faucet", "status", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-faucet", "status", "QUEUED"), "status"), "must not be null" };
         yield return new object[] { "account-faucet", "status", OnboardingTransactionHashResponseJson("account-faucet", "status", "QUEUE D"), "whitespace" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", null), "must not be null" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", MultisigOnboardingAccountId), "account_id"), "must not be null" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", "sorauﾛ1Nmulti\u0001sig"), "control characters" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", "merchant@sora"), "canonical I105" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
-        yield return new object[] { "multisig-account-onboarding", "account_id", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
-        yield return new object[] { "multisig-account-onboarding", "status", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "status", null), "must not be null" };
-        yield return new object[] { "multisig-account-onboarding", "status", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("multisig-account-onboarding", "status", "QUEUED"), "status"), "must not be null" };
-        yield return new object[] { "multisig-account-onboarding", "status", OnboardingTransactionHashResponseJson("multisig-account-onboarding", "status", ""), "non-empty" };
     }
 
     [Theory]
@@ -15217,36 +15465,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     public static IEnumerable<object[]> InvalidRawOnboardingTransactionHashResponses()
     {
-        yield return new object[] { "account-onboarding", "account onboarding response", "null", "must not be null" };
-        yield return new object[] { "account-onboarding", "account onboarding response", "[]", "object" };
-        yield return new object[]
-        {
-            "account-onboarding",
-            "tx_hash_hex",
-            OnboardingTransactionHashDuplicatePropertyJson("account-onboarding", "tx_hash_hex"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "account-onboarding",
-            "account onboarding response.audit.nonce",
-            OnboardingTransactionHashUnknownExtensionDuplicateJson("account-onboarding"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "account-onboarding",
-            "tx_hash_hex",
-            OnboardingTransactionHashResponseJson("account-onboarding", "tx_hash_hex", 1),
-            "string",
-        };
-        yield return new object[]
-        {
-            "account-onboarding",
-            "tx_hash_hex",
-            OnboardingTransactionHashResponseJson("account-onboarding", "tx_hash_hex", " " + ToriiTransactionHashHex),
-            "surrounding whitespace",
-        };
         yield return new object[]
         {
             "account-faucet",
@@ -15266,27 +15484,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "account-faucet",
             "amount",
             OnboardingTransactionHashResponseJson("account-faucet", "amount", 100),
-            "string",
-        };
-        yield return new object[]
-        {
-            "multisig-account-onboarding",
-            "tx_hash_hex",
-            OnboardingTransactionHashResponseJson("multisig-account-onboarding", "tx_hash_hex", "0x" + ToriiTransactionHashHex),
-            "32-byte hex string",
-        };
-        yield return new object[]
-        {
-            "multisig-account-onboarding",
-            "multisig account onboarding response.audit.nonce",
-            OnboardingTransactionHashUnknownExtensionDuplicateJson("multisig-account-onboarding"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "multisig-account-onboarding",
-            "status",
-            OnboardingTransactionHashResponseJson("multisig-account-onboarding", "status", true),
             "string",
         };
     }
@@ -15322,9 +15519,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("account-onboarding")]
     [InlineData("account-faucet")]
-    [InlineData("multisig-account-onboarding")]
     public void RawOnboardingTransactionHashResponsesAllowEmptyOrNullTransactionHash(string operation)
     {
         var emptyResponse = DeserializeRawOnboardingTransactionHashResponse(
@@ -15340,21 +15535,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     public static IEnumerable<object?[]> InvalidDirectOnboardingFaucetMetadata()
     {
-        yield return new object?[] { "account-onboarding", "AccountId", "merchant@sora" };
-        yield return new object?[] { "account-onboarding", "Uaid", "uaid:0123 4567" };
-        yield return new object?[] { "account-onboarding", "TransactionHashHex", " " + ToriiTransactionHashHex };
-        yield return new object?[] { "account-onboarding", "Status", "QUE UED" };
-
         yield return new object?[] { "account-faucet", "AccountId", "merchant@sora" };
         yield return new object?[] { "account-faucet", "AssetDefinitionId", "rose #wonderland" };
         yield return new object?[] { "account-faucet", "AssetId", "rose#wonderland #holder" };
         yield return new object?[] { "account-faucet", "Amount", "100 coins" };
         yield return new object?[] { "account-faucet", "TransactionHashHex", ToriiTransactionHashHex.ToUpperInvariant() };
         yield return new object?[] { "account-faucet", "Status", "" };
-
-        yield return new object?[] { "multisig-account-onboarding", "AccountId", "merchant@sora" };
-        yield return new object?[] { "multisig-account-onboarding", "TransactionHashHex", "0x" + ToriiTransactionHashHex };
-        yield return new object?[] { "multisig-account-onboarding", "Status", "QUEUED\u0001" };
 
         yield return new object?[] { "faucet-puzzle", "Algorithm", " " + ToriiAccountFaucetPow.Algorithm };
         yield return new object?[] { "faucet-puzzle", "Algorithm", "scrypt-leading-zero-bits-v2" };
@@ -15380,34 +15566,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal(propertyName, error.ParamName);
     }
 
-    [Fact]
-    public void RawOnboardingTransactionHashResponseWriteRejectsMalformedHash()
-    {
-        var response = new ToriiAccountOnboardingResponse
-        {
-            AccountId = OnboardingAccountId,
-            Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            TransactionHashHex = ToriiTransactionHashHex,
-            Status = "QUEUED",
-        };
-        SetPrivateField(response, "transactionHashHex", " " + ToriiTransactionHashHex);
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("tx_hash_hex", error.Message);
-        Assert.Contains("surrounding whitespace", error.Message);
-    }
-
     [Theory]
-    [InlineData("account-onboarding", "merchant@sora")]
-    [InlineData("account-onboarding", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
-    [InlineData("account-onboarding", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
     [InlineData("account-faucet", "merchant@sora")]
     [InlineData("account-faucet", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
     [InlineData("account-faucet", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
-    [InlineData("multisig-account-onboarding", "merchant@sora")]
-    [InlineData("multisig-account-onboarding", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
-    [InlineData("multisig-account-onboarding", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
     public void RawOnboardingTransactionHashResponseWriteRejectsNoncanonicalAccountId(
         string operation,
         string accountId)
@@ -15417,45 +15579,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         Assert.Contains("account_id", error.Message);
         Assert.Contains("canonical I105", error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidMultisigAccountOnboardingRequests()
-    {
-        var valid = ValidMultisigAccountOnboardingRequest();
-        yield return new object[] { valid with { Alias = " treasury@paynet" }, "Alias", "whitespace" };
-        yield return new object[] { valid with { Alias = "treasury@paynet\u0001" }, "Alias", "control characters" };
-        yield return new object[] { valid with { RequiredSigners = 0 }, "RequiredSigners", "positive" };
-        yield return new object[] { valid with { RequiredSigners = 4 }, "RequiredSigners", "total member weight" };
-        yield return new object[] { valid with { MemberAccountIds = [] }, "MemberAccountIds", "must not be empty" };
-        yield return new object[] { valid with { MemberAccountIds = null! }, "MemberAccountIds", "cannot be null" };
-        yield return new object[] { valid with { MemberAccountIds = [" " + MultisigMemberAccountId1, MultisigMemberAccountId2] }, "MemberAccountIds[0]", "whitespace" };
-        yield return new object[] { valid with { MemberAccountIds = [MultisigMemberAccountId1 + "\u0001", MultisigMemberAccountId2] }, "MemberAccountIds[0]", "control characters" };
-        yield return new object[] { valid with { MemberAccountIds = ["merchant@sora", MultisigMemberAccountId2] }, "MemberAccountIds[0]", "canonical I105" };
-        yield return new object[] { valid with { MemberAccountIds = ["0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", MultisigMemberAccountId2] }, "MemberAccountIds[0]", "canonical I105" };
-        yield return new object[] { valid with { MemberAccountIds = ["n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ", MultisigMemberAccountId2] }, "MemberAccountIds[0]", "canonical I105" };
-        yield return new object[] { valid with { MemberWeights = null! }, "MemberWeights", "cannot be null" };
-        yield return new object[] { valid with { MemberWeights = [1] }, "MemberWeights", "count must match" };
-        yield return new object[] { valid with { MemberWeights = [1, 0] }, "MemberWeights", "positive" };
-        yield return new object[] { valid with { TransactionTtlMilliseconds = 0 }, "TransactionTtlMilliseconds", "must be positive" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidMultisigAccountOnboardingRequests))]
-    public async Task RegisterMultisigAccountAsyncRejectsMalformedOnboardingRequestsBeforeDispatch(
-        ToriiMultisigAccountOnboardingRequest request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed multisig onboarding request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.RegisterMultisigAccountAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
     }
 
     [Fact]
@@ -16035,74 +16158,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task DeployContractAsyncEncodesRouteAndDeserializesResponse()
-    {
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal(ContractAuthorityAccountId, payload.RootElement.GetProperty("authority").GetString());
-            Assert.Equal("router::dex.universal", payload.RootElement.GetProperty("contract_alias").GetString());
-            Assert.False(payload.RootElement.TryGetProperty("dataspace", out _));
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(ContractDeploymentResponseJson("deploy")),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.DeployContractAsync(new ToriiDeployContractRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            CodeBase64 = "AQID",
-            ContractAlias = "router::dex.universal",
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(response.Ok);
-        Assert.Equal("universal", response.Dataspace);
-        Assert.Equal((ulong)4, response.DeployNonce);
-        Assert.Equal("/v1/contracts/deploy", handler.LastRequest!.RequestUri!.AbsolutePath);
-        Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
-    }
-
-    public static IEnumerable<object[]> InvalidDeployContractRequests()
-    {
-        var valid = ValidDeployContractRequest();
-        yield return new object[] { valid with { Authority = " " + ContractAuthorityAccountId }, "Authority", "whitespace" };
-        yield return new object[] { valid with { Authority = "merchant@sora" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { PrivateKey = "ed0120AABB\u0001" }, "PrivateKey", "control characters" };
-        yield return new object[] { valid with { CodeBase64 = " AQID" }, "CodeBase64", "whitespace" };
-        yield return new object[] { valid with { CodeBase64 = "" }, "CodeBase64", "null or whitespace" };
-        yield return new object[] { valid with { CodeBase64 = "not-base64" }, "CodeBase64", "base64 encoded" };
-        yield return new object[] { valid with { CodeBase64 = "AR==" }, "CodeBase64", "canonical base64" };
-        yield return new object[] { valid with { ContractAlias = "" }, "ContractAlias", "null or whitespace" };
-        yield return new object[] { valid with { ContractAlias = " router::dex.universal" }, "ContractAlias", "whitespace" };
-        yield return new object[] { valid with { ContractAlias = "router::dex.universal\u0001" }, "ContractAlias", "control characters" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidDeployContractRequests))]
-    public async Task DeployContractAsyncRejectsMalformedRequestBeforeDispatch(
-        ToriiDeployContractRequest request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed contract deploy request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.DeployContractAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
     public async Task GetContractCodeBytesAsyncEncodesCodeHashAndDecodesBase64()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -16266,490 +16321,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiContractCodeBytesResponse { CodeBase64 = codeBase64 });
 
         Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Fact]
-    public async Task DeployAndActivateContractInstanceAsyncEncodesRouteAndDeserializesResponse()
-    {
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal(ContractAuthorityAccountId, payload.RootElement.GetProperty("authority").GetString());
-            Assert.Equal("apps", payload.RootElement.GetProperty("namespace").GetString());
-            Assert.Equal("calc.v1", payload.RootElement.GetProperty("contract_id").GetString());
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(ContractDeploymentResponseJson("deploy-and-activate")),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.DeployAndActivateContractInstanceAsync(new ToriiDeployAndActivateContractInstanceRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            Namespace = "apps",
-            ContractId = "calc.v1",
-            CodeBase64 = "AQID",
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(response.Ok);
-        Assert.Equal("apps", response.Namespace);
-        Assert.Equal("calc.v1", response.ContractId);
-        Assert.Equal("/v1/contracts/instance", handler.LastRequest!.RequestUri!.AbsolutePath);
-        Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
-    }
-
-    public static IEnumerable<object[]> InvalidDeployAndActivateContractInstanceRequests()
-    {
-        var valid = ValidDeployAndActivateContractInstanceRequest();
-        yield return new object[] { valid with { Authority = "" }, "Authority", "null or whitespace" };
-        yield return new object[] { valid with { Authority = "merchant@sora" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { PrivateKey = " ed0120AABB" }, "PrivateKey", "whitespace" };
-        yield return new object[] { valid with { Namespace = " apps" }, "Namespace", "whitespace" };
-        yield return new object[] { valid with { ContractId = "calc.v1\u0001" }, "ContractId", "control characters" };
-        yield return new object[] { valid with { CodeBase64 = " AQID" }, "CodeBase64", "whitespace" };
-        yield return new object[] { valid with { CodeBase64 = "not-base64" }, "CodeBase64", "base64 encoded" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidDeployAndActivateContractInstanceRequests))]
-    public async Task DeployAndActivateContractInstanceAsyncRejectsMalformedRequestBeforeDispatch(
-        ToriiDeployAndActivateContractInstanceRequest request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed contract instance deploy request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.DeployAndActivateContractInstanceAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
-    public async Task ActivateContractInstanceAsyncEncodesRouteAndDeserializesResponse()
-    {
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal(ContractAuthorityAccountId, payload.RootElement.GetProperty("authority").GetString());
-            Assert.Equal(new string('a', 64), payload.RootElement.GetProperty("code_hash").GetString());
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""{ "ok": true }"""),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.ActivateContractInstanceAsync(new ToriiActivateContractInstanceRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            Namespace = "apps",
-            ContractId = "calc.v1",
-            CodeHash = new string('a', 64),
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(response.Ok);
-        Assert.Equal("/v1/contracts/instance/activate", handler.LastRequest!.RequestUri!.AbsolutePath);
-        Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
-    }
-
-    public static IEnumerable<object[]> InvalidActivateContractInstanceRequests()
-    {
-        var valid = ValidActivateContractInstanceRequest();
-        yield return new object[] { valid with { Authority = ContractAuthorityAccountId + " " }, "Authority", "whitespace" };
-        yield return new object[] { valid with { Authority = "merchant@sora" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Namespace = "" }, "Namespace", "null or whitespace" };
-        yield return new object[] { valid with { ContractId = "calc v1" }, "ContractId", "whitespace" };
-        yield return new object[] { valid with { CodeHash = " " + new string('a', 64) }, "CodeHash", "whitespace" };
-        yield return new object[] { valid with { CodeHash = new string('a', 63) }, "CodeHash", "32-byte hex string" };
-        yield return new object[] { valid with { CodeHash = new string('g', 64) }, "CodeHash", "32-byte hex string" };
-        yield return new object[] { valid with { CodeHash = "0x" + new string('a', 64) }, "CodeHash", "32-byte hex string" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidActivateContractInstanceRequests))]
-    public async Task ActivateContractInstanceAsyncRejectsMalformedRequestBeforeDispatch(
-        ToriiActivateContractInstanceRequest request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed contract activation request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.ActivateContractInstanceAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Theory]
-    [InlineData("deploy")]
-    [InlineData("deploy-and-activate")]
-    [InlineData("activate")]
-    public async Task ContractDeploymentAsyncRejectsFalseOkResponse(string operation)
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(ContractDeploymentResponseJson(operation, ok: false)),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            InvokeContractDeploymentOperationAsync(client, operation));
-
-        Assert.Contains(".ok must be true", error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidContractDeploymentHashResponses()
-    {
-        yield return new object[] { "deploy", "code_hash_hex", "", "non-empty 32-byte hex string" };
-        yield return new object[] { "deploy", "code_hash_hex", " " + ContractCodeHashHex, "surrounding whitespace" };
-        yield return new object[] { "deploy", "abi_hash_hex", ContractAbiHashHex + " ", "surrounding whitespace" };
-        yield return new object[] { "deploy-and-activate", "code_hash_hex", ContractCodeHashHex[..32] + " " + ContractCodeHashHex[32..], "whitespace" };
-        yield return new object[] { "deploy-and-activate", "abi_hash_hex", ContractAbiHashHex + "\u0001", "control characters" };
-        yield return new object[] { "deploy-and-activate", "code_hash_hex", new string('a', 63), "32-byte hex string" };
-        yield return new object[] { "deploy", "abi_hash_hex", "0x" + ContractAbiHashHex, "32-byte hex string" };
-        yield return new object[] { "deploy-and-activate", "abi_hash_hex", new string('g', 64), "32-byte hex string" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractDeploymentHashResponses))]
-    public async Task ContractDeploymentAsyncRejectsNonExactHashResponse(
-        string operation,
-        string field,
-        string value,
-        string expectedMessage)
-    {
-        var codeHashHex = field == "code_hash_hex" ? value : ContractCodeHashHex;
-        var abiHashHex = field == "abi_hash_hex" ? value : ContractAbiHashHex;
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(ContractDeploymentResponseJson(operation, codeHashHex: codeHashHex, abiHashHex: abiHashHex)),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            InvokeContractDeploymentOperationAsync(client, operation));
-
-        Assert.Contains(field, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object?[]> InvalidContractDeploymentIdentifierResponses()
-    {
-        yield return new object?[] { "deploy", "contract_address", null, "must not be null" };
-        yield return new object?[] { "deploy", "contract_address", "", "non-empty" };
-        yield return new object?[] { "deploy", "contract_address", " iroha1qqqq", "surrounding whitespace" };
-        yield return new object?[] { "deploy", "dataspace", null, "must not be null" };
-        yield return new object?[] { "deploy", "dataspace", "universal ", "surrounding whitespace" };
-        yield return new object?[] { "deploy", "dataspace", "uni versal", "whitespace" };
-        yield return new object?[] { "deploy", "dataspace", "universal\u0001", "control characters" };
-        yield return new object?[] { "deploy-and-activate", "namespace", null, "must not be null" };
-        yield return new object?[] { "deploy-and-activate", "namespace", "", "non-empty" };
-        yield return new object?[] { "deploy-and-activate", "namespace", " apps", "surrounding whitespace" };
-        yield return new object?[] { "deploy-and-activate", "contract_id", null, "must not be null" };
-        yield return new object?[] { "deploy-and-activate", "contract_id", "calc v1", "whitespace" };
-        yield return new object?[] { "deploy-and-activate", "contract_id", "calc.v1\u0001", "control characters" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractDeploymentIdentifierResponses))]
-    public async Task ContractDeploymentAsyncRejectsNonExactIdentifierResponse(
-        string operation,
-        string field,
-        object? value,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(ContractDeploymentResponseJson(operation, field, value)),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            InvokeContractDeploymentOperationAsync(client, operation));
-
-        Assert.Contains(field, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidContractDeploymentRequiredStringPresenceResponses()
-    {
-        foreach (var field in new[] { "contract_address", "dataspace", "code_hash_hex", "abi_hash_hex" })
-        {
-            yield return new object[]
-            {
-                "deploy",
-                field,
-                ContractDeploymentResponseJson("deploy", field, null),
-                "must not be null",
-            };
-            yield return new object[]
-            {
-                "deploy",
-                field,
-                RemoveTopLevelJsonField(ContractDeploymentResponseJson("deploy"), field),
-                "must not be null",
-            };
-        }
-
-        foreach (var field in new[] { "namespace", "contract_id", "code_hash_hex", "abi_hash_hex" })
-        {
-            yield return new object[]
-            {
-                "deploy-and-activate",
-                field,
-                ContractDeploymentResponseJson("deploy-and-activate", field, null),
-                "must not be null",
-            };
-            yield return new object[]
-            {
-                "deploy-and-activate",
-                field,
-                RemoveTopLevelJsonField(ContractDeploymentResponseJson("deploy-and-activate"), field),
-                "must not be null",
-            };
-        }
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractDeploymentRequiredStringPresenceResponses))]
-    public async Task ContractDeploymentAsyncRejectsMissingRequiredStringResponse(
-        string operation,
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(json),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            InvokeContractDeploymentOperationAsync(client, operation));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractDeploymentRequiredStringPresenceResponses))]
-    public void RawContractDeploymentResponsesRejectMissingRequiredStrings(
-        string operation,
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            DeserializeRawContractDeploymentResponse(operation, json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawDeployContractResponses()
-    {
-        yield return new object[] { "contract deploy response", "null", "must not be null" };
-        yield return new object[] { "contract deploy response", "[]", "object" };
-        yield return new object[]
-        {
-            "ok",
-            ContractDeploymentDuplicatePropertyJson("deploy", "ok"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract deploy response.audit.nonce",
-            ContractDeploymentUnknownExtensionDuplicateJson("deploy"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "ok", RemoveTopLevelJsonField(ContractDeploymentRawResponseJson("deploy", "ok", true), "ok"), "must not be null" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("deploy", "ok", "true"), "boolean" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("deploy", "ok", false), "must be true" };
-        yield return new object[] { "contract_address", ContractDeploymentRawResponseJson("deploy", "contract_address", null), "must not be null" };
-        yield return new object[] { "contract_address", ContractDeploymentRawResponseJson("deploy", "contract_address", 1), "string" };
-        yield return new object[] { "dataspace", ContractDeploymentRawResponseJson("deploy", "dataspace", "universal "), "surrounding whitespace" };
-        yield return new object[] { "deploy_nonce", RemoveTopLevelJsonField(ContractDeploymentRawResponseJson("deploy", "deploy_nonce", 4), "deploy_nonce"), "must not be null" };
-        yield return new object[] { "deploy_nonce", ContractDeploymentRawResponseJson("deploy", "deploy_nonce", -1), "unsigned integer" };
-        yield return new object[] { "deploy_nonce", ContractDeploymentRawResponseJson("deploy", "deploy_nonce", "4"), "unsigned integer" };
-        yield return new object[] { "code_hash_hex", ContractDeploymentRawResponseJson("deploy", "code_hash_hex", ContractCodeHashHex.ToUpperInvariant()), "lowercase" };
-        yield return new object[] { "abi_hash_hex", ContractDeploymentRawResponseJson("deploy", "abi_hash_hex", "0x" + ContractAbiHashHex), "32-byte hex string" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawDeployContractResponses))]
-    public void RawDeployContractResponseRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiDeployContractResponse>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawDeployAndActivateContractInstanceResponses()
-    {
-        yield return new object[] { "contract instance deploy response", "null", "must not be null" };
-        yield return new object[] { "contract instance deploy response", "[]", "object" };
-        yield return new object[]
-        {
-            "ok",
-            ContractDeploymentDuplicatePropertyJson("deploy-and-activate", "ok"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract instance deploy response.audit.nonce",
-            ContractDeploymentUnknownExtensionDuplicateJson("deploy-and-activate"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "ok", RemoveTopLevelJsonField(ContractDeploymentRawResponseJson("deploy-and-activate", "ok", true), "ok"), "must not be null" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("deploy-and-activate", "ok", "true"), "boolean" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("deploy-and-activate", "ok", false), "must be true" };
-        yield return new object[] { "namespace", ContractDeploymentRawResponseJson("deploy-and-activate", "namespace", null), "must not be null" };
-        yield return new object[] { "namespace", ContractDeploymentRawResponseJson("deploy-and-activate", "namespace", " apps"), "surrounding whitespace" };
-        yield return new object[] { "contract_id", ContractDeploymentRawResponseJson("deploy-and-activate", "contract_id", "calc v1"), "whitespace" };
-        yield return new object[] { "code_hash_hex", ContractDeploymentRawResponseJson("deploy-and-activate", "code_hash_hex", ContractCodeHashHex.ToUpperInvariant()), "lowercase" };
-        yield return new object[] { "abi_hash_hex", ContractDeploymentRawResponseJson("deploy-and-activate", "abi_hash_hex", "0x" + ContractAbiHashHex), "32-byte hex string" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawDeployAndActivateContractInstanceResponses))]
-    public void RawDeployAndActivateContractInstanceResponseRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiDeployAndActivateContractInstanceResponse>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawActivateContractInstanceResponses()
-    {
-        yield return new object[] { "contract instance activation response", "null", "must not be null" };
-        yield return new object[] { "contract instance activation response", "[]", "object" };
-        yield return new object[]
-        {
-            "ok",
-            ContractDeploymentDuplicatePropertyJson("activate", "ok"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract instance activation response.audit.nonce",
-            ContractDeploymentUnknownExtensionDuplicateJson("activate"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "ok", RemoveTopLevelJsonField(ContractDeploymentRawResponseJson("activate", "ok", true), "ok"), "must not be null" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("activate", "ok", "true"), "boolean" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("activate", "ok", false), "must be true" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawActivateContractInstanceResponses))]
-    public void RawActivateContractInstanceResponseRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiActivateContractInstanceResponse>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object?[]> InvalidDirectContractDeploymentMetadata()
-    {
-        yield return new object?[] { "deploy", "Ok", false };
-        yield return new object?[] { "deploy", "ContractAddress", " iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" };
-        yield return new object?[] { "deploy", "Dataspace", "uni versal" };
-        yield return new object?[] { "deploy", "CodeHashHex", "0x" + ContractCodeHashHex };
-        yield return new object?[] { "deploy", "AbiHashHex", new string('B', 64) };
-
-        yield return new object?[] { "deploy-and-activate", "Ok", false };
-        yield return new object?[] { "deploy-and-activate", "Namespace", " apps" };
-        yield return new object?[] { "deploy-and-activate", "ContractId", "calc v1" };
-        yield return new object?[] { "deploy-and-activate", "CodeHashHex", ContractCodeHashHex.ToUpperInvariant() };
-        yield return new object?[] { "deploy-and-activate", "AbiHashHex", "0x" + ContractAbiHashHex };
-
-        yield return new object?[] { "activate", "Ok", false };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidDirectContractDeploymentMetadata))]
-    public void ContractDeploymentDtosRejectMalformedDirectMetadata(
-        string operation,
-        string propertyName,
-        object? value)
-    {
-        var error = Assert.ThrowsAny<ArgumentException>(() =>
-            SetContractDeploymentDirectMetadata(operation, propertyName, value));
-
-        Assert.Equal(propertyName, error.ParamName);
-    }
-
-    [Fact]
-    public void RawDeployContractResponseWriteRejectsMalformedHash()
-    {
-        var response = ValidDeployContractResponse();
-        SetPrivateField(response, "codeHashHex", ContractCodeHashHex.ToUpperInvariant());
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("code_hash_hex", error.Message);
-        Assert.Contains("lowercase", error.Message);
-    }
-
-    [Fact]
-    public void RawDeployAndActivateContractInstanceResponseWriteRejectsMalformedContractId()
-    {
-        var response = ValidDeployAndActivateContractInstanceResponse();
-        SetPrivateField(response, "contractId", "calc v1");
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("contract_id", error.Message);
-        Assert.Contains("whitespace", error.Message);
-    }
-
-    [Fact]
-    public void RawActivateContractInstanceResponseWriteRejectsFalseOk()
-    {
-        var response = ValidActivateContractInstanceResponse();
-        SetPrivateField(response, "ok", false);
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("ok", error.Message);
-        Assert.Contains("must be true", error.Message);
     }
 
     [Fact]
@@ -18031,7 +17602,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             var payload = ReadBodyAsJson(request);
             Assert.Equal(ContractAuthorityAccountId, payload.RootElement.GetProperty("authority").GetString());
-            Assert.Equal(ContractFeeSponsorAccountId, payload.RootElement.GetProperty("fee_sponsor").GetString());
+            Assert.True(payload.RootElement.TryGetProperty("fee_payment", out _));
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -18061,13 +17632,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Authority = ContractAuthorityAccountId,
             ContractAlias = "router::dex.universal",
             Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-            GasLimit = 500_000,
-            FeeSponsor = ContractFeeSponsorAccountId,
+            FeePayment = SponsorFeePayment(ContractFeeSponsorAccountId, 500_000),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(response.Ok);
         Assert.False(response.Submitted);
-        Assert.Equal("router::dex.universal", response.ContractId);
+        Assert.NotNull(response.ContractAddress);
         Assert.Equal("c2NhZmZvbGQ=", response.TransactionScaffoldBase64);
         Assert.Equal("/v1/contracts/call", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
@@ -18088,7 +17658,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Authority = ContractAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-                GasLimit = 500_000,
+                FeePayment = EmptyAuthorityFeePayment,
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("contract call response.ok", error.Message);
@@ -18132,7 +17702,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Authority = ContractAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-                GasLimit = 500_000,
+                FeePayment = EmptyAuthorityFeePayment,
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains($"contract call response.{responseField}", error.Message);
@@ -18154,7 +17724,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Authority = ContractAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-                GasLimit = 500_000,
+                FeePayment = EmptyAuthorityFeePayment,
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("contract call response.creation_time_ms", error.Message);
@@ -18645,12 +18215,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { valid with { PublicKeyHex = new string('a', 64), SignatureBase64 = " AQID" }, "SignatureBase64", "whitespace" };
         yield return new object[] { valid with { PublicKeyHex = new string('a', 64), SignatureBase64 = "not-base64" }, "SignatureBase64", "base64 encoded" };
         yield return new object[] { valid with { Entrypoint = " main" }, "Entrypoint", "whitespace" };
-        yield return new object[] { valid with { GasAssetId = "xor #universal" }, "GasAssetId", "whitespace" };
-        yield return new object[] { valid with { FeeSponsor = ContractFeeSponsorAccountId + "\u0001" }, "FeeSponsor", "control characters" };
-        yield return new object[] { valid with { FeeSponsor = "merchant@sora" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { GasLimit = 0 }, "GasLimit", "positive" };
+        yield return new object[] { valid with { FeePayment = null! }, "FeePayment", "required" };
     }
 
     [Theory]
@@ -18989,7 +18554,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var handler = new RecordingHandler(request =>
         {
             var payload = ReadBodyAsJson(request);
-            Assert.Equal(MultisigFeeSponsorAccountId, payload.RootElement.GetProperty("fee_sponsor").GetString());
+            Assert.True(payload.RootElement.TryGetProperty("fee_payment", out _));
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -19014,10 +18579,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountAlias = "ops@universal",
             SignerAccountId = MultisigSignerAccountId,
-            Namespace = "apps",
-            ContractId = "calc.v1",
+            ContractAlias = "router::dex.universal",
             Entrypoint = "main",
-            FeeSponsor = MultisigFeeSponsorAccountId,
+            FeePayment = SponsorFeePayment(MultisigFeeSponsorAccountId, 500_000),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(response.Ok);
@@ -19043,15 +18607,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { valid with { SignerAccountId = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "SignerAccountId", "canonical I105" };
         yield return new object[] { valid with { PrivateKey = "ed0120AABB", PublicKeyHex = new string('a', 64), SignatureBase64 = "AQID" }, "PrivateKey", "not both" };
         yield return new object[] { valid with { PublicKeyHex = new string('a', 64) }, "SignatureBase64", "Detached signing requires both" };
-        yield return new object[] { valid with { Namespace = " apps" }, "Namespace", "whitespace" };
-        yield return new object[] { valid with { ContractId = "calc v1" }, "ContractId", "whitespace" };
+        yield return new object[] { valid with { ContractAlias = " router::dex.universal" }, "ContractAlias", "whitespace" };
         yield return new object[] { valid with { Entrypoint = "" }, "Entrypoint", "null or whitespace" };
-        yield return new object[] { valid with { FeeSponsor = MultisigFeeSponsorAccountId + "\u0001" }, "FeeSponsor", "control characters" };
-        yield return new object[] { valid with { FeeSponsor = "sponsor@universal" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "FeeSponsor", "canonical I105" };
+        yield return new object[] { valid with { FeePayment = null! }, "FeePayment", "required" };
         yield return new object[] { valid with { CreationTimeMilliseconds = 0 }, "CreationTimeMilliseconds", "positive" };
-        yield return new object[] { valid with { GasLimit = 0 }, "GasLimit", "positive" };
     }
 
     [Theory]
@@ -19548,7 +19107,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             var payload = ReadBodyAsJson(request);
             Assert.Equal(CanonicalMultisigAccountId, payload.RootElement.GetProperty("multisig_account_id").GetString());
             Assert.Equal(MultisigSignerAccountId, payload.RootElement.GetProperty("signer_account_id").GetString());
-            Assert.Equal(MultisigFeeSponsorAccountId, payload.RootElement.GetProperty("fee_sponsor").GetString());
+            Assert.True(payload.RootElement.TryGetProperty("fee_payment", out _));
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -19566,7 +19125,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountId = CanonicalMultisigAccountId,
             SignerAccountId = MultisigSignerAccountId,
-            FeeSponsor = MultisigFeeSponsorAccountId,
+            FeePayment = SponsorFeePayment(MultisigFeeSponsorAccountId),
             Instructions = ["AQID"],
         }, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -19639,11 +19198,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { valid with { SignatureBase64 = "AQID" }, "PublicKeyHex", "Detached signing requires both" };
         yield return new object[] { valid with { PublicKeyHex = new string('a', 64), SignatureBase64 = "not-base64" }, "SignatureBase64", "base64 encoded" };
         yield return new object[] { valid with { CreationTimeMilliseconds = 0 }, "CreationTimeMilliseconds", "positive" };
-        yield return new object[] { valid with { FeeSponsor = " sponsor@universal" }, "FeeSponsor", "whitespace" };
-        yield return new object[] { valid with { FeeSponsor = MultisigFeeSponsorAccountId + "\u0001" }, "FeeSponsor", "control characters" };
-        yield return new object[] { valid with { FeeSponsor = "sponsor@universal" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "FeeSponsor", "canonical I105" };
-        yield return new object[] { valid with { FeeSponsor = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "FeeSponsor", "canonical I105" };
+        yield return new object[] { valid with { FeePayment = null! }, "FeePayment", "required" };
         yield return new object[] { valid with { Instructions = null! }, "Instructions", "cannot be null" };
         yield return new object[] { valid with { Instructions = [] }, "Instructions", "must not be empty" };
         yield return new object[] { valid with { Instructions = [" AQID"] }, "Instructions[0]", "whitespace" };
@@ -21368,22 +20923,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         object? constructed = (operation, propertyName) switch
         {
-            ("account-onboarding", "AccountId") => ValidAccountOnboardingResponse() with
-            {
-                AccountId = RequiredStringValue(value),
-            },
-            ("account-onboarding", "Uaid") => ValidAccountOnboardingResponse() with
-            {
-                Uaid = RequiredStringValue(value),
-            },
-            ("account-onboarding", "TransactionHashHex") => ValidAccountOnboardingResponse() with
-            {
-                TransactionHashHex = RequiredStringValue(value),
-            },
-            ("account-onboarding", "Status") => ValidAccountOnboardingResponse() with
-            {
-                Status = RequiredStringValue(value),
-            },
             ("account-faucet", "AccountId") => ValidAccountFaucetResponse() with
             {
                 AccountId = RequiredStringValue(value),
@@ -21405,18 +20944,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 TransactionHashHex = RequiredStringValue(value),
             },
             ("account-faucet", "Status") => ValidAccountFaucetResponse() with
-            {
-                Status = RequiredStringValue(value),
-            },
-            ("multisig-account-onboarding", "AccountId") => ValidMultisigAccountOnboardingResponse() with
-            {
-                AccountId = RequiredStringValue(value),
-            },
-            ("multisig-account-onboarding", "TransactionHashHex") => ValidMultisigAccountOnboardingResponse() with
-            {
-                TransactionHashHex = RequiredStringValue(value),
-            },
-            ("multisig-account-onboarding", "Status") => ValidMultisigAccountOnboardingResponse() with
             {
                 Status = RequiredStringValue(value),
             },
@@ -21460,17 +20987,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         GC.KeepAlive(constructed);
     }
 
-    private static ToriiAccountOnboardingResponse ValidAccountOnboardingResponse()
-    {
-        return new ToriiAccountOnboardingResponse
-        {
-            AccountId = OnboardingAccountId,
-            Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            TransactionHashHex = ToriiTransactionHashHex,
-            Status = "QUEUED",
-        };
-    }
-
     private static ToriiAccountFaucetResponse ValidAccountFaucetResponse()
     {
         return new ToriiAccountFaucetResponse
@@ -21479,16 +20995,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             AssetDefinitionId = "rose#wonderland",
             AssetId = $"rose#wonderland#{FaucetAccountId}",
             Amount = "100",
-            TransactionHashHex = ToriiTransactionHashHex,
-            Status = "QUEUED",
-        };
-    }
-
-    private static ToriiMultisigAccountOnboardingResponse ValidMultisigAccountOnboardingResponse()
-    {
-        return new ToriiMultisigAccountOnboardingResponse
-        {
-            AccountId = MultisigOnboardingAccountId,
             TransactionHashHex = ToriiTransactionHashHex,
             Status = "QUEUED",
         };
@@ -21599,95 +21105,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ExecutedTransactionHashHex = null,
             CreationTimeMilliseconds = 321,
             SigningMessageBase64 = "bXVsdGlzaWc=",
-        };
-    }
-
-    private static void SetContractDeploymentDirectMetadata(string operation, string propertyName, object? value)
-    {
-        object? constructed = (operation, propertyName) switch
-        {
-            ("deploy", "Ok") => ValidDeployContractResponse() with
-            {
-                Ok = RequiredBoolValue(value),
-            },
-            ("deploy", "ContractAddress") => ValidDeployContractResponse() with
-            {
-                ContractAddress = RequiredStringValue(value),
-            },
-            ("deploy", "Dataspace") => ValidDeployContractResponse() with
-            {
-                Dataspace = RequiredStringValue(value),
-            },
-            ("deploy", "CodeHashHex") => ValidDeployContractResponse() with
-            {
-                CodeHashHex = RequiredStringValue(value),
-            },
-            ("deploy", "AbiHashHex") => ValidDeployContractResponse() with
-            {
-                AbiHashHex = RequiredStringValue(value),
-            },
-            ("deploy-and-activate", "Ok") => ValidDeployAndActivateContractInstanceResponse() with
-            {
-                Ok = RequiredBoolValue(value),
-            },
-            ("deploy-and-activate", "Namespace") => ValidDeployAndActivateContractInstanceResponse() with
-            {
-                Namespace = RequiredStringValue(value),
-            },
-            ("deploy-and-activate", "ContractId") => ValidDeployAndActivateContractInstanceResponse() with
-            {
-                ContractId = RequiredStringValue(value),
-            },
-            ("deploy-and-activate", "CodeHashHex") => ValidDeployAndActivateContractInstanceResponse() with
-            {
-                CodeHashHex = RequiredStringValue(value),
-            },
-            ("deploy-and-activate", "AbiHashHex") => ValidDeployAndActivateContractInstanceResponse() with
-            {
-                AbiHashHex = RequiredStringValue(value),
-            },
-            ("activate", "Ok") => ValidActivateContractInstanceResponse() with
-            {
-                Ok = RequiredBoolValue(value),
-            },
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(propertyName),
-                propertyName,
-                "Unknown contract deployment direct metadata field."),
-        };
-        GC.KeepAlive(constructed);
-    }
-
-    private static ToriiDeployContractResponse ValidDeployContractResponse()
-    {
-        return new ToriiDeployContractResponse
-        {
-            Ok = true,
-            ContractAddress = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
-            Dataspace = "universal",
-            DeployNonce = 4,
-            CodeHashHex = ContractCodeHashHex,
-            AbiHashHex = ContractAbiHashHex,
-        };
-    }
-
-    private static ToriiDeployAndActivateContractInstanceResponse ValidDeployAndActivateContractInstanceResponse()
-    {
-        return new ToriiDeployAndActivateContractInstanceResponse
-        {
-            Ok = true,
-            Namespace = "apps",
-            ContractId = "calc.v1",
-            CodeHashHex = ContractCodeHashHex,
-            AbiHashHex = ContractAbiHashHex,
-        };
-    }
-
-    private static ToriiActivateContractInstanceResponse ValidActivateContractInstanceResponse()
-    {
-        return new ToriiActivateContractInstanceResponse
-        {
-            Ok = true,
         };
     }
 
@@ -23453,6 +22870,29 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
+    private static HttpStatusCode VpnSuccessStatusCode(string operation)
+    {
+        return operation switch
+        {
+            "quote" or "session-create" or "receipt-submit" => HttpStatusCode.Created,
+            "profile" or "session-get" or "receipt-list" or "receipt-delete" => HttpStatusCode.OK,
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown VPN response operation."),
+        };
+    }
+
+    private static ToriiClient CreateSignedVpnClient(RecordingHandler handler)
+    {
+        return new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    CanonicalAccountId,
+                    CanonicalPrivateKeySeed),
+            });
+    }
+
     private static object? DeserializeRawVpnResponse(string operation, string json)
     {
         return operation switch
@@ -23477,6 +22917,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ("profile", "LeaseSeconds") => ValidVpnProfile() with
             {
                 LeaseSeconds = RequiredUInt64Value(value),
+            },
+            ("profile", "DnsPushIntervalSeconds") => ValidVpnProfile() with
+            {
+                DnsPushIntervalSeconds = RequiredUInt64Value(value),
             },
             ("profile", "EscrowAccountId") => ValidVpnProfile() with
             {
@@ -28825,87 +28269,39 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return JsonWithIgnoredAuditDuplicate(AccountFaucetPuzzleResponseJson("algorithm", ToriiAccountFaucetPow.Algorithm));
     }
 
-    private static ToriiAccountOnboardingRequest ValidAccountOnboardingRequest()
+    private static ToriiAccountOnboardingPlanRequest ValidAccountOnboardingPlanRequest()
     {
-        return new ToriiAccountOnboardingRequest
+        return new ToriiAccountOnboardingPlanRequest
         {
-            Alias = "merchant@paynet",
-            AccountId = CanonicalAccountId,
-            IdentityCommitmentHex = new string('a', 64),
-            Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            Permissions = ["CanResolveAccountAlias"],
+            Alias = OnboardingFixtureAlias,
+            AccountId = OnboardingFixtureAccountId,
+            Permissions = [],
         };
     }
 
-    private static ToriiMultisigAccountOnboardingRequest ValidMultisigAccountOnboardingRequest()
+    private static string SharedOnboardingReceiptJson()
     {
-        return new ToriiMultisigAccountOnboardingRequest
-        {
-            Alias = "treasury@paynet",
-            RequiredSigners = 2,
-            MemberAccountIds = [MultisigMemberAccountId1, MultisigMemberAccountId2],
-            MemberWeights = [1, 2],
-            TransactionTtlMilliseconds = 60_000,
-        };
+        using var fixture = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "alias_setup_v1.json")));
+        return fixture.RootElement
+            .GetProperty("account_onboarding_receipt_vector")
+            .GetProperty("receipt_json")
+            .GetRawText();
     }
 
-    private static ToriiDeployContractRequest ValidDeployContractRequest()
-    {
-        return new ToriiDeployContractRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            CodeBase64 = "AQID",
-            ContractAlias = "router::dex.universal",
-        };
-    }
+    private static ToriiAccountOnboardingPlanReceipt SharedOnboardingReceipt() =>
+        JsonSerializer.Deserialize<ToriiAccountOnboardingPlanReceipt>(SharedOnboardingReceiptJson())
+        ?? throw new InvalidOperationException("shared onboarding receipt fixture decoded to null");
 
-    private static ToriiDeployAndActivateContractInstanceRequest ValidDeployAndActivateContractInstanceRequest()
+    private static byte[] SharedOnboardingBodyEncoder(ToriiAccountOnboardingPlanBody _)
     {
-        return new ToriiDeployAndActivateContractInstanceRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            Namespace = "apps",
-            ContractId = "calc.v1",
-            CodeBase64 = "AQID",
-        };
-    }
-
-    private static ToriiActivateContractInstanceRequest ValidActivateContractInstanceRequest()
-    {
-        return new ToriiActivateContractInstanceRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            Namespace = "apps",
-            ContractId = "calc.v1",
-            CodeHash = new string('a', 64),
-        };
-    }
-
-    private static Task InvokeContractDeploymentOperationAsync(
-        ToriiClient client,
-        string operation)
-    {
-        return operation switch
-        {
-            "deploy" => client.DeployContractAsync(ValidDeployContractRequest()),
-            "deploy-and-activate" => client.DeployAndActivateContractInstanceAsync(ValidDeployAndActivateContractInstanceRequest()),
-            "activate" => client.ActivateContractInstanceAsync(ValidActivateContractInstanceRequest()),
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown contract deployment operation."),
-        };
-    }
-
-    private static object? DeserializeRawContractDeploymentResponse(string operation, string json)
-    {
-        return operation switch
-        {
-            "deploy" => JsonSerializer.Deserialize<ToriiDeployContractResponse>(json),
-            "deploy-and-activate" => JsonSerializer.Deserialize<ToriiDeployAndActivateContractInstanceResponse>(json),
-            "activate" => JsonSerializer.Deserialize<ToriiActivateContractInstanceResponse>(json),
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown contract deployment operation."),
-        };
+        using var fixture = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "alias_setup_v1.json")));
+        return Convert.FromHexString(fixture.RootElement
+            .GetProperty("account_onboarding_receipt_vector")
+            .GetProperty("canonical_body_norito_hex")
+            .GetString()
+            ?? throw new InvalidOperationException("shared onboarding body fixture is missing"));
     }
 
     private static string ContractMetadataHashResponseJson(string operation, string field, string value)
@@ -30089,141 +29485,20 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static string ContractDeploymentResponseJson(
-        string operation,
-        bool ok = true,
-        string? codeHashHex = null,
-        string? abiHashHex = null)
-    {
-        return ContractDeploymentResponseJson(operation, field: null, value: null, ok, codeHashHex, abiHashHex);
-    }
-
-    private static string ContractDeploymentResponseJson(
-        string operation,
-        string? field,
-        object? value,
-        bool ok = true,
-        string? codeHashHex = null,
-        string? abiHashHex = null)
-    {
-        var response = ContractDeploymentResponseJsonObject(operation, codeHashHex, abiHashHex);
-
-        switch (field)
-        {
-            case null:
-                break;
-            case "ok":
-            case "deploy_nonce":
-            case "contract_address":
-            case "dataspace":
-            case "namespace":
-            case "contract_id":
-            case "code_hash_hex":
-            case "abi_hash_hex":
-                response[field] = JsonValueForContractDeployment(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown contract deployment response field.");
-        }
-
-        response["ok"] = ok;
-        return response.ToJsonString();
-    }
-
-    private static JsonObject ContractDeploymentResponseJsonObject(
-        string operation,
-        string? codeHashHex = null,
-        string? abiHashHex = null)
-    {
-        return operation switch
-        {
-            "deploy" => new JsonObject
-            {
-                ["contract_address"] = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
-                ["dataspace"] = "universal",
-                ["deploy_nonce"] = 4,
-                ["code_hash_hex"] = codeHashHex ?? ContractCodeHashHex,
-                ["abi_hash_hex"] = abiHashHex ?? ContractAbiHashHex,
-            },
-            "deploy-and-activate" => new JsonObject
-            {
-                ["namespace"] = "apps",
-                ["contract_id"] = "calc.v1",
-                ["code_hash_hex"] = codeHashHex ?? ContractCodeHashHex,
-                ["abi_hash_hex"] = abiHashHex ?? ContractAbiHashHex,
-            },
-            "activate" => new JsonObject(),
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown contract deployment operation."),
-        };
-    }
-
-    private static string ContractDeploymentRawResponseJson(string operation, string field, object? value)
-    {
-        var response = ContractDeploymentResponseJsonObject(operation);
-        response["ok"] = true;
-        response[field] = JsonValueForContractDeployment(value);
-        return response.ToJsonString();
-    }
-
-    private static string ContractDeploymentDuplicatePropertyJson(string operation, string propertyName)
-    {
-        return operation switch
-        {
-            "deploy" => $$"""
-                {
-                  "{{propertyName}}": true,
-                  "{{propertyName}}": true,
-                  "contract_address": "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
-                  "dataspace": "universal",
-                  "deploy_nonce": 4,
-                  "code_hash_hex": "{{ContractCodeHashHex}}",
-                  "abi_hash_hex": "{{ContractAbiHashHex}}"
-                }
-                """,
-            "deploy-and-activate" => $$"""
-                {
-                  "{{propertyName}}": true,
-                  "{{propertyName}}": true,
-                  "namespace": "apps",
-                  "contract_id": "calc.v1",
-                  "code_hash_hex": "{{ContractCodeHashHex}}",
-                  "abi_hash_hex": "{{ContractAbiHashHex}}"
-                }
-                """,
-            "activate" => $$"""
-                {
-                  "{{propertyName}}": true,
-                  "{{propertyName}}": true
-                }
-                """,
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown contract deployment operation."),
-        };
-    }
-
-    private static string ContractDeploymentUnknownExtensionDuplicateJson(string operation)
-    {
-        return JsonWithIgnoredAuditDuplicate(ContractDeploymentRawResponseJson(operation, "ok", true));
-    }
-
-    private static JsonNode? JsonValueForContractDeployment(object? value)
-    {
-        return value switch
-        {
-            null => null,
-            string text => JsonValue.Create(text),
-            int number => JsonValue.Create(number),
-            long number => JsonValue.Create(number),
-            ulong number => JsonValue.Create(number),
-            bool boolean => JsonValue.Create(boolean),
-            _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unsupported contract deployment JSON value."),
-        };
-    }
-
     private static string ContractCodeBytesRawResponseJson(object? codeBase64)
     {
         return new JsonObject
         {
-            ["code_b64"] = JsonValueForContractDeployment(codeBase64),
+            ["code_b64"] = codeBase64 switch
+            {
+                null => null,
+                string text => JsonValue.Create(text),
+                int number => JsonValue.Create(number),
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(codeBase64),
+                    codeBase64,
+                    "Unsupported contract code-byte JSON value."),
+            },
         }.ToJsonString();
     }
 
@@ -30473,12 +29748,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-onboarding" => client.RegisterAccountAsync(ValidAccountOnboardingRequest()),
             "account-faucet" => client.ClaimAccountFaucetAsync(new ToriiAccountFaucetRequest
             {
                 AccountId = CanonicalAccountId,
             }),
-            "multisig-account-onboarding" => client.RegisterMultisigAccountAsync(ValidMultisigAccountOnboardingRequest()),
             "contract-call" => client.CallContractAsync(ValidContractCallRequest()),
             "multisig-propose" => client.ProposeMultisigAsync(ValidMultisigProposeRequest()),
             "multisig-contract-propose" => client.ProposeMultisigContractCallAsync(ValidMultisigContractCallProposeRequest()),
@@ -30520,25 +29793,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         var response = operation switch
         {
-            "account-onboarding" => new JsonObject
-            {
-                ["account_id"] = OnboardingAccountId,
-                ["uaid"] = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                ["tx_hash_hex"] = ToriiTransactionHashHex,
-                ["status"] = "QUEUED",
-            },
             "account-faucet" => new JsonObject
             {
                 ["account_id"] = FaucetAccountId,
                 ["asset_definition_id"] = "rose#wonderland",
                 ["asset_id"] = $"rose#wonderland#{FaucetAccountId}",
                 ["amount"] = "100",
-                ["tx_hash_hex"] = ToriiTransactionHashHex,
-                ["status"] = "QUEUED",
-            },
-            "multisig-account-onboarding" => new JsonObject
-            {
-                ["account_id"] = MultisigOnboardingAccountId,
                 ["tx_hash_hex"] = ToriiTransactionHashHex,
                 ["status"] = "QUEUED",
             },
@@ -30555,29 +29815,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-onboarding" => $$"""
-                {
-                  "account_id": "{{OnboardingAccountId}}",
-                  "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                  "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-                  "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-                  "status": "QUEUED"
-                }
-                """,
             "account-faucet" => $$"""
                 {
                   "account_id": "{{FaucetAccountId}}",
                   "asset_definition_id": "rose#wonderland",
                   "asset_id": "rose#wonderland#{{FaucetAccountId}}",
                   "amount": "100",
-                  "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-                  "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-                  "status": "QUEUED"
-                }
-                """,
-            "multisig-account-onboarding" => $$"""
-                {
-                  "account_id": "{{MultisigOnboardingAccountId}}",
                   "{{propertyName}}": "{{ToriiTransactionHashHex}}",
                   "{{propertyName}}": "{{ToriiTransactionHashHex}}",
                   "status": "QUEUED"
@@ -30610,9 +29853,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-onboarding" => JsonSerializer.Deserialize<ToriiAccountOnboardingResponse>(json),
             "account-faucet" => JsonSerializer.Deserialize<ToriiAccountFaucetResponse>(json),
-            "multisig-account-onboarding" => JsonSerializer.Deserialize<ToriiMultisigAccountOnboardingResponse>(json),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown onboarding response operation."),
         };
     }
@@ -30621,12 +29862,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-onboarding" => SerializeWithPrivateField(ValidAccountOnboardingResponse(), "accountId", accountId),
             "account-faucet" => SerializeWithPrivateField(ValidAccountFaucetResponse(), "accountId", accountId),
-            "multisig-account-onboarding" => SerializeWithPrivateField(
-                ValidMultisigAccountOnboardingResponse(),
-                "accountId",
-                accountId),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown onboarding response operation."),
         };
     }
@@ -30713,6 +29949,60 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return JsonWithIgnoredAuditDuplicate(VpnProfileRawResponseJson("available", true));
     }
 
+    private static string VpnProfileSupportedExitClassesJson(params string[] exitClasses)
+    {
+        var response = (JsonObject)JsonNode.Parse(VpnProfileRawResponseJson("available", true))!;
+        var items = new JsonArray();
+        foreach (var exitClass in exitClasses)
+        {
+            items.Add(JsonValue.Create(exitClass));
+        }
+
+        response["supported_exit_classes"] = items;
+        return response.ToJsonString();
+    }
+
+    private static string VpnQuoteInstructionCountJson(int count)
+    {
+        var response = (JsonObject)JsonNode.Parse(VpnQuoteRawResponseJson("quote_id", VpnQuoteIdHex))!;
+        var items = new JsonArray();
+        for (var index = 0; index < count; index++)
+        {
+            items.Add(VpnTxInstructionJson("OpenVpnLeaseEscrow", "abcd"));
+        }
+
+        response["tx_instructions"] = items;
+        return response.ToJsonString();
+    }
+
+    private static string VpnReceiptInstructionCountJson(int count)
+    {
+        var response = (JsonObject)JsonNode.Parse(VpnReceiptRawResponseJson("status", "settled"))!;
+        var items = new JsonArray();
+        for (var index = 0; index < count; index++)
+        {
+            items.Add(VpnTxInstructionJson("SettleVpnLease", "cafe"));
+        }
+
+        response["tx_instructions"] = items;
+        return response.ToJsonString();
+    }
+
+    private static string VpnReceiptListCountJson(int itemCount, ulong total)
+    {
+        var items = new JsonArray();
+        for (var index = 0; index < itemCount; index++)
+        {
+            items.Add(JsonNode.Parse(VpnReceiptRawResponseJson("status", "settled")));
+        }
+
+        return new JsonObject
+        {
+            ["items"] = items,
+            ["total"] = total,
+        }.ToJsonString();
+    }
+
     private static string VpnQuoteRawResponseJson(string field, object? value)
     {
         var response = (JsonObject)JsonNode.Parse(VpnResponseJson("quote", "quote_id", VpnQuoteIdHex))!;
@@ -30754,7 +30044,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VpnQuoteIdHex,
             VpnPaymentTransactionHashHex,
             VpnSpkiSha256Hex,
-            "deadbeef");
+            VpnHelperTicketHex);
         response[field] = JsonValueForVpnResponse(value);
         return response.ToJsonString();
     }
@@ -30766,7 +30056,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VpnQuoteIdHex,
             VpnPaymentTransactionHashHex,
             VpnSpkiSha256Hex,
-            "deadbeef");
+            VpnHelperTicketHex);
         return propertyName switch
         {
             "session_id" => json.Replace(
@@ -30886,7 +30176,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var quoteTxPayloadHex = "abcd";
         var sessionId = VpnSessionIdHex;
         var paymentTxHash = VpnPaymentTransactionHashHex;
-        var helperTicketHex = "deadbeef";
+        var helperTicketHex = VpnHelperTicketHex;
         var receiptLeaseIdHex = VpnQuoteIdHex;
         var settleLeasePayloadHex = "cafe";
         var receiptTxPayloadHex = "cafe";
@@ -30973,14 +30263,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ["fee_asset_id"] = "xor#universal.universal",
                 ["escrow_account_id"] = VpnEscrowAccountId,
                 ["operator_account_id"] = VpnOperatorAccountId,
-                ["lease_fee_nanos"] = 1000000,
+                ["lease_fee"] = "1000000.25",
                 ["route_pushes"] = new JsonArray("10.0.0.0/8"),
                 ["excluded_routes"] = new JsonArray("127.0.0.0/8"),
                 ["dns_servers"] = new JsonArray("1.1.1.1"),
                 ["tunnel_addresses"] = new JsonArray("10.208.0.2/32"),
                 ["mtu_bytes"] = 1280,
                 ["meter_family"] = "vpn-standard",
-                ["flow_label_bits"] = 20,
+                ["flow_label_bits"] = 24,
                 ["padding_budget_ms"] = 80,
                 ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
                 ["metering_public_key_hex"] = meteringPublicKeyHex,
@@ -31036,7 +30326,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             ["available"] = true,
             ["relay_endpoint"] = "/dns4/vpn.sora.org/tcp/443/wss",
-            ["supported_exit_classes"] = new JsonArray("standard"),
+            ["supported_exit_classes"] = new JsonArray("standard", "low-latency", "high-security"),
             ["default_exit_class"] = "standard",
             ["lease_secs"] = 3600,
             ["dns_push_interval_secs"] = 30,
@@ -31050,9 +30340,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["fee_asset_id"] = "xor#universal.universal",
             ["escrow_account_id"] = VpnEscrowAccountId,
             ["operator_account_id"] = VpnOperatorAccountId,
-            ["lease_fee_nanos"] = 1000000,
+            ["lease_fee"] = "1000000.25",
             ["settlement_grace_secs"] = 120,
-            ["flow_label_bits"] = 20,
+            ["flow_label_bits"] = 24,
             ["padding_budget_ms"] = 80,
             ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
         };
@@ -31081,8 +30371,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["fee_asset_id"] = "xor#universal.universal",
             ["escrow_account_id"] = VpnEscrowAccountId,
             ["operator_account_id"] = VpnOperatorAccountId,
-            ["lease_fee_nanos"] = 1000000,
-            ["flow_label_bits"] = 20,
+            ["lease_fee"] = "1000000.25",
+            ["flow_label_bits"] = 24,
             ["padding_budget_ms"] = 80,
             ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
             ["route_pushes"] = new JsonArray("10.0.0.0/8"),
@@ -31141,9 +30431,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["fee_asset_id"] = "xor#universal.universal",
             ["escrow_account_id"] = VpnEscrowAccountId,
             ["operator_account_id"] = VpnOperatorAccountId,
-            ["lease_fee_nanos"] = 1000000,
-            ["earned_fee_nanos"] = 500000,
-            ["refunded_fee_nanos"] = 500000,
+            ["lease_fee"] = "1000000.25",
+            ["earned_fee"] = "500000.125",
+            ["refunded_fee"] = "500000.125",
             ["lease_id_hex"] = leaseIdHex,
             ["settle_lease_instruction"] = VpnTxInstructionJson("SettleVpnLease", settleLeasePayloadHex),
             ["tx_instructions"] = new JsonArray(VpnTxInstructionJson("SettleVpnLease", receiptTxPayloadHex)),
@@ -31189,8 +30479,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             FeeAssetId = "xor#universal.universal",
             EscrowAccountId = VpnEscrowAccountId,
             OperatorAccountId = VpnOperatorAccountId,
-            LeaseFeeNanos = 1000000,
-            FlowLabelBits = 20,
+            LeaseFee = "1000000.25",
+            FlowLabelBits = 24,
             PaddingBudgetMilliseconds = 80,
             RelayTlsSpkiSha256Hex = VpnSpkiSha256Hex,
             RoutePushes = new[] { "10.0.0.0/8" },
@@ -31198,7 +30488,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             DnsServers = new[] { "1.1.1.1" },
             TunnelAddresses = new[] { "10.208.0.2/32" },
             MtuBytes = 1280,
-            HelperTicketHex = "deadbeef",
+            HelperTicketHex = VpnHelperTicketHex,
             BytesIn = 123,
             BytesOut = 456,
             Status = "active",
@@ -31226,9 +30516,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             FeeAssetId = "xor#universal.universal",
             EscrowAccountId = VpnEscrowAccountId,
             OperatorAccountId = VpnOperatorAccountId,
-            LeaseFeeNanos = 1000000,
-            EarnedFeeNanos = 500000,
-            RefundedFeeNanos = 500000,
+            LeaseFee = "1000000.25",
+            EarnedFee = "500000.125",
+            RefundedFee = "500000.125",
             LeaseIdHex = VpnQuoteIdHex,
             SettleLeaseInstruction = new ToriiVpnTxInstruction
             {
@@ -31676,7 +30966,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ContractAlias = "router::dex.universal",
             Entrypoint = "main",
             Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-            GasLimit = 500_000,
+            FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
         };
     }
 
@@ -31698,6 +30988,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountAlias = "ops@universal",
             SignerAccountId = MultisigSignerAccountId,
+            FeePayment = EmptyAuthorityFeePayment,
             Instructions = ["AQID"],
         };
     }
@@ -31708,10 +30999,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountAlias = "ops@universal",
             SignerAccountId = MultisigSignerAccountId,
-            Namespace = "apps",
-            ContractId = "calc.v1",
+            ContractAlias = "router::dex.universal",
             Entrypoint = "main",
-            GasLimit = 500_000,
+            FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
         };
     }
 
@@ -31721,6 +31011,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountAlias = "ops@universal",
             SignerAccountId = MultisigSignerAccountId,
+            FeePayment = EmptyAuthorityFeePayment,
             ProposalId = new string('a', 64),
         };
     }
@@ -31755,7 +31046,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             PrivateKey = "ed25519:deadbeef",
             ManifestBytes = "manifest-norito"u8.ToArray(),
             SubmittedEpoch = 42,
-            GasAssetId = "xor#universal",
             Alias = new ToriiSoraFsPinAlias
             {
                 Namespace = "docs",

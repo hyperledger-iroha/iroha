@@ -13,7 +13,7 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["governance", "json"]
+default = ["governance", "json", "pqc"]
 bridge = []
 # Retained for compatibility dependencies; no additional behavior is gated by `std` in this crate.
 std = []
@@ -26,10 +26,15 @@ json = [
     "norito_derive",
     "mv",
 ]
-test-fixtures = ["dep:p256"]
+test-fixtures = []
 gost = ["iroha_crypto/gost"]
 bls = ["iroha_crypto/bls"]
 sm = ["iroha_crypto/sm"]
+# Compile the ABI-21 Kagemusha recursive backend as production-promoted.
+# This is deliberately non-default and is selected by the shipping bridge's
+# `privacy-production-enabled` feature; runtime readiness still requires an
+# authenticated eight-artifact release installation.
+kagemusha-production-enabled = []
 # Enable API for HTTP requests. Should be activated for HTTP clients
 http = []
 # Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)
@@ -46,6 +51,7 @@ trybuild-tests = ["dep:trybuild"]
 bench = []
 ids_projection = []
 governance = []
+pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
 zk-ballot = []
 # Recognize `packed-struct` used by derive macros in dependencies.
 # Not enabled by default; declared to silence unexpected-cfg warnings.
@@ -71,8 +77,8 @@ derive_more = { workspace = true, features = ["as_ref", "display", "debug", "con
 norito = {workspace = true}
 norito_derive = { workspace = true, optional = true }
 mv = { path = "../mv", optional = true }
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"], optional = true }
-sorafs_manifest = { workspace = true }
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
+sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 thiserror = { workspace = true }
 displaydoc = { workspace = true, features = ["std"] }
 getset = { workspace = true }

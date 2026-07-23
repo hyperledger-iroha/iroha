@@ -58,8 +58,15 @@ artifact in a separate immutable finality record with the same header. Both
 writes are idempotent no-clobber operations; a conflicting record at the same
 height is rejected.
 
+Application requires its durable manifest, body frame, deterministic validation
+receipt, and execution commitment to match the CommitQC's authenticated
+`proposal_round`. The reducer owner tag may name another process generation and
+the CommitQC may have a later finality view; neither is allowed to relabel the
+block header or application input.
+
 Before accepting or returning finality, Kura validates the complete
-canonical-header association (height, hash, predecessor, and view), then
+canonical-header association (height, hash, predecessor, and immutable
+proposal-origin view), then
 verifies every roster-aligned PoP, both quorum thresholds, and the CommitQC
 aggregate signature. Restart inventory also validates the retained header,
 archive, finality record, and durable block-hash association. Recovery can
@@ -86,13 +93,17 @@ structural and cryptographic checks:
 2. Validate the height context, its ordered powered roster, canonical dual
    quorum, parent certificate rules, DA layout, and epoch bounds.
 3. Require the artifact height, context id, block subject, repeated block hash,
-   CommitQC round, and Commit phase to agree exactly. A `next_epoch_snapshot`
-   in the height context is mandatory for an epoch-ending boundary parent and
-   forbidden elsewhere.
+   CommitQC finality round, authenticated proposal round, and Commit phase to
+   agree exactly. Prepare evidence requires equal proposal and certification
+   rounds; Commit permits only a proposal view at or before its finality view.
+   A `next_epoch_snapshot` in the height context is mandatory for an
+   epoch-ending boundary parent and forbidden elsewhere.
 4. Require the artifact chain id to equal the caller's expected chain id.
 5. Recompute the block-header height, hash, predecessor, and view-change index
    and require them to match the artifact's height, block hash, subject parent,
-   and CommitQC view respectively.
+   and CommitQC `proposal_round.view` respectively. The CommitQC's own
+   `round.view` may be later because it is the finality round, not the block's
+   immutable origin.
 6. Require the artifact to embed one BLS-normal PoP per roster entry and verify
    every PoP against the corresponding public key.
 7. Require strictly increasing, in-range signer indices. The certificate must
@@ -109,6 +120,7 @@ the following Norito payload:
 {
   protocol_version: 3,
   round: { context_id, height, view },
+  proposal_round: { context_id, height, view },
   phase: Commit,
   subject: { parent_block_hash, block_hash, payload_hash },
   execution_commitment: {
@@ -122,10 +134,12 @@ the following Norito payload:
 }
 ```
 
-The subject hash authenticates the canonical resultless proposal. The execution
-commitment separately authenticates the exact canonical result-bearing block,
-so replay cannot substitute either proposal bytes or deterministic execution
-results while preserving the other binding.
+For Commit, both rounds have the same context and height and the proposal view
+cannot exceed the finality view. Omitting `proposal_round` is not a supported
+legacy encoding. The subject hash authenticates the canonical resultless
+proposal. The execution commitment separately authenticates the exact
+canonical result-bearing block, so replay cannot substitute either proposal
+bytes or deterministic execution results while preserving the other binding.
 
 The signer index and individual signature are not part of the same-message
 preimage. The CommitQC's strictly ordered signer list selects the BLS keys and

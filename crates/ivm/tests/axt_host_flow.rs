@@ -3,8 +3,11 @@
 use std::{collections::HashMap, sync::Arc};
 
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::nexus::{
-    AxtFastpqBinding, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId,
+use iroha_data_model::{
+    nexus::{
+        AxtFastpqBinding, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId,
+    },
+    prelude::Quantity,
 };
 use ivm::{
     IVM, IVMHost, PointerType, VMError,
@@ -123,7 +126,10 @@ fn build_handle(
             account: account.to_string(),
             origin_dsid: Some(dsid),
         },
-        budget: HandleBudget { remaining, per_use },
+        budget: HandleBudget {
+            remaining: Quantity::from(remaining),
+            per_use: per_use.map(Quantity::from),
+        },
         handle_era: 1,
         sub_nonce: 7,
         group_binding: GroupBinding {
@@ -267,8 +273,8 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 500,
-            per_use: Some(500),
+            remaining: Quantity::from(500_u64),
+            per_use: Some(Quantity::from(500_u64)),
         },
         handle_era: 1,
         sub_nonce: 7,
@@ -291,7 +297,7 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "200".into(),
+            amount: Some(Quantity::from(200_u64)),
         },
     };
     let intent_bytes = norito::to_bytes(&intent).expect("encode intent");
@@ -395,7 +401,7 @@ fn default_host_rejects_late_proof_manifest_root_mismatch_at_commit() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "10".into(),
+            amount: Some(Quantity::from(10_u64)),
         },
     };
     assert_eq!(
@@ -510,7 +516,7 @@ fn default_host_rejects_binding_mismatch() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let result = use_handle(&mut vm, &mut host, &handle, &intent, None);
@@ -553,7 +559,7 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "150".into(),
+            amount: Some(Quantity::from(150_u64)),
         },
     };
     assert_eq!(
@@ -567,7 +573,7 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
-            amount: "40".into(),
+            amount: Some(Quantity::from(40_u64)),
         },
     };
     handle.sub_nonce += 1;
@@ -630,7 +636,7 @@ fn default_host_rejects_handle_scope_mismatch() {
             kind: "burn".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "10".into(),
+            amount: Some(Quantity::from(10_u64)),
         },
     };
     let result = use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof));
@@ -676,7 +682,7 @@ fn default_host_rejects_handle_subject_mismatch() {
             kind: "transfer".into(),
             from: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "10".into(),
+            amount: Some(Quantity::from(10_u64)),
         },
     };
     let result = use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof));
@@ -721,7 +727,7 @@ fn default_host_rejects_commit_without_required_proof() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "10".into(),
+            amount: Some(Quantity::from(10_u64)),
         },
     };
     assert_eq!(
@@ -770,7 +776,7 @@ fn handle_proof_fails_closed_without_verifier() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "15".into(),
+            amount: Some(Quantity::from(15_u64)),
         },
     };
     assert!(matches!(
@@ -821,7 +827,7 @@ fn default_host_rejects_handle_with_invalid_manifest_root() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "10".into(),
+            amount: Some(Quantity::from(10_u64)),
         },
     };
     let result = use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof));
@@ -868,7 +874,7 @@ fn default_host_rejects_handle_with_empty_scope() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let result = use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof));
@@ -914,7 +920,7 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
 
@@ -976,11 +982,11 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
 
-    base.budget.remaining = 0;
+    base.budget.remaining = Quantity::from(0_u64);
     assert!(matches!(
         use_handle(&mut vm, &mut host, &base, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
@@ -1093,7 +1099,7 @@ fn commit_requires_proof_for_every_dataspace() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     assert_eq!(
@@ -1106,7 +1112,7 @@ fn commit_requires_proof_for_every_dataspace() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     assert_eq!(
@@ -1344,7 +1350,7 @@ fn wsv_host_policy_checks_root_and_expiry() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let proof = proof_blob_for(dsid, manifest_root, b"policy-root-expiry", None);
@@ -1438,7 +1444,7 @@ fn wsv_host_preflights_slot_length_and_skew_then_fails_closed() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let proof = proof_blob_for(dsid, manifest_root, b"slot-skew", None);
@@ -1502,7 +1508,7 @@ fn wsv_host_rejects_handle_skew_above_config() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let proof = proof_blob_for(dsid, manifest_root, b"skew-above-config", None);
@@ -1622,7 +1628,7 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let proof = proof_blob_for(dsid, manifest_root, b"inline-proof-expired", Some(3));
@@ -1667,7 +1673,7 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
             kind: "transfer".into(),
             from: caller.to_string(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let proof = axt::ProofBlob {
@@ -1713,7 +1719,7 @@ fn wsv_host_rejects_missing_policy_binding() {
             kind: "transfer".into(),
             from: caller.to_string(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let proof = axt::ProofBlob {
@@ -1767,7 +1773,7 @@ fn wsv_host_policy_checks_target_lane() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let proof = proof_blob_for(dsid, manifest_root, b"lane-policy", None);
@@ -1836,7 +1842,7 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
             kind: "transfer".into(),
             from: caller.to_string(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let proof = proof_blob_for(dsid, manifest_root, b"lane-policy-snapshot", None);
@@ -1909,7 +1915,7 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let proof = proof_blob_for(dsid, manifest_root, b"policy-current-slot", None);
@@ -1952,7 +1958,7 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let proof = proof_blob_for(dsid, manifest_root, b"era-nonce-policy", None);
@@ -2036,7 +2042,7 @@ fn axt_policy_rejects_handle_usage() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let result = use_handle(&mut vm, &mut host, &handle, &intent, None);

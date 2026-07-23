@@ -214,7 +214,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       return proofHex;
     }
 
-    private void appendArguments(final Map<String, String> target) {
+    void appendArguments(final Map<String, String> target) {
       target.put("alias.name", name);
       target.put("alias.namespace", namespace);
       target.put("alias.proof_hex", proofHex);

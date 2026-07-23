@@ -79,6 +79,9 @@ function loadPublishedLocales(filePath, knownLocales) {
 
 const publishedLocales = loadPublishedLocales(publishedLocalesPath, allLocales);
 const activeLocales = includeStubLocales ? allLocales : publishedLocales;
+const sourceTranslationPatterns = allLocales
+  .filter((locale) => locale !== 'en')
+  .flatMap((locale) => [`**/*.${locale}.md`, `**/*.${locale}.mdx`]);
 
 function positiveOr(value, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -205,6 +208,11 @@ const config = {
           routeBasePath: '/',
           sidebarPath: './sidebars.js',
           editUrl: 'https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/',
+          // Translations live under `i18n/`. Repository-wide documentation
+          // synchronization also keeps locale-suffixed source mirrors next to
+          // the English files; exclude those mirrors so Docusaurus does not
+          // register every translation as a duplicate English document ID.
+          exclude: sourceTranslationPatterns,
           versions: {
             current: {
               label: 'Next',

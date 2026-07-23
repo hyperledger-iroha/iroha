@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.FixtureGeneratorRunner
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
@@ -14,20 +15,28 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 
-/** Exact Rust/Kotlin parity and adversarial coverage for the sole ABI-19 registration path. */
+/** Exact Rust/Kotlin parity and adversarial coverage for the sole ABI-21 registration path. */
 class RegisterOfflineDeviceAttestationTest {
 
     @Test
     fun `registration and instruction exactly match Rust current model`() {
         val rust = FixtureGeneratorRunner.run("offline-device-attestation")
-        assertEquals(4, rust.size)
+        assertEquals(5, rust.size)
         val registration = registration(rust[3])
 
-        assertEquals(19, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertEquals(21, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertContentEquals(hexToBytes(rust[0]), registration.noritoEncoded())
         assertContentEquals(hexToBytes(rust[2]), registration.challengeHash)
+        assertContentEquals(hexToBytes(rust[4]), registration.canonicalRegistrationHash())
+        assertFalse(
+            registration.canonicalRegistrationHash().contentEquals(
+                MessageDigest.getInstance("SHA-256").digest(registration.noritoEncoded()),
+            ),
+            "registration ID is canonical Iroha Hash, not raw SHA-256",
+        )
 
         val request = request(registration)
         val instruction = request.instruction()
@@ -138,6 +147,7 @@ class RegisterOfflineDeviceAttestationTest {
                 1_900_000_000_000,
                 0,
                 1,
+                TEST_FEE_PAYMENT,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -148,6 +158,7 @@ class RegisterOfflineDeviceAttestationTest {
                 1_900_000_000_000,
                 1,
                 0,
+                TEST_FEE_PAYMENT,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -158,6 +169,7 @@ class RegisterOfflineDeviceAttestationTest {
                 Long.MAX_VALUE - 1,
                 2,
                 1,
+                TEST_FEE_PAYMENT,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -168,6 +180,7 @@ class RegisterOfflineDeviceAttestationTest {
                 registration.expiresAtMs - 1,
                 2,
                 1,
+                TEST_FEE_PAYMENT,
             )
         }
     }
@@ -192,6 +205,7 @@ class RegisterOfflineDeviceAttestationTest {
             "04" +
                 "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296" +
                 "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+        private val TEST_FEE_PAYMENT = FeePaymentIntent.authority(emptyList())
 
         private fun request(registration: DeviceAttestationRegistration) =
             RegisterOfflineDeviceAttestation(
@@ -201,13 +215,14 @@ class RegisterOfflineDeviceAttestationTest {
                 creationTimeMs = 1_900_000_000_000,
                 timeToLiveMs = 60_000,
                 nonce = 7,
+                feePayment = TEST_FEE_PAYMENT,
             )
 
         private fun registration(
             accountId: String,
-            packageName: String = "org.hyperledger.iroha.abi19.fixture",
+            packageName: String = "org.hyperledger.iroha.abi20.fixture",
             signingCertificate: ByteArray =
-                sha256(bytes("abi19-unit-test-signing-certificate")),
+                sha256(bytes("abi20-unit-test-signing-certificate")),
             challengeHash: ByteArray? = null,
             reportHash: ByteArray? = null,
             evidenceHash: ByteArray? = null,
@@ -218,7 +233,7 @@ class RegisterOfflineDeviceAttestationTest {
                 version = 1,
                 platform = DeviceAttestationRegistration.ANDROID_KEYMINT_PLATFORM,
                 keyId = hexLower(sha256(assertionPublicKey)),
-                deviceId = "abi19-android-unit-test-device",
+                deviceId = "abi20-android-unit-test-device",
                 accountId = accountId,
                 assetDefinitionId = null,
                 iosTeamId = null,
@@ -226,7 +241,7 @@ class RegisterOfflineDeviceAttestationTest {
                 iosEnvironment = null,
                 androidPackageName = packageName,
                 androidSigningCertificateSha256 = signingCertificate,
-                publicKey = ByteArray(32) { 0x44 },
+                publicKey = KagemushaDevicePublicKeyV2(hexToBytes(P256_GENERATOR)),
                 assertionScheme =
                     DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME,
                 assertionKeyAlgorithm =
@@ -237,11 +252,11 @@ class RegisterOfflineDeviceAttestationTest {
                 challengeHash = challengeHash,
                 attestationReportHash = reportHash,
                 attestationReport =
-                    bytes("abi19-unit-test-not-physical-attestation-evidence"),
+                    bytes("abi20-unit-test-not-physical-attestation-evidence"),
                 evidenceHash = evidenceHash,
                 evidence = evidence,
                 recentBlockHeight = 42,
-                recentBlockHash = IrohaHash.prehash(bytes("abi19-unit-test-block")),
+                recentBlockHash = IrohaHash.prehash(bytes("abi20-unit-test-block")),
                 expiresAtMs = 2_000_000_000_000,
             )
         }

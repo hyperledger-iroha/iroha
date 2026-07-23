@@ -108,7 +108,10 @@ fn sse_smoke_scenarios() -> Result<()> {
             ),
         ));
         if sandbox::handle_result(
-            client.submit_blocking(register),
+            client.submit_blocking(
+                register,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ),
             stringify!(sse_emits_execute_trigger_event),
         )?
         .is_none()
@@ -116,7 +119,10 @@ fn sse_smoke_scenarios() -> Result<()> {
             return Ok(());
         }
         if sandbox::handle_result(
-            client.submit_blocking(ExecuteTrigger::new(trigger_id)),
+            client.submit_blocking(
+                ExecuteTrigger::new(trigger_id),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ),
             stringify!(sse_emits_execute_trigger_event),
         )?
         .is_none()
@@ -163,7 +169,10 @@ fn sse_smoke_scenarios() -> Result<()> {
             ),
         );
         if sandbox::handle_result(
-            client.submit_blocking(Register::trigger(time_trigger)),
+            client.submit_blocking(
+                Register::trigger(time_trigger),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ),
             stringify!(sse_captures_time_trigger_and_metadata_events),
         )?
         .is_none()
@@ -172,7 +181,10 @@ fn sse_smoke_scenarios() -> Result<()> {
         }
 
         if sandbox::handle_result(
-            client.submit_blocking(Log::new(Level::INFO, "trigger tick".to_string())),
+            client.submit_blocking(
+                Log::new(Level::INFO, "trigger tick".to_string()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ),
             stringify!(sse_captures_time_trigger_and_metadata_events),
         )?
         .is_none()

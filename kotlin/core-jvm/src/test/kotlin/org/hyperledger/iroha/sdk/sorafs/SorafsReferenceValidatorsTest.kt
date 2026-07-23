@@ -113,7 +113,7 @@ class SorafsReferenceValidatorsTest {
             SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
                 side = SorafsOrderbookSide.BID,
                 tier = SorafsOrderbookTier.HOT,
-                pricePerGibMicroXor = "1",
+                pricePerGib = "1",
                 quantityGib = 1,
                 ownerAccount = oversized,
                 expiryUnix = 1,
@@ -255,7 +255,7 @@ class SorafsReferenceValidatorsTest {
         val maximumOwnerOrder = SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
             side = SorafsOrderbookSide.BID,
             tier = SorafsOrderbookTier.HOT,
-            pricePerGibMicroXor = "1",
+            pricePerGib = "1",
             quantityGib = 1,
             ownerAccount = maximumOwner,
             expiryUnix = 1_800_000_000,

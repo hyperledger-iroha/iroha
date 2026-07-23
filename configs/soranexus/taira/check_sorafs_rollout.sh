@@ -13,7 +13,9 @@ SORAFS_TX_STDIN_BUILDER_BIN="${SORAFS_TX_STDIN_BUILDER_BIN:-}"
 ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary}"
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
-ROLLOUT_CANARY_GAS_ASSET_ID="${ROLLOUT_CANARY_GAS_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+ROLLOUT_CANARY_FAUCET_ASSET_ID="${ROLLOUT_CANARY_FAUCET_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+ROLLOUT_CANARY_FEE_PROGRAM_ID="${ROLLOUT_CANARY_FEE_PROGRAM_ID:-testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default}"
+ROLLOUT_CANARY_FEE_PROGRAM_REVISION="${ROLLOUT_CANARY_FEE_PROGRAM_REVISION:-1}"
 ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
 DECLARED_CAPACITY_GIB="${DECLARED_CAPACITY_GIB:-1}"
 STAKE_AMOUNT="${STAKE_AMOUNT:-1}"
@@ -36,7 +38,9 @@ Usage: check_sorafs_rollout.sh --public-root URL [--write-config PATH]
                                [--iroha-bin PATH]
                                [--sorafs-manifest-stub-bin PATH]
                                [--sorafs-tx-stdin-builder-bin PATH]
-                               [--gas-asset-id ASSET_DEFINITION_ID]
+                               [--faucet-asset-id ASSET_DEFINITION_ID]
+                               [--fee-program PROGRAM_ID]
+                               [--fee-program-revision REVISION]
                                [--declared-capacity-gib N]
                                [--stake-amount N]
                                [--declaration-valid-blocks N]
@@ -67,11 +71,9 @@ directory. The bootstrap posts the current universal-account DTO to
 `/v1/accounts/onboard`, requires `HTTP 202` with a `QUEUED` receipt, and follows
 that receipt through `/v1/pipeline/transactions/status` before running the
 capacity declaration canary. Onboarding fees are sponsored by the configured
-Torii onboarding authority; gas fields are not part of the onboarding request.
-When a gas asset is configured, the script skips initial faucet funding by
-default and attaches that asset only to the signed capacity transaction, so the
-canary proves the sponsored onboarding path and the normal transaction-fee path
-separately. Set `ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet
+Torii onboarding authority. The capacity transaction gets an exact
+`/v1/fees/quote` and signs the returned intent for the configured immutable
+sponsor-program revision. Set `ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet
 claim. Both onboarding and faucet helpers wait for their `202 QUEUED` receipts
 to reach `Applied` or `Committed` through the canonical pipeline status route.
 When `--write-config` is supplied, that runtime-only signer config is read
@@ -110,7 +112,7 @@ PY
 should_skip_canary_faucet() {
   case "$ROLLOUT_CANARY_SKIP_FAUCET" in
     auto|"")
-      [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]
+      [[ -n "$ROLLOUT_CANARY_FAUCET_ASSET_ID" ]]
       ;;
     1|true|TRUE|yes|YES)
       return 0
@@ -168,12 +170,28 @@ while [[ $# -gt 0 ]]; do
       SORAFS_TX_STDIN_BUILDER_BIN="$2"
       shift 2
       ;;
-    --gas-asset-id)
+    --faucet-asset-id)
       [[ $# -ge 2 ]] || {
-        echo "missing value for --gas-asset-id" >&2
+        echo "missing value for --faucet-asset-id" >&2
         exit 1
       }
-      ROLLOUT_CANARY_GAS_ASSET_ID="$2"
+      ROLLOUT_CANARY_FAUCET_ASSET_ID="$2"
+      shift 2
+      ;;
+    --fee-program)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --fee-program" >&2
+        exit 1
+      }
+      ROLLOUT_CANARY_FEE_PROGRAM_ID="$2"
+      shift 2
+      ;;
+    --fee-program-revision)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --fee-program-revision" >&2
+        exit 1
+      }
+      ROLLOUT_CANARY_FEE_PROGRAM_REVISION="$2"
       shift 2
       ;;
     --declared-capacity-gib)
@@ -828,8 +846,8 @@ ensure_write_canary_config() {
   if [[ -n "$IROHA_BIN" ]]; then
     bootstrap_cmd+=(--iroha-bin "$IROHA_BIN")
   fi
-  if [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]; then
-    bootstrap_cmd+=(--gas-asset-id "$ROLLOUT_CANARY_GAS_ASSET_ID")
+  if [[ -n "$ROLLOUT_CANARY_FAUCET_ASSET_ID" ]]; then
+    bootstrap_cmd+=(--faucet-asset-id "$ROLLOUT_CANARY_FAUCET_ASSET_ID")
   fi
   if should_skip_canary_faucet; then
     bootstrap_cmd+=(--skip-faucet)
@@ -1099,20 +1117,6 @@ claim_faucet_for_canary() {
     --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
 }
 
-write_canary_metadata_file() {
-  local output_file="$1"
-  local gas_asset_id="$2"
-  python3 - "$output_file" "$gas_asset_id" <<'PY'
-import json
-import sys
-
-path, gas_asset_id = sys.argv[1:]
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump({"gas_asset_id": gas_asset_id}, handle, sort_keys=True)
-    handle.write("\n")
-PY
-}
-
 current_block_height() {
   local root_url="$1"
   expect_status "status" GET "${root_url}/status" 200
@@ -1203,12 +1207,14 @@ submit_capacity_canary() {
   local config_path="$1"
   local tx_stdin_path="$2"
   local output_file="$3"
-  local metadata_file="${4:-}"
-  local submit_cmd=("${IROHA_RUNNER[@]}" --output-format json -c "$config_path")
-
-  if [[ -n "$metadata_file" ]]; then
-    submit_cmd+=(-m "$metadata_file")
-  fi
+  local submit_cmd=(
+    "${IROHA_RUNNER[@]}"
+    --output-format json
+    -c "$config_path"
+    --fee-payer sponsor
+    --fee-program "$ROLLOUT_CANARY_FEE_PROGRAM_ID"
+    --fee-program-revision "$ROLLOUT_CANARY_FEE_PROGRAM_REVISION"
+  )
   submit_cmd+=(ledger transaction stdin)
 
   "${submit_cmd[@]}" \
@@ -1222,26 +1228,18 @@ run_write_canary() {
   ensure_sorafs_tx_stdin_builder_bin
   prepare_write_canary_config "$target_url"
 
-  local temp_config work_dir request_path tx_stdin_path spec_path output_file metadata_file private_key_file account_id private_key current_blocks provider_id_hex
+  local temp_config work_dir request_path tx_stdin_path spec_path output_file private_key_file account_id private_key current_blocks provider_id_hex
   temp_config="$(physical_path "$(mktemp)")"
   work_dir="$(physical_path "$(mktemp -d)")"
   output_file="$(physical_path "$(mktemp)")"
-  metadata_file="$(physical_path "$(mktemp)")"
   private_key_file="$(physical_path "$(mktemp)")"
-  trap 'rm -f "${temp_config:-}" "${metadata_file:-}" "${private_key_file:-}" "${output_file:-}"; rm -rf "${work_dir:-}"; cleanup' EXIT
+  trap 'rm -f "${temp_config:-}" "${private_key_file:-}" "${output_file:-}"; rm -rf "${work_dir:-}"; cleanup' EXIT
   build_write_canary_config \
     "$WRITE_CONFIG" \
     "$target_url" \
     "$temp_config" \
     "$ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
     "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
-  if [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]; then
-    write_canary_metadata_file "$metadata_file" "$ROLLOUT_CANARY_GAS_ASSET_ID"
-  else
-    rm -f "$metadata_file"
-    metadata_file=""
-  fi
-
   account_id="$(resolve_canary_account_id "$temp_config")"
   private_key="$(resolve_canary_private_key "$temp_config")"
   local previous_umask
@@ -1278,16 +1276,16 @@ run_write_canary() {
     "--request=${request_path}" \
     >"$tx_stdin_path"
 
-  if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file" "$metadata_file"; then
+  if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file"; then
     if grep -q 'Failed to find asset' "$output_file"; then
       claim_faucet_for_canary "$target_url" "$account_id" >/dev/null
-      if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file" "$metadata_file"; then
+      if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file"; then
         sed -n '1,120p' "$output_file" >&2 || true
         exit 1
       fi
     else
-      if grep -q 'missing gas_asset_id' "$output_file"; then
-        echo "SoraFS capacity canary failed: Taira requires gas_asset_id transaction metadata; pass --gas-asset-id with an accepted asset definition id" >&2
+      if grep -Eq 'fee quote rejected|fee_payment_rejected' "$output_file"; then
+        echo "SoraFS capacity canary failed: the exact fee quote was rejected; inspect the reported capacity and remediation, then re-quote against the active program revision" >&2
       fi
       if grep -q 'Unknown instruction type' "$output_file"; then
         echo "SoraFS capacity canary failed: the served validator binary is stale and missing SoraFS capacity/order instruction dispatch" >&2

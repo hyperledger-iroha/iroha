@@ -2,12 +2,6 @@ name: Nightly Sumeragi v2 Formal
 
 on:
   workflow_dispatch:
-    inputs:
-      release_gate:
-        description: Require the machine-complete proof ledger
-        required: true
-        type: boolean
-        default: false
   schedule:
     - cron: "43 3 * * *"
 
@@ -28,30 +22,18 @@ jobs:
       - name: Cache pinned TLAPM
         uses: actions/cache@v4
         with:
-          path: target/tlapm/toolchains/763bf3c1826d77a4cf206f43d5aa16775da1da33/x86_64-linux-gnu
-          key: sumeragi-v2-tlapm-linux-x86-64-763bf3c1826d77a4cf206f43d5aa16775da1da33
+          path: target/tlapm/toolchains/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu
+          key: sumeragi-v2-tlapm-linux-x86-64-3ab43c7ff31db4ced850619d4746fa4c841a7681
       - name: Install pinned formal tools
         run: |
           bash scripts/formal/install_sumeragi_v2_tlapm.sh
           bash scripts/formal/install_sumeragi_v2_tla2tools.sh
           bash scripts/formal/install_sumeragi_v2_verus.sh
           echo "$GITHUB_WORKSPACE/target/verus/toolchains/0.2026.05.31.5dd6d83/x86-linux" >> "$GITHUB_PATH"
-      - name: Sumeragi v2 TLAPS, bounded TLC, and Verus gates
+      - name: Sumeragi v2 formal release gate
         env:
           SUMERAGI_V2_TLC_PROFILE: nightly
-          RELEASE_GATE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate }}
-        run: |
-          if [[ "$RELEASE_GATE" == "true" ]]; then
-            bash ci/check_sumeragi_formal.sh --release
-          else
-            bash ci/check_sumeragi_formal.sh
-          fi
-      - name: Sumeragi v2 100,000-height accelerated chaos gate
-        run: >-
-          cargo test --locked -p iroha_sumeragi_core
-          --test network_simulation
-          accelerated_100_000_block_chaos_preserves_chain_prefix
-          -- --ignored --nocapture
+        run: bash ci/check_sumeragi_formal.sh
       - name: Formal docs metadata report
         if: always()
         run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json
@@ -64,3 +46,50 @@ jobs:
             target/formal/sumeragi_v2
             target/docs-i18n/formal-metadata.json
           if-no-files-found: ignore
+
+  # Deliberately independent of the strict formal job: incomplete proof debt
+  # must fail that gate without preventing collection of the nightly chaos
+  # evidence for the exact same workflow revision.
+  sumeragi-v2-chaos-100k:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/sumeragi-v2-chaos-build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          expected_commit="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$expected_commit"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: "false"
+          toolchain: 1.93.1
+      - name: Resolve the attested workspace lockfile
+        run: cargo generate-lockfile
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          shared-key: sumeragi-v2-chaos-100k-1.93.1
+      - name: Prefetch pinned standalone harness dependencies
+        run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch
+      - name: Sumeragi v2 source-attested 100,000-height chaos gate
+        run: bash scripts/run_sumeragi_v2_100k_chaos.sh
+      - name: Upload Sumeragi v2 chaos evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sumeragi-v2-chaos-100k-nightly
+          path: |
+            Cargo.lock
+            target/sumeragi-v2-release
+          if-no-files-found: warn

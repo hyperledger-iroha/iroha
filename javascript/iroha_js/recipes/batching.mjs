@@ -20,6 +20,9 @@ const recipient =
 const assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const assetId = `${assetDefinitionId}#${authority}`;
 const privateKey = Buffer.alloc(32, 0x11);
+// Local encoding-only intent. Live submissions must replace the empty maxima
+// through `quoteAndSignTransaction` before signing.
+const feePayment = { payer: "authority", chargeLimits: [] };
 
 function inspectInstruction(label, instruction) {
   const decoded = noritoDecodeInstruction(noritoEncodeInstruction(instruction));
@@ -48,6 +51,7 @@ inspectInstruction("Burn", burnInstruction);
 const manualBatch = buildTransaction({
   chainId,
   authority,
+  feePayment,
   instructions: [mintInstruction, transferInstruction, burnInstruction],
   nonce: 1,
   ttlMs: 60_000,
@@ -59,6 +63,7 @@ console.log(`\\nManual batch hash: ${manualBatch.hash.toString("hex")}`);
 const mintAndTransfer = buildMintAndTransferTransaction({
   chainId,
   authority,
+  feePayment,
   mint: { assetId, quantity: "10" },
   transfers: [
     { quantity: "5", destinationAccountId: authority },
@@ -77,6 +82,7 @@ const registerMintTransfer = buildRegisterAssetDefinitionMintAndTransferTransact
   {
     chainId,
     authority,
+    feePayment,
     assetDefinition: {
       assetDefinitionId,
       metadata: { description: "Sample asset" },

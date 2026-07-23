@@ -1,19 +1,27 @@
 ---
-title: SNS Training Collateral (SN-8)
-summary: Instructor scripts, localization hooks, and annex evidence capture for the SNS suffix program.
+title: SNS Training Collateral
+summary: Instructor scripts, localization hooks, and release-safe evidence capture for alias provisioning.
 ---
 
-# Sora Name Service Training Collateral
+# Sora Name Service training collateral
 
-**Roadmap reference:** SN-8 “Metrics & Onboarding” (see `roadmap.md:432`).  
-**Audience:** registrar operators, DNS/gateway engineers, guardians, and finance reviewers preparing `.sora`, `.nexus`, or `.dao` launches.  
-**Artifacts:** `dashboards/grafana/sns_suffix_analytics.json`, `docs/portal/docs/sns/kpi-dashboard.md`, `docs/source/sns/onboarding_kit.md`, `docs/examples/sorafs_direct_mode_policy.json`.
+This curriculum teaches the first-release alias workflow: produce one
+declarative intent, obtain a read-only plan against live state, verify the
+canonical plan locally, sign one ordinary transaction, and confirm readiness.
+It must not be adapted to call removed SNS mutation routes or to treat a
+dashboard, client-generated payment proof, API token, or private key as
+execution evidence.
 
-This guide consolidates the training curriculum, localization workflow, and
-evidence capture steps that governance expects before approving a suffix launch.
-It complements the KPI dashboard and onboarding kit by describing how to run the
-briefings, which labs to exercise, and how to thread the outputs into the
-regulatory annex automation.
+The canonical references are:
+
+- [`registrar_api.md`](./registrar_api.md) for planner, apply, renewal, and
+  auto-renew behavior;
+- [`registry_schema.md`](./registry_schema.md) for the persisted SNS read model;
+- [`governance_playbook.md`](./governance_playbook.md) for approval and evidence
+  boundaries;
+- the [portal evidence guide](../../portal/docs/sns/kpi-dashboard.md) for the
+  accepted operational evidence sources; and
+- `fixtures/norito_rpc/alias_setup_v1/` for cross-SDK canonical fixtures.
 
 ## 1. Curriculum overview
 
@@ -21,110 +29,110 @@ regulatory annex automation.
 
 | Track | Objectives | Required pre-reads |
 |-------|------------|--------------------|
-| Registrar operations | Encode/submit manifests, monitor SLA dashboards, escalate errors. | `docs/source/sns/onboarding_kit.md`, `docs/portal/docs/sns/kpi-dashboard.md`. |
-| DNS & gateway | Apply resolver skeletons, propagate freezes, and rehearse rollback. | `docs/source/sorafs_gateway_dns_owner_runbook.md`, `docs/examples/sorafs_gateway_direct_mode.toml`. |
-| Guardians & council delegates | Review governance addenda, dispute tooling, and KPI annex evidence. | `docs/source/sns/governance_playbook.md`, `docs/source/sns/reports/steward_scorecard_2026q1.md`. |
-| Finance & analytics | Reconcile ARPU/bulk-release metrics and publish annex snapshots. | `docs/portal/docs/finance/settlement-iso-mapping.md`, `dashboards/grafana/sns_suffix_analytics.json`. |
+| Registrar operations | Resolve textual names, review `NoOp`/`Repair`/`Create` dispositions, verify a plan, and submit its exact frames as one transaction. | `registrar_api.md`, `onboarding_kit.md`. |
+| Node and gateway operations | Validate onboarding configuration, distinguish `Ready`/`Pending`/`Blocked`, and diagnose visibility without existence leakage. | `registrar_api.md`, portal evidence guide. |
+| Governance and compliance | Approve intent, recognize drift conflicts, and retain a replayable evidence packet without secrets. | `governance_playbook.md`, `registry_schema.md`. |
+| Finance and analytics | Reconcile exact planner quotes and committed ledger debits; distinguish the charged amount from the caller's cap. | `payment_settlement_plan.md`, portal evidence guide. |
 
 ### 1.2 Module sequence
 
-| Module | Duration | Inputs | Exercises | Exit criteria |
-|--------|----------|--------|-----------|---------------|
-| M1 — KPI orientation | 30 min | KPI dashboard JSON + portal embed. | Walk through suffix filters, export PDF/CSV snapshots. | Trainees can locate registrar throughput, freezes, and ARPU deltas. |
-| M2 — Manifest lifecycle | 45 min | `docs/source/sns/registry_schema.md`, zonefile helper JSON. | Build one registrar manifest per language and validate with `scripts/sns_zonefile_skeleton.py`. | Validated manifest + resolver skeleton committed to training branch. |
-| M3 — Incident & dispute drills | 40 min | `docs/source/sns/governance_playbook.md`, guardian CLI. | Simulate freeze + dispute appeals, capture audit log excerpt. | Signed dispute transcript stored under `artifacts/sns/training/<suffix>/<cycle>/`. |
-| M4 — KPI annex capture | 25 min | Grafana export, annex helper. | Run `cargo xtask sns-annex` with training cycle, update regulatory memo + portal copy. | Annex Markdown + regulatory memo reflect latest digest. |
+| Module | Duration | Exercise | Exit criteria |
+|--------|----------|----------|---------------|
+| M1 — Evidence orientation | 30 min | Inspect a redacted `AliasSetupReportV1`, plan body, and committed transaction receipt. | Trainees can identify status, stable diagnostic codes, plan hash, exact quote, cap, and ledger debit. |
+| M2 — Setup planning | 45 min | Plan a dataspace → domain → account-alias intent and independently decode/re-encode its ordered instruction frames. | The verified hash matches the planner hash and the plan contains no blocker. |
+| M3 — Drift and visibility | 40 min | Classify an exact replay, a repair, a conflicting owner/binding, and restricted read responses. | Trainees expect zero-charge `NoOp`, charge-free `Repair`, structured 409 conflict, and the documented 401/403/404 order. |
+| M4 — Atomic apply and evidence | 25 min | Locally sign and submit the exact plan as one normal transaction, then correlate readiness and ledger state. | One transaction receipt plus a post-commit readiness report proves the result; no partial apply is accepted. |
 
 ### 1.3 Lab prerequisites
 
-1. Import `dashboards/grafana/sns_suffix_analytics.json` into the staging Grafana
-   instance and verify the portal mirror (`docs/portal/docs/sns/kpi-dashboard.md`)
-   shows the same UID/tags.
-2. Pre-populate `artifacts/sns/training/<suffix>/<cycle>/` with:
-   - `manifests/` — anonymized manifests for lab submissions.
-   - `logs/` — Torii + guardian telemetry samples.
-   - `slides/` — per-language deck (PDF and editable source).
-3. Ensure Torii staging exposes the SNS APIs, and provide trainees with
-   temporary credentials scoped to the training namespaces.
+1. Use a staging Torii with the alias planner and authenticated onboarding
+   readiness endpoint enabled. Verify static/bootstrap configuration with
+   `irohad --check-config` before the session.
+2. Give each trainee a runtime-only client configuration whose signer matches
+   the transaction authority. If sponsored onboarding is exercised, distribute
+   its API token through a protected token file; never place token or key values
+   in a workbook, shell history, URL, or HTTP body.
+3. Seed secret-free setup intents and expected fixtures under the training
+   artifact directory. Do not copy a live signer file into that directory.
 
-## 2. Localization workflow
+## 2. Lab flow
 
-### 2.1 Languages & collateral
+### 2.1 Readiness and diagnostics
 
-Training handouts must exist for Arabic, Spanish, French, Japanese, Portuguese,
-Russian, and Urdu audiences. Each translation lives next to this file as
-`training_collateral.<lang>.md` so Git history captures review dates. When you
-update the English source, run `python3 scripts/sync_docs_i18n.py --lang <code>`
-or manually refresh the stub so translators see the new hash.
+Run the alias doctor/readiness flow described by `registrar_api.md`. Record the
+overall status, validation phase, stable diagnostic code, affected resource,
+expected/actual values, and remediation. Before sharing the report, verify that
+it contains no raw token, token digest, private-key material, or credential
+header.
 
-| Language | Classroom assets | Contact |
-|----------|------------------|---------|
-| Arabic (`ar`) | `artifacts/sns/training/.sora/ar/slides/`, localized KPI screenshots, annex template. | `suffix-onboarding-ar@sora.org` |
-| Spanish (`es`) | `artifacts/sns/training/.nexus/es/workbooks/`, `docs/examples/sns_training_eval_template.md`. | `nexus-regops@sora.org` |
-| French (`fr`) | Shared deck in `artifacts/sns/training/.dao/fr/slides/`, interpreter notes. | `steward-fra@sora.org` |
-| Japanese (`ja`) | Interpreter-led workshop; use `docs/source/sns/onboarding_kit.ja.md` + localized CLI output. | `suffix-jp@sora.org` |
-| Portuguese (`pt`) | Finance breakout referencing `docs/portal/docs/finance/settlement-iso-mapping.md`. | `suffix-pt@sora.org` |
-| Russian (`ru`) | Additional dispute examples stored under `artifacts/sns/training/.sora/ru/logs/`. | `guardian-ru@sora.org` |
-| Urdu (`ur`) | Remote delivery kit + translated facilitator script under `artifacts/sns/training/.dao/ur/`. | `suffix-ur@sora.org` |
+### 2.2 Read-only planning
 
-### 2.2 Delivery checklist
+Use a typed, secret-free intent. A representative bulk-tool invocation is:
 
-1. Update the language-specific stub (set `status: complete`, note the
-   `translation_last_reviewed` timestamp).
-2. Export the localized slide deck to PDF and drop it in
-   `artifacts/sns/training/<suffix>/<lang>/<cycle>/slides/`.
-3. Record a short walkthrough (≤10 min) that demonstrates KPI navigation in the
-   target language; link it from the stub.
-4. File the assets in the governance tracker with the `sns-training` label so
-   reviewers can diff collateral between cycles.
+```bash
+python3 scripts/sns_bulk_onboard.py setup.json \
+  --config client.toml \
+  --plan-file setup.plan.json
+```
 
-## 3. Delivery assets
+The signed planner request must not mutate state. Review the authority,
+chain/anchor, resolved text/ID pairs, dispositions, exact quotes, caps, totals
+by asset, warnings/blockers, expiry, ordered framed instructions, and plan hash.
+A conflict must return a structured 409 without a partial executable plan.
 
-### 3.1 Slide deck & workbook
+### 2.3 Local verification and apply
 
-- Deck template: `docs/examples/sns_training_template.md` (export to PDF per
-  language before delivery).
-- Workbook template (`docs/examples/sns_training_workbook.md`) links directly to
-  the KPI dashboard, registrar API docs, and dispute tooling so attendees never
-  leave the curated set of references.
-- Pre-session email template lives under
-  `docs/examples/sns_training_invite_email.md`.
+The CLI or SDK must verify the plan hash, decode and re-encode the exact frames,
+locally sign one ordinary transaction, and submit it through the existing
+transaction endpoint. Do not split a parent/child setup into separate
+transactions. Do not substitute locally rebuilt instructions after verification.
+With the bulk wrapper, mutation must be requested explicitly:
 
-### 3.2 Labs & evaluations
+```bash
+python3 scripts/sns_bulk_onboard.py setup.json \
+  --config client.toml \
+  --plan-file setup.plan.json \
+  --apply
+```
 
-- Lab 1 (KPI export): export registrar throughput, attach digest, and record
-  metrics in the shared spreadsheet.
-- Lab 2 (Manifest drill): run `scripts/sns_zonefile_skeleton.py` with the
-  language-specific descriptor and capture `git diff` for the report.
-- Lab 3 (Dispute run): use guardian CLI to stage a freeze and capture the
-  resulting entries for the dispute annex.
-- Evaluations: `docs/examples/sns_training_eval_template.md` contains the
-  survey delivered at the end of every session; drop completed forms in
-  `artifacts/sns/training/<suffix>/<cycle>/feedback/`.
+### 2.4 Evidence packet
 
-## 4. KPI review & annex handoff
+Archive only secret-free material:
 
-After the final lab, capture evidence so governance can reference the exact KPI
-state that trainees used:
+- the approved intent and canonical plan body;
+- the verified plan hash and ordered frame digests;
+- the ordinary transaction hash and committed/rejected result;
+- exact quoted and debited amounts by asset; and
+- the post-commit `AliasSetupReportV1` plus authorized resolution results.
 
-1. Export the Grafana dashboard (`sns_suffix_analytics.json`) for the current
-   cycle and copy it to
-   `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json`.
-2. Run `cargo xtask sns-annex --suffix <suffix> --cycle <cycle> --dashboard <export> \
-   --dashboard-artifact <artifacts path> --output docs/source/sns/reports/<suffix>/<cycle>.md \
-   --regulatory-entry docs/source/sns/regulatory/<memo>.md \
-   --portal-entry docs/portal/docs/sns/regulatory/<memo-id>.md`.
-   The `--portal-entry` flag keeps the portal memo in sync with the source annex.
-3. Attach the workbook answers, slide deck, and recording links to the same
-   governance ticket so reviewers see the whole bundle.
+For a rejection, retain the structured error and prove that no earlier resource,
+binding, index, permission, or balance mutation escaped the transaction.
 
-## 5. Scheduling & feedback loops
+## 3. Localization workflow
 
-| Cycle | Training window | Feedback channels | Metrics |
-|-------|-----------------|-------------------|---------|
-| 2026‑03 | First week after KPI review | `#sns-training` Matrix room, annex comments. | Attendance %, satisfaction score ≥4/5, annex export digest logged. |
-| 2026‑06 | Prior to `.dao` GA | Survey link + finance office hours. | Finance readiness score, manifest drill pass rate. |
-| 2026‑09 | Post multi-suffix expansion | Guardian Q&A, portal feedback form. | Dispute drill completion time, annex SLA (≤2 days). |
+Localized handouts live beside this file as
+`training_collateral.<lang>.md`. Regenerate or review translations after the
+English source changes; a translation carrying an older `source_hash` is not an
+operational runbook. Keep command names, route paths, diagnostic codes, and
+Norito type names unchanged during translation.
 
-Capture anonymous feedback in `docs/source/sns/reports/sns_training_feedback.md`
-so the next cohort can iterate on the exercises and localized scripts.
+## 4. Instructor checklist
+
+- [ ] Every setup uses the signed read-only planner and one locally signed
+      ordinary transaction.
+- [ ] Exact replay demonstrates a zero-charge `NoOp`; derived-state repair is
+      charge-free.
+- [ ] Owner, binding, primary-role, immutable metadata/controller, and text/ID
+      drift demonstrate structured conflicts, never overwrite behavior.
+- [ ] Restricted reads demonstrate 401 before authentication, 403 before
+      lookup for insufficient scope, and 404 only for an authorized miss.
+- [ ] Sponsored onboarding is identified as the sole server-signing exception
+      and uses a header/file token plus a stateless plan receipt.
+- [ ] The shared evidence packet is redacted and contains no payment proof,
+      raw token, inline key, or command-line secret.
+
+## 5. Feedback
+
+Use `docs/examples/sns_training_eval_template.md` for anonymous feedback. Store
+completed workbooks and redacted evidence beneath the cohort artifact directory;
+store runtime credentials separately with restrictive filesystem permissions.

@@ -21,9 +21,7 @@ use iroha_data_model::{
     isi::{SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry},
     parameter::{CustomParameter, Parameter},
     prelude::*,
-    transaction::{
-        Executable, IvmBytecode, IvmProved, SignedTransaction, insert_transaction_gas_limit,
-    },
+    transaction::{Executable, IvmBytecode, IvmProved, SignedTransaction},
     validation_fee::{
         SignedValidationFeePolicyV1, VALIDATION_FEE_DS_SCALE,
         VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
@@ -384,10 +382,14 @@ fn signed_transfer_with_principal_and_fee_instruction(
             .into(),
         );
     }
-    TransactionBuilder::new(state.chain_id.clone(), user.clone())
-        .with_instructions(instructions)
-        .with_metadata(metadata)
-        .sign(user_key_pair.private_key())
+    TransactionBuilder::new(
+        state.chain_id.clone(),
+        user.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .with_metadata(metadata)
+    .sign(user_key_pair.private_key())
 }
 
 fn signed_ivm_proved_overlay(
@@ -395,9 +397,8 @@ fn signed_ivm_proved_overlay(
     user: &AccountId,
     user_key_pair: &KeyPair,
     overlay: Vec<InstructionBox>,
-    mut metadata: Metadata,
+    metadata: Metadata,
 ) -> SignedTransaction {
-    insert_transaction_gas_limit(&mut metadata, 1_000);
     let mut program = ivm::ProgramMetadata {
         max_cycles: 1_000,
         ..ivm::ProgramMetadata::default()
@@ -405,15 +406,19 @@ fn signed_ivm_proved_overlay(
     .encode();
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
-    TransactionBuilder::new(state.chain_id.clone(), user.clone())
-        .with_executable(Executable::IvmProved(IvmProved {
-            bytecode: IvmBytecode::from_compiled(program),
-            overlay: overlay.into(),
-            events_commitment: Hash::new(b"events"),
-            gas_policy_commitment: Hash::new(b"gas-policy"),
-        }))
-        .with_metadata(metadata)
-        .sign(user_key_pair.private_key())
+    TransactionBuilder::new(
+        state.chain_id.clone(),
+        user.clone(),
+        FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1_000)),
+    )
+    .with_executable(Executable::IvmProved(IvmProved {
+        bytecode: IvmBytecode::from_compiled(program),
+        overlay: overlay.into(),
+        events_commitment: Hash::new(b"events"),
+        gas_policy_commitment: Hash::new(b"gas-policy"),
+    }))
+    .with_metadata(metadata)
+    .sign(user_key_pair.private_key())
 }
 
 fn signed_transfer_with_explicit_fee_asset_instruction(
@@ -427,21 +432,25 @@ fn signed_transfer_with_explicit_fee_asset_instruction(
     fee_recipient: AccountId,
     metadata: Metadata,
 ) -> SignedTransaction {
-    TransactionBuilder::new(state.chain_id.clone(), user.clone())
-        .with_instructions([
-            InstructionBox::from(Transfer::asset_quantity(
-                AssetId::new(principal_asset.clone(), user.clone()),
-                1_u32,
-                recipient.clone(),
-            )),
-            InstructionBox::from(Transfer::asset_quantity(
-                AssetId::new(fee_asset.clone(), user.clone()),
-                fee_amount,
-                fee_recipient,
-            )),
-        ])
-        .with_metadata(metadata)
-        .sign(user_key_pair.private_key())
+    TransactionBuilder::new(
+        state.chain_id.clone(),
+        user.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        InstructionBox::from(Transfer::asset_quantity(
+            AssetId::new(principal_asset.clone(), user.clone()),
+            1_u32,
+            recipient.clone(),
+        )),
+        InstructionBox::from(Transfer::asset_quantity(
+            AssetId::new(fee_asset.clone(), user.clone()),
+            fee_amount,
+            fee_recipient,
+        )),
+    ])
+    .with_metadata(metadata)
+    .sign(user_key_pair.private_key())
 }
 
 fn signed_transfer_with_explicit_fee_source_instruction(
@@ -455,21 +464,25 @@ fn signed_transfer_with_explicit_fee_source_instruction(
     fee_recipient: AccountId,
     metadata: Metadata,
 ) -> SignedTransaction {
-    TransactionBuilder::new(state.chain_id.clone(), user.clone())
-        .with_instructions([
-            InstructionBox::from(Transfer::asset_quantity(
-                AssetId::new(fee_asset.clone(), user.clone()),
-                1_u32,
-                recipient.clone(),
-            )),
-            InstructionBox::from(Transfer::asset_quantity(
-                AssetId::new(fee_asset.clone(), fee_source.clone()),
-                fee_amount,
-                fee_recipient,
-            )),
-        ])
-        .with_metadata(metadata)
-        .sign(user_key_pair.private_key())
+    TransactionBuilder::new(
+        state.chain_id.clone(),
+        user.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        InstructionBox::from(Transfer::asset_quantity(
+            AssetId::new(fee_asset.clone(), user.clone()),
+            1_u32,
+            recipient.clone(),
+        )),
+        InstructionBox::from(Transfer::asset_quantity(
+            AssetId::new(fee_asset.clone(), fee_source.clone()),
+            fee_amount,
+            fee_recipient,
+        )),
+    ])
+    .with_metadata(metadata)
+    .sign(user_key_pair.private_key())
 }
 
 fn signed_batch_transfer_with_principal_amounts(
@@ -524,10 +537,14 @@ fn signed_batch_transfer_with_entries(
     entries: Vec<TransferAssetBatchEntry>,
 ) -> SignedTransaction {
     let batch = TransferAssetBatch::new(entries);
-    TransactionBuilder::new(state.chain_id.clone(), user.clone())
-        .with_instructions([InstructionBox::from(batch)])
-        .with_metadata(metadata_for_batch_policy(policy, 0, 2))
-        .sign(user_key_pair.private_key())
+    TransactionBuilder::new(
+        state.chain_id.clone(),
+        user.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([InstructionBox::from(batch)])
+    .with_metadata(metadata_for_batch_policy(policy, 0, 2))
+    .sign(user_key_pair.private_key())
 }
 
 fn validate_in_block(state: &State, height: u64, tx: SignedTransaction) -> String {
@@ -786,22 +803,25 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     );
     drop(view);
 
-    let fee_then_overdrawn_principal_tx =
-        TransactionBuilder::new(state.chain_id.clone(), user.clone())
-            .with_instructions([
-                InstructionBox::from(Transfer::asset_quantity(
-                    AssetId::new(fee_asset.clone(), user.clone()),
-                    policy.fee.clone(),
-                    policy_treasury_account(&policy),
-                )),
-                InstructionBox::from(Transfer::asset_quantity(
-                    AssetId::new(fee_asset.clone(), user.clone()),
-                    100_u32,
-                    recipient.clone(),
-                )),
-            ])
-            .with_metadata(metadata_for_policy(&policy, 0))
-            .sign(user_key_pair.private_key());
+    let fee_then_overdrawn_principal_tx = TransactionBuilder::new(
+        state.chain_id.clone(),
+        user.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        InstructionBox::from(Transfer::asset_quantity(
+            AssetId::new(fee_asset.clone(), user.clone()),
+            policy.fee.clone(),
+            policy_treasury_account(&policy),
+        )),
+        InstructionBox::from(Transfer::asset_quantity(
+            AssetId::new(fee_asset.clone(), user.clone()),
+            100_u32,
+            recipient.clone(),
+        )),
+    ])
+    .with_metadata(metadata_for_policy(&policy, 0))
+    .sign(user_key_pair.private_key());
     let accepted = accept_transaction(&state, fee_then_overdrawn_principal_tx);
     let mut block = state.block(block_header(5, 1_700_000_005_000));
     let mut ivm_cache = IvmCache::new();

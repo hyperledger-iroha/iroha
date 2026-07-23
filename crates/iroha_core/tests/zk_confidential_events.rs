@@ -219,9 +219,13 @@ fn shield_emits_confidential_event() {
         encrypted_payload(0xAB),
     ));
     let chain_id = ChainId::from("confidential_chain");
-    let tx = TransactionBuilder::new(chain_id, account_id.clone())
-        .with_instructions([instruction])
-        .sign(keypair.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id,
+        account_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction])
+    .sign(keypair.private_key());
     let tx_call_hash = tx.hash_as_entrypoint();
     let acc_tx = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let block = BlockBuilder::new(vec![acc_tx])
@@ -324,9 +328,13 @@ fn transfer_emits_confidential_event() {
         Some(root),
     ));
     let chain_id = ChainId::from(TEST_CHAIN_ID);
-    let tx = TransactionBuilder::new(chain_id, account_id.clone())
-        .with_instructions([instruction])
-        .sign(keypair.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id,
+        account_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction])
+    .sign(keypair.private_key());
     let tx_call_hash = tx.hash_as_entrypoint();
     let acc_tx = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let block = BlockBuilder::new(vec![acc_tx])
@@ -416,9 +424,13 @@ fn unshield_emits_confidential_event() {
         Some(root),
     ));
     let chain_id = ChainId::from(TEST_CHAIN_ID);
-    let tx = TransactionBuilder::new(chain_id, account_id.clone())
-        .with_instructions([instruction])
-        .sign(keypair.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id,
+        account_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction])
+    .sign(keypair.private_key());
     let tx_call_hash = tx.hash_as_entrypoint();
     let acc_tx = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let block = BlockBuilder::new(vec![acc_tx])

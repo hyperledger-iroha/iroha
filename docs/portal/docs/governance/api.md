@@ -21,6 +21,7 @@ Endpoints
 
 - POST `/v1/gov/proposals/deploy-contract`
   - Request (JSON):
+    ```text
     {
       "contract_alias": "router::universal"?,
       "contract_address": "tairac1..."?,
@@ -34,43 +35,41 @@ Endpoints
       "authority": "<i105-account-id>?",
       "private_key": "…?"
     }
-  - Response (JSON):
-    { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
+    ```
+  - Response (JSON): `{ "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }`
   - Validation:
     - exactly one of `contract_address` or `contract_alias` must be provided;
     - aliases resolve to the current active canonical contract address before the proposal id is derived;
     - `code_hash` and `abi_hash` are canonicalised to 32-byte lowercase hex;
     - only `abi_version = "1"` is accepted, and `abi_hash` must equal the canonical ABI hash for that version (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`);
-    - `window.upper` must be `>= window.lower`; and
+    - `window.upper` must be greater than or equal to `window.lower`; and
     - `mode`, when supplied, must be `Zk` or `Plain`.
   - Submission model: this endpoint is draft-first. `authority`/`private_key` are only accepted as a legacy pair and currently fail closed because governance server-side signing is disabled, so clients should consume `tx_instructions`, sign locally, and submit via `/transaction`.
 
-Contracts API (deploy)
-- POST `/v1/contracts/deploy`
-  - Request: { "authority": "<i105-account-id>", "private_key": "…", "code_b64": "…", "contract_alias": "router::universal", "lease_expiry_ms": 1735689600000? }
-  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes the domain-separated `code_hash` over the complete artifact including the fixed IVM execution header and `abi_hash` from the enforced ABI policy, derives a fresh immutable `contract_address` from `(chain_discriminant, authority, deploy_nonce, dataspace(contract_alias))`, then submits `RegisterSmartContractBytes`, `RegisterSmartContractCode`, `ActivateContractInstance`, `SetContractAlias::bind`, and the deploy-nonce bump on behalf of `authority`.
-  - Redeploying the same `contract_alias` is the public `kaizen`/`改善` path: Torii clears the old alias binding, deactivates the retired address, binds the alias to the new address, and reports `previous_contract_address` plus `kaizen = true`.
-  - Response: `DeployContractBundleReceiptDto`; the single-contract shortcut returns the canonical bundle receipt with one entry in `contracts[]`.
-  - Related:
-    - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
-    - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
-  - Notes:
-    - this public shortcut is alias-first and is intended for public/unprotected dataspaces;
-    - runtime calls no longer resend bytecode or manifests on each invocation; once deployed, `/v1/contracts/call` references the active contract by address; and
-    - protected-namespace deployment remains governed by the proposal/metadata flow (`gov_contract_address`, enacted proposal tuple, quorum metadata) rather than by a separate public `/v1/contracts/instance*` shortcut.
+Contracts API (locally signed deployment)
+- Torii does not expose a server-side deployment endpoint and never accepts a
+  deployment private key.
+- Clients upload/finalize bytecode, register a locally signed manifest, and
+  submit `CommitContractDeployment` through the standard transaction pipeline.
+- The commit instruction atomically checks the expected deployment nonce and
+  previous alias target before activation or rotation.
+- Related reads:
+  - GET `/v1/contracts/code/{code_hash}` → stored manifest
+  - GET `/v1/contracts/code-bytes/{code_hash}` → `{ code_b64 }`
+
 Alias Service
 - POST `/v1/aliases/resolve`
-  - Request: { "alias": "merchant@paynet" }
-  - Response: { "alias": "merchant@paynet", "account_id": "<i105-account-id>", "index": 12, "source": "on_chain" }
-  - Notes: Torii routes the lookup through the Nexus read proxy using the alias dataspace encoded in the literal, so `merchant@paynet` can be resolved through any configured Nexus ingress instead of only the PAYNET-local Torii surface. Public/unsigned requests remain allowed for ordinary public alias resolution. Returns HTTP `403` with `ErrorEnvelope.code = "permission_denied"` only when the routed dataspace blocks the lookup and no allowed route can resolve it; returns `404` when reachable routes miss and `503` when no route can be reached.
+  - Request: `{ "alias": "merchant@paynet" }`
+  - Response: `{ "alias": "merchant@paynet", "account_id": "<i105-account-id>", "index": 12, "source": "on_chain" }`
+  - Notes: This is an exact public mapping, not a search endpoint. The request must contain the canonical fully-qualified alias. Torii routes through the alias dataspace, independently rate-limits the route, and accepts unsigned requests. If canonical-signature headers are supplied they must verify; invalid or partial signing headers never downgrade to anonymous access. Returns `404` for an unknown exact alias and `503` when its authoritative route cannot be reached.
 - POST `/v1/aliases/resolve-index`
-  - Request: { "index": 0 }
-  - Response: { "index": 0, "alias": "merchant@paynet", "account_id": "<i105-account-id>", "source": "fanout" }
-  - Notes: Because the index alone does not encode a dataspace, Torii fans this lookup out across every configured dataspace route, dedupes identical results, and returns `source = "fanout"` when the response comes from multi-route merging. Returns `409 route_conflict` if multiple dataspaces return incompatible bindings for the same index, `403 permission_denied` if only blocked routes could resolve it, `404` when all reachable routes miss, and `503` when no route can be reached.
+  - Request: `{ "index": 0 }`
+  - Response: `{ "index": 0, "alias": "merchant@paynet", "account_id": "<i105-account-id>", "source": "fanout" }`
+  - Notes: Canonical request signing is required. Because the index alone does not encode a dataspace, Torii fans this lookup out across the signed caller's visible dataspace routes, dedupes identical results, and returns `source = "fanout"` when the response comes from multi-route merging. Returns `409 route_conflict` if multiple dataspaces return incompatible bindings, `403` for missing/invalid signing or inaccessible routes, `404` when reachable routes miss, and `503` when no route can be reached.
 - POST `/v1/aliases/by-account`
-  - Request: { "account_id": "<i105-account-id>", "dataspace": "paynet"?, "domain": "merchant"?" }
-  - Response: { "account_id": "<i105-account-id>", "total": 2, "items": [{ "alias": "merchant@paynet", "dataspace": "paynet", "domain": null, "is_primary": false }], "source": "fanout" }
-  - Notes: Torii routes the lookup through the target-account dataspace set, merges deduplicated alias rows across reachable dataspaces, and recomputes `total` after merging. If one or more routes are denied but another route succeeds, Torii still returns `200` and includes the usual routing diagnostics headers plus an HTTP `Warning` header. Returns `403 permission_denied` only when no allowed route can return aliases, `404` when reachable routes miss, and `503` when no route can be reached.
+  - Request: `{ "account_id": "<i105-account-id>", "dataspace": "paynet"?, "domain": "merchant"?" }`
+  - Response: `{ "account_id": "<i105-account-id>", "total": 2, "items": [{ "alias": "merchant@paynet", "dataspace": "paynet", "domain": null, "is_primary": false }], "source": "fanout" }`
+  - Notes: This is the exact public reverse mapping for one canonical I105 account, not prefix/index enumeration. Torii queries the target account's routes, merges and deterministically sorts at most 64 deduplicated public alias rows, and recomputes `total`. The route is independently rate limited and accepts unsigned requests; supplied canonical-signature headers must verify. Returns `404` when the exact account has no reachable alias result, `409` for conflicting account roots, and `503` when no route can be reached.
 
 Code Size Cap
 - Custom parameter: `max_contract_code_bytes` (JSON u64)
@@ -79,8 +78,8 @@ Code Size Cap
   - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
 
 - POST `/v1/gov/ballots/zk`
-  - Request: { "authority": "<i105-account-id>", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Request: `{ "authority": "<i105-account-id>", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }`
+  - Response: `{ "ok": true, "accepted": true, "tx_instructions": [{…}] }`
   - Notes:
     - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`) unless hinted; only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
     - When any lock hint is provided, the ballot must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required.
@@ -88,13 +87,13 @@ Code Size Cap
     - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
 
 - POST `/v1/gov/ballots/plain`
-  - Request: { "authority": "<i105-account-id>", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Request: `{ "authority": "<i105-account-id>", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }`
+  - Response: `{ "ok": true, "accepted": true, "tx_instructions": [{…}] }`
   - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "<i105-account-id>?", "private_key": "…?" }
-  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
+  - Request: `{ "referendum_id": "r1", "proposal_id": "…64hex", "authority": "<i105-account-id>?", "private_key": "…?" }`
+  - Response: `{ "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }`
   - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
   - Notes:
     - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
@@ -102,26 +101,26 @@ Code Size Cap
     - Turnout checks use approve+reject only; abstain does not count toward turnout.
 
 - POST `/v1/gov/enact`
-  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "<i105-account-id>?", "private_key": "…?" }
-  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
+  - Request: `{ "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "<i105-account-id>?", "private_key": "…?" }`
+  - Response: `{ "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }`
   - Notes: Torii submits the signed transaction when `authority`/`private_key` are provided; otherwise it returns a skeleton for clients to sign and submit. The preimage is optional and currently informational.
 
 - GET `/v1/gov/proposals/{id}`
   - Path `{id}`: proposal id hex (64 chars)
-  - Response: { "found": bool, "proposal": { … }? }
+  - Response: `{ "found": bool, "proposal": { … }? }`
 
 - GET `/v1/gov/locks/{rid}`
   - Path `{rid}`: referendum id string
-  - Response: { "found": bool, "referendum_id": "rid", "locks": { … }? }
+  - Response: `{ "found": bool, "referendum_id": "rid", "locks": { … }? }`
 
 - GET `/v1/gov/council/current`
-  - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
+  - Response: `{ "epoch": N, "members": [{ "account_id": "…" }, …] }`
   - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback using the configured stake asset and thresholds (mirrors the VRF spec until live VRF proofs are persisted on chain).
 
 - POST `/v1/gov/council/derive-vrf` (feature: gov_vrf)
-  - Request: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "…", "variant": "Normal|Small", "pk_b64": "…", "proof_b64": "…" }, …] }
+  - Request: `{ "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "…", "variant": "Normal|Small", "pk_b64": "…", "proof_b64": "…" }, …] }`
   - Behavior: Verifies each candidate’s VRF proof against the canonical input derived from `chain_id`, `epoch`, and the latest block hash beacon; sorts by output bytes desc with tiebreakers; returns the top `committee_size` members. Does not persist.
-  - Response: { "epoch": N, "members": [{ "account_id": "…" } …], "total_candidates": M, "verified": K }
+  - Response: `{ "epoch": N, "members": [{ "account_id": "…" } …], "total_candidates": M, "verified": K }`
   - Notes: Normal = pk in G1, proof in G2 (96 bytes). Small = pk in G2, proof in G1 (48 bytes). Inputs are domain-separated and include `chain_id`.
 
 ### Governance defaults (iroha_config `gov.*`)
@@ -196,7 +195,7 @@ RBAC
 Protected Namespaces
 - Custom parameter `gov_protected_namespaces` (JSON array of strings) enables admission gating for deploys into listed namespaces.
 - Clients must include transaction metadata key `gov_contract_address` for deploys targeting protected namespaces.
-- `gov_manifest_approvers`: optional JSON array of <i105-account-id> account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
+- `gov_manifest_approvers`: optional JSON array of canonical `AccountId` values. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
 - Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_<i105-account-id>_authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
 - Telemetry surfaces the enforcement path via `governance_manifest_quorum_total{outcome}` (values `satisfied` / `rejected`) so operators can audit missing approvals.
 - Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_contract_address` must resolve into a protected dataspace alias present in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
@@ -211,12 +210,12 @@ Runtime Upgrade Hooks
   - `allowed_ids` (array of strings): optional allowlist of metadata values (after trimming). Rejects when the provided value is not listed.
 - When the hook is present, queue admission enforces the metadata policy before the transaction enters the queue. Missing metadata, blank values, or values outside the allowlist produce a deterministic `NotPermitted` error.
 - Telemetry tracks enforcement outcomes via `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`.
-- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any <i105-account-id> approvals required by the manifest quorum.
+- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any canonical `AccountId` approvals required by the manifest quorum.
 
 Convenience Endpoint
 - POST `/v1/gov/protected-namespaces` — applies `gov_protected_namespaces` directly on the node.
-  - Request: { "namespaces": ["apps", "system"] }
-  - Response: { "ok": true, "applied": 1 }
+  - Request: `{ "namespaces": ["apps", "system"] }`
+  - Response: `{ "ok": true, "applied": 1 }`
   - Notes: Intended for admin/testing; requires API token if configured. For production, prefer submitting a signed transaction with `SetParameter(Custom)`.
 
 CLI Helpers
@@ -240,14 +239,15 @@ CLI Helpers
 
 Governed Contract Lookup
 - GET `/v1/gov/contracts/{contract_address}` — returns the active governance binding for a canonical contract address.
-  - Response: { "found": bool, "contract_address": "tairac1...", "dataspace": "universal", "code_hash_hex": "…" ? }
+  - Response: `{ "found": bool, "contract_address": "tairac1...", "dataspace": "universal", "code_hash_hex": "…" ? }`
 
 Unlock Sweep (Operator/Audit)
 - GET `/v1/gov/unlocks/stats`
-  - Response: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
+  - Response: `{ "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }`
   - Notes: `last_sweep_height` reflects the most recent block height where expired locks were swept and persisted. `expired_locks_now` is computed by scanning lock records with `expiry_height <= height_current`.
 - POST `/v1/gov/ballots/zk-v1`
   - Request (v1-style DTO):
+    ```text
     {
       "authority": "<i105-account-id>",
       "chain_id": "00000000-0000-0000-0000-000000000000",
@@ -262,11 +262,13 @@ Unlock Sweep (Operator/Audit)
       "direction": "Aye|Nay|Abstain?",
       "nullifier": "blake2b32:…64hex?"
     }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+    ```
+  - Response: `{ "ok": true, "accepted": true, "tx_instructions": [{…}] }`
 
 - POST `/v1/gov/ballots/zk-v1/ballot-proof` (feature: `zk-ballot`)
   - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
   - Request:
+    ```text
     {
       "authority": "<i105-account-id>",
       "chain_id": "00000000-0000-0000-0000-000000000000",
@@ -283,7 +285,9 @@ Unlock Sweep (Operator/Audit)
         "direction": "Aye"                // optional direction hint
       }
     }
+    ```
   - Response:
+    ```text
     {
       "ok": true,
       "accepted": true,
@@ -292,6 +296,7 @@ Unlock Sweep (Operator/Audit)
         { "wire_id": "CastZkBallot", "payload_hex": "…" }
       ]
     }
+    ```
   - Notes:
     - When `private_key` is provided, Torii submits the signed transaction and sets `reason` to `submitted transaction`.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
@@ -311,7 +316,7 @@ CastZkBallot Verification Path
 
 ### Slashing and Jailing Workflow
 
-Consensus emits Norito-encoded `Evidence` whenever a <i105-account-id> violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
+Consensus emits Norito-encoded `Evidence` whenever an account violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
 
 Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stable and enforced by the data model:
 
@@ -331,7 +336,7 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** — the <i105-account-id> signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
+- **DoublePrepare/DoubleCommit** — the account signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
 - **InvalidQc** — an aggregator gossiped a commit QC whose shape fails deterministic checks (e.g., empty signer bitmap).
 - **InvalidProposal** — a leader proposed a block that fails structural validation (e.g., breaks the locked-chain rule).
 - **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
@@ -348,12 +353,12 @@ Governance must treat the evidence bytes as canonical proof:
 1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
 2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
 3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
-4. **Schedule the follow-up topology** so the offending <i105-account-id> cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
+4. **Schedule the follow-up topology** so the offending account cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
 5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
 
 ### Joint-Consensus Sequencing
 
-Joint consensus guarantees that the outgoing <i105-account-id> set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
+Joint consensus guarantees that the outgoing validator set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
 
 - `SumeragiParameter::NextMode` and `SumeragiParameter::ModeActivationHeight` must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag.
 - `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) is the configuration guard that prevents zero-lag hand-offs:
@@ -364,13 +369,13 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha sumeragi params --summary`, so operators can confirm activation heights and <i105-account-id> rosters.
+- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha sumeragi params --summary`, so operators can confirm activation heights and validator rosters.
 - Governance automation should always:
   1. Finalise the evidence-backed removal (or reinstatement) decision.
   2. Queue a follow-up reconfiguration with `mode_activation_height = h_current + activation_lag_blocks`.
   3. Monitor `/v1/sumeragi/status` until `effective_consensus_mode` flips at the expected height.
 
-Any script that rotates <i105-account-id>s or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
+Any script that rotates validator accounts or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
 
 ## Telemetry surfaces
 

@@ -22,6 +22,13 @@ from iroha_python.address import AccountAddress, AccountAddressError
 CANONICAL_ACCOUNT_ID = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 
 
+def _authority_fee_payment() -> Dict[str, Any]:
+    return {
+        "payer": "authority",
+        "value": {"charge_limits": [], "gas_limit": None},
+    }
+
+
 class StubResponse(requests.Response):
     def __init__(self, payload: Optional[Dict[str, Any]] = None) -> None:
         super().__init__()
@@ -158,6 +165,10 @@ def test_build_and_submit_transaction_forwards_wait_scope(
         "00000000-0000-0000-0000-000000000000",
         "testu-authority",
         b"\x11" * 32,
+        fee_payment={
+            "payer": "authority",
+            "value": {"charge_limits": [], "gas_limit": None},
+        },
         scope="local",
     )
 
@@ -271,6 +282,7 @@ def test_propose_multisig_inherited_helper_posts_native_instruction_payload() ->
         multisig_account_alias="ops@universal",
         signer_account_id="signer@universal",
         instructions=[b"\x01\x02\x03"],
+        fee_payment=_authority_fee_payment(),
         creation_time_ms=0,
     )
 
@@ -295,12 +307,14 @@ def test_propose_multisig_inherited_helper_rejects_bad_payload_shape() -> None:
             multisig_account_alias="ops@universal",
             signer_account_id="signer@universal",
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
     with pytest.raises(RuntimeError, match="valid base64"):
         client.propose_multisig(
             multisig_account_alias="ops@universal",
             signer_account_id="signer@universal",
             instructions=["not base64"],
+            fee_payment=_authority_fee_payment(),
         )
 
 
@@ -320,6 +334,7 @@ def test_propose_multisig_inherited_helper_rejects_malformed_response() -> None:
             multisig_account_alias="ops@universal",
             signer_account_id="signer@universal",
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
 
@@ -338,6 +353,7 @@ def test_propose_multisig_inherited_helper_rejects_false_ok_response() -> None:
             multisig_account_alias="ops@universal",
             signer_account_id="signer@universal",
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
 
@@ -357,6 +373,7 @@ def test_propose_multisig_inherited_helper_rejects_empty_signing_message() -> No
             multisig_account_alias="ops@universal",
             signer_account_id="signer@universal",
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
 
@@ -376,6 +393,7 @@ def test_propose_multisig_inherited_helper_rejects_negative_response_time() -> N
             multisig_account_alias="ops@universal",
             signer_account_id="signer@universal",
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
 

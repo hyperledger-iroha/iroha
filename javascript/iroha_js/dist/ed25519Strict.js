@@ -65,10 +65,16 @@ function parseStrictPoint(bytes, context) {
       `${context} is a small-order Ed25519 point`,
     );
   }
+  if (!point.isTorsionFree()) {
+    throw new StrictEd25519Error(
+      "mixed_torsion",
+      `${context} is not in the prime-order Ed25519 subgroup`,
+    );
+  }
   return point;
 }
 
-/** Validate a canonical, non-small-order compressed Ed25519 public key. */
+/** Validate a canonical compressed point in the prime-order Ed25519 subgroup. */
 export function assertValidEd25519PublicKey(publicKey) {
   const snapshot = snapshotBytes(publicKey, ED25519_POINT_BYTES, "public key");
   parseStrictPoint(snapshot, "public key");

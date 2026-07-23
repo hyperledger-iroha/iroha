@@ -8729,8 +8729,8 @@ mod tests {
         assert_eq!(outcome.category, CATEGORY_NORITO);
         assert!(outcome.message.contains("maximum canonical size"));
 
-        let mut noncanonical = to_bytes(&hedging_feed("primary", 1_000_000, 1_790))
-            .expect("encode canonical hedging feed");
+        let mut noncanonical =
+            to_bytes(&hedging_feed("primary", "1", 1_790)).expect("encode canonical hedging feed");
         noncanonical.push(0);
         let outcome = validate_hedging_payload_bytes(
             HedgingValidationPayloadKindV1::PriceFeed,
@@ -9081,7 +9081,9 @@ mod tests {
             OrderbookOrderRequestFieldsV1 {
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
-                price_per_gib_micro_xor: 1,
+                price_per_gib: "0.000001"
+                    .parse()
+                    .expect("legacy micro-XOR price is representable"),
                 quantity_gib: 1,
                 remaining_gib: 1,
                 owner_account: owner_account.clone(),
@@ -9122,7 +9124,9 @@ mod tests {
             OrderbookOrderRequestFieldsV1 {
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
-                price_per_gib_micro_xor: 1,
+                price_per_gib: "0.000001"
+                    .parse()
+                    .expect("legacy micro-XOR price is representable"),
                 quantity_gib: 1,
                 remaining_gib: 1,
                 owner_account: owner_account.clone(),

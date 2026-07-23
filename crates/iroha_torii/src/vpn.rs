@@ -25,7 +25,7 @@ use iroha_data_model::{
         VpnLeaseStatusV1, VpnQuotePolicyV1, VpnSessionReceiptV1, VpnTariffV1, VpnUsageVoucherV1,
         derive_vpn_session_address_plan_v1,
     },
-    transaction::{Executable, SignedTransaction, TransactionEntrypoint},
+    transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use mv::storage::StorageReadOnly;
@@ -85,6 +85,7 @@ pub struct VpnProfileResponseDto {
     PartialEq,
     Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub struct VpnQuoteCreateRequestDto {
     #[norito(default)]
     pub exit_class: String,
@@ -142,6 +143,7 @@ pub struct VpnQuoteResponseDto {
     PartialEq,
     Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub struct VpnSessionCreateRequestDto {
     #[norito(default)]
     pub exit_class: String,
@@ -246,6 +248,7 @@ pub struct VpnReceiptResponseDto {
     PartialEq,
     Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub struct VpnReceiptSubmitRequestDto {
     pub relay_receipt_hex: String,
     pub client_voucher_hex: String,
@@ -697,13 +700,7 @@ fn settlement_lease_id_from_request_or_receipt(
         return Ok((relay_receipt.quote_id, fallback));
     }
     let lease_id = decode_hex_32(lease_id_hex, "lease_id_hex")?;
-    Ok((
-        lease_id,
-        lease_id_hex
-            .trim_start_matches("0x")
-            .trim_start_matches("0X")
-            .to_owned(),
-    ))
+    Ok((lease_id, hex::encode(lease_id)))
 }
 
 fn address_plan_fingerprint(client_tunnel_addresses: &[String]) -> String {
@@ -1141,13 +1138,8 @@ fn verify_vpn_payment(
             "vpn payment transaction authority does not match signed account",
         ));
     }
-    let Executable::Instructions(instructions) = tx.instructions() else {
-        return Err(not_permitted_error(
-            "vpn payment transaction must be a native instruction transaction",
-        ));
-    };
     let mut matched = false;
-    for instruction in instructions {
+    for instruction in tx.instructions().explicit_instructions() {
         let Some(open) = instruction.as_any().downcast_ref::<OpenVpnLeaseEscrow>() else {
             continue;
         };
@@ -1158,7 +1150,7 @@ fn verify_vpn_payment(
     }
     if !matched {
         return Err(not_permitted_error(
-            "vpn payment transaction must open the quoted native XOR VPN lease escrow",
+            "vpn payment transaction must explicitly open the quoted native XOR VPN lease escrow",
         ));
     }
     Ok(())
@@ -1520,16 +1512,14 @@ pub(crate) async fn handle_create_vpn_session(
             "vpn session metering key does not match the quoted native lease",
         ));
     }
-    verify_vpn_payment(&app, &quote, &request.payment_tx_hash)?;
+    if request.payment_tx_hash.trim().is_empty() {
+        return Err(conversion_error("payment_tx_hash must not be empty"));
+    }
+    let payment_tx_hash = hex::encode(decode_hex_32(&request.payment_tx_hash, "payment_tx_hash")?);
+    verify_vpn_payment(&app, &quote, &payment_tx_hash)?;
 
     remove_existing_sessions_for_account(&app, &account_id, current_ms);
 
-    let payment_tx_hash = request
-        .payment_tx_hash
-        .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X")
-        .to_owned();
     let session_id = build_session_id_from_quote(&quote, &payment_tx_hash);
     let expires_at_ms = quote.quote_expires_at_ms;
     let mut record = VpnSessionRecord {
@@ -2273,11 +2263,11 @@ mod tests {
     }
 
     #[test]
-    fn settlement_lease_id_accepts_explicit_prefixed_hex() {
+    fn settlement_lease_id_canonicalizes_explicit_prefixed_hex() {
         let request = VpnReceiptSubmitRequestDto {
             relay_receipt_hex: String::new(),
             client_voucher_hex: String::new(),
-            lease_id_hex: format!("0x{}", "33".repeat(32)),
+            lease_id_hex: format!("0X{}", "AB".repeat(32)),
         };
         let relay_receipt = VpnSessionReceiptV1 {
             session_id: [0x11; 16],
@@ -2302,8 +2292,79 @@ mod tests {
             settlement_lease_id_from_request_or_receipt(&request, &relay_receipt)
                 .expect("explicit lease id");
 
-        assert_eq!(lease_id, [0x33; 32]);
-        assert_eq!(normalized_hex, "33".repeat(32));
+        assert_eq!(lease_id, [0xAB; 32]);
+        assert_eq!(normalized_hex, "ab".repeat(32));
+    }
+
+    #[tokio::test]
+    async fn submit_vpn_receipt_canonicalizes_explicit_lease_id() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let (app, user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
+            active_wsv_receipt_fixture().await;
+        let canonical_lease_id = hex::encode(fixture.quote_id);
+        let submitted_lease_id = format!("0X{}", canonical_lease_id.to_uppercase());
+        let body = receipt_submit_body_with_lease_id(
+            &fixture.relay_receipt,
+            &fixture.voucher,
+            submitted_lease_id.clone(),
+        );
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
+        let headers = signed_app_headers(&operator, &operator_keys, &method, &uri, body.as_ref());
+
+        let response =
+            handle_submit_vpn_receipt(app.clone(), &method, &uri, &headers, body.as_ref())
+                .await
+                .expect("uppercase explicit lease id should be accepted")
+                .into_response();
+        let receipt: VpnReceiptResponseDto = read_json(response).await;
+
+        assert_eq!(receipt.lease_id_hex, canonical_lease_id);
+        assert_ne!(receipt.lease_id_hex, submitted_lease_id);
+        let stored = app
+            .vpn_receipts
+            .get(&user.to_string())
+            .expect("stored receipt");
+        assert_eq!(stored[0].lease_id_hex, canonical_lease_id);
+    }
+
+    #[tokio::test]
+    async fn create_vpn_session_canonicalizes_payment_hash() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = checked_vpn_ed25519_keypair(0x8A);
+        let account = account_id_for(&key_pair);
+        let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+        let (quote, metering_keys) =
+            create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
+        let submitted_payment_hash = format!("0X{}", quote.quote_id.to_uppercase());
+        let body = norito::json::to_vec(&VpnSessionCreateRequestDto {
+            exit_class: quote.exit_class.clone(),
+            quote_id: quote.quote_id.clone(),
+            payment_tx_hash: submitted_payment_hash.clone(),
+            metering_public_key_hex: metering_public_key_hex(&metering_keys),
+        })
+        .expect("session body");
+        let headers = signed_app_headers(&account, &key_pair, &method, &uri, body.as_ref());
+
+        let response =
+            handle_create_vpn_session(app.clone(), &method, &uri, &headers, body.as_ref())
+                .await
+                .expect("uppercase payment hash should be accepted")
+                .into_response();
+        let session: VpnSessionResponseDto = read_json(response).await;
+
+        assert_eq!(session.payment_tx_hash, quote.quote_id);
+        assert_ne!(session.payment_tx_hash, submitted_payment_hash);
+        let stored = app
+            .vpn_sessions
+            .get(&session.session_id)
+            .expect("stored session");
+        assert_eq!(stored.payment_tx_hash, quote.quote_id);
+        drop(stored);
+        assert!(app.vpn_used_payments.contains_key(&quote.quote_id));
+        assert!(!app.vpn_used_payments.contains_key(&submitted_payment_hash));
     }
 
     #[tokio::test]
@@ -2329,6 +2390,62 @@ mod tests {
             };
 
         assert!(format!("{error:?}").contains("signed account headers are required"));
+    }
+
+    #[tokio::test]
+    async fn vpn_request_handlers_reject_unknown_json_fields_before_auth() {
+        fn assert_unknown_field(error: Error, payload_label: &str) {
+            let message = format!("{error:?}");
+            assert!(
+                message.contains(payload_label),
+                "expected {payload_label} context, got {message}"
+            );
+            assert!(
+                message.contains("unknown field") && message.contains("unexpected"),
+                "expected the unexpected field to be rejected, got {message}"
+            );
+        }
+
+        let account = checked_vpn_account(0x5C);
+        let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+        let method = Method::POST;
+        let headers = HeaderMap::new();
+
+        let quote_uri: Uri = "/v1/vpn/quotes".parse().expect("quote uri");
+        let quote_error = handle_create_vpn_quote(
+            app.clone(),
+            &method,
+            &quote_uri,
+            &headers,
+            br#"{"metering_public_key_hex":"","unexpected":true}"#,
+        )
+        .await
+        .expect_err("unknown quote field must fail before auth");
+        assert_unknown_field(quote_error, "invalid vpn quote create payload");
+
+        let session_uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
+        let session_error = handle_create_vpn_session(
+            app.clone(),
+            &method,
+            &session_uri,
+            &headers,
+            br#"{"quote_id":"","payment_tx_hash":"","metering_public_key_hex":"","unexpected":true}"#,
+        )
+        .await
+        .expect_err("unknown session field must fail before auth");
+        assert_unknown_field(session_error, "invalid vpn session create payload");
+
+        let receipt_uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
+        let receipt_error = handle_submit_vpn_receipt(
+            app,
+            &method,
+            &receipt_uri,
+            &headers,
+            br#"{"relay_receipt_hex":"","client_voucher_hex":"","unexpected":true}"#,
+        )
+        .await
+        .expect_err("unknown receipt field must fail before auth");
+        assert_unknown_field(receipt_error, "invalid vpn receipt payload");
     }
 
     #[tokio::test]
@@ -2911,7 +3028,7 @@ mod tests {
         assert_eq!(body.total, 1);
         assert_eq!(body.items[0].receipt_source, "wsv");
         assert_eq!(body.items[0].status, "settled");
-        assert_eq!(body.items[0].earned_fee, 100);
+        assert_eq!(body.items[0].earned_fee, Quantity::from(100_u64));
     }
 
     #[tokio::test]
@@ -3775,7 +3892,7 @@ mod tests {
             ended_at_ms: now_ms(),
             exit_class: VpnExitClassV1::Standard,
             meter_hash: [0x44; 32],
-            earned_fee,
+            earned_fee: earned_fee.clone(),
             highest_voucher_sequence: voucher.body.sequence,
             client_voucher_hash: voucher.hash(),
         };

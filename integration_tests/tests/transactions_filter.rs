@@ -25,14 +25,17 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || {
-            let _ = client.submit_blocking(Register::asset_definition({
-                let __asset_definition_id = AssetDefinitionId::new(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "txfilter".parse().unwrap(),
-                );
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }));
+            let _ = client.submit_blocking(
+                Register::asset_definition({
+                    let __asset_definition_id = AssetDefinitionId::new(
+                        DomainId::try_new("wonderland", "universal").unwrap(),
+                        "txfilter".parse().unwrap(),
+                    );
+                    AssetDefinition::numeric(__asset_definition_id.clone())
+                        .with_name(__asset_definition_id.name().to_string())
+                }),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            );
         }
     })
     .await?;

@@ -147,7 +147,10 @@ where
 {
     for chunk in instructions.chunks(MAX_INSTRUCTIONS_PER_TX) {
         client
-            .submit_all_blocking(chunk.iter().cloned())
+            .submit_all_blocking(
+                chunk.iter().cloned(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err("Failed to submit instruction batch")?;
     }
     Ok(())
@@ -416,18 +419,19 @@ fn correct_sorting_of_entities() -> Result<()> {
         let domain_id = DomainId::try_new(format!("neverland{i}"), "universal").expect("Valid");
         let mut domain_metadata = Metadata::default();
         domain_metadata.insert(sort_by_metadata_key.clone(), n - i - 1);
-        let domain = Domain::new(domain_id.clone()).with_metadata(domain_metadata.clone());
 
-        domains.push(domain_id);
+        domains.push(domain_id.clone());
         metadata_of_domains.push(domain_metadata);
-
-        let create_account = Register::domain(domain);
-        instructions.push(create_account);
+        instructions.push(SetKeyValue::domain(
+            domain_id,
+            sort_by_metadata_key.clone(),
+            n - i - 1,
+        ));
     }
 
     for domain_id in &domains {
-        ensure_domain_registration_lease_for_network(&network, domain_id)
-            .expect("should seed lease for sortable domains");
+        ensure_domain_setup_for_network(&network, domain_id)
+            .expect("should ensure sortable domains");
     }
     submit_chunked(&test_client, &instructions).expect("Valid");
 
@@ -456,17 +460,18 @@ fn correct_sorting_of_entities() -> Result<()> {
         let domain_id = DomainId::try_new(format!("sortland{idx}"), "universal").expect("Valid");
         let mut domain_metadata = Metadata::default();
         domain_metadata.insert(sort_by_metadata_key.clone(), val);
-        let domain = Domain::new(domain_id.clone()).with_metadata(domain_metadata.clone());
 
-        domains.push(domain_id);
+        domains.push(domain_id.clone());
         metadata_of_domains.push(domain_metadata);
-
-        let create_account = Register::domain(domain);
-        instructions.push(create_account);
+        instructions.push(SetKeyValue::domain(
+            domain_id,
+            sort_by_metadata_key.clone(),
+            val,
+        ));
     }
     for domain_id in &domains {
-        ensure_domain_registration_lease_for_network(&network, domain_id)
-            .expect("should seed lease for underscore sortable domains");
+        ensure_domain_setup_for_network(&network, domain_id)
+            .expect("should ensure underscore sortable domains");
     }
     submit_chunked(&test_client, &instructions).expect("Valid");
 
@@ -563,11 +568,8 @@ fn sort_only_elements_which_have_sorting_key() -> Result<()> {
     let test_client = network.client();
 
     let domain_id = DomainId::parse_fully_qualified(TEST_DOMAIN).unwrap();
-    ensure_domain_registration_lease_for_network(&network, &domain_id)
-        .expect("should seed lease for sorting test domain");
-    test_client
-        .submit_blocking(Register::domain(Domain::new(domain_id.clone())))
-        .expect("should be committed");
+    ensure_domain_setup_for_network(&network, &domain_id)
+        .expect("should ensure sorting test domain");
 
     let sort_by_metadata_key = "test_sort".parse::<Name>().expect("Valid");
 

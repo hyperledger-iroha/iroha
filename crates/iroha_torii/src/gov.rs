@@ -26,7 +26,7 @@ use iroha_data_model::{
     governance::types::{AtWindow, ParliamentBody},
     isi::governance::{CouncilDerivationKind, ParliamentDecision},
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
-    smart_contract::manifest::ManifestProvenance,
+    smart_contract::manifest::{EntryPointKind, ManifestProvenance},
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
@@ -1373,6 +1373,7 @@ fn build_signable_transaction_b64(
     let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
         chain_id.clone(),
         authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions(instructions)
     .try_sign(dummy_key_pair.private_key())
@@ -2058,12 +2059,36 @@ pub struct GovernedContractResponse {
     pub found: bool,
     /// Canonical public contract address queried.
     pub contract_address: iroha_data_model::smart_contract::ContractAddress,
+    /// Consensus-persisted non-signing account authority for the active contract.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_subject_account: Option<String>,
     /// Dataspace alias derived from the contract address, when known.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub dataspace: Option<String>,
     /// Active code hash bound to the contract address, when present.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub code_hash_hex: Option<String>,
+    /// Authenticated ABI hash embedded in the exact active artifact.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub abi_hash_hex: Option<String>,
+    /// Sorted, unique transaction and read-only entrypoints exposed to applications.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_entrypoints: Option<Vec<String>>,
+}
+
+fn governed_contract_invariant(message: impl Into<String>) -> crate::Error {
+    crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+        message.into(),
+    ))
+}
+
+fn is_canonical_public_entrypoint_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    (1..=128).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
 }
 
 /// GET /v1/gov/contracts/{contract_address} — read the active governance binding for a contract.
@@ -2100,19 +2125,122 @@ pub async fn handle_gov_contract_get(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         })?;
-    let code_hash_hex = state
-        .world_view()
+    let view = state.view();
+    let active_code_hash = view
+        .world()
         .contract_instances()
         .get(&contract_address)
-        .map(|hash| {
-            let bytes: [u8; 32] = (*hash).into();
-            hex::encode(bytes)
-        });
+        .copied();
+    let Some(active_code_hash) = active_code_hash else {
+        return Ok(JsonBody(GovernedContractResponse {
+            found: false,
+            contract_address,
+            contract_subject_account: None,
+            dataspace: Some(dataspace),
+            code_hash_hex: None,
+            abi_hash_hex: None,
+            public_entrypoints: None,
+        }));
+    };
+
+    let record =
+        iroha_core::smartcontracts::code::fetch_bound_contract_record(&view, &contract_address)
+            .ok_or_else(|| {
+                governed_contract_invariant(
+                    "active contract has incomplete code, manifest, alias, or subject bindings",
+                )
+            })?;
+    if record.contract_address != contract_address || record.code_hash != active_code_hash {
+        return Err(governed_contract_invariant(
+            "active contract record disagrees with its world-state binding",
+        ));
+    }
+
+    let verified = ivm::verify_contract_artifact(&record.code_bytes).map_err(|error| {
+        governed_contract_invariant(format!(
+            "active contract artifact failed independent verification: {error}"
+        ))
+    })?;
+    let manifest_code_hash = record
+        .manifest
+        .code_hash
+        .ok_or_else(|| governed_contract_invariant("active contract manifest has no code_hash"))?;
+    let manifest_abi_hash = record
+        .manifest
+        .abi_hash
+        .ok_or_else(|| governed_contract_invariant("active contract manifest has no abi_hash"))?;
+    if verified.code_hash != active_code_hash || manifest_code_hash != active_code_hash {
+        return Err(governed_contract_invariant(
+            "active contract code hash does not match its stored artifact and manifest",
+        ));
+    }
+    if verified.abi_hash != manifest_abi_hash
+        || record.manifest.signature_payload() != verified.manifest.signature_payload()
+    {
+        return Err(governed_contract_invariant(
+            "active contract manifest does not match its authenticated artifact metadata",
+        ));
+    }
+    let provenance = record.manifest.provenance.as_ref().ok_or_else(|| {
+        governed_contract_invariant("active contract manifest has no signed provenance")
+    })?;
+    provenance
+        .signature
+        .verify(
+            &provenance.signer,
+            &record.manifest.signature_payload_bytes(),
+        )
+        .map_err(|_| {
+            governed_contract_invariant("active contract manifest provenance is invalid")
+        })?;
+
+    let code_hash_bytes: [u8; 32] = active_code_hash.into();
+    let abi_hash_bytes: [u8; 32] = manifest_abi_hash.into();
+    if code_hash_bytes.iter().all(|byte| *byte == 0) || abi_hash_bytes.iter().all(|byte| *byte == 0)
+    {
+        return Err(governed_contract_invariant(
+            "active contract exposes an invalid all-zero code or ABI hash",
+        ));
+    }
+
+    let mut public_entrypoints = verified
+        .manifest
+        .entrypoints
+        .as_ref()
+        .ok_or_else(|| governed_contract_invariant("active contract has no entrypoint manifest"))?
+        .iter()
+        .filter(|entrypoint| {
+            matches!(
+                entrypoint.kind,
+                EntryPointKind::Kotoage | EntryPointKind::View
+            )
+        })
+        .map(|entrypoint| entrypoint.name.clone())
+        .collect::<Vec<_>>();
+    if public_entrypoints.is_empty()
+        || public_entrypoints
+            .iter()
+            .any(|name| !is_canonical_public_entrypoint_name(name))
+    {
+        return Err(governed_contract_invariant(
+            "active contract has no canonical public entrypoints",
+        ));
+    }
+    public_entrypoints.sort();
+    if public_entrypoints.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(governed_contract_invariant(
+            "active contract advertises duplicate public entrypoints",
+        ));
+    }
+
     Ok(JsonBody(GovernedContractResponse {
-        found: code_hash_hex.is_some(),
+        found: true,
         contract_address,
+        contract_subject_account: Some(record.contract_subject.to_string()),
         dataspace: Some(dataspace),
-        code_hash_hex,
+        code_hash_hex: Some(hex::encode(code_hash_bytes)),
+        abi_hash_hex: Some(hex::encode(abi_hash_bytes)),
+        public_entrypoints: Some(public_entrypoints),
     }))
 }
 
@@ -3085,6 +3213,7 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{Queue, TransactionGuard},
+        smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{
             GovernanceLockRecord, GovernanceLocksForReferendum, GovernanceProposalStatus,
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
@@ -3420,11 +3549,15 @@ mod tests {
                 norito::json!({ "referendum_id": "any" }),
             );
             let enact = Permission::new("CanEnactGovernance".to_string(), norito::json!({}));
+            let register_contract: Permission =
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into();
             let mut world_block = world.block();
             let mut world_tx = world_block.transaction_without_telemetry(LaneConfig::default(), 0);
             let _ = world_tx.add_account_permission(&authority, propose);
             let _ = world_tx.add_account_permission(&authority, ballot);
             let _ = world_tx.add_account_permission(&authority, enact);
+            let _ = world_tx.add_account_permission(&authority, register_contract);
             world_tx.apply();
             world_block.commit();
         }
@@ -3507,6 +3640,56 @@ mod tests {
             .expect("contract address")
     }
 
+    fn install_governed_contract_for_test(
+        harness: &GovHarness,
+    ) -> (
+        iroha_data_model::smart_contract::ContractAddress,
+        iroha_crypto::Hash,
+    ) {
+        let (artifact, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku GovernedReadFixture {
+    view fn balance() -> bool { return true; }
+    kotoage fn transfer() authorize("CanTransferGovernedFixture") {}
+}
+"#,
+            )
+            .expect("compile governed contract fixture");
+        let verified =
+            ivm::verify_contract_artifact(&artifact).expect("verify governed contract fixture");
+        assert_eq!(
+            manifest.signature_payload(),
+            verified.manifest.signature_payload()
+        );
+        let signed_manifest = manifest.signed(&harness.authority_keypair);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &harness.authority,
+            91,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("governed contract address");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = harness.state.block(header);
+        let mut transaction = block.transaction();
+        let code_hash = register_code_bytes(&harness.authority, artifact, &mut transaction)
+            .expect("register governed contract bytes");
+        assert_eq!(code_hash, verified.code_hash);
+        register_manifest(&harness.authority, signed_manifest, &mut transaction)
+            .expect("register governed contract manifest");
+        activate_instance(
+            &harness.authority,
+            contract_address.clone(),
+            code_hash,
+            &mut transaction,
+        )
+        .expect("activate governed contract");
+        transaction.apply();
+        block.commit().expect("commit governed contract fixture");
+        (contract_address, code_hash)
+    }
+
     fn sample_sccp_route_governance_action()
     -> iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1 {
         iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(
@@ -3574,6 +3757,7 @@ mod tests {
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
             harness.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
         .sign(harness.authority_keypair.private_key());
@@ -3649,6 +3833,7 @@ mod tests {
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
             harness.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([instruction])
         .sign(harness.authority_keypair.private_key());
@@ -3704,6 +3889,7 @@ mod tests {
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
             harness.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([instruction])
         .sign(harness.authority_keypair.private_key());
@@ -4715,6 +4901,177 @@ mod tests {
         let body = res.0;
         assert!(body.ok);
         assert_eq!(body.tx_instructions.len(), 1);
+    }
+
+    #[test]
+    fn governed_contract_entrypoint_names_are_closed_ascii_identifiers() {
+        for name in ["a", "balance", "transfer_2"] {
+            assert!(is_canonical_public_entrypoint_name(name), "{name}");
+        }
+        for name in [
+            "",
+            "Balance",
+            "2transfer",
+            "transfer-funds",
+            "transfer funds",
+            "tránsfer",
+            &"a".repeat(129),
+        ] {
+            assert!(!is_canonical_public_entrypoint_name(name), "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn governed_contract_read_serializes_exact_inactive_shape() {
+        let harness = mk_governance_harness(true);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &harness.authority,
+            92,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("inactive contract address");
+        let response = handle_gov_contract_get(
+            harness.state,
+            axum::extract::Path(contract_address.to_string()),
+        )
+        .await
+        .expect("inactive governed contract read");
+        let value = norito::json::to_value(&response.0).expect("serialize inactive response");
+        let object = value.as_object().expect("inactive response object");
+        assert_eq!(
+            object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            ["found", "contract_address", "dataspace"]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(object.get("found"), Some(&norito::json::Value::Bool(false)));
+        assert_eq!(
+            object
+                .get("contract_address")
+                .and_then(norito::json::Value::as_str),
+            Some(contract_address.as_ref())
+        );
+        assert_eq!(
+            object
+                .get("dataspace")
+                .and_then(norito::json::Value::as_str),
+            Some("universal")
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_contract_read_verifies_real_artifact_and_exact_active_shape() {
+        let harness = mk_governance_harness(true);
+        let (contract_address, expected_code_hash) = install_governed_contract_for_test(&harness);
+        let response = handle_gov_contract_get(
+            harness.state,
+            axum::extract::Path(contract_address.to_string()),
+        )
+        .await
+        .expect("active governed contract read");
+        let value = norito::json::to_value(&response.0).expect("serialize active response");
+        let object = value.as_object().expect("active response object");
+        assert_eq!(
+            object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            [
+                "found",
+                "contract_address",
+                "contract_subject_account",
+                "dataspace",
+                "code_hash_hex",
+                "abi_hash_hex",
+                "public_entrypoints",
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(object.get("found"), Some(&norito::json::Value::Bool(true)));
+        assert_eq!(
+            object
+                .get("contract_address")
+                .and_then(norito::json::Value::as_str),
+            Some(contract_address.as_ref())
+        );
+        assert_eq!(
+            object
+                .get("contract_subject_account")
+                .and_then(norito::json::Value::as_str),
+            Some(contract_address.subject_id().to_string().as_str())
+        );
+        assert_eq!(
+            object
+                .get("code_hash_hex")
+                .and_then(norito::json::Value::as_str),
+            Some(hex::encode(<[u8; 32]>::from(expected_code_hash)).as_str())
+        );
+        assert_eq!(
+            object.get("public_entrypoints"),
+            Some(&norito::json!(["balance", "transfer"]))
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_contract_read_rejects_incomplete_active_state() {
+        let harness = mk_governance_harness(true);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &harness.authority,
+            93,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("incomplete contract address");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = harness.state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world_mut_for_testing()
+            .bind_active_contract_subject_for_testing(
+                contract_address.clone(),
+                iroha_crypto::Hash::prehashed([0x44; 32]),
+            );
+        transaction.apply();
+        block.commit().expect("commit incomplete fixture");
+
+        let error = handle_gov_contract_get(
+            harness.state,
+            axum::extract::Path(contract_address.to_string()),
+        )
+        .await
+        .expect_err("incomplete active state must fail closed");
+        assert!(error.to_string().contains("incomplete code"));
+    }
+
+    #[tokio::test]
+    async fn governed_contract_read_rejects_removed_manifest_provenance() {
+        let harness = mk_governance_harness(true);
+        let (contract_address, code_hash) = install_governed_contract_for_test(&harness);
+        let mut manifest = harness
+            .state
+            .view()
+            .world()
+            .contract_manifests()
+            .get(&code_hash)
+            .cloned()
+            .expect("registered manifest");
+        manifest.provenance = None;
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = harness.state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world_mut_for_testing()
+            .contract_manifests_mut_for_testing()
+            .insert(code_hash, manifest);
+        transaction.apply();
+        block.commit().expect("commit corrupted manifest fixture");
+
+        let error = handle_gov_contract_get(
+            harness.state,
+            axum::extract::Path(contract_address.to_string()),
+        )
+        .await
+        .expect_err("unsigned active manifest must fail closed");
+        assert!(error.to_string().contains("signed provenance"));
     }
 
     #[tokio::test]

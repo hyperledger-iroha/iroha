@@ -20,11 +20,13 @@ mod client_configs;
 mod codec;
 mod crypto;
 mod genesis;
+mod kagemusha;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
 mod localnet_tui;
 mod schema;
+mod secure_fs;
 mod swarm;
 mod tui;
 mod verify;
@@ -39,6 +41,9 @@ pub mod json_macros {
 // Note: migrate Kagami CLI to `error_stack` once modules no longer depend on `color_eyre` convenience macros.
 pub(crate) type Outcome = color_eyre::Result<()>;
 
+/// Build-time source identity embedded for release artifact validation.
+const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
+
 const TOP_LEVEL_HELP: &str = concat!(
     "Common tasks:\n",
     "  kagami localnet-wizard\n",
@@ -50,6 +55,7 @@ const TOP_LEVEL_HELP: &str = concat!(
 );
 
 fn main() -> Outcome {
+    let _ = std::hint::black_box(BUILD_SOURCE_ID);
     color_eyre::install()?;
     init_instruction_registry();
     let cli = Cli::parse();
@@ -99,6 +105,8 @@ enum Command {
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
+    /// Verify and promote authenticated Kagemusha V3 or V4 artifact releases
+    Kagemusha(kagemusha::Args),
     /// Verify a genesis manifest against a preset profile
     Verify(verify::Args),
     /// Advanced low-level helpers for codec conversion, schema generation, block inspection, and docs
@@ -144,6 +152,7 @@ impl<T: Write> RunArgs<T> for Command {
             Docker(args) => args.run(writer),
             Keys(args) => args.run(writer),
             Genesis(args) => args.run(writer),
+            Kagemusha(args) => args.run(writer),
             Verify(args) => args.run(writer),
             Advanced(args) => args.run(writer),
         }
@@ -174,6 +183,101 @@ mod tests {
     #[test]
     fn verify_args() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn retired_kagemusha_verify_release_command_is_rejected() {
+        assert!(
+            parse("kagami kagemusha verify-release --bundle-dir ./release").is_err(),
+            "the pre-V4 release verifier must remain unavailable"
+        );
+        assert!(
+            parse(
+                "kagami kagemusha verify-release \
+                 --bundle-dir ./release \
+                 --benchmark-evidence ./benchmark.evidence \
+                 --cryptographic-review ./review.evidence"
+            )
+            .is_err(),
+            "complete evidence must not revive the retired verifier"
+        );
+        assert!(
+            parse(
+                "kagami kagemusha verify-release \
+                 --bundle-dir ./release \
+                 --benchmark-evidence ./benchmark.evidence"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "kagami kagemusha verify-release \
+                 --bundle-dir ./release \
+                 --cryptographic-review ./review.evidence"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn kagemusha_v4_commands_are_distinct_and_require_complete_evidence() {
+        assert!(
+            parse("kagami kagemusha verify-release-v4 --bundle-dir ./release-v4").is_err(),
+            "ABI-20 verification must hash-check both independent evidence files"
+        );
+        assert!(
+            parse(
+                "kagami kagemusha verify-release-v4 \
+                 --bundle-dir ./release-v4 \
+                 --release-policy ./release-policy.norito \
+                 --benchmark-evidence ./benchmark.evidence \
+                 --cryptographic-review ./review.evidence"
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                "kagami kagemusha promote-release-v4 \
+                 --bundle-dir ./release-v4 \
+                 --release-policy ./release-policy.norito \
+                 --promotion-record ./promoted-v4.norito \
+                 --benchmark-evidence ./benchmark.evidence \
+                 --cryptographic-review ./review.evidence"
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                "kagami kagemusha promote-release-v4 \
+                 --bundle-dir ./release-v4 \
+                 --release-policy ./release-policy.norito \
+                 --promotion-record ./promoted-v4.norito \
+                 --benchmark-evidence ./benchmark.evidence"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "kagami kagemusha verify-release-v4 \
+                 --bundle-dir ./release-v4 \
+                 --benchmark-evidence ./benchmark.evidence \
+                 --cryptographic-review ./review.evidence"
+            )
+            .is_err(),
+            "ABI-20 verification must receive the canonical policy explicitly"
+        );
+        assert!(
+            parse(
+                "kagami kagemusha promote-release \
+                 --bundle-dir ./release-v4 \
+                 --promotion-record ./promoted-v4.norito \
+                 --benchmark-evidence ./benchmark.evidence \
+                 --cryptographic-review ./review.evidence \
+                 --abi-version 20"
+            )
+            .is_err(),
+            "the historical V3 command must not accept a V4 alias flag"
+        );
     }
 
     #[test]
@@ -257,6 +361,18 @@ mod tests {
         assert!(
             parse("kagami advanced client-configs --base-config ./client.toml --names alice")
                 .is_ok()
+        );
+        assert!(
+            parse(
+                "kagami advanced client-configs --base-config ./client.toml --names alice --fresh-random-keys"
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                "kagami advanced client-configs --base-config ./client.toml --names alice --fresh-random-keys --seed-prefix forbidden"
+            )
+            .is_err()
         );
     }
 

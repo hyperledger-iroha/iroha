@@ -19,6 +19,10 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{decode_from_bytes, json, to_bytes};
+
+mod common;
+use common::{fixture_update_requested, fixture_update_requested_from};
+
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -29,19 +33,22 @@ fn fixture_path(name: &str) -> PathBuf {
 
 fn load_fixture(name: &str) -> TransitionBatch {
     let path = fixture_path(name);
-    let update = std::env::var("FASTPQ_UPDATE_FIXTURES").is_ok();
-    let mut decoded = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| decode_from_bytes(&bytes).ok());
-
-    if update || decoded.is_none() {
+    if fixture_update_requested() {
         let fresh = build_fixture(name);
         let encoded = norito::core::to_bytes(&fresh).expect("encode fixture");
         std::fs::write(&path, &encoded).expect("write fixture");
-        decoded = Some(fresh);
+        return fresh;
     }
 
-    decoded.expect("fixture available")
+    let bytes = std::fs::read(&path)
+        .unwrap_or_else(|error| panic!("read FASTPQ fixture {}: {error}", path.display()));
+    decode_from_bytes(&bytes).unwrap_or_else(|error| {
+        panic!(
+            "decode FASTPQ fixture {}: {error}; fixture regeneration is explicit and requires \
+             FASTPQ_UPDATE_FIXTURES=1",
+            path.display()
+        )
+    })
 }
 
 fn build_fixture(name: &str) -> TransitionBatch {
@@ -176,9 +183,9 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 
 fn load_ordering_expectations() -> Vec<(String, String)> {
     let path = fixtures_dir().join("ordering_hash.json");
-    let update = std::env::var("FASTPQ_UPDATE_FIXTURES").is_ok();
+    let update = fixture_update_requested();
 
-    if update || !path.exists() {
+    if update {
         let mut map = json::native::Map::new();
         for name in ["transfer", "mint", "burn"] {
             let batch = load_fixture(name);
@@ -209,13 +216,76 @@ fn load_ordering_expectations() -> Vec<(String, String)> {
     entries
 }
 
+fn assert_fixture_semantics_eq(name: &str, actual: &TransitionBatch, expected: &TransitionBatch) {
+    assert_eq!(actual.parameter, expected.parameter, "{name} parameter");
+    assert_eq!(
+        actual.public_inputs, expected.public_inputs,
+        "{name} public inputs"
+    );
+    assert_eq!(actual.metadata, expected.metadata, "{name} metadata");
+    assert_eq!(
+        actual.transitions.len(),
+        expected.transitions.len(),
+        "{name} transition count"
+    );
+    for (index, (actual, expected)) in actual
+        .transitions
+        .iter()
+        .zip(&expected.transitions)
+        .enumerate()
+    {
+        assert_eq!(actual.key, expected.key, "{name} transition {index} key");
+        assert_eq!(
+            actual.pre_value, expected.pre_value,
+            "{name} transition {index} pre-value"
+        );
+        assert_eq!(
+            actual.post_value, expected.post_value,
+            "{name} transition {index} post-value"
+        );
+        assert_eq!(
+            actual.operation, expected.operation,
+            "{name} transition {index} operation"
+        );
+    }
+}
+
+#[test]
+fn fixture_update_gate_requires_exact_one() {
+    use std::ffi::OsStr;
+
+    assert_eq!(fixture_update_requested_from(None), Ok(false));
+    assert_eq!(
+        fixture_update_requested_from(Some(OsStr::new("1"))),
+        Ok(true)
+    );
+
+    for invalid in ["", "0", "true", " 1", "1 ", "01", "1\n"] {
+        assert!(
+            fixture_update_requested_from(Some(OsStr::new(invalid))).is_err(),
+            "unexpectedly accepted FASTPQ_UPDATE_FIXTURES={invalid:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        assert!(fixture_update_requested_from(Some(OsStr::from_bytes(b"1\xff"))).is_err());
+    }
+}
+
 #[test]
 fn fixtures_roundtrip_via_norito() {
     for name in ["transfer", "mint", "burn"] {
         let batch = load_fixture(name);
+        assert_fixture_semantics_eq(name, &batch, &build_fixture(name));
         let bytes = std::fs::read(fixture_path(name)).expect("read fixture");
         let encoded = norito::core::to_bytes(&batch).expect("encode");
-        assert_eq!(bytes, encoded, "{name} roundtrip");
+        assert_eq!(
+            bytes, encoded,
+            "{name} fixture is not the canonical Norito encoding of its decoded semantics"
+        );
     }
 }
 

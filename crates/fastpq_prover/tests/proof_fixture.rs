@@ -1,6 +1,6 @@
 //! Golden V1 proof fixture parity; regeneration gated by `FASTPQ_UPDATE_FIXTURES`.
 
-use std::{env, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 use fastpq_prover::{
     ExecutionMode, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
@@ -16,6 +16,9 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
+
+mod common;
+use common::fixture_update_requested;
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -140,7 +143,7 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
 #[test]
 fn golden_v1_proof_matches_fixture() {
     let path = fixture_path("v1_balanced_1k.bin");
-    if env::var("FASTPQ_UPDATE_FIXTURES").is_ok() {
+    if fixture_update_requested() {
         let prover =
             Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
                 .unwrap();

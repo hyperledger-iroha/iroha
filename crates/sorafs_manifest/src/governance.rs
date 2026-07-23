@@ -4408,6 +4408,13 @@ mod tests {
 
     #[test]
     fn governance_payload_accepts_deal_settlement() {
+        let xor_nanos = |value: u128| -> XorQuantity {
+            let whole = value / 1_000_000_000;
+            let fractional = value % 1_000_000_000;
+            format!("{whole}.{fractional:09}")
+                .parse()
+                .expect("nano-XOR fixture is canonical")
+        };
         let mut ledger = DealLedgerSnapshotV1 {
             version: DEAL_LEDGER_VERSION_V1,
             snapshot_id: [0; 32],
@@ -4417,38 +4424,28 @@ mod tests {
             terms_digest: [0x44; 32],
             provider_id: [0xBB; 32],
             client_id: [0xCC; 32],
-<<<<<<< HEAD
-            provider_accrual: XorQuantity::try_from_micro(100)
-                .expect("legacy micro-XOR value is representable"),
-            client_liability: XorQuantity::try_from_micro(100)
-                .expect("legacy micro-XOR value is representable"),
-            bond_locked: XorQuantity::try_from_micro(50)
-                .expect("legacy micro-XOR value is representable"),
-            bond_slashed: XorQuantity::zero(),
-=======
             deal_start_epoch: 1_700_199_900,
             deal_end_epoch: 1_700_199_999,
             settlement_window_epochs: 100,
             window_start_epoch: 1_700_199_900,
             window_end_epoch: 1_700_200_000,
-            provider_accrual_nano: 100,
-            client_liability_nano: 100,
-            micropayment_credit_generated_nano: 0,
-            micropayment_credit_applied_nano: 0,
-            micropayment_credit_carry_nano: 0,
-            client_debit_nano: 100,
-            outstanding_liability_nano: 0,
-            bond_total_nano: 50,
-            bond_locked_nano: 0,
-            bond_slashed_nano: 0,
-            bond_released_nano: 50,
-            window_expected_charge_nano: 100,
-            window_micropayment_generated_nano: 0,
-            window_micropayment_applied_nano: 0,
-            window_client_debit_nano: 100,
-            window_bond_slashed_nano: 0,
-            window_bond_released_nano: 50,
->>>>>>> origin/optimizations
+            provider_accrual: xor_nanos(100),
+            client_liability: xor_nanos(100),
+            micropayment_credit_generated: XorQuantity::zero(),
+            micropayment_credit_applied: XorQuantity::zero(),
+            micropayment_credit_carry: XorQuantity::zero(),
+            client_debit: xor_nanos(100),
+            outstanding_liability: XorQuantity::zero(),
+            bond_total: xor_nanos(50),
+            bond_locked: XorQuantity::zero(),
+            bond_slashed: XorQuantity::zero(),
+            bond_released: xor_nanos(50),
+            window_expected_charge: xor_nanos(100),
+            window_micropayment_generated: XorQuantity::zero(),
+            window_micropayment_applied: XorQuantity::zero(),
+            window_client_debit: xor_nanos(100),
+            window_bond_slashed: XorQuantity::zero(),
+            window_bond_released: xor_nanos(50),
             captured_at: 1_700_200_000,
         };
         ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");
@@ -4837,7 +4834,8 @@ mod tests {
             provider_id: [0x31; 32],
             manifest_digest: [0x32; 32],
             auditor_account: "auditor@sorafs".to_owned(),
-            proposed_penalty_nano: 1_000,
+            proposed_penalty: XorQuantity::try_from_micro(1)
+                .expect("legacy nano-XOR penalty is representable"),
             submitted_at_unix: 1_800_000_001,
             rationale: "repeated proof failures".to_owned(),
             approval: Some(crate::repair::RepairEscalationApprovalV1 {

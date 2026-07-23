@@ -132,7 +132,10 @@ declare_permissions! {
     iroha_executor_data_model::permission::account::{CanModifyAccountMetadata},
     iroha_executor_data_model::permission::account::{CanReplaceAccountController},
     iroha_executor_data_model::permission::account::{CanManageAccountAlias},
+    iroha_executor_data_model::permission::account::{CanDelegateAccountAliasResolution},
     iroha_executor_data_model::permission::account::{CanResolveAccountAlias},
+
+    iroha_executor_data_model::permission::query::{CanReadRestrictedDataspace},
 
     iroha_executor_data_model::permission::asset_definition::{CanUnregisterAssetDefinition},
     iroha_executor_data_model::permission::asset_definition::{CanModifyAssetDefinitionMetadata},
@@ -157,6 +160,9 @@ declare_permissions! {
     iroha_executor_data_model::permission::parameter::{CanSetParameters},
     iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
     iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
+    iroha_executor_data_model::permission::offline::{CanManageOfflineEscrow},
+    iroha_executor_data_model::permission::offline::{CanActivateKagemushaRecursiveReleaseV4},
+    iroha_executor_data_model::permission::offline::{CanManageOfflineDeviceAttestationPolicy},
     iroha_executor_data_model::permission::role::{CanManageRoles},
 
     iroha_executor_data_model::permission::trigger::{CanRegisterTrigger},
@@ -196,7 +202,32 @@ declare_permissions! {
     iroha_executor_data_model::permission::oracle::{CanResolveOracleDispute},
     iroha_executor_data_model::permission::oracle::{CanManageTwitterBindings},
     iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifest},
-    iroha_executor_data_model::permission::nexus::{CanUseFeeSponsor},
+    iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifestForAccountDomain},
+    iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifestForUaid},
+    iroha_executor_data_model::permission::nexus::{CanManageFeeSponsorProgram},
+    iroha_executor_data_model::permission::nexus::{CanEnrollFeeSponsorProgram},
+    iroha_executor_data_model::permission::nexus::{CanWithdrawFeeSponsorProgram},
+}
+
+mod query {
+    use iroha_executor_data_model::permission::query::CanReadRestrictedDataspace;
+
+    use super::*;
+
+    impl ValidateGrantRevoke for CanReadRestrictedDataspace {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+    }
 }
 
 /// Trait that enables using permissions on the blockchain
@@ -461,47 +492,12 @@ mod settlement {
 
 mod nexus {
     use iroha_executor_data_model::permission::nexus::{
-        CanPublishSpaceDirectoryManifest, CanUseFeeSponsor,
+        CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
+        CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
+        CanWithdrawFeeSponsorProgram,
     };
 
     use super::*;
-
-    const SPACE_DIRECTORY_MANIFEST_PERMISSION: &str = "CanPublishSpaceDirectoryManifest";
-
-    fn is_legacy_space_directory_manifest_wildcard(permission: &PermissionObject) -> bool {
-        permission.name() == SPACE_DIRECTORY_MANIFEST_PERMISSION
-            && permission.payload().as_ref().trim() == "null"
-    }
-
-    fn has_legacy_space_directory_manifest_wildcard(authority: &AccountId, host: &Iroha) -> bool {
-        let account_permissions: Vec<_> = host
-            .query(FindPermissionsByAccountId::new(authority.clone()))
-            .execute()
-            .expect("INTERNAL BUG: `FindPermissionsByAccountId` must never fail")
-            .map(|res| res.dbg_expect("Failed to get permission from cursor"))
-            .collect();
-        if account_permissions
-            .iter()
-            .any(is_legacy_space_directory_manifest_wildcard)
-        {
-            return true;
-        }
-
-        let role_ids: Vec<RoleId> = host
-            .query(FindRolesByAccountId::new(authority.clone()))
-            .execute()
-            .expect("INTERNAL BUG: `FindRolesByAccountId` must never fail")
-            .map(|role_id| role_id.dbg_expect("Failed to get role from cursor"))
-            .collect();
-        if role_ids.is_empty() {
-            return false;
-        }
-
-        let role_filter: BTreeSet<_> = role_ids.iter().cloned().collect();
-        roles_permissions(host)
-            .filter(|(role_id, _)| role_filter.contains(role_id))
-            .any(|(_, permission)| is_legacy_space_directory_manifest_wildcard(&permission))
-    }
 
     fn ensure_publish_manifest_grant_authority(
         permission: CanPublishSpaceDirectoryManifest,
@@ -512,11 +508,7 @@ mod nexus {
         {
             let override_permissions = test_override::permissions();
             if !override_permissions.is_empty() {
-                if has_permission_in_account(&override_permissions, &permission)
-                    || override_permissions
-                        .iter()
-                        .any(is_legacy_space_directory_manifest_wildcard)
-                {
+                if has_permission_in_account(&override_permissions, &permission) {
                     return Ok(());
                 }
                 return Err(ValidationFail::NotPermitted(
@@ -526,9 +518,7 @@ mod nexus {
             }
         }
 
-        if permission.is_owned_by(authority, host)
-            || has_legacy_space_directory_manifest_wildcard(authority, host)
-        {
+        if permission.is_owned_by(authority, host) {
             Ok(())
         } else {
             Err(ValidationFail::NotPermitted(
@@ -561,33 +551,33 @@ mod nexus {
         }
     }
 
-    #[derive(Debug, Clone)]
-    struct SponsorAccount<'a> {
-        sponsor: &'a AccountId,
+    fn ensure_uaid_manifest_grant_authority(
+        permission: CanPublishSpaceDirectoryManifestForUaid,
+        authority: &AccountId,
+        host: &Iroha,
+    ) -> Result {
+        if permission.is_owned_by(authority, host)
+            || (CanPublishSpaceDirectoryManifest {
+                dataspace: permission.dataspace,
+            })
+            .is_owned_by(authority, host)
+        {
+            return Ok(());
+        }
+
+        Err(ValidationFail::NotPermitted(
+            "Current authority must hold either the exact UAID-scoped permission or the dataspace-wide CanPublishSpaceDirectoryManifest permission to grant or revoke it"
+                .to_owned(),
+        ))
     }
 
-    impl PassCondition for SponsorAccount<'_> {
-        fn validate(&self, authority: &AccountId, _host: &Iroha, _context: &Context) -> Result {
-            if authority == self.sponsor {
+    impl ValidateGrantRevoke for CanPublishSpaceDirectoryManifestForUaid {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            if context.curr_block.is_genesis() {
                 return Ok(());
             }
-            Err(ValidationFail::NotPermitted(
-                "only the sponsor account may grant or revoke fee sponsorship".to_owned(),
-            ))
-        }
-    }
 
-    impl<'a> From<&'a CanUseFeeSponsor> for SponsorAccount<'a> {
-        fn from(value: &'a CanUseFeeSponsor) -> Self {
-            Self {
-                sponsor: &value.sponsor,
-            }
-        }
-    }
-
-    impl ValidateGrantRevoke for CanUseFeeSponsor {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            SponsorAccount::from(self).validate(authority, host, context)
+            ensure_uaid_manifest_grant_authority(*self, authority, host)
         }
 
         fn validate_revoke(
@@ -596,9 +586,182 @@ mod nexus {
             context: &Context,
             host: &Iroha,
         ) -> Result {
-            SponsorAccount::from(self).validate(authority, host, context)
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+
+            ensure_uaid_manifest_grant_authority(*self, authority, host)
         }
     }
+
+    fn ensure_account_domain_manifest_grant_authority(
+        permission: &CanPublishSpaceDirectoryManifestForAccountDomain,
+        authority: &AccountId,
+        host: &Iroha,
+    ) -> Result {
+        #[cfg(test)]
+        {
+            let override_permissions = test_override::permissions();
+            if !override_permissions.is_empty() {
+                if has_permission_in_account(&override_permissions, permission)
+                    || has_permission_in_account(
+                        &override_permissions,
+                        &CanPublishSpaceDirectoryManifest {
+                            dataspace: permission.dataspace,
+                        },
+                    )
+                {
+                    return Ok(());
+                }
+                return Err(ValidationFail::NotPermitted(
+                    "Test authority does not hold the exact account-domain or dataspace-wide manifest permission"
+                        .to_owned(),
+                ));
+            }
+        }
+
+        if permission.is_owned_by(authority, host)
+            || (CanPublishSpaceDirectoryManifest {
+                dataspace: permission.dataspace,
+            })
+            .is_owned_by(authority, host)
+        {
+            return Ok(());
+        }
+
+        let domain = host
+            .query_single(FindDomainById::new(permission.domain.clone()))
+            .map_err(|_| {
+                ValidationFail::NotPermitted(
+                    "Account-domain manifest permission references an unknown domain".to_owned(),
+                )
+            })?;
+        if domain.owned_by() == authority {
+            return Ok(());
+        }
+
+        Err(ValidationFail::NotPermitted(
+            "Only the exact account-domain owner, an existing exact holder, or a dataspace-wide manifest authority may grant or revoke this permission"
+                .to_owned(),
+        ))
+    }
+
+    impl ValidateGrantRevoke for CanPublishSpaceDirectoryManifestForAccountDomain {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+
+            ensure_account_domain_manifest_grant_authority(self, authority, host)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+
+            ensure_account_domain_manifest_grant_authority(self, authority, host)
+        }
+    }
+
+    fn ensure_sponsor_program_delegation_authority(
+        sponsor: &AccountId,
+        authority: &AccountId,
+        host: &Iroha,
+    ) -> Result {
+        if authority == sponsor
+            || (CanManageFeeSponsorProgram {
+                sponsor: sponsor.clone(),
+            })
+            .is_owned_by(authority, host)
+        {
+            return Ok(());
+        }
+
+        Err(ValidationFail::NotPermitted(
+            "only the sponsor or its fee-program manager may delegate this permission".to_owned(),
+        ))
+    }
+
+    impl ValidateGrantRevoke for CanManageFeeSponsorProgram {
+        fn validate_grant(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            _host: &Iroha,
+        ) -> Result {
+            if context.curr_block.is_genesis() || authority == &self.sponsor {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(
+                "only the sponsor account may delegate fee-program management".to_owned(),
+            ))
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            _host: &Iroha,
+        ) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+            if authority == &self.sponsor {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "only the sponsor account may revoke fee-program management".to_owned(),
+                ))
+            }
+        }
+    }
+
+    macro_rules! impl_program_scoped_delegation {
+        ($permission:ty) => {
+            impl ValidateGrantRevoke for $permission {
+                fn validate_grant(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    if context.curr_block.is_genesis() {
+                        return Ok(());
+                    }
+                    ensure_sponsor_program_delegation_authority(
+                        &self.program_id.sponsor,
+                        authority,
+                        host,
+                    )
+                }
+
+                fn validate_revoke(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    if context.curr_block.is_genesis() {
+                        return Ok(());
+                    }
+                    ensure_sponsor_program_delegation_authority(
+                        &self.program_id.sponsor,
+                        authority,
+                        host,
+                    )
+                }
+            }
+        };
+    }
+
+    impl_program_scoped_delegation!(CanEnrollFeeSponsorProgram);
+    impl_program_scoped_delegation!(CanWithdrawFeeSponsorProgram);
 }
 
 mod sorafs {
@@ -813,6 +976,48 @@ mod sccp {
             ))
         }
     }
+}
+
+mod offline {
+    //! Pass conditions for governed offline-settlement releases.
+    use iroha_executor_data_model::permission::offline::{
+        CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
+        CanManageOfflineEscrow,
+    };
+
+    use super::*;
+
+    macro_rules! impl_genesis_only_offline_permission {
+        ($($permission:ty),+ $(,)?) => {
+            $(
+                impl ValidateGrantRevoke for $permission {
+                    fn validate_grant(
+                        &self,
+                        authority: &AccountId,
+                        context: &Context,
+                        host: &Iroha,
+                    ) -> Result {
+                        OnlyGenesis::from(self).validate(authority, host, context)
+                    }
+
+                    fn validate_revoke(
+                        &self,
+                        authority: &AccountId,
+                        context: &Context,
+                        host: &Iroha,
+                    ) -> Result {
+                        OnlyGenesis::from(self).validate(authority, host, context)
+                    }
+                }
+            )+
+        }
+    }
+
+    impl_genesis_only_offline_permission!(
+        CanManageOfflineEscrow,
+        CanActivateKagemushaRecursiveReleaseV4,
+        CanManageOfflineDeviceAttestationPolicy,
+    );
 }
 
 pub mod asset {
@@ -1273,9 +1478,9 @@ pub mod account {
     //! Module with pass conditions for asset related tokens
 
     use iroha_executor_data_model::permission::account::{
-        AccountAliasPermissionScope, CanManageAccountAlias, CanModifyAccountMetadata,
-        CanRegisterAccount, CanReplaceAccountController, CanResolveAccountAlias,
-        CanUnregisterAccount,
+        AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
+        CanModifyAccountMetadata, CanRegisterAccount, CanReplaceAccountController,
+        CanResolveAccountAlias, CanUnregisterAccount,
     };
 
     use super::*;
@@ -1324,6 +1529,57 @@ pub mod account {
         host: &Iroha,
     ) -> Result {
         super::domain::Owner { domain }.validate(authority, host, context)
+    }
+
+    fn validate_account_alias_scope_owner(
+        scope: &AccountAliasPermissionScope,
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        match scope {
+            AccountAliasPermissionScope::Domain(domain) => {
+                validate_account_alias_domain_owner(domain, authority, context, host)
+            }
+            AccountAliasPermissionScope::Dataspace(dataspace) => {
+                validate_dataspace_alias_owner(*dataspace, authority, host)
+            }
+            AccountAliasPermissionScope::Alias(alias) => {
+                let account = host
+                    .query_single(
+                        crate::smart_contract::data_model::query::account::prelude::FindAccountByAlias::new(
+                            alias.account_alias(),
+                        ),
+                    )
+                    .map_err(|_| {
+                        ValidationFail::NotPermitted(format!(
+                            "Account alias lease for `{alias}` has no active owner"
+                        ))
+                    })?;
+                if account.id() == authority {
+                    Ok(())
+                } else {
+                    Err(ValidationFail::NotPermitted(format!(
+                        "Can't manage exact account alias permissions for `{alias}`"
+                    )))
+                }
+            }
+        }
+    }
+
+    fn can_delegate_account_alias_resolve(
+        authority: &AccountId,
+        scope: &AccountAliasPermissionScope,
+        context: &Context,
+        host: &Iroha,
+    ) -> bool {
+        let exact_delegation_permission = CanDelegateAccountAliasResolution {
+            scope: scope.clone(),
+        };
+        let account_permissions_allow_delegation =
+            exact_delegation_permission.is_owned_by(authority, host);
+        account_permissions_allow_delegation
+            || validate_account_alias_scope_owner(scope, authority, context, host).is_ok()
     }
 
     impl PassCondition for Owner<'_> {
@@ -1396,14 +1652,14 @@ pub mod account {
 
     impl ValidateGrantRevoke for CanResolveAccountAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            match &self.scope {
-                AccountAliasPermissionScope::Domain(domain) => {
-                    validate_account_alias_domain_owner(domain, authority, context, host)
-                }
-                AccountAliasPermissionScope::Dataspace(dataspace) => {
-                    validate_dataspace_alias_owner(*dataspace, authority, host)
-                }
+            if can_delegate_account_alias_resolve(authority, &self.scope, context, host) {
+                return Ok(());
             }
+
+            Err(ValidationFail::NotPermitted(
+                "Can't grant or revoke account-alias resolution outside an owned or exactly delegated scope"
+                    .to_owned(),
+            ))
         }
 
         fn validate_revoke(
@@ -1416,16 +1672,24 @@ pub mod account {
         }
     }
 
+    impl ValidateGrantRevoke for CanDelegateAccountAliasResolution {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            validate_account_alias_scope_owner(&self.scope, authority, context, host)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            validate_account_alias_scope_owner(&self.scope, authority, context, host)
+        }
+    }
+
     impl ValidateGrantRevoke for CanManageAccountAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            match &self.scope {
-                AccountAliasPermissionScope::Domain(domain) => {
-                    validate_account_alias_domain_owner(domain, authority, context, host)
-                }
-                AccountAliasPermissionScope::Dataspace(dataspace) => {
-                    validate_dataspace_alias_owner(*dataspace, authority, host)
-                }
-            }
+            validate_account_alias_scope_owner(&self.scope, authority, context, host)
         }
 
         fn validate_revoke(
@@ -1892,14 +2156,28 @@ pub(crate) fn revoke_permissions<V: Execute + ?Sized>(
 mod tests {
     use std::{num::NonZeroU64, vec::Vec};
 
-    use iroha_crypto::PublicKey;
+    use iroha_crypto::{Hash, PublicKey};
+    use iroha_executor_data_model::permission::offline::{
+        CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
+        CanManageOfflineEscrow,
+    };
     use iroha_executor_data_model::permission::{
-        asset::CanMintAssetWithDefinition, domain::CanRegisterDomain,
-        nexus::CanPublishSpaceDirectoryManifest, peer::CanManagePeers,
+        account::{
+            AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
+        },
+        asset::CanMintAssetWithDefinition,
+        domain::CanRegisterDomain,
+        nexus::{
+            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
+            CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
+            CanPublishSpaceDirectoryManifestForUaid, CanWithdrawFeeSponsorProgram,
+        },
+        peer::CanManagePeers,
+        query::CanReadRestrictedDataspace,
     };
 
     use super::{
-        OnlyGenesis, PassCondition, ValidateGrantRevoke, has_permission_in_roles,
+        AnyPermission, OnlyGenesis, PassCondition, ValidateGrantRevoke, has_permission_in_roles,
         permission_owned_in_sources,
     };
     use crate::permission::test_override;
@@ -1910,9 +2188,9 @@ mod tests {
             Iroha,
             data_model::{
                 block::BlockHeader,
-                nexus::DataSpaceId,
+                nexus::{DataSpaceId, FeeSponsorProgramId, UniversalAccountId},
                 permission::Permission as PermissionObject,
-                prelude::{AccountId, AssetDefinitionId, Json, RoleId},
+                prelude::{AccountId, AssetDefinitionId, DomainId, Json, RoleId},
             },
         },
     };
@@ -1938,6 +2216,30 @@ mod tests {
                 .parse()
                 .unwrap();
         AccountId::new(public_key)
+    }
+
+    fn make_other_account_id() -> AccountId {
+        let public_key: PublicKey =
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .unwrap();
+        AccountId::new(public_key)
+    }
+
+    fn make_third_account_id() -> AccountId {
+        let public_key: PublicKey =
+            "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
+                .parse()
+                .unwrap();
+        AccountId::new(public_key)
+    }
+
+    fn make_fee_sponsor_program_id(sponsor: AccountId, name: &str) -> FeeSponsorProgramId {
+        FeeSponsorProgramId::new(
+            sponsor,
+            name.parse()
+                .expect("fee sponsor program name must be valid"),
+        )
     }
 
     #[test]
@@ -2060,6 +2362,251 @@ mod tests {
     }
 
     #[test]
+    fn governed_offline_permissions_are_immutable_after_genesis() {
+        let banking_authority = make_account_id();
+        let context = make_context(&banking_authority, 2);
+        let results = [
+            (
+                "CanManageOfflineEscrow",
+                CanManageOfflineEscrow.validate_grant(&banking_authority, &context, &Iroha),
+                CanManageOfflineEscrow.validate_revoke(&banking_authority, &context, &Iroha),
+            ),
+            (
+                "CanActivateKagemushaRecursiveReleaseV4",
+                CanActivateKagemushaRecursiveReleaseV4.validate_grant(
+                    &banking_authority,
+                    &context,
+                    &Iroha,
+                ),
+                CanActivateKagemushaRecursiveReleaseV4.validate_revoke(
+                    &banking_authority,
+                    &context,
+                    &Iroha,
+                ),
+            ),
+            (
+                "CanManageOfflineDeviceAttestationPolicy",
+                CanManageOfflineDeviceAttestationPolicy.validate_grant(
+                    &banking_authority,
+                    &context,
+                    &Iroha,
+                ),
+                CanManageOfflineDeviceAttestationPolicy.validate_revoke(
+                    &banking_authority,
+                    &context,
+                    &Iroha,
+                ),
+            ),
+        ];
+
+        for (name, grant, revoke) in results {
+            for result in [grant, revoke] {
+                let error = result.expect_err(
+                    "a genesis-seeded offline permission must not be mutated post-genesis",
+                );
+                assert!(matches!(error, ValidationFail::NotPermitted(_)));
+                assert!(
+                    error
+                        .to_string()
+                        .contains("only allowed inside the genesis block"),
+                    "unexpected {name} mutation rejection: {error}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn governed_offline_permissions_can_only_be_seeded_in_genesis() {
+        let genesis_authority = make_account_id();
+        let context = make_context(&genesis_authority, 1);
+
+        let results = [
+            (
+                "CanManageOfflineEscrow",
+                CanManageOfflineEscrow.validate_grant(&genesis_authority, &context, &Iroha),
+                CanManageOfflineEscrow.validate_revoke(&genesis_authority, &context, &Iroha),
+            ),
+            (
+                "CanActivateKagemushaRecursiveReleaseV4",
+                CanActivateKagemushaRecursiveReleaseV4.validate_grant(
+                    &genesis_authority,
+                    &context,
+                    &Iroha,
+                ),
+                CanActivateKagemushaRecursiveReleaseV4.validate_revoke(
+                    &genesis_authority,
+                    &context,
+                    &Iroha,
+                ),
+            ),
+            (
+                "CanManageOfflineDeviceAttestationPolicy",
+                CanManageOfflineDeviceAttestationPolicy.validate_grant(
+                    &genesis_authority,
+                    &context,
+                    &Iroha,
+                ),
+                CanManageOfflineDeviceAttestationPolicy.validate_revoke(
+                    &genesis_authority,
+                    &context,
+                    &Iroha,
+                ),
+            ),
+        ];
+        for (name, grant, revoke) in results {
+            assert!(grant.is_ok(), "genesis must grant {name}: {grant:?}");
+            assert!(revoke.is_ok(), "genesis must revoke {name}: {revoke:?}");
+        }
+    }
+
+    #[test]
+    fn fee_sponsor_program_manager_is_typed_and_only_the_sponsor_may_delegate_it() {
+        let sponsor = make_account_id();
+        let outsider = make_other_account_id();
+        let context = make_context(&sponsor, 2);
+        let permission = CanManageFeeSponsorProgram {
+            sponsor: sponsor.clone(),
+        };
+        let raw: PermissionObject = permission.clone().into();
+
+        assert!(matches!(
+            AnyPermission::try_from(&raw),
+            Ok(AnyPermission::CanManageFeeSponsorProgram(parsed)) if parsed == permission
+        ));
+        assert!(
+            permission
+                .validate_grant(&sponsor, &context, &Iroha)
+                .is_ok()
+        );
+        assert!(
+            permission
+                .validate_revoke(&sponsor, &context, &Iroha)
+                .is_ok()
+        );
+        assert!(matches!(
+            permission.validate_grant(&outsider, &context, &Iroha),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert!(matches!(
+            permission.validate_revoke(&outsider, &context, &Iroha),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+    }
+
+    #[test]
+    fn alias_resolution_delegate_can_grant_and_revoke_only_the_exact_scope() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let delegated_scope = AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10));
+        let other_scope = AccountAliasPermissionScope::Dataspace(DataSpaceId::new(12));
+        let held = CanDelegateAccountAliasResolution {
+            scope: delegated_scope.clone(),
+        };
+        let exact = CanResolveAccountAlias {
+            scope: delegated_scope,
+        };
+        let other = CanResolveAccountAlias { scope: other_scope };
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(held.clone())]);
+
+        let exact_grant = exact.validate_grant(&authority, &context, &Iroha);
+        let exact_revoke = exact.validate_revoke(&authority, &context, &Iroha);
+        let cross_scope_grant = other.validate_grant(&authority, &context, &Iroha);
+        let recursive_delegation = held.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(exact_grant.is_ok());
+        assert!(exact_revoke.is_ok());
+        assert!(matches!(
+            cross_scope_grant,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert!(matches!(
+            recursive_delegation,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+    }
+
+    #[test]
+    fn restricted_dataspace_reader_cannot_grant_or_revoke_after_genesis() {
+        let authority = make_account_id();
+        let post_genesis = make_context(&authority, 2);
+        let exact = CanReadRestrictedDataspace {
+            dataspace: DataSpaceId::new(10),
+        };
+        let permission = PermissionObject::from(exact);
+        let role_dispatched =
+            AnyPermission::try_from(&permission).expect("restricted-read permission must be typed");
+        let previous = test_override::replace_permissions(vec![permission]);
+
+        let denied = [
+            exact.validate_grant(&authority, &post_genesis, &Iroha),
+            exact.validate_revoke(&authority, &post_genesis, &Iroha),
+            role_dispatched.validate_grant(&authority, &post_genesis, &Iroha),
+            role_dispatched.validate_revoke(&authority, &post_genesis, &Iroha),
+        ];
+
+        test_override::replace_permissions(previous);
+        for result in denied {
+            let error = result
+                .expect_err("a restricted reader must not mutate the exact token after genesis");
+            assert!(matches!(error, ValidationFail::NotPermitted(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("only allowed inside the genesis block"),
+                "unexpected restricted-read mutation rejection: {error}",
+            );
+        }
+
+        let genesis = make_context(&authority, 1);
+        assert!(exact.validate_grant(&authority, &genesis, &Iroha).is_ok());
+        assert!(exact.validate_revoke(&authority, &genesis, &Iroha).is_ok());
+    }
+
+    #[test]
+    fn alias_resolution_domain_delegate_cannot_widen_or_cross_scope_kind() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let delegated_scope = AccountAliasPermissionScope::Domain(
+            iroha_data_model::domain::DomainId::try_new("hbl", "sbp")
+                .expect("HBL SBP domain fixture"),
+        );
+        let sibling_scope = AccountAliasPermissionScope::Domain(
+            iroha_data_model::domain::DomainId::try_new("ubl", "sbp")
+                .expect("UBL SBP domain fixture"),
+        );
+        let held = CanDelegateAccountAliasResolution {
+            scope: delegated_scope.clone(),
+        };
+        let exact = CanResolveAccountAlias {
+            scope: delegated_scope,
+        };
+        let sibling = CanResolveAccountAlias {
+            scope: sibling_scope,
+        };
+        let dataspace = CanResolveAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10)),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(held)]);
+
+        let exact_grant = exact.validate_grant(&authority, &context, &Iroha);
+        let sibling_grant = sibling.validate_grant(&authority, &context, &Iroha);
+        let dataspace_grant = dataspace.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(exact_grant.is_ok());
+        assert!(matches!(
+            sibling_grant,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert!(matches!(
+            dataspace_grant,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+    }
+
+    #[test]
     fn can_publish_space_directory_manifest_grant_allows_existing_holder_after_genesis() {
         let authority = make_account_id();
         let context = make_context(&authority, 2);
@@ -2075,7 +2622,7 @@ mod tests {
     }
 
     #[test]
-    fn can_publish_space_directory_manifest_grant_allows_legacy_wildcard_holder_after_genesis() {
+    fn can_publish_space_directory_manifest_grant_rejects_unscoped_null_payload_after_genesis() {
         let authority = make_account_id();
         let context = make_context(&authority, 2);
         let token = CanPublishSpaceDirectoryManifest {
@@ -2091,7 +2638,7 @@ mod tests {
         let result = token.validate_grant(&authority, &context, &Iroha);
 
         test_override::replace_permissions(previous);
-        assert!(result.is_ok());
+        assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
     }
 
     #[test]
@@ -2110,5 +2657,230 @@ mod tests {
 
         test_override::replace_permissions(previous);
         assert!(matches!(err, ValidationFail::NotPermitted(_)));
+    }
+
+    #[test]
+    fn dataspace_manifest_holder_can_delegate_one_exact_uaid_after_genesis() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let dataspace = DataSpaceId::new(10);
+        let scoped = CanPublishSpaceDirectoryManifestForUaid {
+            dataspace,
+            uaid: UniversalAccountId::from_hash(Hash::new(b"uaid::delegated-customer")),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(
+            CanPublishSpaceDirectoryManifest { dataspace },
+        )]);
+
+        let result = scoped.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn uaid_manifest_holder_cannot_delegate_a_different_uaid_after_genesis() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let dataspace = DataSpaceId::new(10);
+        let held = CanPublishSpaceDirectoryManifestForUaid {
+            dataspace,
+            uaid: UniversalAccountId::from_hash(Hash::new(b"uaid::hbl-customer")),
+        };
+        let requested = CanPublishSpaceDirectoryManifestForUaid {
+            dataspace,
+            uaid: UniversalAccountId::from_hash(Hash::new(b"uaid::ubl-customer")),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(held)]);
+
+        let result = requested.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
+    }
+
+    #[test]
+    fn account_domain_manifest_delegation_is_exact_across_hbl_and_ubl() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let dataspace = DataSpaceId::new(10);
+        let hbl = CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace,
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+        };
+        let ubl = CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace,
+            domain: DomainId::try_new("ubl", "sbp").expect("UBL domain"),
+        };
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(hbl.clone())]);
+
+        let own_result = hbl.validate_grant(&authority, &context, &Iroha);
+        let cross_fi_result = ubl.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(own_result.is_ok());
+        assert!(matches!(
+            cross_fi_result,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+    }
+
+    #[test]
+    fn dataspace_manifest_holder_can_delegate_account_domain_scope() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let dataspace = DataSpaceId::new(10);
+        let hbl = CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace,
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(
+            CanPublishSpaceDirectoryManifest { dataspace },
+        )]);
+
+        let result = hbl.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn fee_program_manager_can_delegate_exact_enrollment_and_withdrawal_scopes() {
+        let sponsor = make_account_id();
+        let manager = make_other_account_id();
+        let context = make_context(&manager, 2);
+        let program_id = make_fee_sponsor_program_id(sponsor.clone(), "retail");
+        let enrollment = CanEnrollFeeSponsorProgram {
+            program_id: program_id.clone(),
+        };
+        let withdrawal = CanWithdrawFeeSponsorProgram { program_id };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(
+            CanManageFeeSponsorProgram { sponsor },
+        )]);
+
+        for result in [
+            enrollment.validate_grant(&manager, &context, &Iroha),
+            enrollment.validate_revoke(&manager, &context, &Iroha),
+            withdrawal.validate_grant(&manager, &context, &Iroha),
+            withdrawal.validate_revoke(&manager, &context, &Iroha),
+        ] {
+            assert!(result.is_ok(), "program manager must delegate exact scopes");
+        }
+
+        test_override::replace_permissions(previous);
+    }
+
+    #[test]
+    fn fee_program_delegation_is_exact_to_the_program_sponsor() {
+        let first_sponsor = make_account_id();
+        let second_sponsor = make_third_account_id();
+        let manager = make_other_account_id();
+        let context = make_context(&manager, 2);
+        let first = CanEnrollFeeSponsorProgram {
+            program_id: make_fee_sponsor_program_id(first_sponsor.clone(), "retail"),
+        };
+        let second = CanEnrollFeeSponsorProgram {
+            program_id: make_fee_sponsor_program_id(second_sponsor, "retail"),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(
+            CanManageFeeSponsorProgram {
+                sponsor: first_sponsor,
+            },
+        )]);
+
+        assert!(first.validate_grant(&manager, &context, &Iroha).is_ok());
+        assert!(matches!(
+            second.validate_grant(&manager, &context, &Iroha),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+
+        test_override::replace_permissions(previous);
+    }
+
+    #[test]
+    fn exact_fee_program_enrollment_holder_cannot_redelegate_it() {
+        let sponsor = make_account_id();
+        let registrar = make_other_account_id();
+        let context = make_context(&registrar, 2);
+        let token = CanEnrollFeeSponsorProgram {
+            program_id: make_fee_sponsor_program_id(sponsor, "retail"),
+        };
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(token.clone())]);
+
+        assert!(matches!(
+            token.validate_grant(&registrar, &context, &Iroha),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+
+        test_override::replace_permissions(previous);
+    }
+
+    #[test]
+    fn genesis_can_seed_fee_program_permissions() {
+        let sponsor = make_account_id();
+        let genesis_authority = make_other_account_id();
+        let context = make_context(&genesis_authority, 1);
+        let program_id = make_fee_sponsor_program_id(sponsor.clone(), "retail");
+        let permissions = [
+            AnyPermission::CanManageFeeSponsorProgram(CanManageFeeSponsorProgram { sponsor }),
+            AnyPermission::CanEnrollFeeSponsorProgram(CanEnrollFeeSponsorProgram {
+                program_id: program_id.clone(),
+            }),
+            AnyPermission::CanWithdrawFeeSponsorProgram(CanWithdrawFeeSponsorProgram {
+                program_id,
+            }),
+        ];
+
+        for permission in permissions {
+            assert!(
+                permission
+                    .validate_grant(&genesis_authority, &context, &Iroha)
+                    .is_ok()
+            );
+            assert!(
+                permission
+                    .validate_revoke(&genesis_authority, &context, &Iroha)
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn account_domain_manifest_permission_json_uses_dot_fqn() {
+        let token = CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace: DataSpaceId::new(10),
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+        };
+
+        let payload = norito::json::to_json(&token).expect("serialize publisher permission");
+
+        assert_eq!(payload, r#"{"dataspace":10,"domain":"hbl.sbp"}"#);
+        assert_eq!(
+            norito::json::from_str::<CanPublishSpaceDirectoryManifestForAccountDomain>(&payload)
+                .expect("deserialize publisher permission"),
+            token,
+        );
+    }
+
+    #[test]
+    fn sponsor_program_permissions_json_use_exact_program_id() {
+        let sponsor = make_account_id();
+        let token = CanEnrollFeeSponsorProgram {
+            program_id: make_fee_sponsor_program_id(sponsor, "retail"),
+        };
+
+        let payload = norito::json::to_json(&token).expect("serialize enrollment permission");
+
+        assert_eq!(
+            payload,
+            format!(r#"{{"program_id":"{}"}}"#, token.program_id),
+        );
+        assert_eq!(
+            norito::json::from_str::<CanEnrollFeeSponsorProgram>(&payload)
+                .expect("deserialize enrollment permission"),
+            token,
+        );
     }
 }

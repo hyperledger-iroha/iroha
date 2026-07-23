@@ -1,7 +1,7 @@
 //! Admission-time guard: reject IVM programs that invoke unknown syscalls under ABI v1.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::{borrow::Cow, str::FromStr};
+use std::{borrow::Cow, num::NonZeroU64};
 
 use iroha_core::{
     kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
@@ -10,12 +10,9 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ValidationFail,
-    metadata::Metadata,
-    name::Name,
     prelude::*,
     transaction::{Executable, TransactionBuilder, error::TransactionRejectionReason},
 };
-use iroha_primitives::json::Json;
 use ivm::{ProgramMetadata, encoding, instruction};
 use nonzero_ext::nonzero;
 
@@ -31,11 +28,8 @@ fn unknown_syscall_fixture_uses_checked_randomness() {
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
 
-fn metadata_with_gas_limit(limit: u64) -> Metadata {
-    let mut md = Metadata::default();
-    let key = Name::from_str("gas_limit").expect("gas_limit key");
-    md.insert(key, Json::new(limit));
-    md
+fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
+    FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
 
 fn unlisted_syscall_number() -> u8 {
@@ -84,10 +78,13 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let chain: ChainId = "chain".parse().unwrap();
-    let tx = TransactionBuilder::new(chain.clone(), account_id.clone())
-        .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain.clone(),
+        account_id.clone(),
+        fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+    .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
 
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));

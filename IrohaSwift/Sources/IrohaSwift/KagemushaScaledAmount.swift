@@ -159,6 +159,36 @@ public struct KagemushaScaledAmount: Equatable, Hashable, Sendable {
         return lhs < rhs ? .orderedAscending : .orderedDescending
     }
 
+    static func subtractAtomicUnits(_ subtrahend: String, from minuend: String) -> String? {
+        guard compareAtomicUnits(minuend, subtrahend) == .orderedDescending else {
+            return nil
+        }
+        let lhs = Array(minuend.utf8.reversed())
+        let rhs = Array(subtrahend.utf8.reversed())
+        var borrow = 0
+        var result: [UInt8] = []
+        result.reserveCapacity(lhs.count)
+        for index in lhs.indices {
+            var digit = Int(lhs[index] - 48) - borrow
+            if index < rhs.count {
+                digit -= Int(rhs[index] - 48)
+            }
+            if digit < 0 {
+                digit += 10
+                borrow = 1
+            } else {
+                borrow = 0
+            }
+            result.append(UInt8(digit) + 48)
+        }
+        guard borrow == 0 else { return nil }
+        while result.count > 1, result.last == 48 {
+            result.removeLast()
+        }
+        let difference = String(decoding: result.reversed(), as: UTF8.self)
+        return difference == "0" ? nil : difference
+    }
+
     private static func strippingLeadingZeroes(_ value: String) -> String {
         let stripped = value.drop(while: { $0 == "0" })
         return stripped.isEmpty ? "0" : String(stripped)

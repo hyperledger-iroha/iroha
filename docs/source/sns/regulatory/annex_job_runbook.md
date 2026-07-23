@@ -5,9 +5,10 @@ summary: Checklist for maintaining the annex job schedule referenced by roadmap 
 
 # SNS KPI Annex Job Runbook (SN-8)
 
-Roadmap task **SN-8 – Metrics & Onboarding** requires every suffix to ship a
-monthly KPI annex with signed dashboard evidence. This runbook explains how to
-add a new cycle to `docs/source/sns/regulatory/annex_jobs.json`, how to execute
+Roadmap task **SN-8 – Metrics & Onboarding** requires each selected live SNS
+policy to ship a monthly KPI annex with signed dashboard evidence. This runbook
+explains how to add a new cycle to
+`docs/source/sns/regulatory/annex_jobs.json`, how to execute
 `scripts/run_sns_annex_jobs.py`, and which artefacts must be captured for
 governance sign-off.
 
@@ -15,11 +16,12 @@ governance sign-off.
 
 1. Confirm the upcoming review window with Governance (default cadence: monthly
    per suffix).
-2. Use `scripts/add_sns_annex_cycle.py <cycle>` to append entries to
-   `docs/source/sns/regulatory/annex_jobs.json`, create the annex/memo
-   placeholders, and seed the localization stubs. The helper defaults to all
-   three suffixes (`.sora`, `.nexus`, `.dao`) but accepts `--suffix` overrides
-   when you need to stage a subset.
+2. Use
+   `scripts/add_sns_annex_cycle.py <cycle> --suffix .<name>` to append entries
+   to `docs/source/sns/regulatory/annex_jobs.json`, create the annex/memo
+   placeholders, and seed the localization stubs. At least one `--suffix` is
+   required; repeat the option to select more than one active policy. The
+   helper has no built-in suffix catalog and never expands an omitted option.
 3. If you prefer a manual edit, append entries to
    `docs/source/sns/regulatory/annex_jobs.json` with the same fields described
    above (`suffix`, `cycle`, `jurisdiction`, optional overrides) and create the
@@ -79,7 +81,8 @@ Before merging:
 
 ## 5. Current schedule snapshot
 
-The tracking JSON now includes the April **and** May 2026 KPI cycles for
-`.sora`, `.nexus`, and `.dao`. Run this checklist whenever a new suffix/cycle
-pair is added so SN-8 evidence stays reproducible and localized copies remain
-in sync with the latest intake memos.
+Read `annex_jobs.json` for the current schedule. Existing entries may preserve
+historical reporting cohorts; they are not defaults for new cycles. Run this
+checklist whenever an explicitly selected suffix/cycle pair is added so SN-8
+evidence stays reproducible and localized copies remain in sync with the latest
+intake memos.

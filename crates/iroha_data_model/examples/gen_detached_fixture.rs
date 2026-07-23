@@ -1,21 +1,22 @@
 //! Generates the canonical detached-contract transaction fixture used by SDK tests.
 
-use std::{str::FromStr as _, time::Duration};
+use std::{num::NonZeroU64, str::FromStr as _, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
+    asset::AssetDefinitionId,
     metadata::Metadata,
     smart_contract::ContractAddress,
     transaction::{
-        Executable,
+        Executable, FeeChargeKind, FeeChargeLimit, FeePaymentIntent,
         executable::{ContractArgumentRecord, ContractInvocation},
         signed::TransactionBuilder,
     },
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_version::codec::EncodeVersioned as _;
 
 fn main() {
@@ -27,17 +28,15 @@ fn main() {
     let contract_address =
         ContractAddress::from_str("tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
             .expect("fixture contract address");
-    let fee_sponsor = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+    let merchant = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     let expected_code_hash = Hash::new(b"detached-fixture-contract-code");
-    let payload = format!(r#"{{"amount":"750","merchant_account_id":"{fee_sponsor}"}}"#,);
+    let payload = format!(r#"{{"amount":"750","merchant_account_id":"{merchant}"}}"#,);
     let mut metadata = Metadata::default();
     for (key, value) in [
         ("contract_address", contract_address.to_string()),
         ("contract_code_hash", expected_code_hash.to_string()),
         ("contract_alias", "bisp::hbl.sbp".to_owned()),
         ("contract_entrypoint", "spend_to_merchant".to_owned()),
-        ("gas_asset_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned()),
-        ("fee_sponsor", fee_sponsor.to_owned()),
     ] {
         metadata.insert(key.parse().expect("metadata key"), Json::new(value));
     }
@@ -45,7 +44,22 @@ fn main() {
         "contract_payload".parse().expect("metadata key"),
         Json::new(payload),
     );
-    metadata.insert("gas_limit".parse().expect("metadata key"), 500_000_u64);
+    let fee_asset: AssetDefinitionId = "xor#universal".parse().expect("canonical fee asset");
+    let fee_payment = FeePaymentIntent::authority(
+        vec![
+            FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                fee_asset.clone(),
+                Quantity::from_str("1").expect("canonical Nexus maximum"),
+            ),
+            FeeChargeLimit::new(
+                FeeChargeKind::PipelineGas,
+                fee_asset,
+                Quantity::from_str("100").expect("canonical gas maximum"),
+            ),
+        ],
+        NonZeroU64::new(500_000),
+    );
     let invocation = ContractInvocation {
         contract_address,
         expected_code_hash,
@@ -57,15 +71,22 @@ fn main() {
     let mut builder = TransactionBuilder::new(
         ChainId::from("swift-detached-contract-fixture"),
         authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
+    .with_fee_payment_intent(fee_payment)
     .with_metadata(metadata)
     .with_executable(Executable::ContractCall(invocation));
     builder.set_creation_time(Duration::from_millis(4_102_444_800_000));
     builder.set_ttl(Duration::from_millis(120_000));
-    let scaffold = builder
-        .try_sign(placeholder_keypair.private_key())
-        .expect("placeholder signature")
-        .with_authority(authority.clone());
+    let payload = builder.into_payload().expect("valid exact payload");
+    let placeholder_signature = Signature::try_new(
+        placeholder_keypair.private_key(),
+        HashOf::new(&payload).as_ref(),
+    )
+    .expect("placeholder signature");
+    let scaffold = TransactionBuilder::from_payload(payload)
+        .expect("valid exact payload")
+        .build_with_signature(placeholder_signature);
     let scaffold_bytes = scaffold.encode_versioned();
     let payload_hash = HashOf::new(scaffold.payload());
     let signature = Signature::try_new(authority_keypair.private_key(), payload_hash.as_ref())

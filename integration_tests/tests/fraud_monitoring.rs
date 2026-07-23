@@ -44,7 +44,11 @@ fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
     let message = "fraud-monitor integration".to_string();
 
     let missing_err = client
-        .submit_blocking_with_metadata(Log::new(Level::INFO, message.clone()), Metadata::default())
+        .submit_blocking_with_metadata(
+            Log::new(Level::INFO, message.clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        )
         .expect_err("transaction without assessment must be rejected");
     if let Some(reason) = sandbox::sandbox_reason(&missing_err) {
         return Err(Report::msg(format!(
@@ -65,7 +69,11 @@ fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
     low_metadata.insert(tenant_key.clone(), Json::new("tenant-eu"));
     low_metadata.insert(latency_key.clone(), Json::new(85_u64));
     let low_err = client
-        .submit_blocking_with_metadata(Log::new(Level::INFO, message.clone()), low_metadata)
+        .submit_blocking_with_metadata(
+            Log::new(Level::INFO, message.clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            low_metadata,
+        )
         .expect_err("transaction with insufficient band must be rejected");
     if let Some(reason) = sandbox::sandbox_reason(&low_err) {
         return Err(Report::msg(format!(
@@ -85,9 +93,11 @@ fn fraud_monitoring_requires_assessment_bands() -> Result<()> {
     ok_metadata.insert(score_key, Json::new(8_500_u64));
     ok_metadata.insert(tenant_key, Json::new("tenant-eu"));
     ok_metadata.insert(latency_key, Json::new(92_u64));
-    if let Err(err) =
-        client.submit_blocking_with_metadata(Log::new(Level::INFO, message), ok_metadata)
-    {
+    if let Err(err) = client.submit_blocking_with_metadata(
+        Log::new(Level::INFO, message),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ok_metadata,
+    ) {
         if let Some(reason) = sandbox::sandbox_reason(&err) {
             return Err(err.wrap_err(format!(
                 "sandboxed network restriction detected while running {context}: {reason}"

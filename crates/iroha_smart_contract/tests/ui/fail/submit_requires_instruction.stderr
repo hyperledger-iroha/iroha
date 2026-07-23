@@ -9,12 +9,12 @@ error[E0277]: the trait bound `std::string::String: BuiltInInstruction` is not s
   = help: the following other types implement trait `data_model::seal::Instruction`:
             AcceptAnonymousAssetEscrow
             AcceptAssetEscrow
+            AcceptSorafsModerationJurorAssignment
             AcknowledgeSoracloudAgentMessage
-            AcquireAccountAliasLease
             ActivateContractInstance
+            ActivateFeeSponsorProgramRevision
             ActivateIdentifierPolicy
-            ActivatePublicLaneValidator
-            ActivateRamLfeProgramPolicy
+            ActivateKagemushaRecursiveReleaseV4
           and $N others
   = note: required for `std::string::String` to implement `Instruction`
   = note: required for `std::string::String` to implement `BuiltInInstruction`

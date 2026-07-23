@@ -15,8 +15,14 @@ use iroha_data_model::{
         ConsensusRound, DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
         HeightContext, HeightContextId, PROTOCOL_VERSION, PayloadChunk, PayloadEncoding,
         PayloadManifest, Proposal, ProposalJustification, QuorumCertificate, SumeragiV2BodyState,
-        SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase, TimeoutCertificate,
-        TimeoutJustification, TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote,
+        SumeragiV2HeightContextStatus, SumeragiV2IgnoreCount, SumeragiV2IgnoreReason,
+        SumeragiV2LivenessBlocker, SumeragiV2LivenessStatus, SumeragiV2LocalWorkStage,
+        SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
+        SumeragiV2OutboundIntentStatus, SumeragiV2ProgressTransition,
+        SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
+        SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
+        SumeragiV2VoteQuorumStatus, SumeragiV2WorkStatus, TimeoutCertificate, TimeoutJustification,
+        TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote,
     },
     peer::PeerId,
 };
@@ -167,6 +173,7 @@ fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertifica
     let seed = u8::try_from(view + 1).expect("fixture views fit in u8");
     QuorumCertificate {
         round: round(context, view),
+        proposal_round: round(context, view),
         phase,
         subject: subject(seed),
         execution_commitment: execution_commitment(seed),
@@ -230,9 +237,15 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
     commit_request
         .validate(&context)
         .map_err(|error| format!("fixture commit request is invalid: {error}"))?;
+    let mut delayed_commit = prepare.clone();
+    delayed_commit.round = round(&context, 9);
+    delayed_commit.phase = GlobalPhase::Commit;
+    delayed_commit
+        .validate(&context)
+        .map_err(|error| format!("fixture delayed CommitQC is invalid: {error}"))?;
     let commit_response = CommitCertificateResponse {
         request_hash: HashOf::new(&commit_request),
-        certificate: qc(&context, 9, GlobalPhase::Commit),
+        certificate: delayed_commit.clone(),
         responder: peer(100),
         signature: vec![0x82; 48],
     };
@@ -249,6 +262,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             name: "vote",
             message: ConsensusMessageV2::new(ConsensusMessageV2Payload::Vote(Vote {
                 round: manifest.round,
+                proposal_round: manifest.round,
                 phase: GlobalPhase::Prepare,
                 subject: manifest.subject,
                 execution_commitment: prepare.execution_commitment,
@@ -260,6 +274,24 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             name: "quorum_certificate",
             message: ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
                 prepare.clone(),
+            )),
+        },
+        NamedMessage {
+            name: "commit_vote_later_view",
+            message: ConsensusMessageV2::new(ConsensusMessageV2Payload::Vote(Vote {
+                round: delayed_commit.round,
+                proposal_round: delayed_commit.proposal_round,
+                phase: GlobalPhase::Commit,
+                subject: delayed_commit.subject,
+                execution_commitment: delayed_commit.execution_commitment,
+                signer: 0,
+                signature: vec![0x7A],
+            })),
+        },
+        NamedMessage {
+            name: "commit_quorum_certificate_later_view",
+            message: ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
+                delayed_commit,
             )),
         },
         NamedMessage {
@@ -353,6 +385,78 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             quorum: context.quorum,
         },
         last_commit_qc: None,
+        liveness: SumeragiV2LivenessStatus {
+            generation: 3,
+            prepare_quorums: vec![SumeragiV2VoteQuorumStatus {
+                round: prepare.round,
+                proposal_round: prepare.proposal_round,
+                subject: prepare.subject,
+                execution_commitment: prepare.execution_commitment,
+                signer_count: 2,
+                signed_power: 2,
+                min_signers: context.quorum.min_signers,
+                total_power: context.quorum.total_power,
+            }],
+            commit_quorums: vec![SumeragiV2VoteQuorumStatus {
+                round: round(&context, 3),
+                proposal_round: prepare.proposal_round,
+                subject: prepare.subject,
+                execution_commitment: prepare.execution_commitment,
+                signer_count: 1,
+                signed_power: 1,
+                min_signers: context.quorum.min_signers,
+                total_power: context.quorum.total_power,
+            }],
+            timeout_quorums: vec![SumeragiV2TimeoutQuorumStatus {
+                round: timeout.round,
+                signer_count: 3,
+                signed_power: 3,
+                min_signers: context.quorum.min_signers,
+                total_power: context.quorum.total_power,
+                certificate_formed: true,
+            }],
+            outbound_intents: vec![SumeragiV2OutboundIntentStatus {
+                kind: SumeragiV2OutboundIntentKind::CommitVote,
+                round: round(&context, 3),
+                proposal_round: Some(prepare.proposal_round),
+                subject: Some(prepare.subject),
+                execution_commitment: Some(prepare.execution_commitment),
+                stage: SumeragiV2OutboundIntentStage::Sent,
+            }],
+            work: SumeragiV2WorkStatus {
+                candidate: SumeragiV2LocalWorkStage::Complete,
+                body_recovery: SumeragiV2LocalWorkStage::Complete,
+                body_store: SumeragiV2LocalWorkStage::Complete,
+                validation: SumeragiV2LocalWorkStage::Complete,
+                application: SumeragiV2LocalWorkStage::Idle,
+                successor_height: SumeragiV2LocalWorkStage::Idle,
+            },
+            queues: vec![SumeragiV2QueueStatus {
+                queue: SumeragiV2QueueKind::EffectDispatch,
+                depth: 1,
+                capacity: 4,
+                oldest_age_ms: Some(17),
+                service_debt: 2,
+            }],
+            last_progress: Some(SumeragiV2ProgressTransitionStatus {
+                generation: 3,
+                round: prepare.round,
+                transition: SumeragiV2ProgressTransition::LockInstalled,
+                age_ms: 19,
+            }),
+            no_progress_age_ms: 19,
+            blocker: Some(SumeragiV2LivenessBlocker::LocalControlPending),
+            ignore_counts: vec![
+                SumeragiV2IgnoreCount {
+                    reason: SumeragiV2IgnoreReason::Duplicate,
+                    count: 2,
+                },
+                SumeragiV2IgnoreCount {
+                    reason: SumeragiV2IgnoreReason::IrrelevantView,
+                    count: 1,
+                },
+            ],
+        },
     };
     status
         .validate()
@@ -559,11 +663,14 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
     wrong_request_hash.request_hash =
         HashOf::from_untyped_unchecked(Hash::new(b"wrong commit request"));
     let mut wrong_context = values.commit_response.clone();
-    wrong_context.certificate.round.context_id = HeightContextId(HashOf::from_untyped_unchecked(
-        Hash::new(b"wrong height context"),
-    ));
+    let wrong_context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+        b"wrong height context",
+    )));
+    wrong_context.certificate.round.context_id = wrong_context_id;
+    wrong_context.certificate.proposal_round.context_id = wrong_context_id;
     let mut wrong_height = values.commit_response.clone();
     wrong_height.certificate.round.height += 1;
+    wrong_height.certificate.proposal_round.height += 1;
     rows.extend([
         FixtureRow::rejected(
             "negative_binding",

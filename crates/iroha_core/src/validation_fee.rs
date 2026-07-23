@@ -1065,17 +1065,36 @@ fn reject_opaque_fee_asset_effects(
             continue;
         };
         let action = register.object.action();
-        let nested_instructions = match action.executable() {
-            Executable::Instructions(instructions) => instructions.as_ref(),
-            Executable::IvmProved(proved) => proved.overlay.as_ref(),
-            Executable::ContractCall(_) | Executable::Ivm(_) => continue,
-        };
-        reject_opaque_fee_asset_effects(
-            action.authority(),
-            nested_instructions,
-            fee_asset_definition_id,
-            None,
-        )?;
+        match action.executable() {
+            Executable::Instructions(instructions) => reject_opaque_fee_asset_effects(
+                action.authority(),
+                instructions,
+                fee_asset_definition_id,
+                None,
+            )?,
+            Executable::IvmProved(proved) => reject_opaque_fee_asset_effects(
+                action.authority(),
+                &proved.overlay,
+                fee_asset_definition_id,
+                None,
+            )?,
+            Executable::Batch(items) => {
+                let nested_instructions = items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ExecutableBatchItem::Instruction(instruction) => Some(instruction.clone()),
+                        ExecutableBatchItem::ContractCall(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                reject_opaque_fee_asset_effects(
+                    action.authority(),
+                    &nested_instructions,
+                    fee_asset_definition_id,
+                    None,
+                )?;
+            }
+            Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        }
     }
     Ok(())
 }
@@ -1157,19 +1176,46 @@ where
             continue;
         };
         let action = register.object.action();
-        let nested_instructions = match action.executable() {
-            Executable::Instructions(instructions) => instructions.as_ref(),
-            Executable::IvmProved(proved) => proved.overlay.as_ref(),
-            Executable::ContractCall(_) | Executable::Ivm(_) => continue,
-        };
-        reject_opaque_deferred_approval_effects_with(
-            action.authority(),
-            nested_instructions,
-            fee_asset_definition_id,
-            visited_proposals,
-            depth + 1,
-            resolve,
-        )?;
+        match action.executable() {
+            Executable::Instructions(instructions) => {
+                reject_opaque_deferred_approval_effects_with(
+                    action.authority(),
+                    instructions,
+                    fee_asset_definition_id,
+                    visited_proposals,
+                    depth + 1,
+                    resolve,
+                )?;
+            }
+            Executable::IvmProved(proved) => {
+                reject_opaque_deferred_approval_effects_with(
+                    action.authority(),
+                    &proved.overlay,
+                    fee_asset_definition_id,
+                    visited_proposals,
+                    depth + 1,
+                    resolve,
+                )?;
+            }
+            Executable::Batch(items) => {
+                let nested_instructions = items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ExecutableBatchItem::Instruction(instruction) => Some(instruction.clone()),
+                        ExecutableBatchItem::ContractCall(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                reject_opaque_deferred_approval_effects_with(
+                    action.authority(),
+                    &nested_instructions,
+                    fee_asset_definition_id,
+                    visited_proposals,
+                    depth + 1,
+                    resolve,
+                )?;
+            }
+            Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        }
     }
     Ok(())
 }
@@ -2302,11 +2348,28 @@ fn collect_asset_transfers(
     authority: &AccountId,
     fee_asset_definition_id: &AssetDefinitionId,
 ) -> Result<TransferCollection, ValidationFeeAdmissionError> {
+    let batch_instructions;
     let instructions = match executable {
         Executable::Instructions(instructions) => instructions.as_ref(),
         // The overlay is part of the signed transaction payload and is bound to the bytecode by
         // the proved-IVM attachment. Proof verification still runs before the overlay executes.
         Executable::IvmProved(proved) => proved.overlay.as_ref(),
+        Executable::Batch(items) => {
+            if items
+                .iter()
+                .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
+            {
+                return Err(ValidationFeeAdmissionError::UnsupportedExecutable);
+            }
+            batch_instructions = items
+                .iter()
+                .filter_map(|item| match item {
+                    ExecutableBatchItem::Instruction(instruction) => Some(instruction.clone()),
+                    ExecutableBatchItem::ContractCall(_) => None,
+                })
+                .collect::<Vec<_>>();
+            &batch_instructions
+        }
         Executable::ContractCall(_) | Executable::Ivm(_) => {
             return Err(ValidationFeeAdmissionError::UnsupportedExecutable);
         }
@@ -2623,6 +2686,20 @@ fn native_instruction_ds_effect_disposition(
     // These families have native, state-derived balance/supply/custody effects that cannot be
     // represented faithfully as a signed transparent transfer coordinate. Keep them disabled
     // until they have an effect-plan representation covered by the user signature.
+    if let Some(commit) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>(
+    ) {
+        return if commit.expected_previous_contract_address().is_some() {
+            // Rotation deactivates the exact prior target and therefore has the same policy-era
+            // rebinding risk as an explicit DeactivateContractInstance.
+            NativeInstructionDsEffectDisposition::RejectKnownDsCapable(core::any::type_name::<
+                iroha_data_model::isi::smart_contract_code::CommitContractDeployment,
+            >())
+        } else {
+            NativeInstructionDsEffectDisposition::AuditedNoDsEffect
+        };
+    }
     reject_known!(
         // Active-policy deployments are intentionally one-way: registration and first
         // activation are balance-neutral (and allowed below), while removal/deactivation
@@ -2645,12 +2722,10 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::sorafs::RegisterPinManifest,
         iroha_data_model::isi::account_recovery::ReplaceAccountController,
         iroha_data_model::isi::account_recovery::FinalizeAccountRecovery,
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease,
-        iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease,
-        iroha_data_model::isi::sns::RegisterSnsName,
-        iroha_data_model::isi::sns::RenewSnsName,
-        iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2,
-        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2,
+        iroha_data_model::isi::alias_setup::EnsureAlias,
+        iroha_data_model::isi::alias_setup::RenewAliasLease,
+        iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
+        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
         iroha_data_model::isi::social::ClaimTwitterFollowReward,
         iroha_data_model::isi::social::SendToTwitter,
         iroha_data_model::isi::social::CancelTwitterEscrow,
@@ -2720,6 +2795,9 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::AddSignatory,
         iroha_data_model::isi::RemoveSignatory,
         iroha_data_model::isi::SetAccountQuorum,
+        iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew,
+        iroha_data_model::isi::alias_setup::RebindAccountAlias,
+        iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias,
         GrantBox,
         RevokeBox,
         ExecuteTrigger,
@@ -3252,35 +3330,47 @@ mod tests {
     ) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
         let chain: ChainId = "generic-testnet".parse().expect("chain id");
-        TransactionBuilder::new(chain, AccountId::new(key_pair.public_key().clone()))
-            .with_instructions(instructions)
-            .with_metadata(metadata)
-            .sign(key_pair.private_key())
+        TransactionBuilder::new(
+            chain,
+            AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .with_metadata(metadata)
+        .sign(key_pair.private_key())
     }
 
     fn contract_call_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
         let chain: ChainId = "generic-testnet".parse().expect("chain id");
-        TransactionBuilder::new(chain, AccountId::new(key_pair.public_key().clone()))
-            .with_executable(Executable::ContractCall(ContractInvocation {
-                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
-                    .parse()
-                    .expect("contract address"),
-                expected_code_hash: iroha_crypto::Hash::new(b"validation-fee-contract-code"),
-                entrypoint: "send_transfer".to_owned(),
-                arguments: None,
-            }))
-            .with_metadata(metadata)
-            .sign(key_pair.private_key())
+        TransactionBuilder::new(
+            chain,
+            AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::ContractCall(ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            expected_code_hash: iroha_crypto::Hash::new(b"validation-fee-contract-code"),
+            entrypoint: "send_transfer".to_owned(),
+            arguments: None,
+        }))
+        .with_metadata(metadata)
+        .sign(key_pair.private_key())
     }
 
     fn ivm_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
         let chain: ChainId = "generic-testnet".parse().expect("chain id");
-        TransactionBuilder::new(chain, AccountId::new(key_pair.public_key().clone()))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])))
-            .with_metadata(metadata)
-            .sign(key_pair.private_key())
+        TransactionBuilder::new(
+            chain,
+            AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])))
+        .with_metadata(metadata)
+        .sign(key_pair.private_key())
     }
 
     fn ivm_proved_tx(
@@ -3290,15 +3380,19 @@ mod tests {
     ) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
         let chain: ChainId = "generic-testnet".parse().expect("chain id");
-        TransactionBuilder::new(chain, AccountId::new(key_pair.public_key().clone()))
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: IvmBytecode::from_compiled(vec![0x00]),
-                overlay: overlay.into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas-policy"),
-            }))
-            .with_metadata(metadata)
-            .sign(key_pair.private_key())
+        TransactionBuilder::new(
+            chain,
+            AccountId::new(key_pair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x00]),
+            overlay: overlay.into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas-policy"),
+        }))
+        .with_metadata(metadata)
+        .sign(key_pair.private_key())
     }
 
     fn metadata_for(policy: &ValidationFeePolicyV1) -> Metadata {
@@ -3422,7 +3516,7 @@ mod tests {
     fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps() {
         use iroha_data_model::{
             isi::smart_contract_code::{
-                ActivateContractInstance, CancelSmartContractCodeUpload,
+                ActivateContractInstance, CancelSmartContractCodeUpload, CommitContractDeployment,
                 FinalizeSmartContractCodeUpload, RegisterSmartContractBytes,
                 RegisterSmartContractCode, UploadSmartContractCodeChunk,
             },
@@ -3432,9 +3526,10 @@ mod tests {
         let treasury = account(3);
         let policy = policy(&treasury);
         let code_hash = Hash::new(b"permissionless-contract-artifact");
-        let contract_address = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
-            .parse()
-            .expect("contract address");
+        let contract_address: iroha_data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address");
         let instructions: Vec<InstructionBox> = vec![
             RegisterSmartContractBytes {
                 code_hash,
@@ -3473,8 +3568,17 @@ mod tests {
             }
             .into(),
             ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                code_hash,
+            }
+            .into(),
+            CommitContractDeployment {
+                expected_deploy_nonce: 0,
                 contract_address,
                 code_hash,
+                contract_alias: "payments::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
             }
             .into(),
         ];
@@ -3494,18 +3598,19 @@ mod tests {
     #[test]
     fn active_policy_rejects_contract_rebinding_and_artifact_removal_steps() {
         use iroha_data_model::isi::smart_contract_code::{
-            DeactivateContractInstance, RemoveSmartContractBytes,
+            CommitContractDeployment, DeactivateContractInstance, RemoveSmartContractBytes,
         };
 
         let treasury = account(3);
         let policy = policy(&treasury);
         let code_hash = Hash::new(b"immutable-contract-artifact");
-        let contract_address = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
-            .parse()
-            .expect("contract address");
+        let contract_address: iroha_data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address");
         let instructions: Vec<InstructionBox> = vec![
             DeactivateContractInstance {
-                contract_address,
+                contract_address: contract_address.clone(),
                 reason: Some("attempted policy-era rebind".to_owned()),
             }
             .into(),
@@ -3514,13 +3619,22 @@ mod tests {
                 reason: Some("attempted policy-era removal".to_owned()),
             }
             .into(),
+            CommitContractDeployment {
+                expected_deploy_nonce: 1,
+                contract_address: contract_address.clone(),
+                code_hash,
+                contract_alias: "payments::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: Some(contract_address),
+            }
+            .into(),
         ];
 
         for (index, instruction) in instructions.into_iter().enumerate() {
-            let instruction_wire_id = if index == 0 {
-                core::any::type_name::<DeactivateContractInstance>()
-            } else {
-                core::any::type_name::<RemoveSmartContractBytes>()
+            let instruction_wire_id = match index {
+                0 => core::any::type_name::<DeactivateContractInstance>(),
+                1 => core::any::type_name::<RemoveSmartContractBytes>(),
+                _ => core::any::type_name::<CommitContractDeployment>(),
             };
             assert_eq!(
                 enforce_policy(&tx(1, vec![instruction], Metadata::default()), &policy,),

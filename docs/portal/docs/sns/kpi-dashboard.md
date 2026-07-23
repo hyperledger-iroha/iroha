@@ -1,57 +1,45 @@
 ---
-title: SNS KPI dashboard
-description: Live Grafana panels that aggregate registrar, freeze, and revenue metrics for SN-8a.
+title: Alias provisioning operational evidence
+description: Safe dashboard inputs derived from canonical alias plans, readiness reports, and committed transactions.
 ---
 
-# Sora Name Service KPI Dashboard
+# Alias Provisioning Operational Evidence
 
-The KPI dashboard gives stewards, guardians, and regulators a single place to
-review adoption, error, and revenue signals before the monthly annex cadence
-(SN-8a). The Grafana definition ships in the repository at
-`dashboards/grafana/sns_suffix_analytics.json` and the portal mirrors the same
-panels via an embedded iframe so the experience matches the internal Grafana
-instance.
+Alias dashboards are read-only projections. They must derive every financial
+or lifecycle claim from a canonical `AliasTransactionPlanV1`, a committed
+ordinary transaction, or a sorted `AliasSetupReportV1`. Dashboard data never
+authorizes a lease, proves payment, or changes world state.
 
-## Filters & Data Sources
+:::warning Legacy dashboard queries
+`dashboards/grafana/sns_suffix_analytics.json` still contains retired
+bulk-release and fabricated-settlement series. Do not import it or use it as
+financial evidence until those queries are regenerated from the sources
+below.
+:::
 
-- **Suffix filter** – drives the `sns_registrar_status_total{suffix}` queries so
-  `.sora`, `.nexus`, and `.dao` can be inspected independently.
-- **Bulk release filter** – scopes the `sns_bulk_release_payment_*` metrics so
-  finance can reconcile a specific registrar manifest.
-- **Metrics** – pulls from Torii (`sns_registrar_status_total`,
-  `torii_request_duration_seconds`), guardian CLI (`guardian_freeze_active`),
-  `sns_governance_activation_total`, and the bulk-onboarding helper metrics.
+## Safe panels
 
-## Panels
+| Panel | Source | Required correlation |
+|-------|--------|----------------------|
+| Setup dispositions | Planner response and structured conflict report | Plan hash, authority, chain, anchor, resource, and NoOp/Repair/Create/Conflict disposition. |
+| Native lease charges | Exact quote plus committed ledger debit | Transaction hash, payment asset, policy version, exact amount, and quote cap. |
+| Onboarding readiness | Authenticated `AliasSetupReportV1` snapshots | Overall status, validation phase, stable code, severity, resource, and redacted config path. |
+| Renewal and auto-renew | Verified lifecycle plan and transaction result | Expected revision/expiry, target expiry, retry count, suspension reason, and final status. |
+| Read authorization | Torii request status grouped by public/restricted dataspace | Authentication outcome without alias-existence leakage. |
 
-1. **Registrations (last 24h)** – number of successful registrar events for the
-   selected suffix.
-2. **Governance activations (30d)** – charter/addendum motions recorded by the
-   CLI.
-3. **Registrar throughput** – per-suffix rate of successful registrar actions.
-4. **Registrar error modes** – 5 minute rate of error-labelled
-   `sns_registrar_status_total` counters.
-5. **Guardian freeze windows** – live selectors where `guardian_freeze_active`
-   reports an open freeze ticket.
-6. **Net payment units by asset** – totals reported by
-   `sns_bulk_release_payment_net_units` per asset.
-7. **Bulk requests per suffix** – manifest volumes per suffix id.
-8. **Net units per request** – ARPU-style calculation derived from the release
-   metrics.
+Compute counts, totals, and cursors after applying the same visibility policy as
+the read API. Never reconstruct hidden aliases from logs or count rejected
+lookups as evidence that an alias exists.
 
-## Monthly KPI Review Checklist
+## Review checklist
 
-The finance lead drives a recurring review on the first Tuesday of every month:
-
-1. Open the portal’s **Analytics → SNS KPI** page (or Grafana dashboard `sns-kpis`).
-2. Capture a PDF/CSV export of the registrar throughput and revenue tables.
-3. Compare suffixes for SLA breaches (error rate spikes, frozen selectors >72 h,
-   ARPU deltas >10 %).
-4. Log summaries + action items in the relevant annex entry under
-   `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
-5. Attach the exported dashboard artefacts to the annex commit and link them in
-   the council agenda.
-
-If the review uncovers SLA breaches, file a PagerDuty incident for the affected
-owner (registrar duty manager, guardian on-call, or steward program lead) and
-track the remediation in the annex log.
+1. Verify each financial sample joins an exact quote to one committed
+   transaction and ledger debit.
+2. Confirm no dashboard importer accepts a payment proof, settlement bundle,
+   private key, raw token, or per-resource mutation receipt.
+3. Reconcile replayed setup as a zero-charge no-op and repair as a zero-charge
+   derived-state correction.
+4. Record policy/asset drift and repeated auto-renew failure as suspension, not
+   a silently retried charge under changed terms.
+5. Archive only secret-free plan hashes, reports, transaction hashes, and
+   aggregate exports.

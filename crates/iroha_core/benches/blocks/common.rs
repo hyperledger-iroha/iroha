@@ -8,6 +8,7 @@ use std::{
 
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
+    governance::manifest::LaneManifestRegistry,
     prelude::*,
     query::store::LiveQueryStore,
     smartcontracts::{Execute, Registrable as _},
@@ -27,9 +28,7 @@ use iroha_data_model::{
     transaction::IvmBytecode,
 };
 use iroha_executor_data_model::permission::{
-    account::CanUnregisterAccount,
-    asset_definition::CanUnregisterAssetDefinition,
-    domain::{CanRegisterDomain, CanUnregisterDomain},
+    account::CanUnregisterAccount, asset_definition::CanUnregisterAssetDefinition,
 };
 
 /// Create block
@@ -43,9 +42,13 @@ pub fn create_block<'a>(
 ) -> (CommittedBlock, StateBlock<'a>) {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
-    let transaction = TransactionBuilder::new(chain_id.clone(), account_id)
-        .with_instructions(instructions)
-        .sign(account_private_key);
+    let transaction = TransactionBuilder::new(
+        chain_id.clone(),
+        account_id,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .sign(account_private_key);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.view();
         let params = state_view.world.parameters();
@@ -82,25 +85,12 @@ pub fn create_block<'a>(
 }
 
 pub fn populate_state(
-    domains: &[DomainId],
+    _domains: &[DomainId],
     accounts: &[AccountId],
     asset_definitions: &[AssetDefinitionId],
     owner_id: &AccountId,
 ) -> Vec<InstructionBox> {
-    let mut instructions: Vec<InstructionBox> =
-        vec![Grant::account_permission(CanRegisterDomain, owner_id.clone()).into()];
-
-    for domain_id in domains {
-        let domain = Domain::new(domain_id.clone());
-        instructions.push(Register::domain(domain).into());
-        let can_unregister_domain = Grant::account_permission(
-            CanUnregisterDomain {
-                domain: domain_id.clone(),
-            },
-            owner_id.clone(),
-        );
-        instructions.push(can_unregister_domain.into());
-    }
+    let mut instructions: Vec<InstructionBox> = Vec::new();
 
     for account_id in accounts {
         let account = Account::new(account_id.clone());
@@ -150,32 +140,29 @@ pub fn delete_every_nth(
 
     let mut instructions: Vec<InstructionBox> = Vec::new();
     for (i, domain_id) in domains.iter().enumerate() {
-        if i % nth == 0 {
-            instructions.push(Unregister::domain(domain_id.clone()).into());
-        } else {
-            for (j, account_id) in accounts
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| {
-                    domain_for_index(domains, accounts.len(), *index)
-                        .is_some_and(|d| d == domain_id)
-                })
-                .map(|(_, account_id)| account_id)
-                .enumerate()
-            {
-                if j % nth == 0 {
-                    instructions.push(Unregister::account(account_id.clone()).into());
-                }
+        // Runtime domain re-registration is intentionally unavailable; churn the
+        // domain's children while retaining its genesis-created parent.
+        let delete_all_children = i % nth == 0;
+        for (j, account_id) in accounts
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                domain_for_index(domains, accounts.len(), *index).is_some_and(|d| d == domain_id)
+            })
+            .map(|(_, account_id)| account_id)
+            .enumerate()
+        {
+            if delete_all_children || j % nth == 0 {
+                instructions.push(Unregister::account(account_id.clone()).into());
             }
-            for (k, asset_definition_id) in asset_definitions
-                .iter()
-                .filter(|asset_definition_id| asset_definition_id.domain() == domain_id)
-                .enumerate()
-            {
-                if k % nth == 0 {
-                    instructions
-                        .push(Unregister::asset_definition(asset_definition_id.clone()).into());
-                }
+        }
+        for (k, asset_definition_id) in asset_definitions
+            .iter()
+            .filter(|asset_definition_id| asset_definition_id.domain() == domain_id)
+            .enumerate()
+        {
+            if delete_all_children || k % nth == 0 {
+                instructions.push(Unregister::asset_definition(asset_definition_id.clone()).into());
             }
         }
     }
@@ -202,10 +189,8 @@ pub fn restore_every_nth(
 
     let mut instructions: Vec<InstructionBox> = Vec::new();
     for (i, domain_id) in domains.iter().enumerate() {
-        if i % nth == 0 {
-            let domain = Domain::new(domain_id.clone());
-            instructions.push(Register::domain(domain).into());
-        }
+        // Domains remain present so this restore batch uses only ordinary
+        // post-genesis instructions.
         for (j, account_id) in accounts
             .iter()
             .enumerate()
@@ -248,7 +233,7 @@ pub fn build_state(
     let domain_id: DomainId =
         DomainId::try_new("bench", "universal").expect("valid bench domain id");
     let domain = Domain::new(domain_id.clone()).build(account_id);
-    let state = State::new(
+    let state = State::try_new(
         World::with(
             [domain],
             [Account::new(account_id.clone()).build(account_id)],
@@ -258,13 +243,22 @@ pub fn build_state(
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
-    );
+    )
+    .expect("benchmark State startup must validate");
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let transaction = TransactionBuilder::new(chain_id.clone(), account_id.clone())
-            .with_instructions([Log::new(Level::INFO, "init".to_string())])
-            .sign(account_private_key);
+        let transaction = TransactionBuilder::new(
+            chain_id.clone(),
+            account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "init".to_string())])
+        .sign(account_private_key);
         let (max_clock_drift, tx_limits) = {
             let state_view = state.view();
             let params = state_view.world.parameters();
@@ -325,9 +319,13 @@ pub fn build_state(
     state
 }
 
-/// Seed active SNS domain-name leases for synthetic benchmark domains.
-pub fn seed_domain_name_leases(state: &mut State, domains: &[DomainId], owner_id: &AccountId) {
+/// Bootstrap synthetic benchmark domains and their active SNS leases directly into state.
+pub fn seed_benchmark_domains(state: &mut State, domains: &[DomainId], owner_id: &AccountId) {
     for domain_id in domains {
+        state.world.domains.insert(
+            domain_id.clone(),
+            Domain::new(domain_id.clone()).build(owner_id),
+        );
         let selector =
             iroha_core::sns::selector_for_domain(domain_id).expect("benchmark domain id is valid");
         let address =
@@ -387,14 +385,14 @@ mod tests {
     }
 
     #[test]
-    fn seed_domain_name_leases_makes_generated_domains_registrable() {
+    fn seed_benchmark_domains_makes_generated_children_registrable() {
         let rt = Runtime::new().unwrap();
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let mut state = build_state(rt.handle(), &account_id, keypair.private_key());
-        let (domain_ids, account_ids, asset_definition_ids) = generate_ids(1, 0, 0);
+        let (domain_ids, account_ids, asset_definition_ids) = generate_ids(1, 1, 1);
 
-        seed_domain_name_leases(&mut state, &domain_ids, &account_id);
+        seed_benchmark_domains(&mut state, &domain_ids, &account_id);
 
         let (peer_public_key, peer_private_key) =
             KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();

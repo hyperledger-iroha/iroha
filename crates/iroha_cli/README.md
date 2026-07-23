@@ -23,6 +23,20 @@ Alternatively, check out the [documentation](https://docs.iroha.tech/get-started
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
 For automation, prefer `--output-format json --machine` to suppress startup chatter and fail fast when `client.toml` is missing.
 
+The Taira write canary requires an explicit owner-only token file for account
+onboarding. The file must be a current-user-owned, regular non-symlink with no
+group/other permissions and must contain the exact 32–256 byte printable-ASCII
+credential without a trailing newline:
+
+```bash
+iroha taira write-canary \
+  --public-root https://taira.sora.org \
+  --onboarding-token-file "$HOME/.config/iroha/taira-onboarding.token"
+```
+
+The credential is sent only as `X-Iroha-Onboarding-Token` on the JSON onboarding
+request and is never forwarded across redirects.
+
 ### Client configuration
 
 `client.toml` now owns canonical I105 parsing/rendering through `[account].chain_discriminant`.
@@ -47,12 +61,12 @@ Use the built-in wait flow instead of shell polling:
 
 ```bash
 iroha tx status --hash <SIGNED_TX_HASH> --wait
-iroha contract deploy --authority <ACCOUNT_ID> --private-key <HEX> --code-file ./contract.to --wait
 iroha contract call --contract-alias router::dex.universal --entrypoint swap --wait
 iroha contract call --contract-alias router::dex.universal --entrypoint swap --simulate
 ```
 
-See [Command-Line Help](CommandLineHelp.md).
+Run `iroha tools markdown-help` for the complete reference generated from the
+installed CLI.
 
 Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instructions.html) for more information about Iroha instructions such as register, mint, grant, and so on.
 
@@ -523,13 +537,16 @@ bash ./run.sh
 
 :grey_exclamation: All examples below are Unix-oriented. If you're working on Windows, we would highly encourage you to consider using WSL, as most documentation assumes a POSIX-like shell running on your system. Please be advised that the differences in the syntax may go beyond executing `iroha.exe` instead of `iroha`.
 
-### Create new Domain
+### Create a domain and alias lease
 
-To create a domain, you need to specify the entity type first (`domain` in our case) and then the command (`register`) with a list of required parameters. For the `domain` entity, you only need to provide the `id` argument as a string that doesn't contain the `@`, `#` or `$` symbols.
+Ordinary transactions create domains through the declarative alias planner so the SNS lease, owner capabilities, and domain state are checked and applied atomically. Put the secret-free setup request in a JSON file, plan it against live state, then verify and submit that exact plan locally:
 
 ```bash
-iroha ledger domain register --id "Soramitsu"
+iroha app alias setup plan --intent-file alias-setup.json --plan-file alias-plan.json
+iroha app alias setup apply --plan-file alias-plan.json
 ```
+
+Raw `ledger domain register` is reserved for genesis/bootstrap and is not exposed as an ordinary CLI mutation.
 
 ### Create new Account
 
@@ -708,14 +725,17 @@ Expected output format is the same JSON as for full objects, but the entries are
 ```
 
 Note: This feature is experimental and off by default; enable it for testing and iterative development. Behavior and flags may change.
-## Regenerating Markdown Help
+## Rendering Markdown Help
 
 Ensure the CLI builds, then run:
 
-``` 
+```bash
 make docs-cli
 # or
-cargo run -p iroha_cli --bin iroha -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md
+cargo run -p iroha_cli --bin iroha -- tools markdown-help
 ```
 
-This regenerates the full `CommandLineHelp.md` directly from the live CLI, keeping the docs in sync with the actual arguments and subcommands.
+The full Iroha CLI reference is rendered from the live command tree and is not
+checked into the repository. Redirect it to an operator-chosen path when a
+standalone copy is needed. Kagami retains its smaller checked-in
+`CommandLineHelp.md` snapshot and validates that snapshot in its unit tests.

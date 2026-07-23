@@ -99,12 +99,16 @@ fn signed_empty_tx_with_attachments(
     attachments: iroha_data_model::proof::ProofAttachmentList,
 ) -> SignedTransaction {
     let chain: ChainId = "test-chain".parse().expect("test chain");
-    TransactionBuilder::new(chain, ALICE_ID.clone())
-        .with_executable(Executable::Instructions(
-            Vec::<InstructionBox>::new().into(),
-        ))
-        .with_attachments(attachments)
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
+    TransactionBuilder::new(
+        chain,
+        ALICE_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_executable(Executable::Instructions(
+        Vec::<InstructionBox>::new().into(),
+    ))
+    .with_attachments(attachments)
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
 }
 
 fn grant_vk_management(
@@ -163,12 +167,16 @@ fn duplicate_proof_in_same_block_is_rejected() {
         ),
     ]);
 
-    let tx1: SignedTransaction = TransactionBuilder::new(chain.clone(), authority.clone())
-        .with_executable(Executable::Instructions(
-            Vec::<InstructionBox>::new().into(),
-        ))
-        .with_attachments(attachments.clone())
-        .sign(&private_key);
+    let tx1: SignedTransaction = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_executable(Executable::Instructions(
+        Vec::<InstructionBox>::new().into(),
+    ))
+    .with_attachments(attachments.clone())
+    .sign(&private_key);
 
     let mut stx1 = block.transaction();
     exec.execute_transaction(&mut stx1, &authority, tx1, &mut ivm_cache)
@@ -176,12 +184,16 @@ fn duplicate_proof_in_same_block_is_rejected() {
     drop(stx1);
 
     // Second identical transaction in the same block should hit dedup
-    let tx2: SignedTransaction = TransactionBuilder::new(chain, authority.clone())
-        .with_executable(Executable::Instructions(
-            Vec::<InstructionBox>::new().into(),
-        ))
-        .with_attachments(attachments)
-        .sign(&private_key);
+    let tx2: SignedTransaction = TransactionBuilder::new(
+        chain,
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_executable(Executable::Instructions(
+        Vec::<InstructionBox>::new().into(),
+    ))
+    .with_attachments(attachments)
+    .sign(&private_key);
 
     let mut stx2 = block.transaction();
     let err = exec
@@ -375,12 +387,16 @@ fn preverify_rejects_missing_vk_reference() {
             vk_id,
         ),
     ]);
-    let tx: SignedTransaction = TransactionBuilder::new(chain, authority.clone())
-        .with_executable(Executable::Instructions(
-            Vec::<InstructionBox>::new().into(),
-        ))
-        .with_attachments(attachments)
-        .sign(&private_key);
+    let tx: SignedTransaction = TransactionBuilder::new(
+        chain,
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_executable(Executable::Instructions(
+        Vec::<InstructionBox>::new().into(),
+    ))
+    .with_attachments(attachments)
+    .sign(&private_key);
 
     let mut stx = block.transaction();
     let err = exec
@@ -934,12 +950,16 @@ fn preverify_rejects_empty_proof_as_malformed() {
         ),
     ]);
 
-    let tx: SignedTransaction = TransactionBuilder::new(chain, authority.clone())
-        .with_executable(Executable::Instructions(
-            Vec::<InstructionBox>::new().into(),
-        ))
-        .with_attachments(attachments)
-        .sign(&private_key);
+    let tx: SignedTransaction = TransactionBuilder::new(
+        chain,
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_executable(Executable::Instructions(
+        Vec::<InstructionBox>::new().into(),
+    ))
+    .with_attachments(attachments)
+    .sign(&private_key);
 
     let mut stx = block.transaction();
     let err = exec
@@ -990,12 +1010,16 @@ fn preverify_rejects_proof_too_big() {
         ),
     ]);
 
-    let tx: SignedTransaction = TransactionBuilder::new(chain, authority.clone())
-        .with_executable(Executable::Instructions(
-            Vec::<InstructionBox>::new().into(),
-        ))
-        .with_attachments(attachments)
-        .sign(&private_key);
+    let tx: SignedTransaction = TransactionBuilder::new(
+        chain,
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_executable(Executable::Instructions(
+        Vec::<InstructionBox>::new().into(),
+    ))
+    .with_attachments(attachments)
+    .sign(&private_key);
 
     let mut stx = block.transaction();
     let err = exec

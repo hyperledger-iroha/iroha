@@ -18,7 +18,8 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneId},
     transaction::{
-        Executable, SignedTransaction, TransactionEntrypoint, executable::ContractInvocation,
+        Executable, ExecutableBatchItem, SignedTransaction, TransactionEntrypoint,
+        executable::ContractInvocation,
     },
 };
 use iroha_version::codec::DecodeVersioned;
@@ -144,6 +145,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             proved.overlay.len()
                         ),
                     }]
+                }
+                Executable::Batch(items) => {
+                    summary.operation_type = Some("Batch".to_string());
+                    items
+                        .iter()
+                        .enumerate()
+                        .map(|(index, item)| match item {
+                            ExecutableBatchItem::Instruction(instruction) => {
+                                summarize_instruction(instruction, &mut summary);
+                                InstructionRow {
+                                    index,
+                                    kind: instruction_kind(instruction).to_string(),
+                                    json: instruction_json(instruction),
+                                }
+                            }
+                            ExecutableBatchItem::ContractCall(call) => InstructionRow {
+                                index,
+                                kind: "ContractCall".to_string(),
+                                json: contract_call_json(call),
+                            },
+                        })
+                        .collect()
                 }
             };
 

@@ -53,6 +53,20 @@ client = create_torii_client(
 )
 ```
 
+Account onboarding uses a dedicated credential in addition to any global
+`X-API-Token`. Callers must pass the raw 32–256 byte printable-ASCII value for
+each request; the SDK does not trim it, store it in default headers, put it in
+the JSON body, retry the POST, or forward it across redirects.
+
+```python
+response = client.onboard_account(
+    onboarding_token=route_token,
+    alias="alice@universal",
+    uaid="uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    public_key_hex="ab" * 32,
+)
+```
+
 ## Exact Kotodama numbers
 
 `KotodamaInt`, `KotodamaDecimal`, and `KotodamaQuantity` implement the
@@ -151,7 +165,7 @@ applications do not need to duplicate Torii pagination, compatibility retries,
 or account-asset matching logic:
 
 ```python
-from iroha_python import ToriiClient
+from iroha_python import ToriiClient, authority_fee_payment
 
 client = ToriiClient("https://taira.sora.org")
 
@@ -176,27 +190,28 @@ The same client owns the PoC-facing Torii application helpers for contract,
 SNS, and ZK bootstrap flows:
 
 ```python
-deploy = client.deploy_contract_bundle(
-    authority="adult@is",
-    private_key="<multihash-private-key>",
-    contract_alias="boi-lock::is",
-    code_file="contracts/boi_lock.to",
-    wait=True,
-)
-
 call = client.call_contract_and_wait(
     authority="adult@is",
     private_key="<multihash-private-key>",
     contract_alias="boi-lock::is",
     entrypoint="create_lock",
     payload={"amount": "10"},
-    gas_limit=1_500_000,
+    fee_payment=authority_fee_payment(
+        # The app endpoint quotes this exact draft and replaces only the
+        # charge maxima before signing.
+        charge_limits=[],
+        gas_limit=1_500_000,
+    ),
 )
 
 policy = client.get_sns_policy(2)
 registration = client.get_sns_name("domain", "wonderland.is")
 vk_active = client.zk_verifying_key_active("halo2/ipa", "vk_transfer")
 ```
+
+Contract deployment is performed by locally signing the native code-upload,
+manifest-registration, and atomic `CommitContractDeployment` instructions;
+the client does not expose a server-side deployment wrapper.
 
 Verifying-key register/update helpers post the Torii app API payloads directly
 and validate production backends, required `authority` / `private_key` fields,
@@ -229,12 +244,15 @@ client.update_zk_verifying_key({
 ```
 
 ZK-capable assets can be registered and moved through the same transaction
-draft helpers, without shelling out to JavaScript tooling:
+draft helpers, without shelling out to JavaScript tooling. Each
+`*_fee_payment` below is the recommended intent returned by `/v1/fees/quote`
+for that exact unsigned payload:
 
 ```python
 client.register_zk_asset_and_wait(
     chain_id="local",
     authority="<asset-owner>",
+    fee_payment=register_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
     vk_transfer="halo2/ipa:vk_transfer",
@@ -244,6 +262,7 @@ client.register_zk_asset_and_wait(
 client.shield_asset_and_wait(
     chain_id="local",
     authority="<payer>",
+    fee_payment=shield_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
     from_account_id="<payer>",
@@ -263,6 +282,7 @@ prepared_proof = {
 client.zk_transfer_prepared_and_wait(
     chain_id="local",
     authority="<payer>",
+    fee_payment=transfer_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
     inputs=["aa" * 32],
@@ -274,6 +294,7 @@ client.zk_transfer_prepared_and_wait(
 client.unshield_prepared_and_wait(
     chain_id="local",
     authority="<payer>",
+    fee_payment=unshield_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
     to_account_id="<recipient>",
@@ -337,7 +358,9 @@ client.revoke_dataspace_manifest(
 ```
 
 For dataspace-scoped balances, build the concrete asset bucket with
-`compose_asset_id` and submit mutations through the SDK transaction helpers:
+`compose_asset_id` and submit mutations through the SDK transaction helpers.
+`mint_fee_payment` and `transfer_fee_payment` are recommended intents quoted
+for their respective exact unsigned payloads:
 
 ```python
 asset_id = client.compose_asset_id(
@@ -349,6 +372,7 @@ asset_id = client.compose_asset_id(
 client.mint_asset_and_wait(
     chain_id="local",
     authority="<asset-owner>",
+    fee_payment=mint_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_id=asset_id,
     quantity="100",
@@ -357,6 +381,7 @@ client.mint_asset_and_wait(
 client.transfer_assets_and_wait(
     chain_id="local",
     authority="<payer>",
+    fee_payment=transfer_fee_payment,
     private_key_hex="<64-hex-private-key>",
     transfers=[
         {
@@ -383,10 +408,16 @@ register/merge, lifecycle controls, and per-lot metadata updates.
 ```python
 from decimal import Decimal
 
-from iroha_python import TransactionConfig, TransactionDraft
+from iroha_python import TransactionConfig, TransactionDraft, authority_fee_payment
 
 draft = TransactionDraft(
-    TransactionConfig(chain_id="local", authority="<canonical_i105_account_id>")
+    TransactionConfig(
+        chain_id="local",
+        authority="<canonical_i105_account_id>",
+        # The payer and gas bound are fixed before quoting; Torii supplies the
+        # exact charge maxima for this payload.
+        fee_payment=authority_fee_payment(charge_limits=[]),
+    )
 )
 
 draft.register_rwa(
@@ -815,9 +846,19 @@ returns earned/refund XOR fields plus a `SettleVpnLease` instruction skeleton in
 Build transactions with ergonomic helpers that wrap the low-level `Instruction` APIs:
 
 ```python
-from iroha_python import TransactionConfig, TransactionDraft, Ed25519KeyPair
+from iroha_python import (
+    Ed25519KeyPair,
+    TransactionConfig,
+    TransactionDraft,
+    authority_fee_payment,
+)
 
-config = TransactionConfig(chain_id="dev-chain", authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", ttl_ms=120_000)
+config = TransactionConfig(
+    chain_id="dev-chain",
+    authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+    fee_payment=authority_fee_payment(charge_limits=[]),
+    ttl_ms=120_000,
+)
 draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
      .register_account("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", metadata={"role": "admin"}) \
@@ -831,11 +872,69 @@ draft.register_domain("wonderland") \
      .mint_asset_quantity("norito:<asset-id-hex>", 10)
 
 pair = Ed25519KeyPair.from_private_key(bytes([1] * 32))
-envelope = draft.sign_with_keypair(pair)
+envelope, fee_quote = draft.quote_and_sign(client, pair.private_key)
 receipt = client.submit_transaction_envelope(envelope)
 if isinstance(receipt, dict):
     print("Submitted tx:", receipt.get("payload", {}).get("tx_hash"))
 ```
+
+Native instructions and deployed-contract calls can share one ordered, atomic
+batch. Any batch containing a contract call must bind a positive `gas_limit`
+in its fee intent:
+
+```python
+from iroha_python import Instruction, TransactionConfig, TransactionDraft, authority_fee_payment
+
+mixed = TransactionDraft(TransactionConfig(
+    chain_id="dev-chain",
+    authority=authority_account_id,
+    fee_payment=authority_fee_payment(charge_limits=[], gas_limit=500_000),
+))
+mixed.add_instruction(Instruction.register_domain("before"))
+mixed.add_contract_call(
+    contract_address,
+    expected_code_hash_hex,  # Exact 32-byte marked code hash as raw hex.
+    "settle",
+    canonical_argument_record,
+)
+mixed.add_instruction(Instruction.register_domain("after"))
+
+# The signed Batch keeps the exact instruction → call → instruction order.
+envelope = mixed.sign(pair.private_key)
+```
+
+To request sponsorship, bind the draft to one exact program and immutable
+revision before quoting:
+
+```python
+from iroha_python import sponsor_fee_payment
+
+program_id = f"{sponsor_account_id}/wallet_payments"
+requested_fee_payment = sponsor_fee_payment(
+    program_id,
+    3,
+    charge_limits=[],
+)
+
+config = TransactionConfig(
+    chain_id="dev-chain",
+    authority=authority_account_id,
+    fee_payment=requested_fee_payment,
+    ttl_ms=120_000,
+)
+envelope, quote = TransactionDraft(config).register_domain("payments").quote_and_sign(
+    client,
+    pair.private_key,
+)
+```
+
+`quote_and_sign` calls account-signed `POST /v1/fees/quote`, verifies that the
+returned intent retained the payer, exact program/revision, and gas bound, and
+replaces only the charge maxima. Use
+`client.get_fee_sponsor_program(program_id, canonical_auth=auth)` to inspect the
+exact lifecycle record before constructing a sponsored draft. Metadata keys
+named `fee_sponsor`, `gas_asset_id`, or `gas_limit` are retired and rejected;
+sponsor failure never falls back to the authority.
 
 Apply metadata updates or transfer ownership without dropping to raw Norito:
 
@@ -1876,8 +1975,8 @@ no environment variables need to be exported.
 - Offer a `wait_for_transaction_status` helper that polls pipeline status until
   success or failure with configurable intervals, terminal-state handling, and
   callbacks for UI progress indicators.
-- Contracts API wrappers (`/v1/contracts/code`, `/v1/contracts/deploy`,
-  `/v1/contracts/call`, `/v1/contracts/code-bytes/{hash}`), SNS helpers, and
+- Contracts API wrappers (`/v1/contracts/code`, `/v1/contracts/call`,
+  `/v1/contracts/code-bytes/{hash}`), SNS helpers, and
   ZK verifying-key helpers round out the Torii surface needed by PoC operators.
 - Ship optional Norito RPC helpers (`iroha_python.norito_rpc`) so callers can
   invoke Norito-encoded RPC endpoints without vendor-specific transports.

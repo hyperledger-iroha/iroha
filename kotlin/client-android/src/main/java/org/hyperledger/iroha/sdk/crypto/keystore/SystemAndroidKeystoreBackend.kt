@@ -11,6 +11,7 @@ import java.security.KeyStore
 import java.security.ProviderException
 import java.security.cert.Certificate
 import java.security.cert.X509Certificate
+import java.security.spec.NamedParameterSpec
 import org.hyperledger.iroha.sdk.crypto.KeyManagementException
 import org.hyperledger.iroha.sdk.crypto.KeyProviderMetadata
 
@@ -257,11 +258,12 @@ internal class SystemAndroidKeystoreBackend private constructor(
             algorithm: String?,
         ) {
             if (!algorithm.equals("Ed25519", ignoreCase = true)) return
-            val namedParameterSpecClass = Class.forName("java.security.spec.NamedParameterSpec")
-            val namedParameterSpec = namedParameterSpecClass
-                .getConstructor(String::class.java)
-                .newInstance("Ed25519")
-            builder.setAlgorithmParameterSpec(namedParameterSpec as java.security.spec.AlgorithmParameterSpec)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                throw GeneralSecurityException(
+                    "Android Keystore Ed25519 parameters require API 33 or newer"
+                )
+            }
+            builder.setAlgorithmParameterSpec(NamedParameterSpec("Ed25519"))
         }
 
         private fun detectStrongBoxSupport(keyStore: KeyStore): Boolean {

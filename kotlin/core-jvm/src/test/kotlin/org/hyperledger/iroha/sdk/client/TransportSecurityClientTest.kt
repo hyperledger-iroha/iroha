@@ -4,6 +4,7 @@ import java.net.URI
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertIs
 import kotlin.test.assertFailsWith
 import org.hyperledger.iroha.sdk.address.AccountAddress
@@ -22,6 +23,15 @@ import org.hyperledger.iroha.sdk.subscriptions.SubscriptionPlanCreateRequest
 import org.hyperledger.iroha.sdk.subscriptions.SubscriptionToriiException
 
 class TransportSecurityClientTest {
+    @Test
+    fun websocketRequiresExplicitConnector() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            ToriiWebSocketClient.builder().build()
+        }
+
+        assertContains(error.message.orEmpty(), "setWebSocketConnector(...)")
+    }
+
     @Test
     fun noritoRpcRejectsInsecureAuthorizationHeader() {
         val client = NoritoRpcClient.builder()

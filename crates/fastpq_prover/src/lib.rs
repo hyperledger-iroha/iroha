@@ -60,7 +60,9 @@ pub use backend::{
 pub use backend::{
     compute_lookup_grand_product, hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries,
 };
-pub use batch::{OperationKind, PublicInputs, StateTransition, TransitionBatch};
+pub use batch::{
+    OperationKind, PublicInputs, StateTransition, TRANSITION_BATCH_SCHEMA_NAME, TransitionBatch,
+};
 pub use bn254_poseidon::{
     Bn254PoseidonBatchSlice, PendingBn254PoseidonWordBatch, preflight_bn254_poseidon_word_batches,
     try_hash_bn254_poseidon_word_batches, try_submit_bn254_poseidon_word_batches,

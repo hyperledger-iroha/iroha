@@ -30,10 +30,10 @@ use iroha_data_model::{
         orderbook_settlement_escrow_id,
     },
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
 use sorafs_manifest::{
+    XorQuantity,
     orderbook::{
         OrderCancelReasonV1, OrderRequestV1, OrderSideV1, OrderbookSignatureV1,
         decode_order_cancel_v1, decode_order_request_v1, decode_settlement_receipt_v1,
@@ -480,11 +480,19 @@ fn validate_order_policy(
             order.quantity_gib, policy.policy.min_order_gib, policy.policy.max_order_gib
         )));
     }
-    if order.price_per_gib.as_micro() % u128::from(policy.policy.price_tick_micro_xor) != 0 {
+    let price_tick = XorQuantity::try_from_micro(u128::from(policy.policy.price_tick_micro_xor))
+        .map_err(|error| {
+            invalid_parameter(format!("invalid governed order price tick: {error}"))
+        })?;
+    let price_is_aligned = order
+        .price_per_gib
+        .as_quantity()
+        .try_div_decimal_exact(price_tick.as_quantity().as_numeric())
+        .is_ok_and(|quotient| quotient.scale() == 0);
+    if !price_is_aligned {
         return Err(invalid_parameter(format!(
             "order price {} is not aligned to governed tick {} micro-XOR",
-            order.price_per_gib.as_micro(),
-            policy.policy.price_tick_micro_xor
+            order.price_per_gib, policy.policy.price_tick_micro_xor
         )));
     }
     if order.maker_fee_bps > policy.policy.max_maker_fee_bps
@@ -997,13 +1005,8 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
             &escrow_id,
             authority,
             &fee_recipient,
-            Quantity::try_from_numeric(Numeric::new(receipt.provider_credit.as_micro(), 6))
-                .map_err(|error| {
-                    invalid_parameter(format!("provider credit is not a valid quantity: {error}"))
-                })?,
-            Quantity::try_from_numeric(Numeric::new(receipt.fee_amount.as_micro(), 6)).map_err(
-                |error| invalid_parameter(format!("fee amount is not a valid quantity: {error}")),
-            )?,
+            receipt.provider_credit.clone().into_quantity(),
+            receipt.fee_amount.clone().into_quantity(),
         )
         .map_err(|error| {
             invalid_parameter(format!("settlement asset-lock mutation failed: {error}"))
@@ -1312,10 +1315,14 @@ mod tests {
             },
         },
     };
-    use iroha_primitives::{bigint::BigInt, json::Json};
+    use iroha_primitives::{
+        bigint::BigInt,
+        json::Json,
+        numeric::{Numeric, Quantity},
+    };
     use nonzero_ext::nonzero;
     use sorafs_manifest::{
-        deal::XorAmount,
+        XorQuantity,
         orderbook::{
             ByteRangeV1, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1,
             OrderCancelReasonV1, OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1,
@@ -1362,6 +1369,10 @@ mod tests {
             .expect("sign fixture digest")
             .payload()
             .to_vec()
+    }
+
+    fn xor_micro(value: u128) -> XorQuantity {
+        XorQuantity::try_from_micro(value).expect("micro-XOR fixture fits exact XOR quantity")
     }
 
     fn sign_order(mut order: OrderRequestV1, keypair: &KeyPair) -> OrderRequestV1 {
@@ -1416,7 +1427,7 @@ mod tests {
                 order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
-                price_per_gib: XorAmount::from_micro(100),
+                price_per_gib: xor_micro(100),
                 quantity_gib: 10,
                 remaining_gib: 10,
                 owner_account,
@@ -1462,9 +1473,9 @@ mod tests {
                 range: ByteRangeV1 { start, end },
                 chunk_hash: [0xC1; 32],
                 bytes_delivered: length,
-                xor_debited: XorAmount::from_micro(100),
-                provider_credit: XorAmount::from_micro(90),
-                fee_amount: XorAmount::from_micro(10),
+                xor_debited: xor_micro(100),
+                provider_credit: xor_micro(90),
+                fee_amount: xor_micro(10),
                 issued_at_unix: NOW - 1,
                 settlement_signature: empty_signature(keypair),
             },
@@ -1794,7 +1805,12 @@ mod tests {
         candidate.remaining_gib = 1;
         candidates.push(candidate);
         let mut candidate = base.clone();
-        candidate.price_per_gib = XorAmount::from_micro(101);
+        candidate.price_per_gib = xor_micro(101);
+        candidates.push(candidate);
+        let mut candidate = base.clone();
+        candidate.price_per_gib = "0.000100001"
+            .parse()
+            .expect("canonical sub-micro XOR fixture");
         candidates.push(candidate);
         let mut candidate = base.clone();
         candidate.maker_fee_bps = 101;

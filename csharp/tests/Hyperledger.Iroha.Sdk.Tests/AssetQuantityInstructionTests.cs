@@ -13,6 +13,8 @@ public sealed class AssetQuantityInstructionTests
     private const string ChainId = "00000042";
     private const string AccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private const string AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+    private static FeePaymentIntent EmptyAuthorityFeePayment =>
+        FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>());
 
     public static IEnumerable<object[]> InvalidQuantitySpellings()
     {
@@ -50,7 +52,7 @@ public sealed class AssetQuantityInstructionTests
     [MemberData(nameof(InvalidQuantitySpellings))]
     public void EveryAssetInstructionBoundaryRejectsInvalidQuantityText(string quantity)
     {
-        var builder = new TransactionBuilder(ChainId, AccountId);
+        var builder = new TransactionBuilder(ChainId, AccountId, EmptyAuthorityFeePayment);
 
         foreach (var construct in StringConstructionAttempts(builder, quantity))
         {
@@ -75,7 +77,7 @@ public sealed class AssetQuantityInstructionTests
     public void AssetInstructionBoundariesAcceptCanonicalNonNegativeQuantities(string text)
     {
         var quantity = NumericV1.QuantityValue.ParseCanonical(text);
-        var builder = new TransactionBuilder(ChainId, AccountId)
+        var builder = new TransactionBuilder(ChainId, AccountId, EmptyAuthorityFeePayment)
             .TransferAsset(AssetDefinitionId, quantity, AccountId)
             .MintAsset(AssetDefinitionId, quantity, AccountId)
             .BurnAsset(AssetDefinitionId, quantity, AccountId);

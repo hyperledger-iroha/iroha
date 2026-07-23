@@ -50,6 +50,7 @@ use iroha::{
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_crypto::{Algorithm, KeyPair};
+use iroha_torii_shared::{ErrorEnvelope, FeeQuoteResponse};
 use std::num::NonZeroU64;
 use thiserror::Error;
 use tokio::runtime::Runtime;
@@ -69,11 +70,14 @@ fn build_line() -> BuildLine {
     BuildLine::from_bin_name(env!("CARGO_BIN_NAME"))
 }
 
-fn validate_executable_metadata(executable: &Executable, metadata: &Metadata) -> Result<()> {
+fn validate_executable_fee_payment(
+    executable: &Executable,
+    fee_payment: &FeePaymentIntent,
+) -> Result<()> {
     if !executable.requires_transaction_gas_limit() {
         return Ok(());
     }
-    iroha::data_model::transaction::require_transaction_gas_limit(metadata)
+    iroha::data_model::transaction::require_transaction_gas_limit(fee_payment)
         .map(|_| ())
         .map_err(|err| eyre!(format_gas_limit_validation_error(executable, err)))
 }
@@ -85,33 +89,177 @@ fn format_gas_limit_validation_error(
     let executable_label = match executable {
         Executable::Instructions(_) => "instruction transactions",
         Executable::ContractCall(_) => "contract-call transactions",
+        Executable::Batch(_) => "mixed executable batches",
         Executable::Ivm(_) | Executable::IvmProved(_) => "IVM transactions",
     };
     match err {
         iroha::data_model::transaction::TransactionGasLimitError::Missing => {
             if matches!(executable, Executable::Ivm(_) | Executable::IvmProved(_)) {
                 format!(
-                    "{executable_label} require transaction metadata `gas_limit`; pass `--gas-limit <u64>` or `--metadata <json>` with `{{\"gas_limit\": <positive u64>}}`"
+                    "{executable_label} require a signature-bound gas limit; pass `--gas-limit <u64>`"
                 )
             } else {
                 format!(
-                    "{executable_label} require transaction metadata `gas_limit`; pass `--metadata <json>` with `{{\"gas_limit\": <positive u64>}}`"
+                    "{executable_label} require a signature-bound gas limit in the selected fee payment intent"
                 )
             }
-        }
-        iroha::data_model::transaction::TransactionGasLimitError::Invalid(source) => {
-            format!("invalid transaction metadata `gas_limit` for {executable_label}: {source}")
-        }
-        iroha::data_model::transaction::TransactionGasLimitError::Zero => {
-            format!("transaction metadata `gas_limit` for {executable_label} must be positive")
         }
     }
 }
 
-fn apply_cli_gas_limit_override(metadata: &mut Metadata, gas_limit: Option<u64>) {
-    if let Some(gas_limit) = gas_limit {
-        iroha::data_model::transaction::insert_transaction_gas_limit(metadata, gas_limit);
+pub(crate) fn apply_cli_gas_limit_override(
+    fee_payment: FeePaymentIntent,
+    gas_limit: Option<u64>,
+) -> Result<FeePaymentIntent> {
+    let Some(gas_limit) = gas_limit else {
+        return Ok(fee_payment);
+    };
+    let gas_limit =
+        NonZeroU64::new(gas_limit).ok_or_else(|| eyre!("--gas-limit must be greater than zero"))?;
+    Ok(match fee_payment {
+        FeePaymentIntent::Authority(payment) => {
+            FeePaymentIntent::authority(payment.charge_limits, Some(gas_limit))
+        }
+        FeePaymentIntent::Sponsor(payment) => FeePaymentIntent::sponsor(
+            payment.program_id,
+            payment.program_revision,
+            payment.charge_limits,
+            Some(gas_limit),
+        ),
+    })
+}
+
+fn fee_payment_selection_matches(requested: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
+    match (requested, quoted) {
+        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
+            requested.gas_limit == quoted.gas_limit
+        }
+        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
+            requested.program_id == quoted.program_id
+                && requested.program_revision == quoted.program_revision
+                && requested.gas_limit == quoted.gas_limit
+        }
+        _ => false,
     }
+}
+
+fn fee_quote_rejection_message(status: reqwest::StatusCode, body: &[u8]) -> String {
+    let Ok(envelope) = norito::json::from_slice::<ErrorEnvelope>(body) else {
+        let fallback = String::from_utf8_lossy(body);
+        return format!(
+            "fee quote request failed with HTTP {status}: {}",
+            fallback.trim()
+        );
+    };
+
+    let mut message = format!(
+        "fee quote rejected with HTTP {status} [{}]: {}",
+        envelope.code, envelope.message
+    );
+    if let Some(fee) = envelope
+        .details
+        .as_ref()
+        .and_then(|details| details.fee.as_ref())
+    {
+        use std::fmt::Write as _;
+
+        let _ = write!(
+            message,
+            "; fee_code={}; retryable={}",
+            fee.code, fee.retryable
+        );
+        if let Some(program_id) = &fee.program_id {
+            let _ = write!(message, "; program={program_id}");
+        }
+        if let Some(revision) = fee.program_revision {
+            let _ = write!(message, "; revision={revision}");
+        }
+        if let Some(asset_definition_id) = &fee.asset_definition_id {
+            let _ = write!(message, "; asset={asset_definition_id}");
+        }
+        if let Some(required) = &fee.required {
+            let _ = write!(message, "; required={required}");
+        }
+        if let Some(available) = &fee.available {
+            let _ = write!(message, "; available={available}");
+        }
+        if let Some(rule_id) = &fee.rule_id {
+            let _ = write!(message, "; rule={rule_id}");
+        }
+        if let Some(height) = fee.observation_height {
+            let _ = write!(message, "; observation_height={height}");
+        }
+        if let Some(remediation) = &fee.remediation {
+            let _ = write!(message, "; remediation: {remediation}");
+        }
+    }
+    message
+}
+
+pub(crate) fn quote_and_sign_transaction(
+    client: &Client,
+    executable: Executable,
+    requested_fee_payment: FeePaymentIntent,
+    metadata: Metadata,
+) -> Result<(SignedTransaction, FeeQuoteResponse)> {
+    validate_executable_fee_payment(&executable, &requested_fee_payment)?;
+    let mut payload = client
+        .try_build_transaction_payload(executable.clone(), requested_fee_payment.clone(), metadata)
+        .wrap_err("Failed to build exact unsigned transaction payload for fee quoting")?;
+    let response = client
+        .post_fee_quote_response(&payload)
+        .wrap_err("Failed to request an exact transaction fee quote")?;
+    if !response.status().is_success() {
+        return Err(eyre!(fee_quote_rejection_message(
+            response.status(),
+            response.body(),
+        )));
+    }
+    let quote: FeeQuoteResponse = norito::json::from_slice(response.body())
+        .wrap_err("Failed to decode the exact transaction fee quote")?;
+    if !fee_payment_selection_matches(&requested_fee_payment, &quote.intent) {
+        eyre::bail!(
+            "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
+        );
+    }
+    quote
+        .intent
+        .validate()
+        .wrap_err("Fee quote returned an invalid signature-bound payment intent")?;
+    validate_executable_fee_payment(&executable, &quote.intent)?;
+    payload.fee_payment = quote.intent.clone();
+    let transaction = client
+        .try_sign_transaction_payload(payload)
+        .wrap_err("Failed to sign the exact quoted transaction payload")?;
+    Ok((transaction, quote))
+}
+
+fn print_fee_quote_text<C: RunContext + ?Sized>(
+    context: &mut C,
+    quote: &FeeQuoteResponse,
+) -> Result<()> {
+    context.println(format_args!(
+        "fee quote accepted: observation_height={}, ledger_time_ms={}",
+        quote.observation.next_block_height, quote.observation.ledger_time_ms
+    ))?;
+    for component in &quote.components {
+        context.println(format_args!(
+            "  maximum {:?}: {} {}",
+            component.kind, component.max_amount, component.asset_definition_id
+        ))?;
+    }
+    for capacity in &quote.capacities {
+        context.println(format_args!(
+            "  sponsor capacity {}: vault={}, reserve={}, block_remaining={}, program_epoch_remaining={}, beneficiary_epoch_remaining={}",
+            capacity.asset_definition_id,
+            capacity.vault_balance,
+            capacity.reserve_floor,
+            capacity.block_remaining,
+            capacity.program_epoch_remaining,
+            capacity.beneficiary_epoch_remaining,
+        ))?;
+    }
+    Ok(())
 }
 /// Norito JSON derive macros exported for CLI data definitions.
 pub mod json_macros {
@@ -135,6 +283,66 @@ pub(crate) enum TransactionWaitTerminalStatusArg {
     Applied,
     Rejected,
     Expired,
+}
+
+/// Signature-bound source selected for transaction fees.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum FeePayerArg {
+    /// Charge the transaction authority directly.
+    Authority,
+    /// Charge one exact immutable sponsor-program revision.
+    Sponsor,
+}
+
+#[derive(clap::Args, Clone, Debug, Default)]
+struct FeePaymentArgs {
+    /// Required fee source for every submitted transaction.
+    #[arg(long, value_enum, global = true)]
+    fee_payer: Option<FeePayerArg>,
+    /// Exact sponsor program (`<canonical-I105>/<name>`); valid only with `--fee-payer sponsor`.
+    #[arg(long, global = true, value_name = "PROGRAM_ID")]
+    fee_program: Option<String>,
+    /// Exact immutable sponsor-program revision; valid only with `--fee-payer sponsor`.
+    #[arg(long, global = true, value_name = "NONZERO_U64")]
+    fee_program_revision: Option<u64>,
+}
+
+impl FeePaymentArgs {
+    fn selection(&self) -> Result<FeePaymentIntent> {
+        match self.fee_payer {
+            Some(FeePayerArg::Authority) => {
+                if self.fee_program.is_some() || self.fee_program_revision.is_some() {
+                    eyre::bail!(
+                        "--fee-program and --fee-program-revision require `--fee-payer sponsor`"
+                    );
+                }
+                Ok(FeePaymentIntent::authority(Vec::new(), None))
+            }
+            Some(FeePayerArg::Sponsor) => {
+                let program_id = self
+                    .fee_program
+                    .as_deref()
+                    .ok_or_else(|| eyre!("--fee-payer sponsor requires --fee-program"))?
+                    .parse()
+                    .wrap_err("invalid --fee-program")?;
+                let revision = self
+                    .fee_program_revision
+                    .ok_or_else(|| eyre!("--fee-payer sponsor requires --fee-program-revision"))?;
+                if revision == 0 {
+                    eyre::bail!("--fee-program-revision must be greater than zero");
+                }
+                Ok(FeePaymentIntent::sponsor(
+                    program_id,
+                    revision,
+                    Vec::new(),
+                    None,
+                ))
+            }
+            None => eyre::bail!(
+                "transaction submission requires an explicit `--fee-payer authority` or `--fee-payer sponsor --fee-program <id> --fee-program-revision <revision>`"
+            ),
+        }
+    }
 }
 
 impl From<TransactionWaitTerminalStatusArg> for iroha::client::TransactionWaitTerminalStatus {
@@ -223,14 +431,14 @@ struct Args {
     ///
     /// Example usage:
     ///
-    /// `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0`
+    /// `echo "[]" | iroha -io asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0`
     #[arg(short, long)]
     input: bool,
     /// Outputs instructions to stdout without submitting them.
     ///
     /// Example usage:
     ///
-    /// `iroha -o domain register --id "domain" | iroha -io asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha transaction stdin`
+    /// `iroha -o asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha transaction stdin`
     #[arg(short, long)]
     output: bool,
     /// Output format for command responses.
@@ -242,6 +450,9 @@ struct Args {
     /// Enable deterministic machine mode (no startup chatter, strict config loading).
     #[arg(long)]
     machine: bool,
+    /// Required signature-bound fee source for transaction submissions.
+    #[command(flatten)]
+    fee_payment: FeePaymentArgs,
     /// Commands
     #[command(subcommand)]
     command: Command,
@@ -289,6 +500,10 @@ trait RunContext {
     fn config(&self) -> &Config;
 
     fn transaction_metadata(&self) -> Option<&Metadata>;
+
+    fn transaction_fee_payment(&self) -> Result<FeePaymentIntent> {
+        eyre::bail!("this command context has no explicit fee payment selection")
+    }
 
     fn input_instructions(&self) -> bool;
 
@@ -370,6 +585,16 @@ trait RunContext {
         metadata: Metadata,
         wait_for_confirmation: bool,
     ) -> Result<()> {
+        self.submit_with_metadata_and_gas(instructions, metadata, wait_for_confirmation, None)
+    }
+
+    fn submit_with_metadata_and_gas(
+        &mut self,
+        instructions: impl Into<Executable>,
+        metadata: Metadata,
+        wait_for_confirmation: bool,
+        gas_limit: Option<u64>,
+    ) -> Result<()> {
         let executable = instructions.into();
         let executable = match executable {
             Executable::ContractCall(invocation) => {
@@ -396,6 +621,14 @@ trait RunContext {
                 }
                 Executable::IvmProved(proved)
             }
+            Executable::Batch(items) => {
+                if self.input_instructions() || self.output_instructions() {
+                    eyre::bail!(
+                        "Incompatible `--input` `--output` flags with mixed executable batches"
+                    )
+                }
+                Executable::Batch(items)
+            }
             Executable::Instructions(instructions) => {
                 let mut out = instructions.into_vec();
                 if self.input_instructions() {
@@ -410,11 +643,10 @@ trait RunContext {
                 Executable::Instructions(out.into())
             }
         };
-        validate_executable_metadata(&executable, &metadata)?;
+        let fee_payment = apply_cli_gas_limit_override(self.transaction_fee_payment()?, gas_limit)?;
         let client = self.client_from_config();
-        let transaction = client
-            .try_build_transaction(executable, metadata)
-            .wrap_err("Failed to build transaction")?;
+        let (transaction, fee_quote) =
+            quote_and_sign_transaction(&client, executable, fee_payment, metadata)?;
         let i18n = self.i18n().clone();
 
         let err_msg = if cfg!(debug_assertions) {
@@ -447,10 +679,12 @@ trait RunContext {
                 let result = json_utils::json_object(vec![
                     ("hash", json_utils::json_value(&hash)?),
                     ("transaction", json_utils::json_value(&transaction)?),
+                    ("fee_quote", json_utils::json_value(&fee_quote)?),
                 ])?;
                 self.print_data(&result)
             }
             CliOutputFormat::Text => {
+                print_fee_quote_text(self, &fee_quote)?;
                 self.println(confirmation_msg)?;
                 self.println(format!("{}: {}", i18n.t("label.hash"), hash))?;
                 Ok(())
@@ -464,6 +698,7 @@ struct PrintJsonContext<W, E> {
     err_write: E,
     config: Config,
     transaction_metadata: Option<Metadata>,
+    fee_payment: FeePaymentArgs,
     input_instructions: bool,
     output_instructions: bool,
     output_format: CliOutputFormat,
@@ -477,6 +712,10 @@ impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E>
 
     fn transaction_metadata(&self) -> Option<&Metadata> {
         self.transaction_metadata.as_ref()
+    }
+
+    fn transaction_fee_payment(&self) -> Result<FeePaymentIntent> {
+        self.fee_payment.selection()
     }
 
     fn input_instructions(&self) -> bool {
@@ -757,7 +996,7 @@ mod app {
         /// Sora Name Service helpers (registrar + policy tooling)
         #[command(subcommand)]
         Sns(crate::commands::sns::Command),
-        /// Alias helpers (placeholder pipeline)
+        /// Alias resolution and declarative setup helpers
         #[command(subcommand)]
         Alias(crate::commands::alias::Command),
         /// Repo settlement helpers
@@ -1163,6 +1402,7 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         err_write: io::stderr(),
         config,
         transaction_metadata: None,
+        fee_payment: args.fee_payment,
         input_instructions: args.input,
         output_instructions: args.output,
         output_format,
@@ -1813,8 +2053,6 @@ mod domain {
         List(List),
         /// Retrieve details of a specific domain
         Get(Id),
-        /// Register a domain
-        Register(Id),
         /// Unregister a domain
         Unregister(Id),
         /// Transfer ownership of a domain
@@ -1840,13 +2078,6 @@ mod domain {
                         .find(|e| e.id() == &args.id)
                         .ok_or_else(|| eyre!("Domain not found"))?;
                     context.print_data(&entry)
-                }
-                Register(args) => {
-                    let instruction =
-                        iroha::data_model::isi::Register::domain(Domain::new(args.id));
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to register domain")
                 }
                 Unregister(args) => {
                     let instruction = iroha::data_model::isi::Unregister::domain(args.id);
@@ -4683,7 +4914,7 @@ mod multisig {
                 render_multisig_list_all_text(std::slice::from_ref(&entry)).expect("render text");
 
             assert!(rendered.contains("multisig_account_id: "));
-            assert!(rendered.contains(&format!("proposal_id: {}", "a".repeat(64))));
+            assert!(rendered.contains(&format!("proposal_id: {:0>64}", "a")));
             assert!(rendered.contains("status: COLLECTING_SIGNATURES"));
             assert!(rendered.contains("operation_type: TRANSFER"));
             assert!(rendered.contains("intent: {\"sequence\":\"a\"}"));
@@ -4810,7 +5041,7 @@ mod transaction {
     use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, name::Name};
     use std::{
         sync::{
-            LazyLock, Mutex,
+            Arc, LazyLock, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
         thread,
@@ -4831,6 +5062,8 @@ mod transaction {
         Ivm(Ivm),
         /// Send a transaction using JSON input from stdin
         Stdin(Stdin),
+        /// Build and sign stdin instructions locally, then print their exact framed size without submitting
+        SignedSize(SignedSize),
     }
 
     impl Run for Command {
@@ -4842,6 +5075,7 @@ mod transaction {
                 Ping(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
                 Stdin(cmd) => cmd.run(context),
+                SignedSize(cmd) => cmd.run(context),
             }
         }
     }
@@ -4851,8 +5085,20 @@ mod transaction {
         /// Hash of the signed transaction to inspect
         #[arg(short('H'), long)]
         pub hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
+        /// Explicit status routing scope. Omit with `--wait`, which selects the safe scope for
+        /// the requested terminal states.
+        #[arg(long, value_enum, conflicts_with = "wait")]
+        pub scope: Option<StatusScope>,
         #[command(flatten)]
         pub wait: TransactionWaitArgs,
+    }
+
+    #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum StatusScope {
+        /// Query only the configured Torii peer.
+        Local,
+        /// Permit Torii's global/fanout status lookup.
+        Global,
     }
 
     impl Run for Status {
@@ -4862,9 +5108,15 @@ mod transaction {
                 let status = crate::wait_for_transaction_status(&client, self.hash, &self.wait)?;
                 context.print_data(&status)
             } else {
-                let status = client
-                    .get_transaction_status_response(self.hash)?
-                    .ok_or_else(|| eyre!("Transaction status not found"))?;
+                let status = match self.scope.unwrap_or(StatusScope::Local) {
+                    StatusScope::Local => {
+                        client.get_transaction_status_response_local(self.hash)?
+                    }
+                    StatusScope::Global => {
+                        client.get_transaction_status_response_auto(self.hash)?
+                    }
+                }
+                .ok_or_else(|| eyre!("Transaction status not found"))?;
                 context.print_data(&status)
             }
         }
@@ -5040,13 +5292,18 @@ mod transaction {
                 };
                 let client = Client::new(context.config().clone());
                 let metadata = context.transaction_metadata().cloned().unwrap_or_default();
+                let fee_payment = context.transaction_fee_payment()?;
                 let i18n = context.i18n().clone();
                 let base_msg = msg;
+                let first_quote = Arc::new(Mutex::new(None));
+                let first_quote_for_workers = Arc::clone(&first_quote);
                 let result = dispatch_ping_work(count, parallel, move || {
                     let client = client.clone();
                     let metadata = metadata.clone();
+                    let fee_payment = fee_payment.clone();
                     let i18n = i18n.clone();
                     let base_msg = base_msg.clone();
+                    let first_quote = Arc::clone(&first_quote_for_workers);
                     move |index| {
                         let message = ping_message(&base_msg, index, count, no_index);
                         let instruction = Log::new(log_level, message);
@@ -5054,9 +5311,21 @@ mod transaction {
                         if let Some(seed) = ping_seed {
                             let _ = maybe_add_ping_nonce(&mut metadata, seed, index);
                         }
-                        let transaction = client
-                            .try_build_transaction([instruction], metadata)
-                            .wrap_err("Failed to build ping transaction")?;
+                        let executable = Executable::Instructions(
+                            vec![InstructionBox::from(instruction)].into(),
+                        );
+                        let (transaction, quote) = quote_and_sign_transaction(
+                            &client,
+                            executable,
+                            fee_payment.clone(),
+                            metadata,
+                        )
+                        .wrap_err("Failed to quote and sign ping transaction")?;
+                        let mut quote_slot = first_quote.lock().expect("lock");
+                        if quote_slot.is_none() {
+                            *quote_slot = Some(quote);
+                        }
+                        drop(quote_slot);
                         let submit = if no_wait {
                             client.submit_transaction(&transaction).map(|_| ())
                         } else {
@@ -5077,6 +5346,9 @@ mod transaction {
                         })
                     }
                 });
+                if let Some(quote) = first_quote.lock().expect("lock").as_ref() {
+                    print_fee_quote_text(context, quote)?;
+                }
                 let submitted = result.attempted.saturating_sub(result.failed);
                 if no_wait {
                     context.println(format!(
@@ -5186,7 +5458,7 @@ mod transaction {
         /// Path to the IVM bytecode file. If omitted, reads from stdin
         #[arg(short, long)]
         path: Option<PathBuf>,
-        /// Transaction gas limit to attach as metadata for this IVM submit
+        /// Signature-bound transaction gas limit for this IVM submit.
         #[arg(long, value_name("U64"))]
         gas_limit: Option<u64>,
     }
@@ -5201,11 +5473,15 @@ mod transaction {
                 bytes_from_stdin()
                     .wrap_err("Failed to read IVM bytecode from stdin into the buffer")?
             };
-            let mut metadata = context.transaction_metadata().cloned().unwrap_or_default();
-            apply_cli_gas_limit_override(&mut metadata, gas_limit);
+            let metadata = context.transaction_metadata().cloned().unwrap_or_default();
 
             context
-                .submit_with_metadata(IvmBytecode::from_compiled(blob), metadata, true)
+                .submit_with_metadata_and_gas(
+                    IvmBytecode::from_compiled(blob),
+                    metadata,
+                    true,
+                    gas_limit,
+                )
                 .wrap_err("Failed to submit an IVM transaction")
         }
     }
@@ -5219,6 +5495,50 @@ mod transaction {
             context
                 .finish(instructions)
                 .wrap_err("Failed to submit parsed instructions")
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct SignedSize;
+
+    impl Run for SignedSize {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            if context.output_instructions() {
+                eyre::bail!("Incompatible `--output` flag with `iroha tx signed-size`");
+            }
+            let instructions: Vec<InstructionBox> = parse_json_stdin(context)?;
+            let metadata = context.transaction_metadata().cloned().unwrap_or_default();
+            let fee_payment = context.transaction_fee_payment()?;
+            let client = context.client_from_config();
+            let executable = Executable::Instructions(instructions.into());
+            let (transaction, fee_quote) =
+                quote_and_sign_transaction(&client, executable, fee_payment, metadata)
+                    .wrap_err("Failed to quote and sign transaction for exact size measurement")?;
+            let signed_transaction_bytes = u64::try_from(
+                norito::to_bytes(&transaction)
+                    .wrap_err("Failed to encode signed transaction for exact size measurement")?
+                    .len(),
+            )
+            .unwrap_or(u64::MAX);
+
+            match context.output_format() {
+                CliOutputFormat::Json => {
+                    let result = json_utils::json_object(vec![
+                        (
+                            "signed_transaction_bytes",
+                            json_utils::json_value(&signed_transaction_bytes)?,
+                        ),
+                        ("fee_quote", json_utils::json_value(&fee_quote)?),
+                    ])?;
+                    context.print_data(&result)
+                }
+                CliOutputFormat::Text => {
+                    print_fee_quote_text(context, &fee_quote)?;
+                    context.println(format_args!(
+                        "signed_transaction_bytes: {signed_transaction_bytes}"
+                    ))
+                }
+            }
         }
     }
 }
@@ -5652,11 +5972,11 @@ mod trigger {
             let executable =
                 Executable::Instructions(vec![InstructionBox::from(instruction)].into());
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
-            validate_executable_metadata(&executable, &metadata)?;
+            let fee_payment = context.transaction_fee_payment()?;
             let client = context.client_from_config();
-            let transaction = client
-                .try_build_transaction(executable, metadata)
-                .wrap_err("Failed to build trigger execution transaction")?;
+            let (transaction, fee_quote) =
+                quote_and_sign_transaction(&client, executable, fee_payment, metadata)
+                    .wrap_err("Failed to quote and sign trigger execution transaction")?;
             let hash = transaction.hash();
             client
                 .submit_transaction(&transaction)
@@ -5666,6 +5986,7 @@ mod trigger {
                 ("hash", json_utils::json_value(&hash)?),
                 ("trigger_id", json_utils::json_value(&self.id)?),
                 ("transaction", json_utils::json_value(&transaction)?),
+                ("fee_quote", json_utils::json_value(&fee_quote)?),
                 ("trace_requested", json_utils::json_value(&self.trace)?),
             ];
             if self.wait.is_enabled() {
@@ -6391,6 +6712,11 @@ mod trigger {
                 outer.insert("IvmProved".into(), Value::Object(inner));
                 Value::Object(outer)
             }
+            Executable::Batch(items) => {
+                let mut outer = BTreeMap::<String, Value>::new();
+                outer.insert("Batch".into(), to_value(items)?);
+                Value::Object(outer)
+            }
         };
         map.insert("executable".into(), executable_value);
 
@@ -7096,14 +7422,17 @@ mod repo {
 }
 
 mod settlement {
+    use std::collections::BTreeSet;
+
     use super::*;
     use clap::ValueEnum;
     use iroha::data_model::{
+        domain::DomainId,
         isi::{
             InstructionBox,
             settlement::{
-                DvpIsi, FxCorridorPolicy, PvpIsi, SetFxCorridorPolicy, SettleFxCorridor,
-                SettlementAtomicity, SettlementExecutionOrder, SettlementId,
+                DvpIsi, FxCorridorPolicy, FxCorridorSource, PvpIsi, SetFxCorridorPolicy,
+                SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
                 SettlementInstructionBox, SettlementLeg, SettlementPlan,
             },
         },
@@ -7127,6 +7456,14 @@ mod settlement {
         GetFxCorridorPolicy(GetFxCorridorPolicyArgs),
         /// Read the complete governed native FX corridor policy registry
         ListFxCorridorPolicies,
+    }
+
+    #[derive(Clone, Copy, Debug, ValueEnum)]
+    pub enum FxCorridorSourceMode {
+        /// Debit one fixed policy account; that account must authorize settlement.
+        FixedAccount,
+        /// Debit the signed transaction authority without a corridor-settle grant.
+        TransactionAuthority,
     }
 
     impl Run for Command {
@@ -7158,9 +7495,12 @@ mod settlement {
         /// Private dataspace holding the source balance
         #[arg(long)]
         pub source_dataspace: DataSpaceId,
-        /// Fixed account funding the source leg
+        /// Select the source-account resolution policy.
+        #[arg(long, value_enum)]
+        pub source_mode: FxCorridorSourceMode,
+        /// Fixed account funding the source leg (required only in fixed-account mode).
         #[arg(long)]
-        pub source_account: String,
+        pub source_account: Option<String>,
         /// Source-currency asset definition
         #[arg(long)]
         pub source_asset: AssetDefinitionId,
@@ -7176,6 +7516,13 @@ mod settlement {
         /// Destination-currency asset definition
         #[arg(long)]
         pub destination_asset: AssetDefinitionId,
+        /// Allowed destination account-alias domain (repeat for each FI domain).
+        #[arg(
+            long = "allowed-destination-alias-domain",
+            required = true,
+            value_parser = parse_domain_id_literal
+        )]
+        pub allowed_destination_alias_domains: Vec<DomainId>,
         /// Destination/source rate numerator
         #[arg(long)]
         pub rate_numerator: u64,
@@ -7205,12 +7552,42 @@ mod settlement {
 
     impl SetFxCorridorPolicyArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let source = match (self.source_mode, self.source_account.as_deref()) {
+                (FxCorridorSourceMode::FixedAccount, Some(account)) => {
+                    FxCorridorSource::FixedAccount(
+                        resolve_account_id(context, account)
+                            .wrap_err("failed to resolve --source-account")?,
+                    )
+                }
+                (FxCorridorSourceMode::FixedAccount, None) => {
+                    return Err(eyre!(
+                        "--source-account is required with --source-mode fixed-account"
+                    ));
+                }
+                (FxCorridorSourceMode::TransactionAuthority, None) => {
+                    FxCorridorSource::TransactionAuthority
+                }
+                (FxCorridorSourceMode::TransactionAuthority, Some(_)) => {
+                    return Err(eyre!(
+                        "--source-account is not allowed with --source-mode transaction-authority"
+                    ));
+                }
+            };
+            let allowed_domain_count = self.allowed_destination_alias_domains.len();
+            let allowed_destination_alias_domains = self
+                .allowed_destination_alias_domains
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            if allowed_destination_alias_domains.len() != allowed_domain_count {
+                return Err(eyre!(
+                    "--allowed-destination-alias-domain values must be unique"
+                ));
+            }
             let policy = FxCorridorPolicy {
                 policy_id: self.policy_id,
                 revision: self.revision,
                 source_dataspace: self.source_dataspace,
-                source_account: resolve_account_id(context, &self.source_account)
-                    .wrap_err("failed to resolve --source-account")?,
+                source,
                 source_asset_definition_id: self.source_asset,
                 source_sink: resolve_account_id(context, &self.source_sink)
                     .wrap_err("failed to resolve --source-sink")?,
@@ -7218,6 +7595,7 @@ mod settlement {
                 destination_reserve: resolve_account_id(context, &self.destination_reserve)
                     .wrap_err("failed to resolve --destination-reserve")?,
                 destination_asset_definition_id: self.destination_asset,
+                allowed_destination_alias_domains,
                 rate_numerator: self.rate_numerator,
                 rate_denominator: self.rate_denominator,
                 enabled: !self.disabled,
@@ -8637,6 +9015,37 @@ mod tests {
         quantity: iroha_primitives::numeric::Quantity,
     }
 
+    #[derive(clap::Parser, Debug)]
+    struct FxCorridorDomainParserHarness {
+        #[arg(
+            long = "allowed-destination-alias-domain",
+            required = true,
+            value_parser = parse_domain_id_literal
+        )]
+        domains: Vec<DomainId>,
+    }
+
+    #[test]
+    fn fx_corridor_domain_arguments_use_the_canonical_domain_parser() {
+        let domain = DomainId::try_new("hbl", "sbp").expect("canonical domain");
+        let literal = domain.to_string();
+        let parsed = FxCorridorDomainParserHarness::try_parse_from([
+            "fx-corridor-domain-parser",
+            "--allowed-destination-alias-domain",
+            literal.as_str(),
+        ])
+        .expect("canonical fully-qualified domain must parse");
+        assert_eq!(parsed.domains, vec![domain]);
+
+        let error = FxCorridorDomainParserHarness::try_parse_from([
+            "fx-corridor-domain-parser",
+            "--allowed-destination-alias-domain",
+            "hbl",
+        ])
+        .expect_err("a domain without its dataspace must fail during argument parsing");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
     #[test]
     fn cli_quantities_accept_canonical_boundaries_and_reject_signed_or_oversized_values() {
         for value in [
@@ -8673,6 +9082,7 @@ mod tests {
             err_write: Vec::new(),
             config: fallback_config(),
             transaction_metadata: None,
+            fee_payment: FeePaymentArgs::default(),
             input_instructions: false,
             output_instructions: false,
             output_format,
@@ -8743,6 +9153,22 @@ mod tests {
         assert!(
             Args::try_parse_from(["iroha", "contracts", "dev", "doctor"]).is_err(),
             "the retired plural alias must not remain as a compatibility surface"
+        );
+    }
+
+    #[test]
+    fn raw_domain_registration_command_is_not_parseable() {
+        assert!(
+            Args::try_parse_from([
+                "iroha",
+                "ledger",
+                "domain",
+                "register",
+                "--id",
+                "planned.universal",
+            ])
+            .is_err(),
+            "ordinary domain creation must use `app alias setup`"
         );
     }
 
@@ -8981,6 +9407,38 @@ mod tests {
 
         assert!(!status.wait.wait);
         assert!(status.wait.is_enabled());
+        assert_eq!(status.scope, None);
+    }
+
+    #[test]
+    fn tx_status_scope_is_explicit_and_cannot_override_wait_routing() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "--scope",
+            "local",
+        ])
+        .expect("parse explicitly local tx status");
+        let Command::Tx(transaction::Command::Status(status)) = args.command else {
+            panic!("expected tx status command");
+        };
+        assert_eq!(status.scope, Some(transaction::StatusScope::Local));
+
+        let error = Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "--scope",
+            "global",
+            "--wait",
+        ])
+        .expect_err("explicit scope must not override transaction wait routing");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -9078,6 +9536,25 @@ mod tests {
     }
 
     #[test]
+    fn signed_transaction_size_cli_parses_canonical_and_short_paths() {
+        let canonical = Args::try_parse_from(["iroha", "ledger", "transaction", "signed-size"])
+            .expect("canonical signed-size command should parse");
+        assert!(matches!(
+            canonical.command,
+            Command::Ledger(ledger::Command::Transaction(
+                transaction::Command::SignedSize(_)
+            ))
+        ));
+
+        let short = Args::try_parse_from(["iroha", "tx", "signed-size"])
+            .expect("short signed-size command should parse");
+        assert!(matches!(
+            short.command,
+            Command::Tx(transaction::Command::SignedSize(_))
+        ));
+    }
+
+    #[test]
     fn printjsoncontext_routes_text_to_stderr_in_json_mode() {
         let mut ctx = test_context(CliOutputFormat::Json);
         ctx.println("hello").expect("println");
@@ -9130,8 +9607,10 @@ mod tests {
             "write-canary",
             "--alias-prefix",
             "rollout",
-            "--gas-asset-id",
+            "--faucet-asset-id",
             "asset",
+            "--onboarding-token-file",
+            "/tmp/taira-onboarding.token",
             "--write-config",
             "/tmp/taira-canary-client.toml",
             "--json",
@@ -9142,7 +9621,11 @@ mod tests {
         };
         assert_eq!(cmd.public_root, "https://taira.sora.org");
         assert_eq!(cmd.alias_prefix, "rollout");
-        assert_eq!(cmd.gas_asset_id, "asset");
+        assert_eq!(cmd.faucet_asset_id, "asset");
+        assert_eq!(
+            cmd.onboarding_token_file,
+            std::path::PathBuf::from("/tmp/taira-onboarding.token")
+        );
         assert_eq!(
             cmd.write_config.as_deref(),
             Some(std::path::Path::new("/tmp/taira-canary-client.toml"))
@@ -9410,75 +9893,63 @@ mod tests {
         assert_eq!(processed, 0);
     }
 
-    fn metadata_with_gas_limit(limit: u64) -> Metadata {
-        let mut metadata = Metadata::default();
-        iroha::data_model::transaction::insert_transaction_gas_limit(&mut metadata, limit);
-        metadata
+    fn authority_fee_payment_with_gas(limit: u64) -> FeePaymentIntent {
+        FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
     }
 
     #[test]
-    fn validate_executable_metadata_accepts_positive_ivm_gas_limit() {
+    fn validate_executable_fee_payment_accepts_positive_ivm_gas_limit() {
         let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
-        let metadata = metadata_with_gas_limit(42);
-        validate_executable_metadata(&executable, &metadata).expect("gas_limit should validate");
+        let fee_payment = authority_fee_payment_with_gas(42);
+        validate_executable_fee_payment(&executable, &fee_payment)
+            .expect("gas limit should validate");
     }
 
     #[test]
-    fn validate_executable_metadata_rejects_missing_ivm_gas_limit() {
+    fn validate_executable_fee_payment_rejects_missing_ivm_gas_limit() {
         let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
-        let err = validate_executable_metadata(&executable, &Metadata::default())
-            .expect_err("missing gas_limit must fail");
+        let err = validate_executable_fee_payment(
+            &executable,
+            &FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("missing gas limit must fail");
         assert!(err.to_string().contains("IVM transactions require"));
         assert!(err.to_string().contains("--gas-limit <u64>"));
-        assert!(err.to_string().contains("gas_limit"));
     }
 
     #[test]
-    fn validate_executable_metadata_rejects_non_numeric_ivm_gas_limit() {
-        let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            iroha::data_model::transaction::transaction_gas_limit_metadata_key().clone(),
-            iroha_primitives::json::Json::from("oops"),
-        );
-        let err = validate_executable_metadata(&executable, &metadata)
-            .expect_err("non-numeric gas_limit must fail");
-        assert!(
-            err.to_string()
-                .contains("invalid transaction metadata `gas_limit`")
-        );
+    fn apply_cli_gas_limit_override_rejects_zero() {
+        let err =
+            apply_cli_gas_limit_override(FeePaymentIntent::authority(Vec::new(), None), Some(0))
+                .expect_err("zero gas limit must fail");
+        assert!(err.to_string().contains("greater than zero"));
     }
 
     #[test]
-    fn validate_executable_metadata_rejects_zero_ivm_gas_limit() {
-        let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
-        let metadata = metadata_with_gas_limit(0);
-        let err = validate_executable_metadata(&executable, &metadata)
-            .expect_err("zero gas_limit must fail");
-        assert!(err.to_string().contains("must be positive"));
-    }
-
-    #[test]
-    fn validate_executable_metadata_skips_instruction_transactions() {
+    fn validate_executable_fee_payment_skips_instruction_transactions() {
         let executable = Executable::Instructions(Vec::<InstructionBox>::new().into());
-        validate_executable_metadata(&executable, &Metadata::default())
-            .expect("plain instructions should not require gas_limit");
+        validate_executable_fee_payment(
+            &executable,
+            &FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect("plain instructions should not require gas_limit");
     }
 
     #[test]
-    fn validate_executable_metadata_accepts_positive_ivm_proved_gas_limit() {
+    fn validate_executable_fee_payment_accepts_positive_ivm_proved_gas_limit() {
         let executable = Executable::IvmProved(iroha::data_model::transaction::IvmProved {
             bytecode: IvmBytecode::from_compiled(vec![0x00]),
             overlay: Vec::<InstructionBox>::new().into(),
             events_commitment: Hash::new(b"events"),
             gas_policy_commitment: Hash::new(b"gas"),
         });
-        let metadata = metadata_with_gas_limit(42);
-        validate_executable_metadata(&executable, &metadata).expect("gas_limit should validate");
+        let fee_payment = authority_fee_payment_with_gas(42);
+        validate_executable_fee_payment(&executable, &fee_payment)
+            .expect("gas limit should validate");
     }
 
     #[test]
-    fn validate_executable_metadata_rejects_missing_contract_call_gas_limit() {
+    fn validate_executable_fee_payment_rejects_missing_contract_call_gas_limit() {
         let executable = Executable::ContractCall(
             iroha::data_model::transaction::executable::ContractInvocation {
                 contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
@@ -9489,8 +9960,11 @@ mod tests {
                 arguments: None,
             },
         );
-        let err = validate_executable_metadata(&executable, &Metadata::default())
-            .expect_err("missing gas_limit must fail");
+        let err = validate_executable_fee_payment(
+            &executable,
+            &FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("missing gas limit must fail");
         assert!(
             err.to_string()
                 .contains("contract-call transactions require")
@@ -9499,12 +9973,83 @@ mod tests {
     }
 
     #[test]
-    fn apply_cli_gas_limit_override_sets_and_replaces_metadata_value() {
-        let mut metadata = metadata_with_gas_limit(10);
-        apply_cli_gas_limit_override(&mut metadata, Some(42));
-        let gas_limit = iroha::data_model::transaction::require_transaction_gas_limit(&metadata)
-            .expect("gas_limit should be present");
+    fn apply_cli_gas_limit_override_sets_and_replaces_signed_value() {
+        let fee_payment = authority_fee_payment_with_gas(10);
+        let fee_payment = apply_cli_gas_limit_override(fee_payment, Some(42)).unwrap();
+        let gas_limit = iroha::data_model::transaction::require_transaction_gas_limit(&fee_payment)
+            .expect("gas limit should be present");
         assert_eq!(gas_limit, 42);
+    }
+
+    #[test]
+    fn fee_payment_args_require_explicit_payer_and_exact_sponsor_revision() {
+        assert!(FeePaymentArgs::default().selection().is_err());
+        let authority = FeePaymentArgs {
+            fee_payer: Some(FeePayerArg::Authority),
+            ..FeePaymentArgs::default()
+        }
+        .selection()
+        .expect("authority selection");
+        assert!(matches!(authority, FeePaymentIntent::Authority(_)));
+
+        let missing = FeePaymentArgs {
+            fee_payer: Some(FeePayerArg::Sponsor),
+            ..FeePaymentArgs::default()
+        };
+        assert!(missing.selection().is_err());
+    }
+
+    #[test]
+    fn fee_quote_may_replace_limits_but_not_payer_or_gas_bound() {
+        use iroha::data_model::{
+            asset::AssetDefinitionId,
+            nexus::FeeSponsorProgramId,
+            transaction::{FeeChargeKind, FeeChargeLimit},
+        };
+        use iroha_primitives::numeric::Quantity;
+
+        let requested = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(42));
+        let quoted = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
+                    "rose".parse().expect("name"),
+                ),
+                Quantity::try_from(1_u64).expect("quantity"),
+            )],
+            NonZeroU64::new(42),
+        );
+        assert!(fee_payment_selection_matches(&requested, &quoted));
+
+        let sponsor = FeeSponsorProgramId::new(
+            AccountId::new(fixture_key_pair(7).public_key().clone()),
+            "default".parse().expect("program name"),
+        );
+        let wrong_payer = FeePaymentIntent::sponsor(sponsor, 1, Vec::new(), NonZeroU64::new(42));
+        assert!(!fee_payment_selection_matches(&requested, &wrong_payer));
+        let wrong_gas = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(41));
+        assert!(!fee_payment_selection_matches(&requested, &wrong_gas));
+    }
+
+    #[test]
+    fn fee_quote_rejection_surfaces_capacity_and_remediation() {
+        let body = br#"{
+            "code":"fee_payment_rejected",
+            "message":"program capacity exhausted",
+            "details":{"fee":{
+                "code":"program_block_limit_exceeded",
+                "retryable":true,
+                "required":"12",
+                "available":"7",
+                "remediation":"retry in the next block"
+            }}
+        }"#;
+        let message = fee_quote_rejection_message(reqwest::StatusCode::CONFLICT, body);
+        assert!(message.contains("program_block_limit_exceeded"));
+        assert!(message.contains("required=12"));
+        assert!(message.contains("available=7"));
+        assert!(message.contains("retry in the next block"));
     }
 
     #[test]
@@ -9804,6 +10349,7 @@ transaction_status_timeout = "77s"
             Executable::ContractCall(_) => panic!("expected instructions"),
             Executable::Ivm(_) => panic!("expected instructions"),
             Executable::IvmProved(_) => panic!("expected instructions"),
+            Executable::Batch(_) => panic!("expected instructions"),
         };
         assert_eq!(instructions.len(), 1);
         let log = instructions[0]

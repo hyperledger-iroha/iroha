@@ -712,29 +712,6 @@ invocations (`GOV_SUBMIT`, `GOV_FETCH`, `ISO_MESSAGE_KIND`, `ISO_MESSAGE_ID`, po
 interval overrides, and the required Torii/AUTHORITY/PRIVATE_KEY_HEX triplet) so the same
 scripts can be dropped into staging rehearals or release workflows without bespoke glue.
 
-### Contract deployment recipe (JS-06)
-
-JS-06 also requires a deterministic way to publish bytecode without rewriting
-curl invocations. The `javascript/iroha_js/recipes/contracts.mjs` helper reads
-bytecode from `CONTRACT_CODE_PATH`, requires a stable `CONTRACT_ALIAS`, and
-runs the alias-first `/v1/contracts/deploy` flow. Supply the credentials and
-alias context via:
-
-```
-TORII_URL=https://torii.devnet.example \
-AUTHORITY=<i105-account-id> \
-PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
-CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
-CONTRACT_ALIAS=demo_contract::universal \
-node javascript/iroha_js/recipes/contracts.mjs
-```
-
-Set `CONTRACT_LEASE_EXPIRY_MS` when you need a leased alias binding for a
-rehearsal environment. `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` propagate directly
-to `ToriiClient`, and private keys are
-validated whether you pass `PRIVATE_KEY=ed25519:<hex>` or a raw `PRIVATE_KEY_HEX` string, so
-the script can run inside CI without bespoke wrappers.
-
 ## Sumeragi availability telemetry
 
 Reliable broadcast (RBC) remains an internal Sumeragi v2 data-availability

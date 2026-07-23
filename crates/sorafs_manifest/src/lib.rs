@@ -27,6 +27,7 @@ pub mod gateway_fixture;
 pub mod governance;
 pub mod hedging;
 pub mod hosts;
+#[cfg(feature = "pqc")]
 pub mod hybrid_envelope;
 pub mod manifest_capabilities;
 pub mod orderbook;
@@ -371,7 +372,7 @@ pub use pricing::signed::{
 pub use pricing::{
     BondPolicyError, BondPolicyV1, CreditPolicyError, CreditPolicyV1, MAX_PRICING_NONCE_SAMPLES,
     MAX_PRICING_NOTES_LEN, MAX_PRICING_TIER_ID_LEN, MAX_PRICING_TIERS, MicropaymentDecision,
-    PRICING_MANIFEST_VERSION_V1, PricingCalculationError, PricingManifestError, PricingManifestV1,
+    PRICING_MANIFEST_VERSION_V1, PricingManifestError, PricingManifestV1,
     PricingMicropaymentEvaluationError, PricingMicropaymentPolicyError,
     PricingMicropaymentPolicyV1, PricingNonceJsonError, PricingTierError, PricingTierV1,
 };

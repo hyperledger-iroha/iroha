@@ -130,6 +130,9 @@ class UrlConnectionTransportExecutor(
         val url = request.uri.toURL()
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = request.method
+        // Canonical signatures bind the original URI, and onboarding tokens must never be
+        // forwarded to a redirect target by the platform HTTP stack.
+        connection.instanceFollowRedirects = false
         connection.doInput = true
         val timeout = request.timeout
         val connectMs = toMillis(timeout ?: connectTimeout, connection.connectTimeout)

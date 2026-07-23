@@ -133,12 +133,14 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
             .executed_block_wire_hash()
             .expect("hash exact bridge fixture block wire"),
     );
+    let round = ConsensusRound {
+        context_id: context.id(),
+        height: 1,
+        view: 0,
+    };
     let mut commit_qc = QuorumCertificate {
-        round: ConsensusRound {
-            context_id: context.id(),
-            height: 1,
-            view: 0,
-        },
+        round,
+        proposal_round: round,
         phase: GlobalPhase::Commit,
         subject,
         execution_commitment,

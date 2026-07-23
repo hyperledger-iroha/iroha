@@ -76,6 +76,38 @@ public final class TransactionPayloadFixtureExporter {
       if (!fixture.isDecodable()) {
         throw new IllegalStateException(fixture.name() + ": fixture missing structured payload");
       }
+      if ("ivm_transfer".equals(fixture.name())) {
+        final String payloadBase64 = requireFixtureText(map, "payload_base64");
+        final String payloadHashHex = requireFixtureText(map, "payload_hash");
+        final String signedBase64 = requireFixtureText(map, "signed_base64");
+        final String signedHashHex = requireFixtureText(map, "signed_hash");
+        final byte[] encoded = decodeCanonicalBase64(payloadBase64, "payload_base64");
+        final byte[] signedBytes = decodeCanonicalBase64(signedBase64, "signed_base64");
+        final String encodedFile = fixture.name() + ".norito";
+        if (!payloadHashHex.equals(hex(IrohaHash.prehash(encoded)))) {
+          throw new IllegalStateException(fixture.name() + ": legacy payload hash drift");
+        }
+        if (!encodedFiles.add(encodedFile)
+            || !payloadHashes.add(payloadHashHex)
+            || !payloadBytes.add(ByteBuffer.wrap(encoded).asReadOnlyBuffer())
+            || !signedHashes.add(signedHashHex)
+            || !signedPayloadBytes.add(ByteBuffer.wrap(signedBytes).asReadOnlyBuffer())) {
+          throw new IllegalStateException(fixture.name() + ": duplicate legacy fixture identity");
+        }
+        pendingPaths.add(outputDir.resolve(encodedFile));
+        pendingPayloads.add(encoded);
+        manifestFixtures.add(
+            manifestEntry(
+                fixture,
+                encodedFile,
+                encoded.length,
+                payloadBase64,
+                payloadHashHex,
+                signedBase64,
+                signedHashHex,
+                signedBytes.length));
+        continue;
+      }
       final TransactionPayload payload = fixture.toPayload();
       final byte[] encoded = adapter.encodeTransaction(payload);
       final byte[] payloadHash = IrohaHash.prehash(encoded);
@@ -134,6 +166,27 @@ public final class TransactionPayloadFixtureExporter {
         outputDir.resolve("transaction_fixtures.manifest.json"),
         toPrettyJson(manifest) + "\n",
         StandardCharsets.UTF_8);
+  }
+
+  private static String requireFixtureText(
+      final Map<String, Object> fixture, final String field) {
+    final Object value = fixture.get(field);
+    if (!(value instanceof String) || ((String) value).isEmpty()) {
+      throw new IllegalStateException("legacy fixture requires " + field);
+    }
+    return (String) value;
+  }
+
+  private static byte[] decodeCanonicalBase64(final String value, final String field) {
+    try {
+      final byte[] decoded = Base64.getDecoder().decode(value);
+      if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
+        throw new IllegalStateException(field + " must use canonical base64");
+      }
+      return decoded;
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalStateException(field + " must contain base64", ex);
+    }
   }
 
   private static void rewriteFixtureEntry(

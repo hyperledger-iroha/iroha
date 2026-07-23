@@ -13,8 +13,6 @@ fn main() {
 
     // Your code goes here…
 
-    domain_registration_test(config.clone())
-        .expect("Domain registration example is expected to work correctly");
     account_definition_test().expect("Account definition example is expected to work correctly");
     account_registration_test(config.clone())
         .expect("Account registration example is expected to work correctly");
@@ -26,50 +24,6 @@ fn main() {
         .expect("Asset burning example is expected to work correctly");
     // output_visualising_test(&config).expect(msg: "Visualising outputs example is expected to work correctly");
     println!("Success!");
-}
-
-fn domain_registration_test(config: Config) -> Result<(), Error> {
-    // #region domain_register_example_crates
-    use iroha::{
-        client::Client,
-        data_model::{
-            metadata::Metadata,
-            prelude::{Domain, DomainId, InstructionBox, Register},
-        },
-    };
-    // #endregion domain_register_example_crates
-
-    // #region domain_register_example_create_domain
-    // Create a domain Id
-    let looking_glass: DomainId = DomainId::try_new("looking_glass", "universal")?;
-    // #endregion domain_register_example_create_domain
-
-    // #region domain_register_example_create_isi
-    // Create an ISI
-    let create_looking_glass = Register::domain(Domain::new(looking_glass));
-    // #endregion domain_register_example_create_isi
-
-    // #region rust_client_create
-    // Create an Iroha client
-    let client = Client::new(config);
-    // #endregion rust_client_create
-
-    // #region domain_register_example_prepare_tx
-    // Prepare a transaction
-    let metadata = Metadata::default();
-    let instructions: Vec<InstructionBox> = vec![create_looking_glass.into()];
-    let tx = client.build_transaction(instructions, metadata);
-    // #endregion domain_register_example_prepare_tx
-
-    // #region domain_register_example_submit_tx
-    // Submit a prepared domain registration transaction
-    client
-        .submit_transaction(&tx)
-        .wrap_err("Failed to submit transaction")?;
-    // #endregion domain_register_example_submit_tx
-
-    // Finish the test successfully
-    Ok(())
 }
 
 fn account_definition_test() -> Result<(), Error> {
@@ -134,7 +88,11 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
     // Account's RegisterBox
     let metadata = Metadata::default();
     let instructions: Vec<InstructionBox> = vec![create_account.into()];
-    let tx = client.build_transaction(instructions, metadata);
+    let tx = client.build_transaction(
+        instructions,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata,
+    );
     // #endregion register_account_prepare_tx
 
     // #region register_account_submit_tx
@@ -177,7 +135,10 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
     );
 
     // Submit a registration time
-    client.submit(register_time)?;
+    client.submit(
+        register_time,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     // #endregion register_asset_init_submit
 
     // Generate a new public key for a new account
@@ -195,7 +156,10 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
     );
 
     // Submit a minting transaction
-    client.submit_all([mint])?;
+    client.submit_all(
+        [mint],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     // #endregion register_asset_mint_submit
 
     // Finish the test successfully
@@ -233,7 +197,10 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // #region mint_asset_submit_tx
     client
-        .submit(mint_roses)
+        .submit(
+            mint_roses,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("Failed to submit transaction")?;
     // #endregion mint_asset_submit_tx
 
@@ -249,7 +216,10 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // #region mint_asset_submit_tx_alt
     client
-        .submit(mint_roses_alt)
+        .submit(
+            mint_roses_alt,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("Failed to submit transaction")?;
     // #endregion mint_asset_submit_tx_alt
 
@@ -288,7 +258,10 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_submit_tx
     client
-        .submit(burn_roses)
+        .submit(
+            burn_roses,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("Failed to submit transaction")?;
     // #endregion burn_asset_submit_tx
 
@@ -304,7 +277,10 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_submit_tx_alt
     client
-        .submit(burn_roses_alt)
+        .submit(
+            burn_roses_alt,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("Failed to submit transaction")?;
     // #endregion burn_asset_submit_tx_alt
 

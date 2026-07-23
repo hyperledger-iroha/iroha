@@ -145,9 +145,13 @@ pub fn sample_signed_transaction() -> SignedTransaction {
     let chain_id: ChainId = ChainId::from("test-chain");
     let key_pair = checked_norito_rpc_ed25519_key_fixture();
     let account = AccountId::of(key_pair.public_key().clone());
-    TransactionBuilder::new(chain_id, account)
-        .with_instructions([Log::new(Level::INFO, "norito-rpc test".to_owned())])
-        .sign(key_pair.private_key())
+    TransactionBuilder::new(
+        chain_id,
+        account,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "norito-rpc test".to_owned())])
+    .sign(key_pair.private_key())
 }
 
 /// Construct a versioned external transaction payload suitable for public `/v1/pipeline/transactions` tests.

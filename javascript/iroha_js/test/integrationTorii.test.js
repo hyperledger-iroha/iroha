@@ -2386,33 +2386,15 @@ test(
     if (Object.prototype.hasOwnProperty.call(CONTRACT_CALL_OPTIONS, "payload")) {
       request.payload = CONTRACT_CALL_OPTIONS.payload;
     }
-    const gasAssetId =
-      CONTRACT_CALL_OPTIONS.gasAssetId ?? CONTRACT_CALL_OPTIONS.gas_asset_id ?? null;
-    if (isNonEmptyString(gasAssetId)) {
-      request.gasAssetId = gasAssetId;
-    }
-    const gasLimitRaw =
-      CONTRACT_CALL_OPTIONS.gasLimit ?? CONTRACT_CALL_OPTIONS.gas_limit ?? null;
-    let gasLimit = null;
-    if (
-      typeof gasLimitRaw === "number" &&
-      Number.isFinite(gasLimitRaw) &&
-      Number.isInteger(gasLimitRaw)
-    ) {
-      gasLimit = gasLimitRaw;
-    } else if (typeof gasLimitRaw === "string") {
-      const trimmed = gasLimitRaw.trim();
-      if (/^[0-9]+$/.test(trimmed)) {
-        gasLimit = trimmed;
-      }
-    }
-    if (gasLimit === null) {
+    const feePayment =
+      CONTRACT_CALL_OPTIONS.feePayment ?? CONTRACT_CALL_OPTIONS.fee_payment ?? null;
+    if (feePayment === null || typeof feePayment !== "object" || Array.isArray(feePayment)) {
       t.diagnostic(
-        "contract call payload must include numeric `gasLimit`/`gas_limit` field",
+        "contract call payload must include exact quoted `feePayment`/`fee_payment` intent",
       );
       return;
     }
-    request.gasLimit = gasLimit;
+    request.feePayment = feePayment;
 
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,

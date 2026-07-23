@@ -7,6 +7,5 @@
 mod mock_torii;
 
 pub use mock_torii::{
-    CANONICAL_BLOCK_WIRE, CANONICAL_EVENT_MESSAGE, MockTorii, MockToriiBuilder, MockToriiData,
-    MockToriiFrame, kagami_default_manifest_json,
+    MockTorii, MockToriiBuilder, MockToriiData, MockToriiFrame, kagami_default_manifest_json,
 };

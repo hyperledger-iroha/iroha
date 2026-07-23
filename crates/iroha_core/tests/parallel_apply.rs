@@ -19,7 +19,11 @@ use snapshots::assert_events;
 const FIXTURE_TIME: Duration = Duration::from_millis(1);
 
 fn tx_builder(chain_id: &ChainId, authority: &AccountId) -> TransactionBuilder {
-    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+    let mut builder = TransactionBuilder::new(
+        chain_id.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     builder.set_creation_time(FIXTURE_TIME);
     builder
 }

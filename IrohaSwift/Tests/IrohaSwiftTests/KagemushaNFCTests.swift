@@ -2,6 +2,19 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaNFCTests: XCTestCase {
+    private func hexData(_ value: String) -> Data {
+        precondition(value.count.isMultiple(of: 2))
+        var output = Data()
+        output.reserveCapacity(value.count / 2)
+        var index = value.startIndex
+        while index < value.endIndex {
+            let next = value.index(index, offsetBy: 2)
+            output.append(UInt8(value[index..<next], radix: 16)!)
+            index = next
+        }
+        return output
+    }
+
     func testMeasuredReleaseArchivesStayWithinTheSafeNFCChunkBudget() {
         let samples: [(String, Int, Int, Int)] = [
             ("request", 824, 4, 6),
@@ -27,12 +40,12 @@ final class KagemushaNFCTests: XCTestCase {
 
     func testApplicationIdentifierContractIsExactAndStrict() throws {
         let identifier = try KagemushaNFCProtocol.applicationIdentifier(
-            hex: " f0504b45504b524e464301 "
+            hex: " f049524f48415045455201 "
         )
         XCTAssertEqual(identifier, KagemushaNFCProtocol.defaultApplicationIdentifier)
         XCTAssertEqual(
             try KagemushaNFCProtocol.applicationIdentifierHex(identifier),
-            "F0504B45504B524E464301"
+            "F049524F48415045455201"
         )
         XCTAssertEqual(
             KagemushaNFCProtocol.parseCommand(
@@ -49,8 +62,8 @@ final class KagemushaNFCTests: XCTestCase {
             ),
             .selectOtherApplication
         )
-        for invalid in ["", "F", "F0504B4Z", "F050 4B", "F0504B45",
-                        "F0504B45504B524E464301020304050607"] {
+        for invalid in ["", "F", "F049524Z", "F049 52", "F049524F",
+                        "F049524F48415045455201020304050607"] {
             XCTAssertThrowsError(
                 try KagemushaNFCProtocol.applicationIdentifier(hex: invalid),
                 invalid
@@ -100,8 +113,14 @@ final class KagemushaNFCTests: XCTestCase {
     }
 
     func testPayloadBudgetUsesAuthoritativeRawArchiveLimit() throws {
-        XCTAssertEqual(KagemushaNFCProtocol.rawTransportVersion, 2)
-        XCTAssertEqual(KagemushaNFCProtocol.maximumPayloadBytes, 32_768)
+        XCTAssertEqual(KagemushaNFCProtocol.rawTransportVersion, 4)
+        XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerArchiveBytesV2, 32 * 1024)
+        XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerArchiveBytesV4, 32 * 1024 * 1024)
+        XCTAssertEqual(
+            KagemushaPeerTransportContract.maximumArchiveBytes,
+            KagemushaPeerTransportContract.maximumArchiveBytesV4
+        )
+        XCTAssertEqual(KagemushaNFCProtocol.maximumPayloadBytes, 32 * 1024 * 1024)
         let maximum = Data(
             repeating: 0xA5,
             count: KagemushaNFCProtocol.maximumPayloadBytes
@@ -111,13 +130,101 @@ final class KagemushaNFCTests: XCTestCase {
             payloadBytes: maximum
         )
         let decoded = try XCTUnwrap(KagemushaNFCProtocol.decodeInfo(info))
-        XCTAssertEqual(decoded.transportVersion, 2)
+        XCTAssertEqual(decoded.transportVersion, 4)
         XCTAssertEqual(decoded.payloadLength, maximum.count)
         XCTAssertThrowsError(try KagemushaNFCProtocol.encodeInfo(
             kind: .payment,
             payloadBytes: maximum + Data([0])
         )) { error in
             XCTAssertEqual(error as? KagemushaNFCError, .invalidPayloadLength)
+        }
+    }
+
+    func testAPDUV4GoldensStreamBeyondLegacyLimitAndRejectDowngrade() throws {
+        let smallArchive = hexData(
+            "4e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb502519897f659"
+        )
+        let smallCommands = try KagemushaNFCProtocol.writePayloadCommands(
+            kind: .receiveRequest,
+            payloadBytes: smallArchive,
+            maximumChunkLength: KagemushaNFCProtocol.safeChunkBytes
+        )
+        XCTAssertEqual(
+            smallCommands[0],
+            hexData(
+                "802004002604010000002d16b35168fd7dce091904f3b0b2597831528dbf9c19bd154b8eba509b92b1f84c"
+            )
+        )
+        XCTAssertEqual(
+            smallCommands[1],
+            hexData(
+                "8021040031000000004e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb502519897f659"
+            )
+        )
+        XCTAssertEqual(smallCommands[2], hexData("8022040000"))
+
+        let payload = Data((0..<70_003).map { UInt8(truncatingIfNeeded: $0 * 29 + 7) })
+        let commands = try KagemushaNFCProtocol.writePayloadCommands(
+            kind: .payment,
+            payloadBytes: payload,
+            maximumChunkLength: KagemushaNFCProtocol.maximumExtendedWriteChunkBytes
+        )
+        guard case let .writeMetadata(kind, length, digest) =
+                KagemushaNFCProtocol.parseCommand(commands[0]) else {
+            return XCTFail("missing V4 metadata")
+        }
+        XCTAssertEqual(length, payload.count)
+        let assembler = try KagemushaNFCPayloadAssembler(
+            kind: kind,
+            expectedLength: length,
+            expectedSHA256: digest
+        )
+        for command in commands.dropFirst().dropLast().reversed() {
+            guard case let .writeChunk(offset, bytes) =
+                    KagemushaNFCProtocol.parseCommand(command) else {
+                return XCTFail("missing V4 chunk")
+            }
+            XCTAssertTrue(assembler.write(offset: offset, bytes: bytes))
+        }
+        XCTAssertEqual(try assembler.commit(), payload)
+
+        let atFFFF = try KagemushaNFCProtocol.writeChunkCommand(
+            offset: 0xFFFF,
+            bytes: Data([0x5A])
+        )
+        let at10000 = try KagemushaNFCProtocol.writeChunkCommand(
+            offset: 0x1_0000,
+            bytes: Data([0x5A])
+        )
+        XCTAssertEqual(atFFFF, hexData("80210400050000ffff5a"))
+        XCTAssertEqual(at10000, hexData("8021040005000100005a"))
+        XCTAssertEqual(
+            try KagemushaNFCProtocol.readChunkCommand(offset: 0xFFFF, length: 1_024),
+            hexData("80110400060000ffff0400")
+        )
+        XCTAssertEqual(
+            KagemushaNFCProtocol.parseCommand(atFFFF),
+            .writeChunk(offset: 0xFFFF, bytes: Data([0x5A]))
+        )
+        XCTAssertEqual(
+            KagemushaNFCProtocol.parseCommand(at10000),
+            .writeChunk(offset: 0x1_0000, bytes: Data([0x5A]))
+        )
+
+        // Retired V2 P1/P2 offsets, including offset zero, are never V4 commands.
+        for retired in [
+            Data([0x80, 0x21, 0, 0, 1, 0x5A]),
+            Data([0x80, 0x21, 0xFF, 0xFF, 1, 0x5A]),
+            Data([0x80, 0x11, 0, 0, 0]),
+            Data(at10000.dropLast()),
+        ] {
+            XCTAssertEqual(KagemushaNFCProtocol.parseCommand(retired), .invalid)
+        }
+        XCTAssertThrowsError(try KagemushaNFCProtocol.writeChunkCommand(
+            offset: KagemushaNFCProtocol.maximumPayloadBytes,
+            bytes: Data([1])
+        )) { error in
+            XCTAssertEqual(error as? KagemushaNFCError, .invalidOffset)
         }
     }
 
@@ -151,14 +258,15 @@ final class KagemushaNFCTests: XCTestCase {
     }
 
     func testEveryCanonicalNFCChunkRoundTripsAndReassemblesOutOfOrder() throws {
-        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let request = try offer.project().request
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
         let acknowledgement = try KagemushaPeerTransportTestFixtures.acknowledgement(
             request: request,
             payment: payment
         )
         let payloads: [KagemushaPeerPayload] = [
-            .receiveRequest(request),
+            .receiveRequest(offer),
             .payment(payment),
             .acknowledgement(acknowledgement),
         ]
@@ -237,8 +345,9 @@ final class KagemushaNFCTests: XCTestCase {
     }
 
     func testCardStateMachineReadsRequestAndRejectsInvalidWriteSequences() throws {
-        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let machine = try KagemushaNFCCardStateMachine(receiveRequest: request)
+        let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let request = try offer.project().request
+        let machine = try KagemushaNFCCardStateMachine(receiveRequest: offer)
         let candidatePayment = Data("invalid-candidate".utf8)
         XCTAssertEqual(
             machine.handle(KagemushaNFCProtocol.getInfoCommand()).rejectionReason,
@@ -302,13 +411,14 @@ final class KagemushaNFCTests: XCTestCase {
     }
 
     func testCardStateMachineCommitsTypedPaymentAndTracksEveryAckByte() throws {
-        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let request = try offer.project().request
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
         let acknowledgement = try KagemushaPeerTransportTestFixtures.acknowledgement(
             request: request,
             payment: payment
         )
-        let machine = try KagemushaNFCCardStateMachine(receiveRequest: request)
+        let machine = try KagemushaNFCCardStateMachine(receiveRequest: offer)
         let paymentBytes = payment.archive
         let commands = try KagemushaNFCProtocol.writePayloadCommands(
             kind: .payment,
@@ -332,6 +442,14 @@ final class KagemushaNFCTests: XCTestCase {
             XCTAssertNil(machine.handle(duplicate).rejectionReason)
         }
         let commit = machine.handle(commitCommand)
+        guard KagemushaRecursiveSpend.hasRequiredNativeSymbols else {
+            XCTAssertNil(commit.committedPayload)
+            XCTAssertEqual(commit.rejectionReason, .invalidCommittedPayload)
+            XCTAssertEqual(KagemushaNFCProtocol.responseStatus(commit.response), 0x6A80)
+            XCTAssertTrue(machine.isReadable)
+            XCTAssertTrue(machine.hasPendingWrite)
+            return
+        }
         XCTAssertEqual(commit.committedPayload, .payment(payment))
         XCTAssertFalse(machine.isReadable)
         XCTAssertFalse(machine.hasPendingWrite)

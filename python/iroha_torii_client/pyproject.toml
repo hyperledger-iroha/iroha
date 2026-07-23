@@ -11,6 +11,7 @@ authors = [{name = "Hyperledger Iroha Contributors"}]
 license = {text = "Apache-2.0"}
 requires-python = ">=3.9"
 dependencies = [
+  "blake3>=1.0",
   "requests>=2.31",
 ]
 keywords = ["iroha", "torii", "sdk", "blockchain"]

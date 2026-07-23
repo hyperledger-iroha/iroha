@@ -90,6 +90,7 @@ use iroha_data_model::{
     domain::DomainId,
     events::prelude::*,
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
+    merge::MAX_MERGE_EXECUTION_ENTRYPOINTS,
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
         DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob,
@@ -368,6 +369,12 @@ const fn uses_live_vm_overlay_scheduler(executable: &Executable) -> bool {
     )
 }
 
+/// Return whether the executable must run once against the scheduler's live state.
+#[must_use]
+const fn uses_live_batch_scheduler(executable: &Executable) -> bool {
+    matches!(executable, Executable::Batch(_))
+}
+
 fn missing_authority_requires_rejection(
     state_tx: &crate::state::StateTransaction<'_, '_>,
     tx: &SignedTransaction,
@@ -424,7 +431,7 @@ mod overlay_error_tests {
     use iroha_data_model::{
         ValidationFail,
         nexus::{AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
-        transaction::{IvmBytecode, IvmProved},
+        transaction::{ExecutableBatchItem, IvmBytecode, IvmProved},
     };
 
     use super::*;
@@ -467,6 +474,23 @@ mod overlay_error_tests {
 
         let instructions = Executable::Instructions(Vec::<InstructionBox>::new().into());
         assert!(!uses_live_vm_overlay_scheduler(&instructions));
+    }
+
+    #[test]
+    fn mixed_batch_uses_live_scheduler_barrier_path() {
+        let batch = Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(InstructionBox::from(
+                iroha_data_model::isi::Log::new(
+                    iroha_data_model::level::Level::INFO,
+                    "live batch".to_owned(),
+                ),
+            ))]
+            .into(),
+        );
+        assert!(uses_live_batch_scheduler(&batch));
+
+        let instructions = Executable::Instructions(Vec::<InstructionBox>::new().into());
+        assert!(!uses_live_batch_scheduler(&instructions));
     }
 }
 
@@ -559,12 +583,8 @@ enum DetachedFallbackReason {
 fn transaction_requires_fee_postprocessing(
     pipeline_cfg: &iroha_config::parameters::actual::Pipeline,
     nexus_cfg: &iroha_config::parameters::actual::Nexus,
-    tx: &iroha_data_model::transaction::SignedTransaction,
 ) -> bool {
     if !pipeline_cfg.gas.accepted_assets.is_empty() {
-        return true;
-    }
-    if tx.metadata().get("gas_asset_id").is_some() {
         return true;
     }
     if nexus_cfg.enabled {
@@ -814,7 +834,6 @@ pub(crate) struct ExpectedNativeAmxV2Context {
 }
 
 /// Recover the single signed v2 context from a producer-authenticated receipt.
-#[cfg(test)]
 pub(crate) fn expected_native_amx_v2_context_from_receipt(
     receipt: &NativeAmxReceipt,
     expected_epoch: u64,
@@ -1378,6 +1397,7 @@ fn parse_lane_settlement_buffer_config(
     world: &impl WorldReadOnly,
     dataspace_catalog: &DataSpaceCatalog,
     lane: &LaneConfig,
+    now_ms: u64,
 ) -> Result<Option<LaneSettlementBufferConfig>, String> {
     let account_raw = lane.metadata.get("settlement.buffer_account");
     let asset_raw = lane.metadata.get("settlement.buffer_asset");
@@ -1394,8 +1414,9 @@ fn parse_lane_settlement_buffer_config(
         }
     };
 
-    let account_id = parse_account_literal_with_world(world, dataspace_catalog, account_raw)
-        .ok_or_else(|| format!("invalid settlement buffer account `{account_raw}`"))?;
+    let account_id =
+        parse_account_literal_with_world(world, dataspace_catalog, account_raw, now_ms)
+            .ok_or_else(|| format!("invalid settlement buffer account `{account_raw}`"))?;
     let asset_definition_id = AssetDefinitionId::parse_address_literal(asset_raw)
         .map_err(|error| format!("invalid settlement buffer asset `{asset_raw}`: {error}"))?;
     let capacity = capacity_raw.parse::<XorQuantity>().map_err(|error| {
@@ -1427,6 +1448,7 @@ fn compute_settlement_buffer_snapshot(
         &state_block.world,
         &state_block.nexus.dataspace_catalog,
         lane,
+        u64::try_from(state_block._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
     )?;
     let Some(config) = config else {
         return Ok(None);
@@ -1534,7 +1556,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
-    executor::{charge_fees_for_applied_overlay_with_encoded_len, configure_executor_fuel_budget},
+    executor::{
+        charge_fees_for_applied_overlay_with_encoded_len, charge_fees_for_rejected_live_batch,
+        configure_executor_fuel_budget,
+    },
     kura::{
         PipelineDagSnapshot, PipelineRecoverySidecar, PipelineSidecarEnqueueResult,
         PipelineTxSnapshot,
@@ -1826,6 +1851,7 @@ pub(crate) fn parse_account_literal_with_world(
     world: &impl WorldReadOnly,
     dataspace_catalog: &DataSpaceCatalog,
     input: &str,
+    now_ms: u64,
 ) -> Option<AccountId> {
     let literal = input.trim();
     if literal.is_empty() {
@@ -1837,33 +1863,17 @@ pub(crate) fn parse_account_literal_with_world(
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .or_else(|| {
             let alias = AccountAlias::from_literal(literal, dataspace_catalog).ok()?;
-            resolve_account_alias_in_world(world, &alias)
+            resolve_account_alias_in_world(world, dataspace_catalog, &alias, now_ms)
         })
 }
 
 pub(crate) fn resolve_account_alias_in_world(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &DataSpaceCatalog,
     alias: &AccountAlias,
+    now_ms: u64,
 ) -> Option<AccountId> {
-    if let Some(account_id) = world.account_aliases().get(alias).cloned() {
-        return Some(account_id);
-    }
-
-    let mut matched_account_id: Option<AccountId> = None;
-    for (account_id, value) in world.accounts().iter() {
-        if value.as_ref().label() != Some(alias) {
-            continue;
-        }
-        if let Some(existing) = matched_account_id.as_ref() {
-            if existing != account_id {
-                return None;
-            }
-        } else {
-            matched_account_id = Some(account_id.clone());
-        }
-    }
-
-    matched_account_id
+    crate::sns::resolve_active_account_alias(world, dataspace_catalog, alias, now_ms)
 }
 
 pub(crate) fn parse_asset_definition_literal_with_world(
@@ -1889,12 +1899,13 @@ fn parse_account_from_access_key(
     world: &impl WorldReadOnly,
     dataspace_catalog: &DataSpaceCatalog,
     key: &str,
+    now_ms: u64,
 ) -> Option<AccountId> {
     if let Some(rest) = key.strip_prefix("account:") {
-        parse_account_literal_with_world(world, dataspace_catalog, rest)
+        parse_account_literal_with_world(world, dataspace_catalog, rest, now_ms)
     } else if let Some(rest) = key.strip_prefix("account.detail:") {
         let (account_raw, _) = rest.split_once(':')?;
-        parse_account_literal_with_world(world, dataspace_catalog, account_raw)
+        parse_account_literal_with_world(world, dataspace_catalog, account_raw, now_ms)
     } else {
         None
     }
@@ -1991,12 +2002,18 @@ mod prefetch_tests {
             parse_account_from_access_key(
                 &world_view,
                 &DataSpaceCatalog::default(),
-                &format!("account:{alice}")
+                &format!("account:{alice}"),
+                0,
             ),
             Some(expected.clone())
         );
         assert_eq!(
-            parse_account_from_access_key(&world_view, &DataSpaceCatalog::default(), &detail_key),
+            parse_account_from_access_key(
+                &world_view,
+                &DataSpaceCatalog::default(),
+                &detail_key,
+                0,
+            ),
             Some(expected.clone())
         );
         assert_eq!(expected.subject_id(), alice.subject_id());
@@ -2005,6 +2022,7 @@ mod prefetch_tests {
                 &world_view,
                 &DataSpaceCatalog::default(),
                 "asset:coin#wonderland",
+                0,
             )
             .is_none()
         );
@@ -2023,7 +2041,12 @@ mod prefetch_tests {
         let i105 = alice.canonical_i105().expect("i105 encoding");
         let literal = format!("{i105}@{wonderland}");
         assert_eq!(
-            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &literal),
+            parse_account_literal_with_world(
+                &world_view,
+                &DataSpaceCatalog::default(),
+                &literal,
+                0,
+            ),
             None
         );
     }
@@ -2042,7 +2065,7 @@ mod prefetch_tests {
 
         let i105 = alice.canonical_i105().expect("i105 encoding");
         assert_eq!(
-            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &i105),
+            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &i105, 0,),
             Some(alice)
         );
     }
@@ -2062,7 +2085,12 @@ mod prefetch_tests {
             .canonical_i105()
             .expect("canonical I105 account literal");
         assert_eq!(
-            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &encoded),
+            parse_account_literal_with_world(
+                &world_view,
+                &DataSpaceCatalog::default(),
+                &encoded,
+                0,
+            ),
             Some(account),
             "canonical I105 account ids must remain valid without domain-linked account materialization"
         );
@@ -2077,12 +2105,38 @@ mod prefetch_tests {
             Some(AccountAliasDomain::new(domain_id.name().clone())),
             DataSpaceId::UNIVERSAL,
         );
-        let world = World::with(
+        let mut world = World::with(
             [Domain::new(domain_id.clone()).build(&account_id)],
             [Account::new(account_id.clone())
-                .with_label(Some(alias))
+                .with_label(Some(alias.clone()))
                 .build(&account_id)],
             [],
+        );
+        let selector = crate::sns::selector_for_account_alias(&alias, &DataSpaceCatalog::default())
+            .expect("SNS selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&account_id)
+            .expect("account address");
+        let lease = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&lease),
+        );
+        world
+            .account_aliases
+            .insert(alias.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            alias.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, account_id.clone()),
         );
         let world_view = world.view();
 
@@ -2091,6 +2145,7 @@ mod prefetch_tests {
                 &world_view,
                 &DataSpaceCatalog::default(),
                 "gas@ivm.universal",
+                0,
             ),
             Some(account_id),
             "account selectors must resolve active on-chain aliases to canonical account ids"
@@ -2104,17 +2159,7 @@ mod prefetch_tests {
             Name::from_str("treasury").expect("alias name"),
             DataSpaceId::new(7),
         );
-        let world = World::with(
-            [],
-            [Account::new(account_id.clone())
-                .with_label(Some(alias))
-                .build(&account_id)],
-            [],
-        );
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
+        let catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
                 id: DataSpaceId::new(7),
@@ -2124,6 +2169,43 @@ mod prefetch_tests {
             },
         ])
         .expect("dataspace catalog");
+        let mut world = World::with(
+            [],
+            [Account::new(account_id.clone())
+                .with_label(Some(alias.clone()))
+                .build(&account_id)],
+            [],
+        );
+        let selector =
+            crate::sns::selector_for_account_alias(&alias, &catalog).expect("SNS selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&account_id)
+            .expect("account address");
+        let lease = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&lease),
+        );
+        world
+            .account_aliases
+            .insert(alias.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            alias.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, account_id.clone()),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        state.nexus.write().dataspace_catalog = catalog;
         let state_view = state.view();
         let world_view = state_view.world();
 
@@ -2132,6 +2214,7 @@ mod prefetch_tests {
                 world_view,
                 &state_view.nexus.dataspace_catalog,
                 "treasury@retail",
+                0,
             ),
             Some(account_id.clone()),
             "account selectors must resolve aliases in non-default dataspaces"
@@ -2162,10 +2245,14 @@ mod prefetch_tests {
         lane.metadata
             .insert("settlement.buffer_capacity".to_owned(), "1000".to_owned());
 
-        let parsed =
-            parse_lane_settlement_buffer_config(&world_view, &DataSpaceCatalog::default(), &lane)
-                .expect("valid config")
-                .expect("config present");
+        let parsed = parse_lane_settlement_buffer_config(
+            &world_view,
+            &DataSpaceCatalog::default(),
+            &lane,
+            0,
+        )
+        .expect("valid config")
+        .expect("config present");
         let expected = alice.clone();
         assert_eq!(parsed.account_id, expected);
         assert_eq!(parsed.account_id.subject_id(), alice.subject_id());
@@ -2179,9 +2266,13 @@ mod prefetch_tests {
             "settlement.buffer_capacity_micro".to_owned(),
             "1000000000".to_owned(),
         );
-        let retired =
-            parse_lane_settlement_buffer_config(&world_view, &DataSpaceCatalog::default(), &lane)
-                .expect_err("retired fixed-unit key must not be accepted");
+        let retired = parse_lane_settlement_buffer_config(
+            &world_view,
+            &DataSpaceCatalog::default(),
+            &lane,
+            0,
+        )
+        .expect_err("retired fixed-unit key must not be accepted");
         assert!(retired.contains("must define"));
 
         lane.metadata
@@ -2199,6 +2290,7 @@ mod prefetch_tests {
                 &world_view,
                 &DataSpaceCatalog::default(),
                 &lane,
+                0,
             )
             .expect_err("invalid capacity must fail closed");
             assert!(
@@ -3558,23 +3650,39 @@ mod chained {
         }
 
         /// Header context selected for this proposal before payload/result roots are finalized.
-        /// Callers use it to select an exact pending settlement sidecar for the
-        /// active height, parent, and view.
+        ///
+        /// Certified merge execution strips those roots and binds the remaining height, parent,
+        /// ledger-time, and view fields, so callers may use this clone to select an exact pending
+        /// merge sidecar without introducing a header-hash cycle.
         #[inline]
         #[must_use]
         pub(crate) fn carrier_context_header(&self) -> BlockHeader {
             self.0.header.clone()
         }
 
-        /// Reject the retired autonomous merge-application projection.
+        /// Bind this proposal to the exact ledger timestamp certified by a merge batch.
         ///
-        /// The method remains as a fail-closed boundary while the corresponding
-        /// data-model field is still decodable.
+        /// Height, parent, and view are selected by the active global round and must already
+        /// match. Only the timestamp may be adopted from the pre-executed merge application
+        /// context; payload roots are deliberately excluded from that context.
         pub(crate) fn bind_certified_merge_application_context(
-            self,
-            _application: &BlockHeader,
+            mut self,
+            application: &BlockHeader,
         ) -> Result<Self, &'static str> {
-            Err(crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION)
+            if application.merkle_root().is_some()
+                || application.result_merkle_root().is_some()
+                || application.creation_time().is_zero()
+                || application.height() != self.0.header.height()
+                || application.prev_block_hash() != self.0.header.prev_block_hash()
+                || application.view_change_index() != self.0.header.view_change_index()
+            {
+                return Err(
+                    "certified merge application context differs from the active global round",
+                );
+            }
+            self.0.header.creation_time_ms = u64::try_from(application.creation_time().as_millis())
+                .map_err(|_| "certified merge application timestamp exceeds u64")?;
+            Ok(self)
         }
 
         /// Attach a DA commitment bundle and update the header hash accordingly.
@@ -3884,12 +3992,20 @@ mod new {
             let chain: ChainId = "new-block-conversion".parse().expect("valid chain id");
             let (authority, keypair) = gen_account_in("wonderland");
 
-            let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-                .with_instructions([Log::new(Level::INFO, "first".to_owned())])
-                .sign(keypair.private_key());
-            let tx2 = TransactionBuilder::new(chain, authority)
-                .with_instructions([Log::new(Level::INFO, "second".to_owned())])
-                .sign(keypair.private_key());
+            let tx1 = TransactionBuilder::new(
+                chain.clone(),
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "first".to_owned())])
+            .sign(keypair.private_key());
+            let tx2 = TransactionBuilder::new(
+                chain,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "second".to_owned())])
+            .sign(keypair.private_key());
 
             let mut expected = vec![
                 (tx1.hash_as_entrypoint(), 0usize, tx1.clone()),
@@ -3926,9 +4042,13 @@ mod new {
         fn block_builder_sign_with_index_sets_signature_index() {
             let chain: ChainId = "new-block-sign-index".parse().expect("valid chain id");
             let (authority, keypair) = gen_account_in("wonderland");
-            let tx = TransactionBuilder::new(chain, authority)
-                .with_instructions([Log::new(Level::INFO, "signed".to_owned())])
-                .sign(keypair.private_key());
+            let tx = TransactionBuilder::new(
+                chain,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "signed".to_owned())])
+            .sign(keypair.private_key());
 
             let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))];
             let builder = BlockBuilder::new(accepted);
@@ -3947,9 +4067,13 @@ mod new {
         fn block_builder_try_sign_with_index_sets_verifiable_signature() {
             let chain: ChainId = "new-block-try-sign-index".parse().expect("valid chain id");
             let (authority, keypair) = gen_account_in("wonderland");
-            let tx = TransactionBuilder::new(chain, authority)
-                .with_instructions([Log::new(Level::INFO, "try-signed".to_owned())])
-                .sign(keypair.private_key());
+            let tx = TransactionBuilder::new(
+                chain,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "try-signed".to_owned())])
+            .sign(keypair.private_key());
 
             let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))];
             let builder = BlockBuilder::new(accepted);
@@ -3975,12 +4099,20 @@ mod new {
             let chain: ChainId = "new-block-conversion".parse().expect("valid chain id");
             let (authority, keypair) = gen_account_in("wonderland");
 
-            let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-                .with_instructions([Log::new(Level::INFO, "first".to_owned())])
-                .sign(keypair.private_key());
-            let tx2 = TransactionBuilder::new(chain, authority)
-                .with_instructions([Log::new(Level::INFO, "second".to_owned())])
-                .sign(keypair.private_key());
+            let tx1 = TransactionBuilder::new(
+                chain.clone(),
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "first".to_owned())])
+            .sign(keypair.private_key());
+            let tx2 = TransactionBuilder::new(
+                chain,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "second".to_owned())])
+            .sign(keypair.private_key());
 
             let expected = vec![tx1.clone(), tx2.clone()];
             let accepted = vec![
@@ -4084,6 +4216,56 @@ pub(crate) mod valid {
         .map_err(TransactionRejectionReason::Validation)?;
         fee_tx.apply();
         Ok(())
+    }
+
+    fn charge_rejected_live_batch_fees(
+        state_block_mut: &mut StateBlock<'_>,
+        tx: &iroha_data_model::transaction::SignedTransaction,
+        authority: &AccountId,
+        gas_used: u64,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        rejection_reason: &TransactionRejectionReason,
+    ) -> Result<(), TransactionRejectionReason> {
+        if !rejected_live_batch_gas_is_accountable(gas_used, rejection_reason) {
+            return Ok(());
+        }
+
+        let mut fee_tx = state_block_mut.transaction();
+        fee_tx.current_lane_id = Some(lane_id);
+        fee_tx.current_dataspace_id = Some(dataspace_id);
+        fee_tx.world.current_dataspace_id = Some(dataspace_id);
+        fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+        fee_tx.current_tx_hash = Some(tx.hash());
+
+        charge_fees_for_rejected_live_batch(&mut fee_tx, authority, tx, gas_used)
+            .map_err(TransactionRejectionReason::Validation)?;
+        fee_tx.apply();
+        Ok(())
+    }
+
+    fn rejected_live_batch_gas_is_accountable(
+        gas_used: u64,
+        rejection_reason: &TransactionRejectionReason,
+    ) -> bool {
+        gas_used > 0
+            && !matches!(
+                rejection_reason,
+                TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InternalError(_)
+                )
+            )
+    }
+
+    fn account_rejected_live_batch_gas(
+        state_block_mut: &mut StateBlock<'_>,
+        gas_used: u64,
+        rejection_reason: &TransactionRejectionReason,
+    ) {
+        if rejected_live_batch_gas_is_accountable(gas_used, rejection_reason) {
+            state_block_mut.gas_used_in_block =
+                state_block_mut.gas_used_in_block.saturating_add(gas_used);
+        }
     }
 
     /// Block that was validated and accepted.
@@ -4599,6 +4781,7 @@ pub(crate) mod valid {
         context_id: iroha_data_model::block::consensus_v2::HeightContextId,
         height: u64,
         epoch: u64,
+        consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
         snapshot_bootstrap: Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor>,
     }
 
@@ -4613,6 +4796,7 @@ pub(crate) mod valid {
                 context_id: context.id(),
                 height: context.height,
                 epoch: context.epoch,
+                consensus_mode: context.mode,
                 snapshot_bootstrap: context.snapshot_bootstrap,
             }
         }
@@ -4625,6 +4809,7 @@ pub(crate) mod valid {
                 ),
                 height: block.header().height().get(),
                 epoch: 0,
+                consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
                 snapshot_bootstrap: None,
             }
         }
@@ -4633,6 +4818,9 @@ pub(crate) mod valid {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum ConsensusValidationProfile {
         LegacyLive,
+        SignedGenesis {
+            consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+        },
         #[cfg(test)]
         Replay,
         SumeragiV2 {
@@ -4658,7 +4846,7 @@ pub(crate) mod valid {
                 #[cfg(test)]
                 Self::Replay => true,
                 Self::SumeragiV2 { .. } => true,
-                Self::LegacyLive => false,
+                Self::LegacyLive | Self::SignedGenesis { .. } => false,
             }
         }
 
@@ -4666,7 +4854,7 @@ pub(crate) mod valid {
             match self {
                 #[cfg(test)]
                 Self::Replay => false,
-                Self::LegacyLive | Self::SumeragiV2 { .. } => true,
+                Self::LegacyLive | Self::SignedGenesis { .. } | Self::SumeragiV2 { .. } => true,
             }
         }
 
@@ -4674,7 +4862,7 @@ pub(crate) mod valid {
             match self {
                 #[cfg(test)]
                 Self::Replay => false,
-                Self::LegacyLive | Self::SumeragiV2 { .. } => true,
+                Self::LegacyLive | Self::SignedGenesis { .. } | Self::SumeragiV2 { .. } => true,
             }
         }
 
@@ -4685,7 +4873,7 @@ pub(crate) mod valid {
         const fn v2_block_cadence(self) -> Option<Duration> {
             match self {
                 Self::SumeragiV2 { block_cadence, .. } => Some(block_cadence),
-                Self::LegacyLive => None,
+                Self::LegacyLive | Self::SignedGenesis { .. } => None,
                 #[cfg(test)]
                 Self::Replay => None,
             }
@@ -4696,7 +4884,7 @@ pub(crate) mod valid {
         ) -> Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor> {
             match self {
                 Self::SumeragiV2 { context, .. } => context.snapshot_bootstrap,
-                Self::LegacyLive => None,
+                Self::LegacyLive | Self::SignedGenesis { .. } => None,
                 #[cfg(test)]
                 Self::Replay => None,
             }
@@ -4705,6 +4893,18 @@ pub(crate) mod valid {
         const fn v2_context(self) -> Option<SumeragiV2ValidationContext> {
             match self {
                 Self::SumeragiV2 { context, .. } => Some(context),
+                Self::LegacyLive | Self::SignedGenesis { .. } => None,
+                #[cfg(test)]
+                Self::Replay => None,
+            }
+        }
+
+        const fn authoritative_consensus_mode(
+            self,
+        ) -> Option<iroha_data_model::block::consensus_v2::ConsensusMode> {
+            match self {
+                Self::SignedGenesis { consensus_mode } => Some(consensus_mode),
+                Self::SumeragiV2 { context, .. } => Some(context.consensus_mode),
                 Self::LegacyLive => None,
                 #[cfg(test)]
                 Self::Replay => None,
@@ -6192,6 +6392,40 @@ pub(crate) mod valid {
             .unbox_state_block()
         }
 
+        /// Validate signed genesis against its authenticated consensus mode without committing it.
+        ///
+        /// The mode must come from the canonical signed genesis handshake metadata. It is threaded
+        /// explicitly because the pre-execution world cannot yet contain genesis parameters.
+        #[allow(clippy::too_many_arguments)]
+        pub fn validate_signed_genesis_keep_voting_block<'state>(
+            block: SignedBlock,
+            topology: &Topology,
+            expected_chain_id: &ChainId,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            state: &'state State,
+            voting_block: &mut Option<VotingBlock>,
+            consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
+                expected_chain_id,
+                genesis_account,
+                time_source,
+                state,
+                voting_block,
+                false,
+                None,
+                false,
+                false,
+                ConsensusValidationProfile::SignedGenesis { consensus_mode },
+                false,
+                None,
+            )
+            .unbox_state_block()
+        }
+
         /// Test-only replay validation entrypoint for exact recovery fixtures.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
@@ -6269,39 +6503,6 @@ pub(crate) mod valid {
                     context: validation_context,
                 },
                 true,
-                None,
-            )
-            .unbox_state_block()
-        }
-
-        /// Same as [`Self::validate_keep_voting_block`], but records timing breakdowns.
-        #[allow(clippy::too_many_arguments)]
-        #[cfg(test)]
-        pub(crate) fn validate_keep_voting_block_with_timing<'state>(
-            block: SignedBlock,
-            topology: &Topology,
-            expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
-            time_source: &TimeSource,
-            state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
-            soft_fork: bool,
-            timings: &mut ValidationTimings,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            Self::validate_keep_voting_block_inner(
-                block,
-                topology,
-                expected_chain_id,
-                genesis_account,
-                time_source,
-                state,
-                voting_block,
-                soft_fork,
-                Some(timings),
-                false,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-                false,
                 None,
             )
             .unbox_state_block()
@@ -6480,9 +6681,21 @@ pub(crate) mod valid {
                     ));
                 }
             };
-            if entry.execution_batch.is_some() {
+            let Some(batch) = entry.execution_batch.as_ref() else {
+                return Ok(());
+            };
+            let merge_entrypoints = batch
+                .lanes
+                .iter()
+                .flat_map(|execution| execution.entrypoint_hashes.iter().copied())
+                .collect::<BTreeSet<_>>();
+            if block
+                .external_entrypoints_cloned()
+                .map(|entrypoint| Hash::from(entrypoint.hash()))
+                .any(|hash| merge_entrypoints.contains(&hash))
+            {
                 return Err(Self::execution_context_error(
-                    crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION,
+                    "ordinary block entrypoint duplicates a certified merge-batch entrypoint",
                 ));
             }
             Ok(())
@@ -6617,7 +6830,11 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Err(error) = Self::validate_npos_effects_with_state(&block, state) {
+            if let Err(error) = Self::validate_npos_effects_with_state(
+                &block,
+                state,
+                validation_profile.authoritative_consensus_mode(),
+            ) {
                 let stateless_elapsed = stateless_start.elapsed();
                 record_timings(&mut timings, stateless_elapsed, None);
                 emit_rejection(&block, &error);
@@ -7344,11 +7561,32 @@ pub(crate) mod valid {
         fn validate_npos_effects_with_state(
             block: &SignedBlock,
             state: &State,
+            authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
         ) -> Result<(), BlockValidationError> {
             Self::validate_npos_effects_header(block)?;
 
             let block_height = block.header().height().get();
             let actual_effects = block.npos_consensus_effects();
+            if block.header().is_genesis() {
+                return if actual_effects.is_none() {
+                    Ok(())
+                } else {
+                    Err(Self::npos_effects_error(
+                        "genesis must not carry NPoS effects without committed pre-block state",
+                    ))
+                };
+            }
+            if authoritative_mode
+                == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned)
+            {
+                return if actual_effects.is_none() {
+                    Ok(())
+                } else {
+                    Err(Self::npos_effects_error(
+                        "permissioned consensus blocks must not carry NPoS effects",
+                    ))
+                };
+            }
             let admission_keys = if let Some(effects) = actual_effects {
                 crate::sumeragi::evidence::validate_v2_evidence_admissions(
                     state,
@@ -7630,7 +7868,7 @@ pub(crate) mod valid {
             let Some(reference) = bundle.merge_entry.as_ref() else {
                 return Ok(());
             };
-            Self::validate_settlement_only_merge_reference(reference)?;
+            Self::validate_merge_reference_execution_projection(reference)?;
             if block.header().is_genesis() {
                 return Err(Self::execution_context_error(
                     "genesis block cannot carry a certified merge entry",
@@ -7739,13 +7977,31 @@ pub(crate) mod valid {
             Ok(())
         }
 
-        fn validate_settlement_only_merge_reference(
+        fn validate_merge_reference_execution_projection(
             reference: &CertifiedMergeLedgerReference,
         ) -> Result<(), BlockValidationError> {
-            if crate::merge::merge_reference_has_execution_projection(reference) {
+            let has_batch_hash = reference.execution_batch_hash.is_some();
+            if [
+                reference.entrypoint_count.is_some(),
+                reference.entrypoint_merkle_root.is_some(),
+                reference.result_merkle_root.is_some(),
+                reference.base_state_height.is_some(),
+                reference.base_state_hash.is_some(),
+            ]
+            .into_iter()
+            .any(|present| present != has_batch_hash)
+            {
                 return Err(Self::execution_context_error(
-                    crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION,
+                    "certified merge reference has a partial execution-batch binding",
                 ));
+            }
+            if let Some(entrypoint_count) = reference.entrypoint_count
+                && !(1..=u64::try_from(MAX_MERGE_EXECUTION_ENTRYPOINTS).unwrap_or(u64::MAX))
+                    .contains(&entrypoint_count)
+            {
+                return Err(Self::execution_context_error(format!(
+                    "certified merge reference entrypoint count {entrypoint_count} is outside 1..={MAX_MERGE_EXECUTION_ENTRYPOINTS}",
+                )));
             }
             Ok(())
         }
@@ -7949,7 +8205,13 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} has zero lane-local height",
                     )));
                 }
-                let expected_dataspace = crate::state::nexus_active_lane_dataspace_at_height(
+                if ownership.lane_block_view != 0 {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} must originate at lane-local view zero, got {}",
+                        ownership.lane_block_view
+                    )));
+                }
+                let expected_dataspace = crate::state::consensus_lane_dataspace_at_height(
                     ownership.lane_id,
                     state.nexus(),
                     proposal_height,
@@ -9508,10 +9770,8 @@ pub(crate) mod valid {
                     )));
                 }
             }
-            let nexus_fee_receipts_active = state_block
-                .nexus
-                .fees
-                .lane_relay_burn_receipts_active_at(block.header().height().get());
+            let nexus_fee_receipts_active = state_block.nexus.fees.settlement_mode
+                == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
             let mut lane_settlement_builders: BTreeMap<
                 (LaneId, DataSpaceId),
                 LaneSettlementBuilder,
@@ -11036,12 +11296,21 @@ pub(crate) mod valid {
                 cache_idx: usize,
             }
 
+            #[derive(Clone)]
+            enum PreparedBlockExecution {
+                Overlay(PreparedBlockOverlay),
+                /// Mixed batches are never detached, rebuilt, merged, or quarantined.
+                // TODO: Route classified batches through quarantine once that lane can preserve
+                // the global live-state barrier without rebuilding or replaying the batch.
+                LiveBatch,
+            }
+
             let capture_vm_access_log = |tx: &SignedTransaction| {
                 dynamic_prepass || uses_live_vm_overlay_scheduler(tx.instructions())
             };
 
             let mut prepared_overlays: Vec<
-                Result<PreparedBlockOverlay, crate::pipeline::overlay::OverlayBuildError>,
+                Result<PreparedBlockExecution, crate::pipeline::overlay::OverlayBuildError>,
             > = vec![Err(crate::pipeline::overlay::OverlayBuildError::IvmHeaderParse); txs.len()];
             // Normal lane overlays
             if build_parallel && workers > 1 {
@@ -11051,8 +11320,14 @@ pub(crate) mod valid {
                             .par_iter_mut()
                             .enumerate()
                             .for_each(|(i, slot)| {
+                                let tx = txs[i];
+                                if uses_live_batch_scheduler(tx.instructions()) {
+                                    if stateless_rejections[i].is_none() {
+                                        *slot = Ok(PreparedBlockExecution::LiveBatch);
+                                    }
+                                    return;
+                                }
                                 if !is_quarantine[i] && stateless_rejections[i].is_none() {
-                                    let tx = &txs[i];
                                     let metadata =
                                         crate::pipeline::overlay::resolve_streaming_metadata(
                                             state_block,
@@ -11091,7 +11366,7 @@ pub(crate) mod valid {
                                                     prepared.access_log.as_ref(),
                                                     state_block,
                                                 );
-                                            PreparedBlockOverlay {
+                                            PreparedBlockExecution::Overlay(PreparedBlockOverlay {
                                                 overlay: Arc::new(prepared.overlay),
                                                 access_log: prepared.access_log,
                                                 durable_state_reads,
@@ -11101,7 +11376,7 @@ pub(crate) mod valid {
                                                     .prepared_argument_record,
                                                 prepared_contract: prepared.prepared_contract,
                                                 cache_idx,
-                                            }
+                                            })
                                         });
                                 }
                             })
@@ -11111,8 +11386,14 @@ pub(crate) mod valid {
                         .par_iter_mut()
                         .enumerate()
                         .for_each(|(i, slot)| {
+                            let tx = txs[i];
+                            if uses_live_batch_scheduler(tx.instructions()) {
+                                if stateless_rejections[i].is_none() {
+                                    *slot = Ok(PreparedBlockExecution::LiveBatch);
+                                }
+                                return;
+                            }
                             if !is_quarantine[i] && stateless_rejections[i].is_none() {
-                                let tx = &txs[i];
                                 let metadata = crate::pipeline::overlay::resolve_streaming_metadata(
                                     state_block,
                                     tx.authority(),
@@ -11147,7 +11428,7 @@ pub(crate) mod valid {
                                         prepared.access_log.as_ref(),
                                         state_block,
                                     );
-                                    PreparedBlockOverlay {
+                                    PreparedBlockExecution::Overlay(PreparedBlockOverlay {
                                         overlay: Arc::new(prepared.overlay),
                                         access_log: prepared.access_log,
                                         durable_state_reads,
@@ -11156,13 +11437,19 @@ pub(crate) mod valid {
                                         prepared_argument_record: prepared.prepared_argument_record,
                                         prepared_contract: prepared.prepared_contract,
                                         cache_idx,
-                                    }
+                                    })
                                 });
                             }
                         });
                 }
             } else {
                 for (i, tx) in txs.iter().enumerate() {
+                    if uses_live_batch_scheduler(tx.instructions()) {
+                        if stateless_rejections[i].is_none() {
+                            prepared_overlays[i] = Ok(PreparedBlockExecution::LiveBatch);
+                        }
+                        continue;
+                    }
                     if !is_quarantine[i] && stateless_rejections[i].is_none() {
                         let metadata = crate::pipeline::overlay::resolve_streaming_metadata(
                             state_block,
@@ -11195,7 +11482,7 @@ pub(crate) mod valid {
                                     prepared.access_log.as_ref(),
                                     state_block,
                                 );
-                                PreparedBlockOverlay {
+                                PreparedBlockExecution::Overlay(PreparedBlockOverlay {
                                     overlay: Arc::new(prepared.overlay),
                                     access_log: prepared.access_log,
                                     durable_state_reads,
@@ -11204,13 +11491,16 @@ pub(crate) mod valid {
                                     prepared_argument_record: prepared.prepared_argument_record,
                                     prepared_contract: prepared.prepared_contract,
                                     cache_idx: 0,
-                                }
+                                })
                             });
                     }
                 }
             }
             // Quarantine lane overlays (caps): build only for allowed; mark overflow as error
             for (i, tx) in txs.iter().enumerate() {
+                if uses_live_batch_scheduler(tx.instructions()) {
+                    continue;
+                }
                 if is_quarantine[i] {
                     if quarantine_overflow.contains(&i) {
                         prepared_overlays[i] =
@@ -11241,15 +11531,17 @@ pub(crate) mod valid {
                                 &mut ivm_cache,
                                 None,
                             )
-                            .map(|prepared| PreparedBlockOverlay {
-                                overlay: Arc::new(prepared.overlay),
-                                access_log: prepared.access_log,
-                                durable_state_reads: None,
-                                access_fence: prepared.access_fence,
-                                force_live_rebuild: prepared.force_live_rebuild,
-                                prepared_argument_record: prepared.prepared_argument_record,
-                                prepared_contract: prepared.prepared_contract,
-                                cache_idx: 0,
+                            .map(|prepared| {
+                                PreparedBlockExecution::Overlay(PreparedBlockOverlay {
+                                    overlay: Arc::new(prepared.overlay),
+                                    access_log: prepared.access_log,
+                                    durable_state_reads: None,
+                                    access_fence: prepared.access_fence,
+                                    force_live_rebuild: prepared.force_live_rebuild,
+                                    prepared_argument_record: prepared.prepared_argument_record,
+                                    prepared_contract: prepared.prepared_contract,
+                                    cache_idx: 0,
+                                })
                             });
                     }
                 }
@@ -11269,11 +11561,10 @@ pub(crate) mod valid {
 
             let fee_postprocessing_required: Vec<bool> = txs
                 .iter()
-                .map(|tx| {
+                .map(|_| {
                     transaction_requires_fee_postprocessing(
                         &state_block.pipeline,
                         &state_block.nexus,
-                        tx,
                     )
                 })
                 .collect();
@@ -11298,13 +11589,19 @@ pub(crate) mod valid {
                     return (crate::pipeline::access::AccessSet::new(), None);
                 }
                 let (mut set, mut source) = match &prepared_overlays[idx] {
-                    Ok(prepared) => derive_for_prepared_overlay_with_source(
-                        tx,
-                        &*state_block,
-                        prepared.overlay.as_ref(),
-                        prepared.prepared_contract.as_ref(),
-                        prepared.access_log.as_ref(),
-                        dynamic_prepass,
+                    Ok(PreparedBlockExecution::Overlay(prepared)) => {
+                        derive_for_prepared_overlay_with_source(
+                            tx,
+                            &*state_block,
+                            prepared.overlay.as_ref(),
+                            prepared.prepared_contract.as_ref(),
+                            prepared.access_log.as_ref(),
+                            dynamic_prepass,
+                        )
+                    }
+                    Ok(PreparedBlockExecution::LiveBatch) => (
+                        crate::pipeline::access::AccessSet::global(),
+                        Some(AccessSetSource::ConservativeFallback),
                     ),
                     Err(_) => derive_for_transaction_with_source(
                         tx,
@@ -11312,7 +11609,7 @@ pub(crate) mod valid {
                         crate::pipeline::access::IvmStrategy::Conservative,
                     ),
                 };
-                if let Ok(prepared) = &prepared_overlays[idx]
+                if let Ok(PreparedBlockExecution::Overlay(prepared)) = &prepared_overlays[idx]
                     && !matches!(
                         source,
                         Some(AccessSetSource::ManifestHints | AccessSetSource::EntrypointHints)
@@ -11401,16 +11698,18 @@ pub(crate) mod valid {
                 timings.execution_tx_access_ms = to_ms(start.elapsed());
             }
 
-            let overlays: Vec<Result<Arc<TxOverlay>, crate::pipeline::overlay::OverlayBuildError>> =
-                prepared_overlays
-                    .iter()
-                    .map(|result| {
-                        result
-                            .as_ref()
-                            .map(|prepared| Arc::clone(&prepared.overlay))
-                            .map_err(Clone::clone)
-                    })
-                    .collect();
+            let overlays: Vec<
+                Option<Result<Arc<TxOverlay>, crate::pipeline::overlay::OverlayBuildError>>,
+            > = prepared_overlays
+                .iter()
+                .map(|result| match result {
+                    Ok(PreparedBlockExecution::Overlay(prepared)) => {
+                        Some(Ok(Arc::clone(&prepared.overlay)))
+                    }
+                    Ok(PreparedBlockExecution::LiveBatch) => None,
+                    Err(err) => Some(Err(err.clone())),
+                })
+                .collect();
 
             // VM overlays are prepared from a block-start snapshot. Before a
             // sequential merge, retain the cached overlay only while every
@@ -11433,7 +11732,7 @@ pub(crate) mod valid {
                 let is_vm = uses_live_vm_overlay_scheduler(tx.instructions());
                 let (stale_durable_read, force_live_rebuild, cache_idx, prepared_argument_record) =
                     match prepared_overlays[idx].as_ref() {
-                        Ok(prepared) => (
+                        Ok(PreparedBlockExecution::Overlay(prepared)) => (
                             prepared
                                 .durable_state_reads
                                 .as_ref()
@@ -11442,6 +11741,11 @@ pub(crate) mod valid {
                             prepared.cache_idx,
                             prepared.prepared_argument_record.clone(),
                         ),
+                        Ok(PreparedBlockExecution::LiveBatch) => {
+                            return Err(crate::pipeline::overlay::OverlayBuildError::ContractCall(
+                                "mixed batch reached the overlay rebuild path".to_owned(),
+                            ));
+                        }
                         Err(err) if is_vm && err.may_change_with_live_state() => (
                             false,
                             true,
@@ -11452,10 +11756,17 @@ pub(crate) mod valid {
                     };
                 let rebuild_quarantined_vm = is_quarantine[idx] && is_vm;
                 if !stale_durable_read && !force_live_rebuild && !rebuild_quarantined_vm {
-                    return prepared_overlays[idx]
-                        .as_ref()
-                        .map(|prepared| Arc::clone(&prepared.overlay))
-                        .map_err(Clone::clone);
+                    return match prepared_overlays[idx].as_ref() {
+                        Ok(PreparedBlockExecution::Overlay(prepared)) => {
+                            Ok(Arc::clone(&prepared.overlay))
+                        }
+                        Ok(PreparedBlockExecution::LiveBatch) => {
+                            Err(crate::pipeline::overlay::OverlayBuildError::ContractCall(
+                                "mixed batch reached the overlay reuse path".to_owned(),
+                            ))
+                        }
+                        Err(err) => Err(err.clone()),
+                    };
                 }
 
                 let accounts = state_ro.accounts_snapshot();
@@ -11511,18 +11822,12 @@ pub(crate) mod valid {
             let dag_fp = dag_fingerprint(key_count, &access_ids, &call_hashes);
 
             let block_hash = block.hash();
-            let expected_dag_fp =
-                state_block
-                    .kura()
-                    .read_pipeline_metadata(height)
-                    .and_then(|sidecar| {
-                        expected_pipeline_dag_fingerprint(
-                            height,
-                            block_hash,
-                            &call_hashes,
-                            &sidecar,
-                        )
-                    });
+            let expected_dag_fp = state_block
+                .kura()
+                .read_pipeline_metadata_for_block(height, block_hash)
+                .and_then(|sidecar| {
+                    expected_pipeline_dag_fingerprint(height, block_hash, &call_hashes, &sidecar)
+                });
 
             // Compare with expected fingerprint when present; warn on mismatch (non-forking).
             if let Some(exp) = expected_dag_fp
@@ -11817,7 +12122,7 @@ pub(crate) mod valid {
                 }
 
                 for (idx, overlay_result) in overlays.iter().enumerate() {
-                    if let Ok(overlay) = overlay_result {
+                    if let Some(Ok(overlay)) = overlay_result {
                         if overlay.is_empty() {
                             continue;
                         }
@@ -11987,6 +12292,104 @@ pub(crate) mod valid {
                 );
                 tx_results[idx] = Some(result);
             };
+
+            let execute_live_batch = |state_block_mut: &mut StateBlock<'_>,
+                                      idx: usize|
+             -> TransactionResultInner {
+                let tx = txs[idx];
+                debug_assert!(uses_live_batch_scheduler(tx.instructions()));
+                let authority = tx.authority().clone();
+                let executable_items = match tx.instructions() {
+                    Executable::Batch(items) => items.len(),
+                    _ => 0,
+                };
+                let mut state_tx = state_block_mut.transaction();
+                state_tx.current_lane_id = Some(routing_decisions[idx].lane_id);
+                state_tx.current_dataspace_id = Some(routing_decisions[idx].dataspace_id);
+                state_tx.world.current_dataspace_id = Some(routing_decisions[idx].dataspace_id);
+                state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(
+                    prepared_txs[idx].metadata.entrypoint_hash,
+                ));
+                state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
+
+                if missing_authority_requires_rejection(
+                    &state_tx,
+                    tx,
+                    &authority,
+                    executable_items,
+                    block.header().is_genesis(),
+                ) {
+                    return Err(TransactionRejectionReason::AccountDoesNotExist(
+                        iroha_data_model::query::error::FindError::Account(authority),
+                    ));
+                }
+                let admission = validate_block_transaction_admission(
+                    &mut state_tx,
+                    tx,
+                    routing_decisions[idx],
+                )?;
+                let executor = state_tx.world.executor.clone();
+                let mut ivm_cache = overlay_caches[0].lock();
+                let execution_result = executor.execute_transaction(
+                    &mut state_tx,
+                    &authority,
+                    tx.clone(),
+                    &mut ivm_cache,
+                );
+                drop(ivm_cache);
+                if let Err(error) = execution_result {
+                    let rejection_reason = TransactionRejectionReason::Validation(error);
+                    let gas_used = state_tx.last_tx_gas_used;
+                    drop(state_tx);
+                    let fee_result = charge_rejected_live_batch_fees(
+                        state_block_mut,
+                        tx,
+                        &authority,
+                        gas_used,
+                        routing_decisions[idx].lane_id,
+                        routing_decisions[idx].dataspace_id,
+                        &rejection_reason,
+                    );
+                    account_rejected_live_batch_gas(state_block_mut, gas_used, &rejection_reason);
+                    return match fee_result {
+                        Ok(()) => Err(rejection_reason),
+                        Err(fee_error) => Err(fee_error),
+                    };
+                }
+                let trigger_sequence = match state_tx.execute_data_triggers_dfs(&authority) {
+                    Ok(sequence) => sequence,
+                    Err(rejection_reason) => {
+                        let gas_used = state_tx.last_tx_gas_used;
+                        drop(state_tx);
+                        let fee_result = charge_rejected_live_batch_fees(
+                            state_block_mut,
+                            tx,
+                            &authority,
+                            gas_used,
+                            routing_decisions[idx].lane_id,
+                            routing_decisions[idx].dataspace_id,
+                            &rejection_reason,
+                        );
+                        account_rejected_live_batch_gas(
+                            state_block_mut,
+                            gas_used,
+                            &rejection_reason,
+                        );
+                        return match fee_result {
+                            Ok(()) => Err(rejection_reason),
+                            Err(fee_error) => Err(fee_error),
+                        };
+                    }
+                };
+                commit_stateful_admission_sequence(&mut state_tx, &admission)?;
+                let gas_used = state_tx.last_tx_gas_used;
+                state_tx.apply();
+                if gas_used > 0 {
+                    state_block_mut.gas_used_in_block =
+                        state_block_mut.gas_used_in_block.saturating_add(gas_used);
+                }
+                Ok(trigger_sequence)
+            };
             if let Some(start) = apply_setup_start {
                 apply_setup_ms = to_ms(start.elapsed());
             }
@@ -12036,7 +12439,10 @@ pub(crate) mod valid {
                             record_result(idx, Err(reason));
                             continue;
                         }
-                        if idx < is_quarantine.len() && is_quarantine[idx] {
+                        if idx < is_quarantine.len()
+                            && is_quarantine[idx]
+                            && !uses_live_batch_scheduler(txs[idx].instructions())
+                        {
                             layer_quar.push(idx);
                         } else {
                             layer_norm.push(idx);
@@ -12068,8 +12474,9 @@ pub(crate) mod valid {
                     let prepare_entry = |idx: usize| {
                         let tx = txs[idx];
                         let overlay = match overlays[idx].as_ref() {
-                            Ok(overlay) => Some(overlay.as_ref()),
-                            Err(err)
+                            None => None,
+                            Some(Ok(overlay)) => Some(overlay.as_ref()),
+                            Some(Err(err))
                                 if uses_live_vm_overlay_scheduler(tx.instructions())
                                     && err.may_change_with_live_state() =>
                             {
@@ -12079,7 +12486,7 @@ pub(crate) mod valid {
                                 // build to `overlay_for_live_state`.
                                 None
                             }
-                            Err(err) => return Err((idx, map_overlay_error(err))),
+                            Some(Err(err)) => return Err((idx, map_overlay_error(err))),
                         };
                         if let Some(overlay) = overlay {
                             let max_instrs = state_block.pipeline.overlay_max_instructions;
@@ -12180,6 +12587,9 @@ pub(crate) mod valid {
                     // Deterministically prefetch authority/account state and warm the first
                     // instruction chunk for each overlay to reduce merge stalls.
                     let mut accounts_to_prefetch: BTreeSet<AccountId> = BTreeSet::new();
+                    let alias_resolution_time_ms =
+                        u64::try_from(state_block._curr_block.creation_time().as_millis())
+                            .unwrap_or(u64::MAX);
                     for entry in &prepared {
                         accounts_to_prefetch.insert(entry.authority.clone());
                         if let Some(access_set) = access.get(entry.idx) {
@@ -12188,6 +12598,7 @@ pub(crate) mod valid {
                                     &state_block.world,
                                     &state_block.nexus.dataspace_catalog,
                                     key,
+                                    alias_resolution_time_ms,
                                 ) {
                                     accounts_to_prefetch.insert(account);
                                 }
@@ -12197,12 +12608,13 @@ pub(crate) mod valid {
                                     &state_block.world,
                                     &state_block.nexus.dataspace_catalog,
                                     key,
+                                    alias_resolution_time_ms,
                                 ) {
                                     accounts_to_prefetch.insert(account);
                                 }
                             }
                         }
-                        if let Some(Ok(overlay)) = overlays.get(entry.idx) {
+                        if let Some(Some(Ok(overlay))) = overlays.get(entry.idx) {
                             let _ = warm_overlay_chunk(overlay, entry.chunk_size);
                         }
                     }
@@ -12356,7 +12768,7 @@ pub(crate) mod valid {
                             })
                     };
                     let eval_detached = |p: &PreparedEntry| {
-                        if let Some(Ok(ovl)) = overlays.get(p.idx) {
+                        if let Some(Some(Ok(ovl))) = overlays.get(p.idx) {
                             if matches!(
                                 &*state_block.world.executor,
                                 crate::executor::Executor::UserProvided(_)
@@ -12368,8 +12780,12 @@ pub(crate) mod valid {
                                     .as_ref()
                                     .ok()
                                     .is_some_and(|prepared| {
-                                        prepared.durable_state_reads.is_some()
-                                            || prepared.force_live_rebuild
+                                        matches!(
+                                            prepared,
+                                            PreparedBlockExecution::Overlay(overlay)
+                                                if overlay.durable_state_reads.is_some()
+                                                    || overlay.force_live_rebuild
+                                        )
                                     })
                             {
                                 return (p.idx, None, Some(DetachedFallbackReason::DurableState));
@@ -12419,6 +12835,7 @@ pub(crate) mod valid {
                                             &state_block.world,
                                             &p.authority,
                                             &account_id,
+                                            alias_resolution_time_ms,
                                         ) {
                                             Ok(true) => {}
                                             Ok(false) => {
@@ -12445,6 +12862,7 @@ pub(crate) mod valid {
                                             &state_block.world,
                                             &p.authority,
                                             &transfer,
+                                            alias_resolution_time_ms,
                                         ) {
                                             Ok(true) => {}
                                             Ok(false) => {
@@ -12634,6 +13052,9 @@ pub(crate) mod valid {
                             }
                             let tx = txs[idx];
                             let hash = prepared_txs[idx].metadata.entrypoint_hash;
+                            if uses_live_batch_scheduler(tx.instructions()) {
+                                return execute_live_batch(state_block_mut, idx);
+                            }
                             let overlay = match overlay_for_live_state(state_block_mut, idx) {
                                 Ok(overlay) => overlay,
                                 Err(err) => {
@@ -13072,6 +13493,8 @@ pub(crate) mod valid {
                                                     result.and_then(|()| {
                                                         let overlay = overlays[p.idx]
                                                             .as_ref()
+                                                            .expect("detached delta requires an overlay")
+                                                            .as_ref()
                                                             .map_err(map_overlay_error)?;
                                                         charge_fees_for_applied_overlay_with_encoded_len(
                                                             &mut state_tx,
@@ -13506,6 +13929,14 @@ pub(crate) mod valid {
                     let hash = prepared_txs[idx].metadata.entrypoint_hash;
                     if let Some(reason) = stateless_rejections[idx].take() {
                         record_result(idx, Err(reason));
+                        continue;
+                    }
+                    if uses_live_batch_scheduler(tx.instructions()) {
+                        let result = execute_live_batch(state_block, idx);
+                        if result.is_err() {
+                            record_amx_abort(state_block, idx, "exec");
+                        }
+                        record_result(idx, result);
                         continue;
                     }
                     let overlay = match overlay_for_live_state(state_block, idx) {
@@ -14529,7 +14960,7 @@ pub(crate) mod valid {
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
             },
-            parameter::Parameters,
+            parameter::{Parameter, Parameters, system::SumeragiNposParameters},
             prelude::{Account, Domain, PeerId, Register},
             soracloud::{
                 SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1,
@@ -14624,31 +15055,42 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn merge_reference_admission_rejects_partial_and_full_execution_projections() {
+        fn merge_reference_admission_rejects_partial_and_accepts_full_execution_projection() {
             let settlement = settlement_merge_reference_fixture();
-            ValidBlock::validate_settlement_only_merge_reference(&settlement)
+            ValidBlock::validate_merge_reference_execution_projection(&settlement)
                 .expect("settlement-only reference is admissible at the projection boundary");
 
             let mut partial = settlement.clone();
             partial.entrypoint_count = Some(1);
 
             let mut full = settlement;
-            full.execution_batch_hash = Some(Hash::new(b"retired-batch"));
+            full.execution_batch_hash = Some(Hash::new(b"execution-batch"));
             full.entrypoint_count = Some(1);
             full.entrypoint_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
-                b"retired-entrypoints",
+                b"execution-entrypoints",
             )));
             full.result_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
-                b"retired-results",
+                b"execution-results",
             )));
             full.base_state_height = Some(0);
-            full.base_state_hash = Some(HashOf::from_untyped_unchecked(Hash::new(b"retired-base")));
+            full.base_state_hash =
+                Some(HashOf::from_untyped_unchecked(Hash::new(b"execution-base")));
 
-            for reference in [&partial, &full] {
+            assert!(matches!(
+                ValidBlock::validate_merge_reference_execution_projection(&partial),
+                Err(BlockValidationError::ExecutionContextInvalid(reason))
+                    if reason == "certified merge reference has a partial execution-batch binding"
+            ));
+            ValidBlock::validate_merge_reference_execution_projection(&full)
+                .expect("complete execution projection is admissible");
+
+            for invalid_count in [0, MAX_MERGE_EXECUTION_ENTRYPOINTS as u64 + 1] {
+                let mut invalid = full.clone();
+                invalid.entrypoint_count = Some(invalid_count);
                 assert!(matches!(
-                    ValidBlock::validate_settlement_only_merge_reference(reference),
+                    ValidBlock::validate_merge_reference_execution_projection(&invalid),
                     Err(BlockValidationError::ExecutionContextInvalid(reason))
-                        if reason == crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION
+                        if reason.contains("entrypoint count")
                 ));
             }
         }
@@ -15208,14 +15650,18 @@ pub(crate) mod valid {
             }
             .encode();
             bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-            let tx = TransactionBuilder::new(sccp_chain_id(), account_id)
-                .with_executable(Executable::IvmProved(IvmProved {
-                    bytecode: IvmBytecode::from_compiled(bytecode),
-                    overlay: overlay.into(),
-                    events_commitment: Hash::new(b"events"),
-                    gas_policy_commitment: Hash::new(b"gas"),
-                }))
-                .sign(keypair.private_key());
+            let tx = TransactionBuilder::new(
+                sccp_chain_id(),
+                account_id,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: IvmBytecode::from_compiled(bytecode),
+                overlay: overlay.into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            }))
+            .sign(keypair.private_key());
             AcceptedTransaction::new_unchecked(Cow::Owned(tx))
         }
 
@@ -15306,8 +15752,12 @@ pub(crate) mod valid {
         #[test]
         fn sccp_commitment_root_validation_rejects_short_result_vector() {
             let (plain_account, plain_keypair) = gen_account_in("sccp");
-            let plain_tx = TransactionBuilder::new(sccp_chain_id(), plain_account)
-                .sign(plain_keypair.private_key());
+            let plain_tx = TransactionBuilder::new(
+                sccp_chain_id(),
+                plain_account,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(plain_keypair.private_key());
             let plain_hash = plain_tx.hash_as_entrypoint();
             let sccp_entrypoint = sccp_accepted_transaction().entrypoint().clone();
             let accepted_plain = AcceptedTransaction::new_unchecked(Cow::Owned(plain_tx.clone()));
@@ -15916,6 +16366,10 @@ pub(crate) mod valid {
                         state.chain_id.clone(),
                         authority,
                         &time_source,
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
                     )
                     .with_instructions([Log::new(Level::INFO, format!("lane-predecessor-{index}"))])
                     .sign(signer.private_key()),
@@ -16208,6 +16662,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, label.to_owned())])
             .sign(signer.private_key());
@@ -16320,6 +16775,7 @@ pub(crate) mod valid {
                     state.chain_id.clone(),
                     authority,
                     &time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(Level::INFO, format!("{label}-{idx}"))])
                 .sign(signer.private_key());
@@ -16389,7 +16845,7 @@ pub(crate) mod valid {
             nexus.lane_catalog = lane_catalog;
         }
 
-        fn install_live_test_elastic_lane(state: &mut State, kura: &Kura) {
+        fn install_live_test_elastic_lane(state: &State) {
             let mut elastic_lane = LaneConfig {
                 id: LaneId::new(1),
                 alias: "elastic-lane-1".to_owned(),
@@ -16402,53 +16858,21 @@ pub(crate) mod valid {
                 .metadata
                 .insert("autoscale.created_height".to_owned(), "1".to_owned());
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
-            let mut nexus = state.nexus.write();
-            nexus.enabled = true;
-            nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
-            nexus.lane_catalog =
-                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
-                    .expect("live elastic lane catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-            drop(nexus);
-            state.reseed_static_lane_incarnations();
-
-            let previous = iroha_config::parameters::actual::LaneConfig::default();
-            let updated = state.nexus_snapshot().lane_config;
-            let default_incarnation = state
-                .lane_incarnation_at_height(LaneId::SINGLE, 1)
-                .expect("default lane incarnation at elastic creation height");
-            let elastic_incarnation = state
-                .lane_incarnation_at_height(LaneId::new(1), 1)
-                .expect("elastic lane incarnation at creation height");
-            let previous_incarnations = BTreeMap::from([(LaneId::SINGLE, default_incarnation)]);
-            let updated_incarnations = BTreeMap::from([
-                (LaneId::SINGLE, default_incarnation),
-                (LaneId::new(1), elastic_incarnation),
-            ]);
-            let previous_activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
-            let updated_activation_heights =
-                BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 1)]);
-            kura.apply_lane_geometry_transition_at_height(
-                &previous,
-                &updated,
-                &previous_incarnations,
-                &updated_incarnations,
-                &previous_activation_heights,
-                &updated_activation_heights,
-                &BTreeSet::new(),
-                1,
-            )
-            .expect("apply elastic lane storage geometry at creation height");
-            kura.mark_lane_geometry_catalog_published(
-                &updated,
-                &updated_incarnations,
-                &updated_activation_heights,
-                None,
-            )
-            .expect("publish elastic lane storage geometry");
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                nexus.autoscale.enabled = true;
+                nexus.autoscale.min_lanes = nonzero!(1_u32);
+                nexus.autoscale.max_lanes = nonzero!(8_u32);
+            }
+            state
+                .apply_autoscale_lane_lifecycle_for_tests(
+                    &iroha_data_model::nexus::LaneLifecyclePlan {
+                        additions: vec![elastic_lane],
+                        retire: Vec::new(),
+                    },
+                )
+                .expect("apply live elastic lane through the autoscale lifecycle");
         }
 
         #[test]
@@ -16644,6 +17068,7 @@ pub(crate) mod valid {
                 );
             let vote = iroha_data_model::block::consensus_v2::Vote {
                 round,
+                proposal_round: round,
                 phase: iroha_data_model::block::consensus_v2::GlobalPhase::Commit,
                 subject,
                 execution_commitment: execution,
@@ -16661,6 +17086,7 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             let qc = iroha_data_model::block::consensus_v2::QuorumCertificate {
                 round,
+                proposal_round: round,
                 phase: iroha_data_model::block::consensus_v2::GlobalPhase::Commit,
                 subject,
                 execution_commitment: execution,
@@ -17390,6 +17816,74 @@ pub(crate) mod valid {
             block
         }
 
+        #[test]
+        fn consensus_mode_effects_permissioned_skips_npos_derivation_without_signed_parameters() {
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = npos_effects_block(leader.private_key(), 2, None);
+
+            ValidBlock::validate_npos_effects_with_state(
+                &block,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+            )
+            .expect("permissioned validation must not derive NPoS-only penalties");
+        }
+
+        #[test]
+        fn consensus_mode_effects_permissioned_rejects_npos_attachment() {
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = npos_effects_block(
+                leader.private_key(),
+                2,
+                Some(NposConsensusEffects {
+                    vrf_epoch_seals: vec![vrf_epoch_record_for_test(0, 2)],
+                    v2_evidence_admissions: Vec::new(),
+                    penalty_actions: Vec::new(),
+                }),
+            );
+
+            let err = ValidBlock::validate_npos_effects_with_state(
+                &block,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+            )
+            .expect_err("permissioned validation must reject NPoS-only effects");
+            assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
+        }
+
+        #[test]
+        fn consensus_mode_effects_npos_still_requires_signed_parameters() {
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = npos_effects_block(leader.private_key(), 2, None);
+
+            let err = ValidBlock::validate_npos_effects_with_state(
+                &block,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
+            )
+            .expect_err("NPoS validation must require signed NPoS parameters");
+            assert!(matches!(
+                err,
+                BlockValidationError::NposEffectsInvalid(message)
+                    if message.contains("requires signed NPoS parameters")
+            ));
+        }
+
         fn vrf_epoch_record_for_test(epoch: u64, height: u64) -> VrfEpochRecord {
             VrfEpochRecord {
                 epoch,
@@ -17458,7 +17952,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            ValidBlock::validate_npos_effects_with_state(&block, &state)
+            ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect("monotonic VRF epoch record extension should validate");
         }
 
@@ -17488,7 +17982,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect_err("VRF epoch record rewrite should be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -17524,7 +18018,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            ValidBlock::validate_npos_effects_with_state(&block, &state)
+            ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect("monotonic VRF epoch record extension should validate");
         }
 
@@ -17556,7 +18050,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect_err("VRF epoch record rewrite must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -17565,6 +18059,11 @@ pub(crate) mod valid {
         fn validate_npos_effects_rejects_missing_required_actions() {
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let mut world = World::new();
+            let mut parameters = Parameters::default();
+            parameters.set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+            world.parameters = Cell::new(parameters);
             world.vrf_epochs.insert(
                 7,
                 VrfEpochRecord {
@@ -17592,9 +18091,29 @@ pub(crate) mod valid {
             );
             let block = npos_effects_block(leader.private_key(), 20, None);
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
-                .expect_err("missing deterministic NPoS marker must be rejected");
+            let err = ValidBlock::validate_npos_effects_with_state(
+                &block,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
+            )
+            .expect_err("missing deterministic NPoS marker must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
+
+            let exact = npos_effects_block(
+                leader.private_key(),
+                20,
+                Some(NposConsensusEffects {
+                    vrf_epoch_seals: Vec::new(),
+                    v2_evidence_admissions: Vec::new(),
+                    penalty_actions: vec![npos_marker(7, 20)],
+                }),
+            );
+            ValidBlock::validate_npos_effects_with_state(
+                &exact,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
+            )
+            .expect("the exact deterministic NPoS action set must validate");
         }
 
         #[test]
@@ -17615,7 +18134,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect_err("extra deterministic NPoS action must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -17639,7 +18158,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
                 .expect_err("duplicate NPoS actions must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -17675,6 +18194,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 alice_id,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "test".to_string())])
             .sign(alice_keypair.private_key());
@@ -17767,6 +18287,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "duplicate".to_owned())])
             .sign(signer.private_key());
@@ -17855,6 +18376,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "context".to_owned())])
             .sign(signer.private_key());
@@ -17921,6 +18443,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "context".to_owned())])
             .sign(signer.private_key());
@@ -18022,6 +18545,100 @@ pub(crate) mod valid {
                 ConsensusValidationProfile::LegacyLive,
             )
             .expect("matching lane payload ownership must validate");
+        }
+
+        #[test]
+        fn validate_static_state_dependent_accepts_single_lane_context_when_nexus_disabled() {
+            let (state, _kura, topology, time_source, leader) = lane_payload_context_fixture();
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = false;
+            }
+            assert_eq!(
+                crate::state::consensus_lane_dataspace_at_height(
+                    LaneId::SINGLE,
+                    &state.nexus_snapshot(),
+                    2,
+                ),
+                Some(DataSpaceId::UNIVERSAL)
+            );
+            let signed = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "single-lane-payload-context-with-nexus-disabled",
+                1,
+                None,
+            );
+
+            let view = state.query_view();
+            ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect("disabled Nexus must retain the canonical single-lane route");
+        }
+
+        #[test]
+        fn validate_static_state_dependent_rejects_nonzero_planner_origin_lane_view() {
+            let (state, topology, time_source, signed) =
+                signed_default_lane_block_with_execution_context(
+                    "lane-payload-context-nonzero-origin-view",
+                    1,
+                    |transactions, validators, lane_incarnation| {
+                        let ownership = sample_lane_payload_ownership_for_context_at_slot(
+                            2,
+                            0,
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                            lane_incarnation,
+                            1,
+                            1,
+                            vec![0],
+                            vec![Hash::from(transactions[0].hash_as_entrypoint())],
+                            validators,
+                        );
+                        ownership
+                            .validate_replay_material()
+                            .expect("nonzero lane-view fixture must carry fresh replay hashes");
+                        BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                            transactions[0].hash_as_entrypoint(),
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        )])
+                        .with_lane_payload_ownerships(vec![ownership])
+                    },
+                );
+
+            let view = state.query_view();
+            let error = ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect_err("planner-origin lane payloads must start at lane view zero");
+            assert!(
+                matches!(
+                    error,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("must originate at lane-local view zero")
+                ),
+                "unexpected nonzero lane-view rejection: {error}"
+            );
         }
 
         #[test]
@@ -18804,6 +19421,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "context".to_owned())])
             .sign(signer.private_key());
@@ -18944,6 +19562,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([
                 InstructionBox::from(Register::domain(Domain::new(
@@ -19040,8 +19659,8 @@ pub(crate) mod valid {
 
             let mut world = World::new();
             insert_active_consensus_keys(&mut world, &key_pairs);
-            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&mut state, &kura);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_live_test_elastic_lane(&state);
             install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash = commit_block_with_applied_lane_predecessors(
                 &state,
@@ -19062,6 +19681,7 @@ pub(crate) mod valid {
                     state.chain_id.clone(),
                     authority,
                     &time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(Level::INFO, format!("elastic-context-{attempt}"))])
                 .sign(signer.private_key());
@@ -19154,8 +19774,8 @@ pub(crate) mod valid {
 
             let mut world = World::new();
             insert_active_consensus_keys(&mut world, &key_pairs);
-            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&mut state, &kura);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_live_test_elastic_lane(&state);
             install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash = commit_block_with_applied_lane_predecessors(
                 &state,
@@ -19177,6 +19797,7 @@ pub(crate) mod valid {
                     state.chain_id.clone(),
                     authority,
                     &time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(
                     Level::INFO,
@@ -19207,17 +19828,20 @@ pub(crate) mod valid {
             time_handle.advance(Duration::from_millis(1));
 
             let coordinator = plan.coordinator_route();
+            let lane_incarnation = state
+                .lane_incarnation_at_height(coordinator.lane_id, 2)
+                .expect("elastic lane incarnation at candidate height");
+            let descriptor_validators =
+                state.authoritative_lane_peer_ids_at_height(coordinator.lane_id, 2);
             let mut ownership = sample_lane_payload_ownership_for_context(
                 2,
                 0,
                 coordinator.lane_id,
                 coordinator.dataspace_id,
-                state
-                    .lane_incarnation_at_height(coordinator.lane_id, 2)
-                    .expect("elastic lane incarnation at candidate height"),
+                lane_incarnation,
                 vec![0],
                 vec![Hash::from(tx.hash_as_entrypoint())],
-                topology.as_ref(),
+                &descriptor_validators,
             );
             bind_applied_lane_predecessor(&kura, &mut ownership);
             let execution_context = BlockExecutionContextBundle::new(vec![
@@ -19490,8 +20114,8 @@ pub(crate) mod valid {
 
             let mut world = World::new();
             insert_active_consensus_keys(&mut world, &key_pairs);
-            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&mut state, &kura);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_live_test_elastic_lane(&state);
             install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash = commit_block_with_applied_lane_predecessors(
                 &state,
@@ -19513,6 +20137,7 @@ pub(crate) mod valid {
                     state.chain_id.clone(),
                     authority,
                     &time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(
                     Level::INFO,
@@ -19540,25 +20165,37 @@ pub(crate) mod valid {
             let (tx, plan) =
                 selected.expect("fixture should find a transaction routed to elastic lane");
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+            let coordinator = plan.coordinator_route();
+            let lane_incarnation = state
+                .lane_incarnation_at_height(coordinator.lane_id, 2)
+                .expect("elastic lane incarnation before disabling Nexus");
+            let descriptor_validators =
+                state.authoritative_lane_peer_ids_at_height(coordinator.lane_id, 2);
 
             {
                 let mut nexus = state.nexus.write();
                 nexus.enabled = false;
             }
+            assert_eq!(
+                crate::state::consensus_lane_dataspace_at_height(
+                    plan.coordinator_route().lane_id,
+                    &state.nexus_snapshot(),
+                    2,
+                ),
+                None,
+                "disabled Nexus must not retain a catalogued elastic route"
+            );
             time_handle.advance(Duration::from_millis(1));
 
-            let coordinator = plan.coordinator_route();
             let mut ownership = sample_lane_payload_ownership_for_context(
                 2,
                 0,
                 coordinator.lane_id,
                 coordinator.dataspace_id,
-                state
-                    .lane_incarnation_at_height(coordinator.lane_id, 2)
-                    .expect("elastic lane incarnation at candidate height"),
+                lane_incarnation,
                 vec![0],
                 vec![Hash::from(tx.hash_as_entrypoint())],
-                topology.as_ref(),
+                &descriptor_validators,
             );
             bind_applied_lane_predecessor(&kura, &mut ownership);
             let execution_context = BlockExecutionContextBundle::new(vec![
@@ -19615,8 +20252,8 @@ pub(crate) mod valid {
 
             let mut world = World::new();
             insert_active_consensus_keys(&mut world, &key_pairs);
-            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&mut state, &kura);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_live_test_elastic_lane(&state);
             install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash = commit_block_with_applied_lane_predecessors(
                 &state,
@@ -19638,6 +20275,7 @@ pub(crate) mod valid {
                     state.chain_id.clone(),
                     authority,
                     &time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .with_instructions([Log::new(
                     Level::INFO,
@@ -19665,6 +20303,10 @@ pub(crate) mod valid {
             let (tx, plan) =
                 selected.expect("fixture should find a transaction routed to elastic lane");
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+            let coordinator = plan.coordinator_route();
+            let lane_incarnation = state
+                .lane_incarnation_at_height(coordinator.lane_id, 2)
+                .expect("elastic lane incarnation before corrupting the active range");
 
             {
                 let mut nexus = state.nexus.write();
@@ -19681,15 +20323,12 @@ pub(crate) mod valid {
             }
             time_handle.advance(Duration::from_millis(1));
 
-            let coordinator = plan.coordinator_route();
             let mut ownership = sample_lane_payload_ownership_for_context(
                 2,
                 0,
                 coordinator.lane_id,
                 coordinator.dataspace_id,
-                state
-                    .lane_incarnation_at_height(coordinator.lane_id, 2)
-                    .expect("elastic lane incarnation at candidate height"),
+                lane_incarnation,
                 vec![0],
                 vec![Hash::from(tx.hash_as_entrypoint())],
                 topology.as_ref(),
@@ -19725,13 +20364,16 @@ pub(crate) mod valid {
             .expect_err(
                 "corrupted active elastic range must reject stale elastic execution context",
             );
-            assert!(matches!(
-                err,
-                BlockValidationError::ExecutionContextInvalid(ref message)
-                    if message.contains("routing mismatch")
-                        && message.contains("expected lane 0")
-                        && message.contains("got lane 1")
-            ));
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("routing mismatch")
+                            && message.contains("expected lane 0")
+                            && message.contains("got lane 1")
+                ),
+                "unexpected corrupt-range rejection: {err:?}"
+            );
         }
 
         #[test]
@@ -19820,9 +20462,13 @@ pub(crate) mod valid {
                 (params.sumeragi().max_clock_drift(), params.transaction())
             };
 
-            let tx = TransactionBuilder::new(chain_id.clone(), alice_id)
-                .with_instructions([Log::new(Level::INFO, "test".to_string())])
-                .sign(alice_keypair.private_key());
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                alice_id,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "test".to_string())])
+            .sign(alice_keypair.private_key());
             let crypto_cfg = state.crypto();
             let tx = AcceptedTransaction::accept(
                 tx,
@@ -20996,6 +21642,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "overlap-grace".to_owned())])
             .sign(signer.private_key());
@@ -21788,6 +22435,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "reject-only".to_owned())])
             .sign(signer.private_key());
@@ -21856,6 +22504,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "forged-fragment-count".to_owned())])
             .sign(signer.private_key());
@@ -21939,6 +22588,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(
                 Level::INFO,
@@ -22014,6 +22664,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             );
             builder.set_ttl(Duration::from_millis(100));
             let tx = builder
@@ -22073,6 +22724,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
             .sign(signer.private_key());
@@ -22135,6 +22787,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
             .sign(signer.private_key());
@@ -22307,6 +22960,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
             .sign(signer.private_key());
@@ -22374,6 +23028,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "prevalidated".to_owned())])
             .sign(signer.private_key());
@@ -22491,6 +23146,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
             .sign(signer.private_key());
@@ -22548,6 +23204,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
             .sign(signer.private_key());
@@ -22630,6 +23287,7 @@ pub(crate) mod valid {
                 state.chain_id.clone(),
                 authority,
                 &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions([Log::new(Level::INFO, "fraud-check".to_owned())])
             .with_metadata(Metadata::default())
@@ -22683,9 +23341,13 @@ pub(crate) mod valid {
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
-            let tx = TransactionBuilder::new(chain_id.clone(), genesis_account.clone())
-                .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
 
             let block = SignedBlock::genesis(
                 vec![tx],
@@ -22705,9 +23367,13 @@ pub(crate) mod valid {
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
-            let tx = TransactionBuilder::new(chain_id.clone(), genesis_account.clone())
-                .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
             let record = DaCommitmentRecord::new(
                 LaneId::new(0),
                 1,
@@ -22749,11 +23415,15 @@ pub(crate) mod valid {
             );
             let asset_name = asset_definition_id.name().to_string();
 
-            let tx = TransactionBuilder::new(chain_id.clone(), genesis_account.clone())
-                .with_instructions([Register::asset_definition(
-                    AssetDefinition::numeric(asset_definition_id).with_name(asset_name),
-                )])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Register::asset_definition(
+                AssetDefinition::numeric(asset_definition_id).with_name(asset_name),
+            )])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
 
             let block = SignedBlock::genesis(
                 vec![tx],
@@ -22850,12 +23520,20 @@ pub(crate) mod valid {
             let chain_b = ChainId::from("11111111-1111-1111-1111-111111111111");
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
-            let tx_a = TransactionBuilder::new(chain_a.clone(), genesis_account.clone())
-                .with_instructions([Log::new(Level::INFO, "tx_a".to_owned())])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-            let tx_b = TransactionBuilder::new(chain_b, genesis_account.clone())
-                .with_instructions([Log::new(Level::INFO, "tx_b".to_owned())])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let tx_a = TransactionBuilder::new(
+                chain_a.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "tx_a".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let tx_b = TransactionBuilder::new(
+                chain_b,
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "tx_b".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
 
             let block = SignedBlock::genesis(
                 vec![tx_a, tx_b],
@@ -22900,7 +23578,11 @@ pub(crate) mod valid {
 
         // Create a signed block with only leader signature
         let (account_id, keypair) = gen_account_in("dummy");
-        let mut builder = TransactionBuilder::new(chain_id.clone(), account_id);
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            account_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
@@ -23969,8 +24651,8 @@ mod commit {
             let binding = binding_for_descriptor(&descriptor);
             let mut first = sample_handle(binding, lane, dsid, 10, policy.manifest_root);
             first.handle.sub_nonce = 3;
-            first.handle.budget.remaining = 10;
-            first.handle.budget.per_use = Some(10);
+            first.handle.budget.remaining = Quantity::from(10_u64);
+            first.handle.budget.per_use = Some(Quantity::from(10_u64));
             first.intent.op.amount = Some("7".parse().expect("canonical spend quantity"));
             first.amount = Some("7".parse().expect("canonical fragment quantity"));
             let mut second = first.clone();
@@ -24851,12 +25533,16 @@ mod commit {
                 Some(5),
                 None,
             );
-            let expected_commitment =
-                ivm::axt::derive_amount_commitment(dsid, 5, Some(proof.payload.as_slice()));
+            let hidden_amount = Quantity::from(5_u64);
+            let expected_commitment = ivm::axt::derive_amount_commitment(
+                dsid,
+                &hidden_amount,
+                Some(proof.payload.as_slice()),
+            );
 
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
-            handle.intent.op.amount = "hidden".to_owned();
-            handle.amount = 0;
+            handle.intent.op.amount = None;
+            handle.amount = None;
             handle.amount_commitment = Some(expected_commitment);
 
             let envelope = AxtEnvelopeRecord {
@@ -24916,8 +25602,8 @@ mod commit {
             );
 
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
-            handle.intent.op.amount = "hidden".to_owned();
-            handle.amount = 0;
+            handle.intent.op.amount = None;
+            handle.amount = None;
             handle.amount_commitment = Some([0xFF; 32]);
 
             let envelope = AxtEnvelopeRecord {
@@ -24940,7 +25626,11 @@ mod commit {
             let state_block = state.block(block.header());
 
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Budget, "commitment mismatch");
+            expect_axt_error(
+                err,
+                AxtRejectReason::Budget,
+                "amount commitment does not match",
+            );
         }
     }
 }
@@ -25230,6 +25920,7 @@ mod event {
             let inner_tx = iroha_data_model::prelude::TransactionBuilder::new(
                 chain_id.clone(),
                 authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .sign(keypair.private_key());
             let commitment =
@@ -25253,9 +25944,12 @@ mod event {
                     ),
                 );
             let sealed_hash = sealed_entrypoint.hash();
-            let rejected_tx =
-                iroha_data_model::prelude::TransactionBuilder::new(chain_id, authority)
-                    .sign(keypair.private_key());
+            let rejected_tx = iroha_data_model::prelude::TransactionBuilder::new(
+                chain_id,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(keypair.private_key());
             let rejected_hash = rejected_tx.hash_as_entrypoint();
             let header = iroha_data_model::block::BlockHeader::new(
                 nonzero_ext::nonzero!(1_u64),
@@ -25321,9 +26015,12 @@ mod event {
             let chain_id: iroha_data_model::ChainId =
                 "event-routing-plan-first".parse().expect("chain id");
             let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
-            let tx =
-                iroha_data_model::prelude::TransactionBuilder::new(chain_id, authority.clone())
-                    .sign(keypair.private_key());
+            let tx = iroha_data_model::prelude::TransactionBuilder::new(
+                chain_id,
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(keypair.private_key());
             let hash = tx.hash();
             let plan_route =
                 crate::queue::RoutingDecision::new(LaneId::new(7), DataSpaceId::new(70));
@@ -25887,12 +26584,14 @@ mod tests {
     use iroha_data_model::{
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
-        nexus::{FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect},
         prelude::*,
-        transaction::signed::{
-            SealedTransactionCommitmentPayload, SealedTransactionReveal,
-            SignedSealedTransactionCommitment, SignedTransaction,
-            compute_sealed_transaction_commitment,
+        transaction::{
+            ExecutableBatchItem,
+            signed::{
+                SealedTransactionCommitmentPayload, SealedTransactionReveal,
+                SignedSealedTransactionCommitment, SignedTransaction,
+                compute_sealed_transaction_commitment,
+            },
         },
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
@@ -26007,24 +26706,16 @@ mod tests {
             .parse()
             .expect("valid chain id");
         let (account_id, keypair) = gen_account_in("dummy");
-        let mut builder = TransactionBuilder::new(chain_id, account_id);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            account_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
-    }
-
-    fn default_fee_sponsor_policy(sponsor: &AccountId) -> FeeSponsorPolicy {
-        FeeSponsorPolicy {
-            id: FeeSponsorPolicyId::new(
-                sponsor.clone(),
-                "default".parse().expect("default fee sponsor policy"),
-            ),
-            enabled: true,
-            max_fee: None,
-            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
-        }
     }
 
     #[test]
@@ -26664,9 +27355,13 @@ mod tests {
                 )))
             })
             .collect::<Vec<_>>();
-        let tx = TransactionBuilder::new(chain_id, authority_id)
-            .with_instructions(instructions)
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id,
+            authority_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .sign(keypair.private_key());
         let tx_hash = AcceptedTransaction::prepare_signed_metadata(&tx).signed_hash;
         (tx, tx_hash)
     }
@@ -26728,26 +27423,26 @@ mod tests {
             lane_incarnation: participant_proposal.descriptor.lane_incarnation,
             dataspace_id: participant.dataspace_id,
             tx_count: 2,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: Quantity::zero(),
+            total_xor_due: Quantity::zero(),
+            total_xor_after_haircut: Quantity::zero(),
+            total_xor_variance: Quantity::zero(),
             swap_metadata: None,
             receipts: vec![
                 LaneSettlementReceipt {
                     source_id: first_source,
-                    local_amount_micro: 0,
-                    xor_due_micro: 0,
-                    xor_after_haircut_micro: 0,
-                    xor_variance_micro: 0,
+                    local_amount: Quantity::zero(),
+                    xor_due: Quantity::zero(),
+                    xor_after_haircut: Quantity::zero(),
+                    xor_variance: Quantity::zero(),
                     timestamp_ms: 42,
                 },
                 LaneSettlementReceipt {
                     source_id: second_source,
-                    local_amount_micro: 0,
-                    xor_due_micro: 0,
-                    xor_after_haircut_micro: 0,
-                    xor_variance_micro: 0,
+                    local_amount: Quantity::zero(),
+                    xor_due: Quantity::zero(),
+                    xor_after_haircut: Quantity::zero(),
+                    xor_variance: Quantity::zero(),
                     timestamp_ms: 42,
                 },
             ],
@@ -27395,6 +28090,7 @@ mod tests {
             chain_id.clone(),
             authority.clone(),
             &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([
             InstructionBox::from(Register::domain(Domain::new(
@@ -27660,17 +28356,25 @@ mod tests {
         let log = Log::new(Level::INFO, "test".to_string());
 
         let tx1 = Box::new(
-            TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-                .with_instructions([log.clone()])
-                .sign(alice_keypair.private_key()),
+            TransactionBuilder::new(
+                chain_id.clone(),
+                alice_id.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([log.clone()])
+            .sign(alice_keypair.private_key()),
         );
         let tx1: &'static SignedTransaction = Box::leak(tx1);
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx1));
 
         let tx2 = Box::new(
-            TransactionBuilder::new(chain_id, alice_id.clone())
-                .with_instructions([log])
-                .sign(alice_keypair.private_key()),
+            TransactionBuilder::new(
+                chain_id,
+                alice_id.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([log])
+            .sign(alice_keypair.private_key()),
         );
         let tx2: &'static SignedTransaction = Box::leak(tx2);
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx2));
@@ -27949,16 +28653,24 @@ mod tests {
             "coin".parse().unwrap(),
         );
         let a_coin = AssetId::of(rose.clone(), alice_id.clone());
-        let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-        let tx2 = TransactionBuilder::new(chain_id.clone(), bob_id.clone())
-            .with_instructions([SetKeyValue::account(
-                bob_id.clone(),
-                "k".parse().unwrap(),
-                iroha_primitives::json::Json::new("v"),
-            )])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx1 = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain_id.clone(),
+            bob_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SetKeyValue::account(
+            bob_id.clone(),
+            "k".parse().unwrap(),
+            iroha_primitives::json::Json::new("v"),
+        )])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
         let acc: Vec<_> = vec![tx1, tx2]
             .into_iter()
             .map(|t| crate::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
@@ -28064,7 +28776,11 @@ mod tests {
         reveal_deadline_height: u64,
         metadata_key: Name,
     ) -> (TransactionEntrypoint, TransactionEntrypoint) {
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::ZERO);
         let signed = builder
             .with_instructions([SetKeyValue::account(
@@ -28099,9 +28815,13 @@ mod tests {
         let chain_id = ChainId::from("external-only-borrowed-validation");
         let (authority, keypair) = gen_account_in("wonderland");
         let state = state_with_transaction_policy(&chain_id, &authority, false, false);
-        let signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "external-only".to_owned())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "external-only".to_owned())])
+        .sign(keypair.private_key());
         let entrypoint_hash = TransactionEntrypoint::External(signed.clone()).hash();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
         let block = BlockBuilder::new(vec![accepted])
@@ -28136,9 +28856,13 @@ mod tests {
                 .into()
         };
 
-        let instructions_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "plain".to_owned())])
-            .sign(keypair.private_key());
+        let instructions_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "plain".to_owned())])
+        .sign(keypair.private_key());
         let instructions_block: SignedBlock = make_block(instructions_tx);
         assert!(
             ValidBlock::sequential_entrypoints_for_live_execution(&instructions_block).is_none(),
@@ -28152,39 +28876,51 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let contract_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_executable(Executable::ContractCall(
-                iroha_data_model::transaction::executable::ContractInvocation {
-                    contract_address,
-                    expected_code_hash: Hash::new(b"overlay-routing-contract-code"),
-                    entrypoint: "increment".to_owned(),
-                    arguments: None,
-                },
-            ))
-            .sign(keypair.private_key());
+        let contract_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::ContractCall(
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address,
+                expected_code_hash: Hash::new(b"overlay-routing-contract-code"),
+                entrypoint: "increment".to_owned(),
+                arguments: None,
+            },
+        ))
+        .sign(keypair.private_key());
         let contract_block: SignedBlock = make_block(contract_tx);
         assert!(
             ValidBlock::sequential_entrypoints_for_live_execution(&contract_block).is_none(),
             "contract calls use the overlay scheduler; durable reads are validated before merge"
         );
 
-        let ivm_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0x01])))
-            .sign(keypair.private_key());
+        let ivm_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0x01])))
+        .sign(keypair.private_key());
         let ivm_block: SignedBlock = make_block(ivm_tx);
         assert!(
             ValidBlock::sequential_entrypoints_for_live_execution(&ivm_block).is_none(),
             "raw IVM calls use the same durable-read validation as deployed contracts"
         );
 
-        let proved_tx = TransactionBuilder::new(chain_id, authority)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
-                overlay: Vec::<InstructionBox>::new().into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            }))
-            .sign(keypair.private_key());
+        let proved_tx = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        }))
+        .sign(keypair.private_key());
         let proved_block: SignedBlock = make_block(proved_tx);
         assert!(
             ValidBlock::sequential_entrypoints_for_live_execution(&proved_block).is_none(),
@@ -28252,22 +28988,23 @@ seiyaku GuardedOverlay {
             .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
             .transpose()
             .expect("bounded guarded arguments");
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "gas_limit".parse().expect("gas_limit name"),
-            Json::new(100_000_u64),
-        );
-        let transaction = TransactionBuilder::new(chain_id, authority.clone())
-            .with_metadata(metadata)
-            .with_executable(Executable::ContractCall(
-                iroha_data_model::transaction::executable::ContractInvocation {
-                    contract_address,
-                    expected_code_hash: code_hash,
-                    entrypoint: "write".to_owned(),
-                    arguments,
-                },
-            ))
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            chain_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                core::num::NonZeroU64::new(100_000),
+            ),
+        )
+        .with_executable(Executable::ContractCall(
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address,
+                expected_code_hash: code_hash,
+                entrypoint: "write".to_owned(),
+                arguments,
+            },
+        ))
+        .sign(keypair.private_key());
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             transaction,
         ))])
@@ -28389,11 +29126,6 @@ seiyaku DynamicAccessCounter {
         state.set_pipeline(pipeline);
 
         let make_call = |authority: AccountId, keypair: &KeyPair, entrypoint: &str, delta: i64| {
-            let mut metadata = Metadata::default();
-            metadata.insert(
-                "gas_limit".parse().expect("gas_limit name"),
-                Json::new(1_000_000_u64),
-            );
             let payload = Json::new(norito::json!({
                 "key": "7",
                 "delta": (delta.to_string()),
@@ -28409,17 +29141,23 @@ seiyaku DynamicAccessCounter {
                     .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
                     .transpose()
                     .expect("bounded contract arguments");
-            TransactionBuilder::new(chain_id.clone(), authority)
-                .with_metadata(metadata)
-                .with_executable(Executable::ContractCall(
-                    iroha_data_model::transaction::executable::ContractInvocation {
-                        contract_address: contract_address.clone(),
-                        expected_code_hash: code_hash,
-                        entrypoint: entrypoint.to_owned(),
-                        arguments,
-                    },
-                ))
-                .sign(keypair.private_key())
+            TransactionBuilder::new(
+                chain_id.clone(),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(
+                    Vec::new(),
+                    core::num::NonZeroU64::new(1_000_000),
+                ),
+            )
+            .with_executable(Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address: contract_address.clone(),
+                    expected_code_hash: code_hash,
+                    entrypoint: entrypoint.to_owned(),
+                    arguments,
+                },
+            ))
+            .sign(keypair.private_key())
         };
         let direct = make_call(alice.clone(), &alice_keypair, "bump_direct", 3);
         let helper = make_call(bob, &bob_keypair, "bump_via_helper", 5);
@@ -28564,10 +29302,6 @@ seiyaku DynamicTarget {
                          fixture_nonce: u64| {
             let mut metadata = Metadata::default();
             metadata.insert(
-                "gas_limit".parse().expect("gas_limit name"),
-                Json::new(1_000_000_u64),
-            );
-            metadata.insert(
                 "dynamic_target_fixture_nonce"
                     .parse()
                     .expect("fixture nonce name"),
@@ -28584,17 +29318,24 @@ seiyaku DynamicTarget {
                     .map(iroha_data_model::transaction::executable::ContractArgumentRecord::try_new)
                     .transpose()
                     .expect("bounded contract arguments");
-            TransactionBuilder::new(chain_id.clone(), authority)
-                .with_metadata(metadata)
-                .with_executable(Executable::ContractCall(
-                    iroha_data_model::transaction::executable::ContractInvocation {
-                        contract_address: contract_address.clone(),
-                        expected_code_hash: code_hash,
-                        entrypoint: entrypoint.to_owned(),
-                        arguments,
-                    },
-                ))
-                .sign(keypair.private_key())
+            TransactionBuilder::new(
+                chain_id.clone(),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(
+                    Vec::new(),
+                    core::num::NonZeroU64::new(1_000_000),
+                ),
+            )
+            .with_metadata(metadata)
+            .with_executable(Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address: contract_address.clone(),
+                    expected_code_hash: code_hash,
+                    entrypoint: entrypoint.to_owned(),
+                    arguments,
+                },
+            ))
+            .sign(keypair.private_key())
         };
         let choose = (0_u64..)
             .find_map(|nonce| {
@@ -28751,9 +29492,13 @@ seiyaku DynamicTarget {
         let mut world = World::with([domain], [account], []);
         let block_key = Name::from_str("sequential_block_pipeline_trigger").expect("metadata key");
         let tx_key = Name::from_str("sequential_tx_pipeline_trigger").expect("metadata key");
-        let external_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "external".to_owned())])
-            .sign(keypair.private_key());
+        let external_signed = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "external".to_owned())])
+        .sign(keypair.private_key());
         let external_hash = external_signed.hash();
         add_pipeline_metadata_trigger(
             &mut world,
@@ -28921,9 +29666,13 @@ seiyaku DynamicTarget {
         let tx_key = Name::from_str("sealed_only_tx_pipeline_trigger").expect("metadata key");
         let any_tx_key =
             Name::from_str("sealed_only_any_tx_pipeline_trigger").expect("metadata key");
-        let dummy_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
-            .sign(keypair.private_key());
+        let dummy_signed = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
+        .sign(keypair.private_key());
         add_pipeline_metadata_trigger(
             &mut world,
             &authority,
@@ -29047,11 +29796,15 @@ seiyaku DynamicTarget {
         let wrong_dataspace_key =
             Name::from_str("sequential_wrong_dataspace_rejected_tx_pipeline_trigger")
                 .expect("metadata key");
-        let external_signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Unregister::domain(
-                DomainId::try_new("missing-domain", "universal").expect("valid domain id"),
-            )])
-            .sign(keypair.private_key());
+        let external_signed = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Unregister::domain(
+            DomainId::try_new("missing-domain", "universal").expect("valid domain id"),
+        )])
+        .sign(keypair.private_key());
         let external_hash = external_signed.hash();
         let wrong_hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([0xE7; Hash::LENGTH]));
@@ -29424,7 +30177,11 @@ seiyaku DynamicTarget {
             Json::from(2_u64),
         );
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::ZERO);
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "expired".to_owned())])
@@ -29463,7 +30220,11 @@ seiyaku DynamicTarget {
             Json::from(5_u64),
         );
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::ZERO);
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "sequence".to_owned())])
@@ -29515,9 +30276,13 @@ seiyaku DynamicTarget {
         );
 
         // Making two transactions that have the same instruction
-        let tx = TransactionBuilder::new(chain_id.clone(), alice_id)
-            .with_instructions([create_asset_definition])
-            .sign(alice_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([create_asset_definition])
+        .sign(alice_keypair.private_key());
         let crypto_cfg = state.crypto();
         let tx = AcceptedTransaction::accept(
             tx,
@@ -29572,9 +30337,13 @@ seiyaku DynamicTarget {
         let domain_a = Register::domain(Domain::new(domain_a_id));
         let domain_b = Register::domain(Domain::new(domain_b_id));
 
-        let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions::<InstructionBox>([domain_a.into()])
-            .sign(alice_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>([domain_a.into()])
+        .sign(alice_keypair.private_key());
         let crypto_cfg = state.crypto();
         let tx = AcceptedTransaction::accept(
             tx,
@@ -29589,9 +30358,13 @@ seiyaku DynamicTarget {
         let fail_instruction = Unregister::domain(fail_domain_id);
         let succeed_instruction = domain_b;
 
-        let tx0 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions::<InstructionBox>([fail_instruction.into()])
-            .sign(alice_keypair.private_key());
+        let tx0 = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>([fail_instruction.into()])
+        .sign(alice_keypair.private_key());
         let tx0 = AcceptedTransaction::accept(
             tx0,
             &chain_id,
@@ -29601,9 +30374,13 @@ seiyaku DynamicTarget {
         )
         .expect("Valid");
 
-        let tx2 = TransactionBuilder::new(chain_id.clone(), alice_id)
-            .with_instructions::<InstructionBox>([succeed_instruction.into()])
-            .sign(alice_keypair.private_key());
+        let tx2 = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>([succeed_instruction.into()])
+        .sign(alice_keypair.private_key());
         let tx2 = AcceptedTransaction::accept(
             tx2,
             &chain_id,
@@ -29689,9 +30466,13 @@ seiyaku DynamicTarget {
             AssetDefinition::numeric(asset_definition_id).with_name("coin".to_owned()),
         );
         let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
-        let tx_fail = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions::<InstructionBox>([create_domain.clone().into(), fail_isi.into()])
-            .sign(alice_keypair.private_key());
+        let tx_fail = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>([create_domain.clone().into(), fail_isi.into()])
+        .sign(alice_keypair.private_key());
         let crypto_cfg = state.crypto();
         let tx_fail = AcceptedTransaction::accept(
             tx_fail,
@@ -29701,9 +30482,13 @@ seiyaku DynamicTarget {
             crypto_cfg.as_ref(),
         )
         .expect("Valid");
-        let tx_accept = TransactionBuilder::new(chain_id.clone(), alice_id)
-            .with_instructions::<InstructionBox>([create_domain.into(), create_asset.into()])
-            .sign(alice_keypair.private_key());
+        let tx_accept = TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions::<InstructionBox>([create_domain.into(), create_asset.into()])
+        .sign(alice_keypair.private_key());
         let tx_accept = AcceptedTransaction::accept(
             tx_accept,
             &chain_id,
@@ -29754,13 +30539,13 @@ seiyaku DynamicTarget {
     }
 
     #[test]
-    fn rejected_business_execution_still_charges_nexus_fee() {
+    fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus fee test lock");
         crate::sumeragi::status::reset_nexus_economics_for_tests();
 
-        let chain_id = ChainId::from("rejected-business-fee-test");
+        let chain_id = ChainId::from("rejected-live-batch-fee-test");
         let (payer_id, payer_keypair) = gen_account_in("wonderland");
         let (sink_id, _sink_keypair) = gen_account_in("wonderland");
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -29801,7 +30586,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
         let (max_clock_drift, tx_limits) = {
             let state_view = state.world.view();
@@ -29819,10 +30603,24 @@ seiyaku DynamicTarget {
         let create_domain = Register::domain(Domain::new(created_domain_id.clone()));
         let fail_instruction =
             Unregister::domain(DomainId::try_new("missing-domain", "universal").unwrap());
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                asset_definition_id.clone(),
+                Quantity::from(1_u32),
+            )],
+            None,
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone(), fee_payment);
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
-            .with_instructions::<InstructionBox>([create_domain.into(), fail_instruction.into()])
+            .with_executable(Executable::Batch(
+                vec![
+                    ExecutableBatchItem::Instruction(create_domain.into()),
+                    ExecutableBatchItem::Instruction(fail_instruction.into()),
+                ]
+                .into(),
+            ))
             .sign(payer_keypair.private_key());
         let tx = AcceptedTransaction::accept(
             tx,
@@ -29864,12 +30662,304 @@ seiyaku DynamicTarget {
             .0
             .to_string();
 
-        assert_eq!(payer_balance, "9", "tx error: {first_error:?}");
+        assert_eq!(
+            payer_balance, "9",
+            "rejected mixed batch must still pay its Nexus fee; tx error: {first_error:?}"
+        );
         assert_eq!(sink_balance, "0");
         assert!(
             state_block.world.domain(&created_domain_id).is_err(),
             "failed transaction state changes must still be rolled back"
         );
+    }
+
+    #[test]
+    fn rejected_contract_only_batch_vm_error_still_charges_nexus_fee() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let chain_id = ChainId::from("rejected-contract-batch-fee-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_definition_id.clone(), payer_id.clone()),
+            Quantity::from(10_u32),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_definition_id.clone(), sink_id.clone()),
+            Quantity::zero(),
+        );
+        let (program, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku MeteredFailure {
+  kotoage fn run() authorize("CanInvokeContractEntrypoint") {
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("must_not_be_written"),
+      value: Json::parse("true")
+    );
+  }
+}
+"#,
+            )
+            .expect("compile metered failure contract");
+        let code_hash = ivm::contract_code_hash(&program);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &payer_id,
+            95,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let contract_subject = Account::new(contract_address.subject_id()).build(&payer_id);
+        let mut world = test_world_with_assets(
+            [domain],
+            [payer, sink, contract_subject],
+            [asset_definition],
+            [payer_asset, sink_asset],
+            [],
+        );
+        world.contract_code.insert(code_hash, program);
+        world
+            .contract_manifests
+            .insert(code_hash, manifest.signed(&payer_keypair));
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        let entrypoint_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "run".to_owned(),
+            }
+            .into();
+        let mut permissions = iroha_data_model::permission::Permissions::new();
+        assert!(permissions.insert(entrypoint_permission));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(payer_id.clone(), permissions);
+
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        install_test_lane_manifests(&state);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
+            nexus.fees.fee_asset_id = asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (_leader_public, leader_private) = leader.into_parts();
+        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        let latest_signed: SignedBlock = latest_valid.into();
+        let invocation = iroha_data_model::transaction::executable::ContractInvocation {
+            contract_address,
+            expected_code_hash: code_hash,
+            entrypoint: "run".to_owned(),
+            arguments: None,
+        };
+        let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                asset_definition_id.clone(),
+                Quantity::from(1_u32),
+            )],
+            core::num::NonZeroU64::new(10),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone(), fee_payment);
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_executable(Executable::Batch(
+                vec![ExecutableBatchItem::ContractCall(invocation)].into(),
+            ))
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&latest_signed))
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let error = valid
+            .as_ref()
+            .errors()
+            .next()
+            .map(|(_, error)| error)
+            .expect("the gas-capped contract call must fail");
+        assert!(
+            matches!(
+                error,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                    if message.contains("gas")
+            ),
+            "unexpected VM rejection: {error:?}"
+        );
+
+        let assets = state_block.world.assets();
+        let payer_balance = assets
+            .get(&AssetId::of(asset_definition_id, payer_id.clone()))
+            .expect("payer balance exists")
+            .0
+            .to_string();
+        assert_eq!(
+            payer_balance, "9",
+            "failed contract VM work must remain chargeable"
+        );
+        assert_eq!(
+            state_block.gas_used_in_block, 10,
+            "failed contract VM work must consume the parent block gas budget"
+        );
+        let marker: Name = "must_not_be_written".parse().expect("marker name");
+        assert!(
+            state_block
+                .world
+                .account(&payer_id)
+                .expect("payer account")
+                .metadata()
+                .get(&marker)
+                .is_none(),
+            "contract business effects must roll back on VM failure"
+        );
+    }
+
+    #[test]
+    fn successful_live_batches_accumulate_parent_block_gas() {
+        for parallel_apply in [false, true] {
+            let chain_id = ChainId::from(format!("live-batch-parent-gas-{parallel_apply}"));
+            let (authority, keypair) = gen_account_in("wonderland");
+            let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+            let world = World::with(
+                [Domain::new(domain_id).build(&authority)],
+                [Account::new(authority.clone()).build(&authority)],
+                [],
+            );
+            let mut state = State::new_with_chain_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            );
+            install_test_lane_manifests(&state);
+            let mut pipeline = state.pipeline.clone();
+            pipeline.parallel_apply = parallel_apply;
+            pipeline.parallel_overlay = true;
+            pipeline.workers = 2;
+            state.set_pipeline(pipeline);
+
+            let log_instruction =
+                InstructionBox::from(Log::new(Level::INFO, "meter one live batch".to_owned()));
+            let expected_gas =
+                crate::gas::meter_instructions(core::slice::from_ref(&log_instruction));
+            assert!(expected_gas > 0, "the fixture must consume gas");
+
+            let (max_clock_drift, tx_limits) = {
+                let state_view = state.world.view();
+                let params = state_view.parameters();
+                (params.sumeragi().max_clock_drift(), params.transaction())
+            };
+            let transactions = [0_u64, 1_u64]
+                .into_iter()
+                .map(|creation_time_ms| {
+                    let mut builder = TransactionBuilder::new(
+                        chain_id.clone(),
+                        authority.clone(),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    );
+                    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+                    let transaction = builder
+                        .with_executable(Executable::Batch(
+                            vec![ExecutableBatchItem::Instruction(log_instruction.clone())].into(),
+                        ))
+                        .sign(keypair.private_key());
+                    AcceptedTransaction::accept(
+                        transaction,
+                        &chain_id,
+                        max_clock_drift,
+                        tx_limits,
+                        state.crypto().as_ref(),
+                    )
+                    .expect("batch must pass stateless admission")
+                })
+                .collect::<Vec<_>>();
+
+            let block = BlockBuilder::new(transactions)
+                .chain(0, None)
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+            let mut state_block = state.block(block.header());
+            state_block.gas_limit_per_block = expected_gas;
+            let valid = block
+                .validate_and_record_transactions(&mut state_block)
+                .unpack(|_| {});
+            let results = valid
+                .as_ref()
+                .results()
+                .map(|result| result.0.clone())
+                .collect::<Vec<_>>();
+            let successes = results.iter().filter(|result| result.is_ok()).count();
+            let gas_limit_rejections = results
+                .iter()
+                .filter(|result| {
+                    matches!(
+                        result,
+                        Err(TransactionRejectionReason::Validation(
+                            ValidationFail::NotPermitted(message)
+                        )) if message.contains("block gas limit exceeded")
+                    )
+                })
+                .count();
+
+            assert_eq!(
+                successes, 1,
+                "only one live batch may fit with parallel_apply={parallel_apply}: {results:?}"
+            );
+            assert_eq!(
+                gas_limit_rejections, 1,
+                "the second live batch must observe parent gas with parallel_apply={parallel_apply}: {results:?}"
+            );
+            assert_eq!(
+                state_block.gas_used_in_block, expected_gas,
+                "successful live-batch gas must be retained by the parent block"
+            );
+        }
     }
 
     #[test]
@@ -29930,7 +31020,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -29945,7 +31034,15 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                fee_asset_definition_id.clone(),
+                Quantity::from(1_u32),
+            )],
+            None,
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone(), fee_payment);
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -30052,7 +31149,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -30068,7 +31164,11 @@ seiyaku DynamicTarget {
         let latest_signed: SignedBlock = latest_valid.into();
 
         let marker_key: Name = "fee_fallback_marker".parse().expect("metadata key");
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([SetKeyValue::account(
@@ -30182,7 +31282,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -30197,7 +31296,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -30310,7 +31413,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let trigger_marker_key: Name = "fee_trigger_marker".parse().expect("metadata key");
@@ -30351,7 +31453,11 @@ seiyaku DynamicTarget {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -30475,7 +31581,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -30490,7 +31595,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -30592,7 +31701,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -30607,7 +31715,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -30715,7 +31827,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -30730,7 +31841,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut first_builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut first_builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         first_builder.set_creation_time(Duration::from_millis(0));
         let first_tx = first_builder
             .with_instructions([Transfer::asset_quantity(
@@ -30748,7 +31863,11 @@ seiyaku DynamicTarget {
         )
         .expect("first transaction should pass stateless admission");
 
-        let mut second_builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut second_builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         second_builder.set_creation_time(Duration::from_millis(1));
         let second_tx = second_builder
             .with_instructions([Transfer::asset_quantity(
@@ -30877,7 +31996,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -30892,7 +32010,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let missing_domain_id = DomainId::try_new("missing-domain", "universal").unwrap();
         let tx = builder
@@ -31026,7 +32148,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -31046,7 +32167,11 @@ seiyaku DynamicTarget {
             Name::from_str("tx_sequence").expect("metadata key"),
             Json::from(5_u64),
         );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_metadata(metadata)
@@ -31115,14 +32240,14 @@ seiyaku DynamicTarget {
     }
 
     #[test]
-    fn fee_enabled_unauthorized_sponsor_rejects_without_transfer_or_sponsor_debit() {
+    fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_mutation() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus fee test lock");
         crate::sumeragi::status::reset_nexus_economics_for_tests();
         crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
 
-        let chain_id = ChainId::from("fee-detached-unauthorized-sponsor-test");
+        let chain_id = ChainId::from("legacy-fee-sponsor-metadata-disabled-fees-test");
         let (payer_id, payer_keypair) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
         let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -31167,299 +32292,116 @@ seiyaku DynamicTarget {
         install_test_lane_manifests(&state);
         {
             let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
+            nexus.enabled = false;
             nexus.fees.base_fee = Quantity::from(1_u32);
             nexus.fees.per_byte_fee = Quantity::zero();
             nexus.fees.per_instruction_fee = Quantity::zero();
             nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
 
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("fee_sponsor").expect("metadata key"),
             Json::new(sponsor_id.to_string()),
         );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "unauthorized fee sponsor metadata must reject the transaction"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after sponsor rejection")
-                .0,
-            Quantity::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after sponsor rejection")
-                .0,
-            Quantity::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&sponsor_fee_asset)
-                .expect("sponsor xor after sponsor rejection")
-                .0,
-            Quantity::from(10_u32),
-            "unauthorized sponsor rejection must not debit the sponsor"
-        );
-    }
-
-    #[test]
-    fn fee_enabled_disabled_sponsor_rejects_without_transfer_or_sponsor_debit() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-disabled-sponsor-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let sink = Account::new(sink_id.clone()).build(&sink_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let fee_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
-        let world = test_world_with_assets(
-            [domain],
-            [payer, sponsor, recipient, sink],
-            [transfer_asset_definition, fee_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
-                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
-            ],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(1_u32);
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_instruction_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = false;
-            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-            nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
-        }
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("metadata key"),
-            Json::new(sponsor_id.to_string()),
-        );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "fee_sponsor metadata must reject when sponsorship is disabled"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after disabled sponsor rejection")
-                .0,
-            Quantity::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after disabled sponsor rejection")
-                .0,
-            Quantity::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&sponsor_fee_asset)
-                .expect("sponsor xor after disabled sponsor rejection")
-                .0,
-            Quantity::from(10_u32),
-            "disabled sponsorship must not debit the requested sponsor"
-        );
-    }
-
-    #[test]
-    fn fee_enabled_sponsor_cap_rejects_without_transfer_or_sponsor_debit() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-sponsor-cap-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let sink = Account::new(sink_id.clone()).build(&sink_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let fee_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
-        let mut world = test_world_with_assets(
-            [domain],
-            [payer, sponsor, recipient, sink],
-            [transfer_asset_definition, fee_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
-                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
-            ],
-            [],
-        );
-        let fee_permission: Permission =
-            iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
-                sponsor: sponsor_id.clone(),
-                policy: "default".parse().expect("default fee sponsor policy"),
-            }
-            .into();
-        world.account_permissions.insert(
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
             payer_id.clone(),
-            std::collections::BTreeSet::from([fee_permission]),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
-        let policy = default_fee_sponsor_policy(&sponsor_id);
-        world.fee_sponsor_policies.insert(policy.id.clone(), policy);
+        builder.set_creation_time(Duration::from_millis(0));
+        let error = builder
+            .with_metadata(metadata)
+            .with_instructions([Transfer::asset_quantity(
+                payer_transfer_asset.clone(),
+                1_u32,
+                recipient_id,
+            )])
+            .try_sign(payer_keypair.private_key())
+            .expect_err("retired fee_sponsor metadata must fail before block admission");
+        assert!(
+            matches!(
+                &error,
+                iroha_data_model::transaction::signed::TransactionSignatureError::InvalidFeePaymentIntent(message)
+                    if message.contains("legacy transaction metadata key `fee_sponsor`")
+            ),
+            "unexpected signing error: {error}"
+        );
+
+        let state_view = state.world.view();
+        let assets = state_view.assets();
+        assert_eq!(
+            assets
+                .get(&payer_transfer_asset)
+                .expect("payer rose after signing rejection")
+                .0,
+            Quantity::from(5_u32)
+        );
+        assert_eq!(
+            assets
+                .get(&recipient_transfer_asset)
+                .expect("recipient rose after signing rejection")
+                .0,
+            Quantity::zero()
+        );
+        assert_eq!(
+            assets
+                .get(&sponsor_fee_asset)
+                .expect("sponsor xor after signing rejection")
+                .0,
+            Quantity::from(10_u32),
+            "signing rejection must not debit the legacy sponsor"
+        );
+    }
+
+    #[test]
+    fn legacy_fee_sponsor_metadata_rejects_even_when_nexus_fees_are_enabled() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+
+        let chain_id = ChainId::from("legacy-fee-sponsor-metadata-enabled-fees-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let transfer_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+        let fee_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let transfer_asset_definition =
+            AssetDefinition::numeric(transfer_asset_definition_id.clone())
+                .with_name("rose".to_owned())
+                .build(&payer_id);
+        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
+        let recipient_transfer_asset =
+            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
+        let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
+        let world = test_world_with_assets(
+            [domain],
+            [payer, sponsor, recipient, sink],
+            [transfer_asset_definition, fee_asset_definition],
+            [
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
+            ],
+            [],
+        );
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
         let mut state =
@@ -31468,94 +32410,66 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(2_u32);
+            nexus.fees.base_fee = Quantity::from(1_u32);
             nexus.fees.per_byte_fee = Quantity::zero();
             nexus.fees.per_instruction_fee = Quantity::zero();
             nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
-            nexus.fees.sponsor_max_fee = Quantity::from(1_u32);
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
 
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("fee_sponsor").expect("metadata key"),
             Json::new(sponsor_id.to_string()),
         );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
+        let error = builder
             .with_metadata(metadata)
             .with_instructions([Transfer::asset_quantity(
                 payer_transfer_asset.clone(),
                 1_u32,
                 recipient_id,
             )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "fee_sponsor metadata must reject when computed fee exceeds sponsor_max_fee"
+            .try_sign(payer_keypair.private_key())
+            .expect_err("retired fee_sponsor metadata must fail before block admission");
+        assert!(
+            matches!(
+                &error,
+                iroha_data_model::transaction::signed::TransactionSignatureError::InvalidFeePaymentIntent(message)
+                    if message.contains("legacy transaction metadata key `fee_sponsor`")
+            ),
+            "unexpected signing error: {error}"
         );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
 
-        let assets = state_block.world.assets();
+        let state_view = state.world.view();
+        let assets = state_view.assets();
         assert_eq!(
             assets
                 .get(&payer_transfer_asset)
-                .expect("payer rose after sponsor cap rejection")
+                .expect("payer rose after signing rejection")
                 .0,
             Quantity::from(5_u32)
         );
         assert_eq!(
             assets
                 .get(&recipient_transfer_asset)
-                .expect("recipient rose after sponsor cap rejection")
+                .expect("recipient rose after signing rejection")
                 .0,
             Quantity::zero()
         );
         assert_eq!(
             assets
                 .get(&sponsor_fee_asset)
-                .expect("sponsor xor after sponsor cap rejection")
+                .expect("sponsor xor after signing rejection")
                 .0,
             Quantity::from(10_u32),
-            "sponsor cap rejection must not debit the sponsor"
+            "signing rejection must not debit the legacy sponsor"
         );
     }
 
@@ -31610,7 +32524,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = "not-an-asset-literal".to_owned();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let (max_clock_drift, tx_limits) = {
@@ -31625,7 +32538,11 @@ seiyaku DynamicTarget {
         });
         let latest_signed: SignedBlock = latest_valid.into();
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Transfer::asset_quantity(
@@ -31680,687 +32597,6 @@ seiyaku DynamicTarget {
     }
 
     #[test]
-    fn fee_enabled_malformed_sponsor_metadata_rejects_without_transfer_or_fee() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-malformed-sponsor-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let sink = Account::new(sink_id.clone()).build(&sink_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let fee_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = test_world_with_assets(
-            [domain],
-            [payer, recipient, sink],
-            [transfer_asset_definition, fee_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
-                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
-            ],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(1_u32);
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_instruction_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
-            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-            nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
-        }
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("metadata key"),
-            Json::from(true),
-        );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "malformed fee_sponsor metadata must reject the transaction"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after malformed sponsor rejection")
-                .0,
-            Quantity::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after malformed sponsor rejection")
-                .0,
-            Quantity::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&payer_fee_asset)
-                .expect("payer xor after malformed sponsor rejection")
-                .0,
-            Quantity::from(10_u32),
-            "malformed sponsor metadata must not fall back to payer debit"
-        );
-    }
-
-    #[test]
-    fn fee_enabled_missing_gas_asset_metadata_rejects_without_partial_transfer() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-missing-gas-asset-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let gas_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let gas_asset_definition = AssetDefinition::numeric(gas_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let payer_gas_asset = AssetId::of(gas_asset_definition_id.clone(), payer_id.clone());
-        let world = test_world_with_assets(
-            [domain],
-            [payer, recipient],
-            [transfer_asset_definition, gas_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
-                Asset::new(payer_gas_asset.clone(), Quantity::from(10_u32)),
-            ],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        state.pipeline.gas.accepted_assets = vec![gas_asset_definition_id.to_string()];
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
-
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "gas policy must reject a transaction missing gas_asset_id metadata"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after missing gas asset rejection")
-                .0,
-            Quantity::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after missing gas asset rejection")
-                .0,
-            Quantity::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&payer_gas_asset)
-                .expect("payer gas asset after missing gas metadata rejection")
-                .0,
-            Quantity::from(10_u32)
-        );
-    }
-
-    #[test]
-    fn fee_enabled_missing_gas_rate_mapping_rejects_without_partial_transfer() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-missing-gas-rate-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let gas_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let gas_asset_definition = AssetDefinition::numeric(gas_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let payer_gas_asset = AssetId::of(gas_asset_definition_id.clone(), payer_id.clone());
-        let world = test_world_with_assets(
-            [domain],
-            [payer, recipient],
-            [transfer_asset_definition, gas_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
-                Asset::new(payer_gas_asset.clone(), Quantity::from(10_u32)),
-            ],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        state.pipeline.gas.accepted_assets = vec![gas_asset_definition_id.to_string()];
-        state.pipeline.gas.units_per_gas.clear();
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("gas_asset_id").expect("metadata key"),
-            Json::new(gas_asset_definition_id.to_string()),
-        );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "accepted gas_asset_id without units_per_gas mapping must reject"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after missing gas rate rejection")
-                .0,
-            Quantity::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after missing gas rate rejection")
-                .0,
-            Quantity::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&payer_gas_asset)
-                .expect("payer gas asset after missing gas rate rejection")
-                .0,
-            Quantity::from(10_u32)
-        );
-    }
-
-    #[test]
-    fn signed_block_sponsored_fee_burns_when_sponsor_is_fee_sink() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-
-        let chain_id = ChainId::from("sponsored-block-fee-burn-test");
-        let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let (sponsor_id, sponsor_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let authority = Account::new(authority_id.clone()).build(&authority_id);
-        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority_id);
-        let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
-        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Quantity::from(10_u32));
-        let world = test_world_with_assets(
-            [domain],
-            [authority, sponsor],
-            [asset_definition],
-            [sponsor_asset],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(1_u32);
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_instruction_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
-            nexus.fees.fee_asset_id = asset_definition_id.to_string();
-            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
-        }
-
-        {
-            let fee_permission: Permission =
-                iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
-                    sponsor: sponsor_id.clone(),
-                    policy: "default".parse().expect("default fee sponsor policy"),
-                }
-                .into();
-            let mut world = state.world.block();
-            world.account_permissions.insert(
-                authority_id.clone(),
-                std::collections::BTreeSet::from([fee_permission]),
-            );
-            let policy = default_fee_sponsor_policy(&sponsor_id);
-            world.fee_sponsor_policies.insert(policy.id.clone(), policy);
-            world.commit();
-        }
-
-        let (_genesis_handle, genesis_time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let genesis_block = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
-            .chain(0, None)
-            .sign(sponsor_keypair.private_key())
-            .unpack(|_| {});
-        let genesis_signed: SignedBlock = genesis_block.clone().into();
-        let mut genesis_state_block = state.block(genesis_block.header);
-        let _valid_genesis = genesis_block
-            .validate_and_record_transactions(&mut genesis_state_block)
-            .unpack(|_| {});
-        genesis_state_block.commit().expect("commit first block");
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("static name"),
-            iroha_primitives::json::Json::new(sponsor_id.to_string()),
-        );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions::<InstructionBox>([Log::new(Level::INFO, "fee".to_owned()).into()])
-            .sign(authority_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&genesis_signed))
-            .sign(sponsor_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert!(
-            valid_block.as_ref().errors().next().is_none(),
-            "sponsored transaction should be approved"
-        );
-        state_block.commit().expect("commit sponsored fee block");
-
-        let committed_balance_after = state
-            .view()
-            .world()
-            .assets()
-            .get(&sponsor_asset_id)
-            .expect("sponsor asset exists after block commit")
-            .0
-            .as_numeric()
-            .try_mantissa_u128()
-            .unwrap();
-        assert_eq!(committed_balance_after, 9);
-    }
-
-    #[test]
-    fn routed_signed_block_sponsored_fee_burns_global_sponsor_asset() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-
-        let chain_id = ChainId::from("routed-sponsored-block-fee-burn-test");
-        let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let (sponsor_id, sponsor_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let authority = Account::new(authority_id.clone()).build(&authority_id);
-        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority_id);
-        let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
-        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Quantity::from(10_u32));
-        let world = test_world_with_assets(
-            [domain],
-            [authority, sponsor],
-            [asset_definition],
-            [sponsor_asset],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        install_test_lane_manifests(&state);
-        let paynet_lane = LaneId::new(3);
-        let paynet_dataspace = DataSpaceId::new(10);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Quantity::from(1_u32);
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_instruction_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.fees.sponsorship_enabled = true;
-            nexus.fees.fee_asset_id = asset_definition_id.to_string();
-            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
-            nexus.lane_catalog = LaneCatalog::new(
-                nonzero!(4_u32),
-                vec![
-                    LaneConfig::default(),
-                    LaneConfig {
-                        id: paynet_lane,
-                        dataspace_id: paynet_dataspace,
-                        alias: "paynet".to_string(),
-                        ..LaneConfig::default()
-                    },
-                ],
-            )
-            .expect("lane catalog");
-            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
-                iroha_data_model::nexus::DataSpaceMetadata::default(),
-                iroha_data_model::nexus::DataSpaceMetadata {
-                    id: paynet_dataspace,
-                    alias: "paynet".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-            ])
-            .expect("dataspace catalog");
-            nexus.routing_policy.default_lane = paynet_lane;
-            nexus.routing_policy.default_dataspace = paynet_dataspace;
-        }
-        install_test_lane_manifests(&state);
-
-        {
-            let fee_permission: Permission =
-                iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
-                    sponsor: sponsor_id.clone(),
-                    policy: "default".parse().expect("default fee sponsor policy"),
-                }
-                .into();
-            let mut world = state.world.block();
-            world.account_permissions.insert(
-                authority_id.clone(),
-                std::collections::BTreeSet::from([fee_permission]),
-            );
-            let policy = default_fee_sponsor_policy(&sponsor_id);
-            world.fee_sponsor_policies.insert(policy.id.clone(), policy);
-            world.commit();
-        }
-
-        let (_genesis_handle, genesis_time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let genesis_block = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
-            .chain(0, None)
-            .sign(sponsor_keypair.private_key())
-            .unpack(|_| {});
-        let genesis_signed: SignedBlock = genesis_block.clone().into();
-        let mut genesis_state_block = state.block(genesis_block.header);
-        let _valid_genesis = genesis_block
-            .validate_and_record_transactions(&mut genesis_state_block)
-            .unpack(|_| {});
-        genesis_state_block.commit().expect("commit first block");
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("static name"),
-            iroha_primitives::json::Json::new(sponsor_id.to_string()),
-        );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_metadata(metadata)
-            .with_instructions::<InstructionBox>([Log::new(Level::INFO, "fee".to_owned()).into()])
-            .sign(authority_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&genesis_signed))
-            .sign(sponsor_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert!(
-            valid_block.as_ref().errors().next().is_none(),
-            "routed sponsored transaction should be approved"
-        );
-        state_block
-            .commit()
-            .expect("commit routed sponsored fee block");
-
-        let committed_balance_after = state
-            .view()
-            .world()
-            .assets()
-            .get(&sponsor_asset_id)
-            .expect("sponsor asset exists after block commit")
-            .0
-            .as_numeric()
-            .try_mantissa_u128()
-            .unwrap();
-        assert_eq!(committed_balance_after, 9);
-    }
-
-    #[test]
     fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
@@ -32408,7 +32644,6 @@ seiyaku DynamicTarget {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
         {
             let mut world = state.world.block();
@@ -32447,7 +32682,11 @@ seiyaku DynamicTarget {
                 DataEventFilter::Any,
             ),
         );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            payer_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions::<InstructionBox>([
@@ -32538,12 +32777,16 @@ seiyaku DynamicTarget {
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
 
-        let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([
-                InstructionBox::from(Register::account(Account::new(authority.clone()))),
-                InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
-            ])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::account(Account::new(authority.clone()))),
+            InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
+        ])
+        .sign(keypair.private_key());
         let crypto_cfg = state.crypto();
         let tx = AcceptedTransaction::accept(
             tx,
@@ -32639,6 +32882,10 @@ seiyaku DynamicTarget {
                         chain_id.clone(),
                         authority.clone(),
                         &time_source,
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
                     )
                     .with_metadata(transaction_metadata)
                     .with_instructions(instructions)
@@ -32884,9 +33131,13 @@ seiyaku DynamicTarget {
         // Create genesis transaction
         // Sign with `genesis_wrong_key` as peer which has incorrect genesis key pair
         // Bypass `accept_genesis` check to allow signing with wrong key
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_wrong_account_id.clone())
-            .with_instructions([isi])
-            .sign(genesis_wrong_key.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_wrong_account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([isi])
+        .sign(genesis_wrong_key.private_key());
         let tx = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
 
         // Create genesis block
@@ -32963,9 +33214,13 @@ seiyaku DynamicTarget {
             AssetDefinition::numeric(asset_definition_id).with_name("xor".to_owned()),
         );
 
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
-            .with_instructions([instruction])
-            .sign(genesis_key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(genesis_key_pair.private_key());
         let block = SignedBlock::genesis(
             vec![tx],
             genesis_key_pair.private_key(),
@@ -33012,9 +33267,13 @@ seiyaku DynamicTarget {
 
         let instruction = Register::domain(Domain::new(wonderland_domain_id.clone()));
 
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
-            .with_instructions([instruction])
-            .sign(genesis_key_pair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(genesis_key_pair.private_key());
         let block = SignedBlock::genesis(
             vec![tx],
             genesis_key_pair.private_key(),
@@ -33509,10 +33768,26 @@ fn estimate_transaction_teu(tx: &SignedTransaction) -> u64 {
             let instructions: Vec<_> = batch.iter().cloned().collect();
             crate::gas::meter_instructions(&instructions)
         }
-        Executable::ContractCall(_) => crate::executor::parse_gas_limit(tx.metadata())
-            .ok()
-            .flatten()
-            .unwrap_or(IVM_TEU_FALLBACK),
+        Executable::ContractCall(_) => {
+            crate::executor::transaction_gas_limit(tx).unwrap_or(IVM_TEU_FALLBACK)
+        }
+        Executable::Batch(items) => {
+            if items.iter().any(|item| {
+                matches!(
+                    item,
+                    iroha_data_model::transaction::ExecutableBatchItem::ContractCall(_)
+                )
+            }) {
+                crate::executor::transaction_gas_limit(tx).unwrap_or(IVM_TEU_FALLBACK)
+            } else {
+                let instructions = tx
+                    .instructions()
+                    .explicit_instructions()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                crate::gas::meter_instructions(&instructions)
+            }
+        }
         Executable::Ivm(bytecode) => match ProgramMetadata::parse(bytecode.as_ref()) {
             Ok(parsed) => {
                 let max_cycles = parsed.metadata.max_cycles;

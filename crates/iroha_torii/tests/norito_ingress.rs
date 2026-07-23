@@ -415,7 +415,69 @@ async fn public_transaction_route_rejects_empty_body_without_decode_panic() {
     let resp = post_ga_norito(uri::TRANSACTION, Vec::new()).await;
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        resp.headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("invalid_transaction_payload")
+    );
     let envelope = response_error_envelope(resp).await;
+    assert_transaction_decode_rejection_without_panic(&envelope);
+}
+
+#[tokio::test]
+async fn public_transaction_route_rejects_malformed_json_with_exact_decode_code() {
+    use axum::{
+        body::Body,
+        http::{Request, header::ACCEPT, header::CONTENT_TYPE},
+    };
+    use http_body_util::BodyExt as _;
+    use iroha_torii_shared::uri;
+    use tower::ServiceExt as _;
+
+    let harness = NoritoRpcHarness::new(|cfg| {
+        cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
+    });
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(uri::TRANSACTION)
+        .header(CONTENT_TYPE, "application/json")
+        .header(ACCEPT, "application/json")
+        .body(Body::from(r#"{"version":1,"content":{}}"#))
+        .expect("request");
+    request
+        .extensions_mut()
+        .insert(norito_rpc_harness::loopback_connect_info());
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("invalid_transaction_payload")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json; charset=utf-8")
+    );
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect response body")
+        .to_bytes();
+    let envelope: ErrorEnvelope =
+        norito::json::from_slice(&body).expect("decode JSON error envelope");
     assert_transaction_decode_rejection_without_panic(&envelope);
 }
 
@@ -668,9 +730,13 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
         sorafs_rollout_phase: iroha_config::parameters::actual::SorafsRolloutPhase::Canary,
     });
 
-    let tx = TransactionBuilder::new(chain, account)
-        .with_instructions([Log::new(Level::INFO, "client submit e2e".to_owned())])
-        .sign(key_pair.private_key());
+    let tx = TransactionBuilder::new(
+        chain,
+        account,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "client submit e2e".to_owned())])
+    .sign(key_pair.private_key());
     let expected_hash = tx.hash();
 
     let actual_hash = tokio::task::spawn_blocking(move || client.submit_transaction(&tx))

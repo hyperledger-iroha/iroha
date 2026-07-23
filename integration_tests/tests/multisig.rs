@@ -65,7 +65,10 @@ fn multisig_supported(_client: &Client) -> bool {
 fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
     let upgrade_executor = Upgrade::new(Executor::new(load_sample_ivm(executor)));
     client
-        .submit_blocking(upgrade_executor)
+        .submit_blocking(
+            upgrade_executor,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("Have you set IvmFuelConfig::Auto?")?;
     Ok(())
 }
@@ -199,7 +202,7 @@ fn wait_for_account_metadata_value(
 
 fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId) -> Result<()> {
     let register_domain =
-        || submit_register_domain_with_network_lease(network, client, Domain::new(domain.clone()));
+        || submit_ensure_domain_for_network(network, client, Domain::new(domain.clone()));
     match register_domain() {
         Ok(()) => Ok(()),
         Err(err) if is_inconclusive_domain_registration_error(&err) => {
@@ -207,7 +210,7 @@ fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId
                 return Ok(());
             }
 
-            let retry = client.submit_blocking(Register::domain(Domain::new(domain.clone())));
+            let retry = register_domain();
             match retry {
                 Ok(_) => Ok(()),
                 Err(retry_err)
@@ -234,11 +237,10 @@ fn register_runtime_domain_and_transfer_to_bob(
 ) -> Result<()> {
     register_runtime_domain(network, client, domain)?;
     client
-        .submit_blocking(Transfer::domain(
-            ALICE_ID.clone(),
-            domain.clone(),
-            BOB_ID.clone(),
-        ))
+        .submit_blocking(
+            Transfer::domain(ALICE_ID.clone(), domain.clone(), BOB_ID.clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err_with(|| format!("transfer multisig test domain `{domain}` to bob"))?;
     Ok(())
 }
@@ -366,7 +368,7 @@ fn wait_for_multisig_cancel_action(
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: None,
-                fee_sponsor: None,
+                fee_payment: FeePaymentIntent::authority(Vec::new(), None),
                 proposal_id: Some(proposal_id.to_owned()),
                 instructions_hash: None,
             },
@@ -608,6 +610,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
     test_client
         .submit_blocking::<InstructionBox>(
             MultisigPropose::new(multisig_account_id.clone(), instructions, None).into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("submit tarlookup multisig proposal")?;
 
@@ -632,7 +635,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: None,
-            fee_sponsor: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             proposal_id: Some(instructions_hash.clone()),
             instructions_hash: None,
         },
@@ -1003,8 +1006,10 @@ fn multisig_register_materializes_missing_signatory_account() -> Result<()> {
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
-    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
-        .submit_blocking(Register::account(Account::new(existing_signer.0.clone())))?;
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_blocking(
+        Register::account(Account::new(existing_signer.0.clone())),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let missing_signer = gen_account_in(&domain);
     let spec = MultisigSpec::new(
@@ -1053,8 +1058,10 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
-    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
-        .submit_blocking(Register::account(Account::new(existing_signer.0.clone())))?;
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_blocking(
+        Register::account(Account::new(existing_signer.0.clone())),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let missing_signer = gen_account_in(&domain);
     assert!(
@@ -1199,8 +1206,10 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -
         Register::account(Account::new(existing_signer.0.clone())).into(),
         Register::account(Account::new(non_signatory.0.clone())).into(),
     ];
-    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
-        .submit_all_blocking(register_accounts)?;
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_all_blocking(
+        register_accounts,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let missing_signer = gen_account_in(&domain);
     let spec = MultisigSpec::new(
@@ -1214,7 +1223,10 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     let register = MultisigRegister::with_account(seed_account, domain.clone(), spec);
     alt_client(non_signatory, &test_client)
-        .submit_blocking::<InstructionBox>(register.into())
+        .submit_blocking::<InstructionBox>(
+            register.into(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("non-signatory should register multisig without a separate grant");
 
     let created_via_key: Name = "iroha:created_via".parse().unwrap();
@@ -1255,8 +1267,10 @@ fn multisig_register_materializes_missing_signatory_account_after_executor_upgra
     upgrade_executor(&test_client, "executor_with_admin")?;
 
     let existing_signer = gen_account_in(&domain);
-    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
-        .submit_blocking(Register::account(Account::new(existing_signer.0.clone())))?;
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_blocking(
+        Register::account(Account::new(existing_signer.0.clone())),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let missing_signer = gen_account_in(&domain);
     let spec = MultisigSpec::new(
@@ -1317,8 +1331,10 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
         Register::account(Account::new(existing_signer.0.clone())).into(),
         Register::account(Account::new(non_signatory.0.clone())).into(),
     ];
-    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
-        .submit_all_blocking(register_accounts)?;
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_all_blocking(
+        register_accounts,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let missing_signer = gen_account_in(&domain);
     let spec = MultisigSpec::new(
@@ -1332,7 +1348,10 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     let register = MultisigRegister::with_account(seed_account, domain.clone(), spec);
     alt_client(non_signatory, &test_client)
-        .submit_blocking::<InstructionBox>(register.into())
+        .submit_blocking::<InstructionBox>(
+            register.into(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("non-signatory should register multisig without a separate grant");
 
     let created_via_key: Name = "iroha:created_via".parse().unwrap();
@@ -1367,8 +1386,10 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
-    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
-        .submit_blocking(Register::account(Account::new(existing_signer.0.clone())))?;
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_blocking(
+        Register::account(Account::new(existing_signer.0.clone())),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let spec = MultisigSpec::new(
         BTreeMap::from([(existing_signer.0.clone(), 1)]),
@@ -1428,8 +1449,10 @@ fn multisig_add_signatory_rejected_does_not_materialize_missing_account() -> Res
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
-    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
-        .submit_blocking(Register::account(Account::new(existing_signer.0.clone())))?;
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_blocking(
+        Register::account(Account::new(existing_signer.0.clone())),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     let spec = MultisigSpec::new(
@@ -1595,7 +1618,10 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
         (CARPENTER_ID.clone(), CARPENTER_KEYPAIR.clone()),
         &test_client,
     )
-    .submit_blocking::<InstructionBox>(register_multisig_account.into())
+    .submit_blocking::<InstructionBox>(
+        register_multisig_account.into(),
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
     .expect("multisig account should be registered by an arbitrary account");
     let resident_ids: Vec<AccountId> = core::iter::once(non_signatory.0.clone())
         .chain(signatories.keys().cloned())
@@ -1678,7 +1704,10 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
         std::thread::sleep(Duration::from_millis(ms))
     }
     test_client
-        .submit_blocking(Log::new(Level::DEBUG, "Just ticking time".to_string()))
+        .submit_blocking(
+            Log::new(Level::DEBUG, "Just ticking time".to_string()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("tick time after multisig proposal")?;
 
     let approve: InstructionBox =
@@ -1687,14 +1716,19 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
     // Approve once to see if the proposal expires
     let approver = approvers.next().unwrap();
     alt_client(approver, &test_client)
-        .submit_blocking::<InstructionBox>(approve.clone())
+        .submit_blocking::<InstructionBox>(
+            approve.clone(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit first multisig approval")?;
 
     // Subsequent approvals should succeed unless the proposal is expired
     for _ in 0..(N_SIGNATORIES - 4) {
         let approver = approvers.next().unwrap();
-        let res =
-            alt_client(approver, &test_client).submit_blocking::<InstructionBox>(approve.clone());
+        let res = alt_client(approver, &test_client).submit_blocking::<InstructionBox>(
+            approve.clone(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         match &transaction_ttl_ms_opt {
             None => {
                 res.unwrap();
@@ -1722,7 +1756,10 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
 
     // The last approve to proceed to validate and execute the instructions
     let approver = approvers.next().unwrap();
-    let res = alt_client(approver, &test_client).submit_blocking::<InstructionBox>(approve.clone());
+    let res = alt_client(approver, &test_client).submit_blocking::<InstructionBox>(
+        approve.clone(),
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     match (&transaction_ttl_ms_opt, &unauthorized_target_opt) {
         (None, None) => {
             res.unwrap();
@@ -1823,7 +1860,10 @@ fn multisig_recursion_base(suite: TestSuite, context: &'static str) -> Result<()
             spec.clone(),
         );
         test_client
-            .submit_blocking::<InstructionBox>(register.into())
+            .submit_blocking::<InstructionBox>(
+                register.into(),
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .wrap_err("register multisig account in recursion setup")?;
         Ok(canonical_multisig_account_id(&spec))
     };
@@ -1843,7 +1883,10 @@ fn multisig_recursion_base(suite: TestSuite, context: &'static str) -> Result<()
         spec_with_nested_signatory,
     );
     let err = test_client
-        .submit_blocking::<InstructionBox>(register_nested.into())
+        .submit_blocking::<InstructionBox>(
+            register_nested.into(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect_err("nested multisig signatories must be rejected");
     let msg = format!("{err:#}");
     assert!(
@@ -1875,9 +1918,14 @@ fn reserved_roles() {
         Register::role(Role::new(role, ALICE_ID.clone()))
     };
 
-    let _err = test_client.submit_blocking(register).expect_err(
-        "role with this name shouldn't be registered by anyone other than the domain owner",
-    );
+    let _err = test_client
+        .submit_blocking(
+            register,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err(
+            "role with this name shouldn't be registered by anyone other than the domain owner",
+        );
 }
 
 fn alt_client(signatory: (AccountId, KeyPair), base_client: &Client) -> Client {

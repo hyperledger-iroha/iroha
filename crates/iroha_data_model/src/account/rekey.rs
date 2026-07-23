@@ -6,9 +6,11 @@ use std::{io::Cursor, str::FromStr, string::String, vec::Vec};
 use iroha_crypto::PublicKey;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use thiserror::Error;
 
 use super::{Account, AccountId, Name};
 use crate::{
+    alias_setup::AccountAliasName,
     domain::DomainId,
     error::ParseError,
     nexus::{DataSpaceCatalog, DataSpaceId},
@@ -118,21 +120,16 @@ impl AccountAlias {
     /// # Errors
     /// Returns [`ParseError`] when the literal is malformed or the dataspace alias is unknown.
     pub fn from_literal(input: &str, catalog: &DataSpaceCatalog) -> Result<Self, ParseError> {
-        let canonical = canonicalize_literal(input)?;
-        let segments = split_alias_segments(&canonical)?;
-        let label = segments
-            .label
-            .parse()
-            .map_err(|_| ParseError::new("account alias label segment is invalid"))?;
-        let domain = segments
-            .domain
-            .map(str::parse::<AccountAliasDomain>)
-            .transpose()?;
+        let name = input.parse::<AccountAliasName>()?;
         let dataspace = catalog
-            .by_alias(segments.dataspace)
+            .by_alias(name.dataspace.as_ref())
             .map(|entry| entry.id)
             .ok_or_else(|| ParseError::new("unknown dataspace alias in account alias"))?;
-        Ok(Self::new_in_dataspace(label, domain, dataspace))
+        Ok(Self::new_in_dataspace(
+            name.label,
+            name.domain.map(AccountAliasDomain::new),
+            dataspace,
+        ))
     }
 
     /// Render the canonical account alias literal using dataspace aliases from the catalog.
@@ -143,18 +140,12 @@ impl AccountAlias {
         let dataspace = catalog
             .by_id(self.dataspace)
             .ok_or_else(|| ParseError::new("unknown dataspace id for account alias"))?;
-        let label = self.label.as_ref().to_ascii_lowercase();
-        let dataspace_alias = dataspace.alias.to_ascii_lowercase();
-        Ok(self.domain.as_ref().map_or_else(
-            || format!("{label}@{dataspace_alias}"),
-            |domain| {
-                format!(
-                    "{label}@{}.{}",
-                    domain.to_string().to_ascii_lowercase(),
-                    dataspace_alias
-                )
-            },
-        ))
+        AccountAliasName::try_new(
+            self.label.as_ref(),
+            self.domain.as_ref().map(|domain| domain.name().as_ref()),
+            dataspace.alias.as_str(),
+        )
+        .map(|name| name.to_string())
     }
 
     /// Resolve the alias-domain scope into a dataspace-qualified [`DomainId`].
@@ -174,77 +165,6 @@ impl AccountAlias {
             .map_err(|_| ParseError::new("dataspace alias in catalog is invalid"))?;
         Ok(Some(DomainId::try_new(domain.name(), &dataspace_alias)?))
     }
-}
-
-fn canonicalize_literal(input: &str) -> Result<String, ParseError> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Err(ParseError::new("account alias must not be empty"));
-    }
-    if trimmed != input {
-        return Err(ParseError::new(
-            "account alias must not contain leading or trailing whitespace",
-        ));
-    }
-    if trimmed.chars().any(char::is_control) {
-        return Err(ParseError::new(
-            "account alias must not contain control characters",
-        ));
-    }
-    Ok(trimmed.to_ascii_lowercase())
-}
-
-struct AliasSegments<'a> {
-    label: &'a str,
-    domain: Option<&'a str>,
-    dataspace: &'a str,
-}
-
-fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
-    let (label, right) = input.split_once('@').ok_or_else(|| {
-        ParseError::new("account alias must use `name@domain.dataspace` or `name@dataspace` format")
-    })?;
-    if right.contains('@') {
-        return Err(ParseError::new(
-            "account alias must contain exactly one `@` separator",
-        ));
-    }
-
-    if label.is_empty() {
-        return Err(ParseError::new(
-            "account alias label segment must not be empty",
-        ));
-    }
-    if right.is_empty() {
-        return Err(ParseError::new(
-            "account alias dataspace segment must not be empty",
-        ));
-    }
-
-    let dot_count = right.bytes().filter(|byte| *byte == b'.').count();
-    if dot_count == 1 {
-        let (domain, dataspace) = right.split_once('.').expect("counted dot");
-        if domain.is_empty() || dataspace.is_empty() {
-            return Err(ParseError::new(
-                "account alias domain and dataspace segments must not be empty",
-            ));
-        }
-        return Ok(AliasSegments {
-            label,
-            domain: Some(domain),
-            dataspace,
-        });
-    }
-    if dot_count > 1 {
-        return Err(ParseError::new(
-            "account alias must contain at most one `.` after `@`",
-        ));
-    }
-    Ok(AliasSegments {
-        label,
-        domain: None,
-        dataspace: right,
-    })
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for AccountAlias {
@@ -349,6 +269,55 @@ mod tests {
     }
 }
 
+/// Provenance for one account-id transition retained by an [`AccountRekeyRecord`].
+///
+/// Entries are positional: entry `i` describes the transition from
+/// `previous_account_ids[i]` to the next account id in the record. Only an
+/// explicit [`Self::AccountIdRekey`] transition can carry controller continuity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", rename_all = "snake_case")
+)]
+pub enum AccountRekeyTransitionProvenance {
+    /// Transition decoded from state written before provenance was recorded.
+    ///
+    /// Legacy history is retained for audit, but permanently remains non-authorizing.
+    #[codec(index = 0)]
+    LegacyUnspecified,
+    /// The stable alias was assigned to a different, independently controlled account.
+    #[codec(index = 1)]
+    AliasReassignment,
+    /// The canonical account-id rekey operation retired the predecessor controller.
+    #[codec(index = 2)]
+    AccountIdRekey,
+}
+
+impl Default for AccountRekeyTransitionProvenance {
+    fn default() -> Self {
+        Self::LegacyUnspecified
+    }
+}
+
+/// Structural failures in an account rekey record's transition history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum AccountRekeyRecordError {
+    /// A non-legacy provenance vector is not aligned with the retained account-id history.
+    #[error(
+        "account rekey transition provenance has {provenance_count} entries for {account_id_count} previous account ids"
+    )]
+    TransitionProvenanceLength {
+        /// Number of retained previous account ids.
+        account_id_count: usize,
+        /// Number of typed provenance entries.
+        provenance_count: usize,
+    },
+}
+
 /// Record that tracks the active concrete account behind a stable account label.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -374,6 +343,15 @@ pub struct AccountRekeyRecord {
     /// Historical single-key signatories retained for audit trails.
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     pub previous_signatories: Vec<PublicKey>,
+    /// Typed provenance for every transition in `previous_account_ids`.
+    ///
+    /// This trailing defaulted field preserves decoding of legacy persisted records. An empty
+    /// vector paired with non-empty history is normalized deterministically to
+    /// [`AccountRekeyTransitionProvenance::LegacyUnspecified`] during state rebuild and never
+    /// authorizes controller continuity.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub transition_provenance: Vec<AccountRekeyTransitionProvenance>,
 }
 
 impl AccountRekeyRecord {
@@ -395,37 +373,235 @@ impl AccountRekeyRecord {
             active_account_id,
             previous_account_ids: Vec::new(),
             previous_signatories: Vec::new(),
+            transition_provenance: Vec::new(),
         }
     }
 
-    /// Repoint the stable label to a new concrete account and retain the previous controller ids.
-    #[must_use]
-    pub fn repoint_to_account(&self, next_account_id: AccountId) -> Self {
+    fn normalized_transition_provenance(
+        &self,
+    ) -> Result<Vec<AccountRekeyTransitionProvenance>, AccountRekeyRecordError> {
+        if self.transition_provenance.is_empty() {
+            return Ok(vec![
+                AccountRekeyTransitionProvenance::LegacyUnspecified;
+                self.previous_account_ids.len()
+            ]);
+        }
+        if self.transition_provenance.len() != self.previous_account_ids.len() {
+            return Err(AccountRekeyRecordError::TransitionProvenanceLength {
+                account_id_count: self.previous_account_ids.len(),
+                provenance_count: self.transition_provenance.len(),
+            });
+        }
+        Ok(self.transition_provenance.clone())
+    }
+
+    fn repoint_to_account_with_provenance(
+        &self,
+        next_account_id: AccountId,
+        provenance: AccountRekeyTransitionProvenance,
+    ) -> Result<Self, AccountRekeyRecordError> {
         if self.active_account_id == next_account_id {
-            return self.clone();
+            self.normalized_transition_provenance()?;
+            return Ok(self.clone());
         }
         let active_signatory = next_account_id.try_signatory().cloned();
 
         let mut previous_account_ids = self.previous_account_ids.clone();
         previous_account_ids.push(self.active_account_id.clone());
+        let mut transition_provenance = self.normalized_transition_provenance()?;
+        transition_provenance.push(provenance);
 
         let mut previous_signatories = self.previous_signatories.clone();
         if let Some(active_signatory) = self.active_signatory.as_ref() {
             previous_signatories.push(active_signatory.clone());
         }
 
-        Self {
+        Ok(Self {
             label: self.label.clone(),
             active_account_id: next_account_id,
             previous_account_ids,
             active_signatory,
             previous_signatories,
+            transition_provenance,
+        })
+    }
+
+    /// Assign the stable alias to another independently controlled account.
+    ///
+    /// Alias reassignment retains audit history but deliberately breaks controller continuity.
+    ///
+    /// # Errors
+    /// Returns an error when the existing typed history is structurally malformed.
+    pub fn reassign_alias_to_account(
+        &self,
+        next_account_id: AccountId,
+    ) -> Result<Self, AccountRekeyRecordError> {
+        self.repoint_to_account_with_provenance(
+            next_account_id,
+            AccountRekeyTransitionProvenance::AliasReassignment,
+        )
+    }
+
+    /// Record a canonical account-id rekey that retired the previous controller.
+    ///
+    /// This constructor records only provenance. Core must additionally enforce retirement and
+    /// move state atomically at the canonical account-id mutation point.
+    ///
+    /// # Errors
+    /// Returns an error when the existing typed history is structurally malformed.
+    pub fn repoint_for_account_id_rekey(
+        &self,
+        next_account_id: AccountId,
+    ) -> Result<Self, AccountRekeyRecordError> {
+        self.repoint_to_account_with_provenance(
+            next_account_id,
+            AccountRekeyTransitionProvenance::AccountIdRekey,
+        )
+    }
+
+    /// Normalize a decoded legacy history to explicit non-authorizing provenance.
+    ///
+    /// This is intended for the canonical state rebuild path. Ordinary decoding leaves missing
+    /// trailing provenance untouched so historical wire bytes retain their original meaning.
+    ///
+    /// # Errors
+    /// Returns an error for a partially populated, non-legacy provenance vector.
+    pub fn normalize_legacy_transition_provenance(
+        &mut self,
+    ) -> Result<(), AccountRekeyRecordError> {
+        self.transition_provenance = self.normalized_transition_provenance()?;
+        Ok(())
+    }
+
+    /// Return the consecutive, explicitly proven account-id rekey predecessors of the active id.
+    ///
+    /// A legacy or alias-reassignment entry breaks the active lineage. The returned slice is
+    /// therefore always the maximal `AccountIdRekey` suffix ending at `active_account_id`.
+    ///
+    /// # Errors
+    /// Returns an error for a partially populated provenance vector. A completely missing legacy
+    /// vector is accepted as an all-legacy, non-authorizing history.
+    pub fn active_account_id_rekey_predecessors(
+        &self,
+    ) -> Result<&[AccountId], AccountRekeyRecordError> {
+        if self.transition_provenance.is_empty() {
+            return Ok(&self.previous_account_ids[self.previous_account_ids.len()..]);
         }
+        if self.transition_provenance.len() != self.previous_account_ids.len() {
+            return Err(AccountRekeyRecordError::TransitionProvenanceLength {
+                account_id_count: self.previous_account_ids.len(),
+                provenance_count: self.transition_provenance.len(),
+            });
+        }
+        let suffix_start = self
+            .transition_provenance
+            .iter()
+            .rposition(|provenance| *provenance != AccountRekeyTransitionProvenance::AccountIdRekey)
+            .map_or(0, |index| index + 1);
+        Ok(&self.previous_account_ids[suffix_start..])
     }
 
     /// Plan a rotation to a new signatory-backed account, returning the staged record.
-    #[must_use]
-    pub fn rotate_to(&self, next_signatory: PublicKey) -> Self {
-        self.repoint_to_account(AccountId::new(next_signatory))
+    ///
+    /// # Errors
+    /// Returns an error when the existing typed history is structurally malformed.
+    pub fn rotate_to(&self, next_signatory: PublicKey) -> Result<Self, AccountRekeyRecordError> {
+        self.repoint_for_account_id_rekey(AccountId::new(next_signatory))
+    }
+}
+
+#[cfg(test)]
+mod rekey_record_tests {
+    use iroha_crypto::KeyPair;
+    use norito::codec::{DecodeAll, Encode};
+
+    use super::*;
+
+    fn account_id() -> AccountId {
+        AccountId::new(
+            KeyPair::try_random()
+                .expect("generate rekey fixture keypair")
+                .public_key()
+                .clone(),
+        )
+    }
+
+    fn alias() -> AccountAlias {
+        AccountAlias::domainless(
+            "wire".parse().expect("account alias label"),
+            crate::nexus::DataSpaceId::UNIVERSAL,
+        )
+    }
+
+    #[test]
+    fn legacy_wire_defaults_transition_provenance_without_authorizing_it() {
+        #[derive(Encode)]
+        struct LegacyAccountRekeyRecord {
+            label: AccountAlias,
+            active_account_id: AccountId,
+            previous_account_ids: Vec<AccountId>,
+            active_signatory: Option<PublicKey>,
+            previous_signatories: Vec<PublicKey>,
+        }
+
+        let previous = account_id();
+        let active = account_id();
+        let legacy = LegacyAccountRekeyRecord {
+            label: alias(),
+            active_account_id: active.clone(),
+            previous_account_ids: vec![previous],
+            active_signatory: active.try_signatory().cloned(),
+            previous_signatories: Vec::new(),
+        };
+        let encoded = legacy.encode();
+        let mut bytes = encoded.as_slice();
+        let mut decoded = AccountRekeyRecord::decode_all(&mut bytes)
+            .expect("legacy account rekey record must decode");
+
+        assert!(bytes.is_empty());
+        assert!(decoded.transition_provenance.is_empty());
+        assert!(
+            decoded
+                .active_account_id_rekey_predecessors()
+                .expect("missing legacy provenance is structurally valid")
+                .is_empty(),
+            "legacy history must remain non-authorizing before rebuild"
+        );
+
+        decoded
+            .normalize_legacy_transition_provenance()
+            .expect("rebuild normalization");
+        assert_eq!(
+            decoded.transition_provenance,
+            vec![AccountRekeyTransitionProvenance::LegacyUnspecified]
+        );
+    }
+
+    #[test]
+    fn alias_reassignment_breaks_the_active_account_id_rekey_suffix() {
+        let first = account_id();
+        let second = account_id();
+        let active = account_id();
+        let record = AccountRekeyRecord::new(alias(), first.clone())
+            .reassign_alias_to_account(second.clone())
+            .expect("alias reassignment")
+            .repoint_for_account_id_rekey(active.clone())
+            .expect("canonical account-id rekey");
+
+        assert_eq!(record.previous_account_ids, vec![first, second.clone()]);
+        assert_eq!(
+            record.transition_provenance,
+            vec![
+                AccountRekeyTransitionProvenance::AliasReassignment,
+                AccountRekeyTransitionProvenance::AccountIdRekey,
+            ]
+        );
+        assert_eq!(
+            record
+                .active_account_id_rekey_predecessors()
+                .expect("well-formed transition history"),
+            &[second]
+        );
+        assert_eq!(record.active_account_id, active);
     }
 }

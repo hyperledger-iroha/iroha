@@ -1116,8 +1116,12 @@ pub(crate) mod tests {
             .map(|index| {
                 let key_pair = KeyPair::random();
                 let authority = AccountId::new(key_pair.public_key().clone());
-                let mut builder = TransactionBuilder::new(chain_id.clone(), authority)
-                    .with_instructions::<InstructionBox>([]);
+                let mut builder = TransactionBuilder::new(
+                    chain_id.clone(),
+                    authority,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions::<InstructionBox>([]);
                 builder.set_creation_time(Duration::from_millis(
                     epoch.saturating_mul(10).saturating_add(index),
                 ));

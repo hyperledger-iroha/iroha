@@ -7,8 +7,18 @@ view of that canonical mapping.
 
 ## Scope
 
-- Applies to IVM bytecode execution (Executable::Ivm).
+- Applies to raw IVM bytecode, proved IVM execution, deployed `ContractCall`,
+  and contract-call items inside `Executable::Batch`.
 - Native ISI gas metering is defined separately in `crates/iroha_core/src/gas.rs`.
+- A transaction batch containing any contract call has one signature-bound gas
+  limit. Native item costs and every contract invocation consume that common
+  budget in canonical input order; the transaction settles gas once rather
+  than once per item. State changes remain atomic if an item exhausts the
+  shared limit.
+- A trigger batch likewise uses one shared deterministic budget: the remaining
+  block budget when it is configured, or the existing default trigger cap when
+  block gas is unlimited. The cap applies to the batch as a whole, not once per
+  contract-call item, and an item failure rolls back the trigger batch.
 - ISO 20022 opcodes are reserved in ABI v1 and do not carry gas entries yet.
 
 ## Determinism and schedule hash

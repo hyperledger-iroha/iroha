@@ -1,13 +1,15 @@
 //! Host execution for delivery-versus-payment and payment-versus-payment settlements.
 
+use std::collections::BTreeSet;
+
 use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetId},
     events::data::prelude::{ConfigurationEvent, ParameterChanged},
     isi::{
         error::{InstructionEvaluationError, InstructionExecutionError, InvalidParameterError},
         settlement::{
-            DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi, SetFxCorridorPolicy,
-            SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder,
+            DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource, PvpIsi,
+            SetFxCorridorPolicy, SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder,
             SettlementInstructionBox, SettlementLeg, SettlementPlan,
         },
     },
@@ -276,9 +278,32 @@ fn validate_fx_policy_entities(
         return Err(invalid_fx_parameter(message));
     }
 
-    ensure_account_exists(stx, &policy.source_account)?;
+    if let FxCorridorSource::FixedAccount(account) = &policy.source {
+        ensure_account_exists(stx, account)?;
+    }
     ensure_account_exists(stx, &policy.source_sink)?;
     ensure_account_exists(stx, &policy.destination_reserve)?;
+
+    let destination_dataspace = stx
+        .nexus
+        .dataspace_catalog
+        .by_id(policy.destination_dataspace)
+        .ok_or_else(|| {
+            invalid_fx_parameter(format!(
+                "FX corridor destination dataspace {} is absent from the active catalog",
+                policy.destination_dataspace.as_u64()
+            ))
+        })?;
+    if policy
+        .allowed_destination_alias_domains
+        .iter()
+        .any(|domain| domain.dataspace().as_ref() != destination_dataspace.alias.as_str())
+    {
+        return Err(invalid_fx_parameter(format!(
+            "FX corridor destination alias domains must use the `{}` dataspace scope",
+            destination_dataspace.alias
+        )));
+    }
 
     for asset_definition_id in [
         &policy.source_asset_definition_id,
@@ -649,15 +674,6 @@ fn validate_fx_settlement_preconditions(
     stx: &mut StateTransaction<'_, '_>,
     instruction: &SettleFxCorridor,
 ) -> Result<(FxCorridorPolicy, SettlementLeg, SettlementLeg), Error> {
-    if !can_settle_fx_corridor(stx, authority, &instruction.policy_id) {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "not permitted: exact {CAN_SETTLE_FX_CORRIDOR} for policy `{}` is required",
-                instruction.policy_id
-            )
-            .into(),
-        ));
-    }
     if stx
         .world
         .settlement_ledgers
@@ -680,9 +696,30 @@ fn validate_fx_settlement_preconditions(
             format!("FX corridor policy `{}` is disabled", policy.policy_id).into(),
         ));
     }
-    if authority != &policy.source_account {
-        return Err(InstructionExecutionError::InvariantViolation(
-            "FX corridor settlement must be authorised by the policy source account".into(),
+    let source_account = match &policy.source {
+        FxCorridorSource::FixedAccount(account) => {
+            if !can_settle_fx_corridor(stx, authority, &instruction.policy_id) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "not permitted: exact {CAN_SETTLE_FX_CORRIDOR} for policy `{}` is required",
+                        instruction.policy_id
+                    )
+                    .into(),
+                ));
+            }
+            if authority != account {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "FX corridor settlement must be authorised by the fixed policy source account"
+                        .into(),
+                ));
+            }
+            account.clone()
+        }
+        FxCorridorSource::TransactionAuthority => authority.clone(),
+    };
+    if source_account == policy.source_sink {
+        return Err(invalid_fx_parameter(
+            "FX corridor settlement source account must differ from the source sink",
         ));
     }
     if instruction.expected_policy_revision != policy.revision {
@@ -704,6 +741,43 @@ fn validate_fx_settlement_preconditions(
         ));
     }
     ensure_account_exists(stx, &instruction.recipient)?;
+    let matched_domains = stx
+        .world
+        .bound_account_aliases(&instruction.recipient)
+        .into_iter()
+        .filter(|alias| {
+            crate::sns::resolve_active_account_alias(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                alias,
+                stx.block_unix_timestamp_ms(),
+            )
+            .as_ref()
+                == Some(&instruction.recipient)
+        })
+        .filter(|alias| alias.dataspace == policy.destination_dataspace)
+        .map(|alias| alias.domain_id(&stx.nexus.dataspace_catalog))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            invalid_fx_parameter(format!("invalid FX recipient alias domain binding: {err}"))
+        })?
+        .into_iter()
+        .flatten()
+        .filter(|domain| policy.allowed_destination_alias_domains.contains(domain))
+        .collect::<BTreeSet<_>>();
+    match matched_domains.len() {
+        1 => {}
+        0 => {
+            return Err(invalid_fx_parameter(
+                "FX corridor recipient has no alias in an allowed destination domain",
+            ));
+        }
+        _ => {
+            return Err(invalid_fx_parameter(
+                "FX corridor recipient alias domain is ambiguous",
+            ));
+        }
+    }
     if instruction.source_amount.is_zero() {
         return Err(invalid_fx_parameter(
             "FX corridor source quantity must be positive",
@@ -723,7 +797,7 @@ fn validate_fx_settlement_preconditions(
     let source_leg = SettlementLeg::new(
         policy.source_asset_definition_id.clone(),
         instruction.source_amount.clone(),
-        policy.source_account.clone(),
+        source_account,
         policy.source_sink.clone(),
     );
     let destination_leg = SettlementLeg::new(
@@ -866,7 +940,7 @@ impl Execute for SettleFxCorridor {
             destination_dataspace: policy.destination_dataspace,
             rate_numerator: policy.rate_numerator,
             rate_denominator: policy.rate_denominator,
-            source_account: policy.source_account.clone(),
+            source_account: source_leg.from().clone(),
             source_sink: policy.source_sink.clone(),
             destination_reserve: policy.destination_reserve.clone(),
             recipient: self.recipient.clone(),
@@ -1232,7 +1306,10 @@ mod tests {
     use std::collections::BTreeSet;
 
     use iroha_data_model::{
-        account::Account,
+        account::{
+            Account, AccountAddress,
+            rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
+        },
         asset::{
             Asset, AssetBalancePolicy, AssetDefinition,
             prelude::{AssetDefinitionId, AssetId},
@@ -1242,6 +1319,8 @@ mod tests {
         domain::{Domain, DomainId},
         isi::error::InstructionEvaluationError,
         metadata::Metadata,
+        nexus::{DataSpaceCatalog, DataSpaceMetadata},
+        sns::{NameControllerV1, NameRecordV1},
     };
     use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID};
@@ -1327,6 +1406,14 @@ mod tests {
                 ),
                 Asset::new(
                     AssetId::with_scope(
+                        source_asset_definition_id.clone(),
+                        BOB_ID.clone(),
+                        AssetBalanceScope::Dataspace(source_dataspace),
+                    ),
+                    Quantity::from(source_balance),
+                ),
+                Asset::new(
+                    AssetId::with_scope(
                         destination_asset_definition_id.clone(),
                         SAMPLE_GENESIS_ACCOUNT_ID.clone(),
                         AssetBalanceScope::Dataspace(destination_dataspace),
@@ -1347,26 +1434,119 @@ mod tests {
                 }),
             ]),
         );
+        let recipient_alias = AccountAlias::new(
+            "retail_recipient".parse().expect("recipient alias"),
+            Some(AccountAliasDomain::new(
+                "hbl".parse().expect("HBL alias domain"),
+            )),
+            destination_dataspace,
+        );
+        world
+            .account_aliases
+            .insert(recipient_alias.clone(), BOB_ID.clone());
+        world
+            .account_aliases_by_account
+            .insert(BOB_ID.clone(), BTreeSet::from([recipient_alias.clone()]));
         let policy = FxCorridorPolicy {
             policy_id,
             revision: 1,
             source_dataspace,
-            source_account: ALICE_ID.clone(),
+            source: FxCorridorSource::FixedAccount(ALICE_ID.clone()),
             source_asset_definition_id,
             source_sink: CARPENTER_ID.clone(),
             destination_dataspace,
             destination_reserve: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
             destination_asset_definition_id,
+            allowed_destination_alias_domains: BTreeSet::from([
+                DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+                DomainId::try_new("ubl", "sbp").expect("UBL domain"),
+            ]),
             rate_numerator,
             rate_denominator,
             enabled,
         };
+        let catalog = fx_catalog(&policy);
+        let selector = crate::sns::selector_for_account_alias(&recipient_alias, &catalog)
+            .expect("canonical FX recipient alias selector");
+        let address = AccountAddress::from_account_id(&BOB_ID)
+            .expect("FX recipient account must encode as an address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            BOB_ID.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state
+            .insert(crate::sns::record_storage_key(&selector), record.encode());
+        world.account_rekey_records.insert(
+            recipient_alias.clone(),
+            AccountRekeyRecord::new(recipient_alias, BOB_ID.clone()),
+        );
         let state = State::new(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
         (state, policy)
+    }
+
+    fn fx_catalog(policy: &FxCorridorPolicy) -> DataSpaceCatalog {
+        DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: policy.source_dataspace,
+                alias: "cbuae".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: policy.destination_dataspace,
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("FX dataspace catalog")
+    }
+
+    fn configure_fx_catalog(stx: &mut StateTransaction<'_, '_>, policy: &FxCorridorPolicy) {
+        stx.nexus.dataspace_catalog = fx_catalog(policy);
+    }
+
+    fn insert_active_fx_alias(
+        stx: &mut StateTransaction<'_, '_>,
+        alias: AccountAlias,
+        account_id: AccountId,
+    ) {
+        let selector = crate::sns::selector_for_account_alias(&alias, &stx.nexus.dataspace_catalog)
+            .expect("canonical FX alias selector");
+        let address = AccountAddress::from_account_id(&account_id)
+            .expect("FX alias owner must encode as an address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        stx.world
+            .smart_contract_state
+            .insert(crate::sns::record_storage_key(&selector), record.encode());
+        stx.world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), account_id.clone()),
+        );
+        stx.world.insert_account_alias_binding(alias, account_id);
     }
 
     fn fx_settlement(policy: &FxCorridorPolicy, id: &str, source_amount: u32) -> SettleFxCorridor {
@@ -1387,6 +1567,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
         }
@@ -1460,11 +1641,144 @@ mod tests {
     }
 
     #[test]
+    fn fx_corridor_transaction_authority_self_debits_without_settle_permission() {
+        let (state, mut policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        policy.source = FxCorridorSource::TransactionAuthority;
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
+        SetFxCorridorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("policy registration succeeds");
+        assert!(
+            !can_settle_fx_corridor(&stx, &BOB_ID, &policy.policy_id),
+            "fixture authority must not have CanSettleFxCorridor",
+        );
+        stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+            [0xF2; iroha_crypto::Hash::LENGTH],
+        ));
+
+        let instruction = fx_settlement(&policy, "fx_authority_source", 2);
+        instruction
+            .clone()
+            .execute(&BOB_ID, &mut stx)
+            .expect("transaction-authority policy self-debits without a grant");
+
+        let source_balance = |account: &AccountId| {
+            stx.world
+                .assets
+                .get(&AssetId::with_scope(
+                    policy.source_asset_definition_id.clone(),
+                    account.clone(),
+                    AssetBalanceScope::Dataspace(policy.source_dataspace),
+                ))
+                .map_or_else(Quantity::zero, |value| value.as_ref().clone())
+        };
+        assert_eq!(source_balance(&BOB_ID), Quantity::from(8_u32));
+        assert_eq!(source_balance(&ALICE_ID), Quantity::from(10_u32));
+        let receipt = stx
+            .world
+            .settlement_ledgers
+            .get(&instruction.settlement_id)
+            .and_then(|ledger| ledger.entries.first())
+            .expect("settlement receipt");
+        assert_eq!(receipt.authority, BOB_ID.clone());
+        assert_eq!(
+            receipt
+                .fx_corridor
+                .as_ref()
+                .expect("FX details")
+                .source_account,
+            BOB_ID.clone(),
+        );
+    }
+
+    #[test]
+    fn fx_corridor_recipient_alias_domain_is_required_and_unambiguous() {
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
+        SetFxCorridorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("policy registration succeeds");
+
+        stx.world.remove_account_alias_bindings_for_account(&BOB_ID);
+        assert_smart_contract_parameter_contains(
+            fx_settlement(&policy, "fx_missing_recipient_domain", 1)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("recipient without an allowed alias must fail"),
+            "no alias in an allowed destination domain",
+        );
+
+        for (label, domain) in [("hbl_recipient", "hbl"), ("ubl_recipient", "ubl")] {
+            insert_active_fx_alias(
+                &mut stx,
+                AccountAlias::new(
+                    label.parse().expect("alias label"),
+                    Some(AccountAliasDomain::new(
+                        domain.parse().expect("alias domain"),
+                    )),
+                    policy.destination_dataspace,
+                ),
+                BOB_ID.clone(),
+            );
+        }
+        assert_smart_contract_parameter_contains(
+            fx_settlement(&policy, "fx_ambiguous_recipient_domain", 1)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("recipient bound to two allowed FIs must fail"),
+            "alias domain is ambiguous",
+        );
+    }
+
+    #[test]
+    fn fx_corridor_rejects_recipient_bound_only_to_non_allowed_destination_domain() {
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
+        SetFxCorridorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("policy registration succeeds");
+
+        stx.world.remove_account_alias_bindings_for_account(&BOB_ID);
+        insert_active_fx_alias(
+            &mut stx,
+            AccountAlias::new(
+                "other_recipient".parse().expect("alias label"),
+                Some(AccountAliasDomain::new(
+                    "other".parse().expect("alias domain"),
+                )),
+                policy.destination_dataspace,
+            ),
+            BOB_ID.clone(),
+        );
+
+        assert_smart_contract_parameter_contains(
+            fx_settlement(&policy, "fx_non_allowed_recipient_domain", 1)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("recipient bound only to other.sbp must fail"),
+            "no alias in an allowed destination domain",
+        );
+    }
+
+    #[test]
     fn fx_corridor_rejects_policy_and_signed_intent_mismatches() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
         }
@@ -1568,7 +1882,10 @@ mod tests {
         same_dataspace.destination_dataspace = same_dataspace.source_dataspace;
         cases.push(same_dataspace);
         let mut same_account = policy.clone();
-        same_account.source_sink = same_account.source_account.clone();
+        let FxCorridorSource::FixedAccount(source_account) = &same_account.source else {
+            unreachable!("fixture uses a fixed source")
+        };
+        same_account.source_sink = source_account.clone();
         cases.push(same_account);
         let mut same_asset = policy.clone();
         same_asset.destination_asset_definition_id = same_asset.source_asset_definition_id.clone();
@@ -1590,6 +1907,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
         }
@@ -1640,6 +1958,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
         let mut wrong_scope = policy.clone();
         wrong_scope.source_dataspace = DataSpaceId::new(11);
         SetFxCorridorPolicy {
@@ -1677,6 +1996,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
         }

@@ -131,10 +131,10 @@ pub fn run_i3_bench_suite(options: I3BenchOptions) -> Result<I3BenchReport, Box<
         ),
         bench_fee(
             "fee_sponsor",
-            "sponsor fallback debit",
+            "selected sponsor-program debit",
             options.iterations,
             options.sample_size,
-            FeeScenario::SponsorAllowed,
+            FeeScenario::SponsorSelected,
             &fixtures.fee_ledger,
         ),
         bench_fee(
@@ -255,9 +255,11 @@ fn bench_fee(
     ledger: &FeeLedger,
 ) -> ScenarioResult {
     bench_scenario(name, note, iterations, sample_size, || match scenario {
-        FeeScenario::PayerOnly => ledger.clone().charge(75_000, false),
-        FeeScenario::SponsorAllowed => ledger.clone().charge(75_000, true),
-        FeeScenario::Insufficient => ledger.clone().charge(3_000_000_000, true),
+        FeeScenario::PayerOnly => ledger.clone().charge(75_000, FeeSource::Authority),
+        FeeScenario::SponsorSelected => ledger.clone().charge(75_000, FeeSource::SponsorProgram),
+        FeeScenario::Insufficient => ledger
+            .clone()
+            .charge(3_000_000_000, FeeSource::SponsorProgram),
     })
 }
 
@@ -593,24 +595,32 @@ fn conflicts(left: &SchedulerAccess, right: &SchedulerAccess) -> bool {
 
 enum FeeScenario {
     PayerOnly,
-    SponsorAllowed,
+    SponsorSelected,
     Insufficient,
 }
 
+#[derive(Clone, Copy)]
+enum FeeSource {
+    Authority,
+    SponsorProgram,
+}
+
 impl FeeLedger {
-    fn charge(mut self, fee: u128, allow_sponsor: bool) -> u64 {
+    fn charge(mut self, fee: u128, source: FeeSource) -> u64 {
         let allocs = 1;
-        if self.payer >= fee {
-            self.payer -= fee;
-            self.collector += fee;
-            return allocs;
+        match source {
+            FeeSource::Authority if self.payer >= fee => {
+                self.payer -= fee;
+                self.collector += fee;
+                allocs
+            }
+            FeeSource::SponsorProgram if self.sponsor >= fee => {
+                self.sponsor -= fee;
+                self.collector += fee;
+                allocs + 1
+            }
+            FeeSource::Authority | FeeSource::SponsorProgram => allocs + 1,
         }
-        if allow_sponsor && self.sponsor >= fee {
-            self.sponsor -= fee;
-            self.collector += fee;
-            return allocs + 1;
-        }
-        allocs + 1
     }
 }
 

@@ -21,7 +21,7 @@ use iroha_data_model::{
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
         mint_burn::BurnBox,
-        offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
+        offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         zk::{Shield, Unshield, ZkTransfer},
     },
@@ -42,6 +42,7 @@ use norito::{
     codec::Encode,
     json::{self, Map, Value},
 };
+use sha2::{Digest as _, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
@@ -762,6 +763,7 @@ impl std::str::FromStr for ExplorerInstructionKind {
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerInstructionBoxDto {
     pub encoded: String,
+    pub framed_sha256: String,
     pub json: Value,
 }
 
@@ -865,9 +867,9 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::ZkTransfer
             } else if any.downcast_ref::<Unshield>().is_some() {
                 ExplorerInstructionKind::Unshield
-            } else if any.downcast_ref::<TopUpKagemushaRecursiveV2>().is_some() {
+            } else if any.downcast_ref::<TopUpKagemushaRecursiveV4>().is_some() {
                 ExplorerInstructionKind::KagemushaTopUp
-            } else if any.downcast_ref::<RedeemKagemushaRecursiveV2>().is_some() {
+            } else if any.downcast_ref::<RedeemKagemushaRecursiveV4>().is_some() {
                 ExplorerInstructionKind::KagemushaRedeem
             } else {
                 ExplorerInstructionKind::Custom
@@ -941,6 +943,7 @@ fn instruction_box_dto(
 ) -> ExplorerInstructionBoxDto {
     ExplorerInstructionBoxDto {
         encoded: instruction_encoded_hex(instruction),
+        framed_sha256: instruction_framed_sha256(instruction),
         json: instruction_json_payload(instruction, kind),
     }
 }
@@ -948,6 +951,14 @@ fn instruction_box_dto(
 fn instruction_encoded_hex(instruction: &InstructionBox) -> String {
     let bytes = instruction.dyn_encode();
     format!("0x{}", hex::encode(bytes))
+}
+
+fn instruction_framed_sha256(instruction: &InstructionBox) -> String {
+    let wire_id = IsiInstruction::id(&**instruction);
+    let payload = instruction.dyn_encode();
+    let framed = iroha_data_model::isi::frame_instruction_payload(wire_id, &payload)
+        .expect("registered explorer instruction must use canonical Norito framing");
+    format!("0x{}", hex::encode(Sha256::digest(framed)))
 }
 
 fn instruction_json_payload(instruction: &InstructionBox, kind: ExplorerInstructionKind) -> Value {
@@ -972,6 +983,9 @@ fn structured_instruction_payload(
     instruction: &InstructionBox,
     kind: ExplorerInstructionKind,
 ) -> Value {
+    if let Some(payload) = propose_sccp_route_governance_payload(instruction) {
+        return payload;
+    }
     match kind {
         ExplorerInstructionKind::Register => register_payload(instruction),
         ExplorerInstructionKind::Unregister => unregister_payload(instruction),
@@ -994,6 +1008,21 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
     .unwrap_or_else(|| fallback_structured_payload(instruction))
+}
+
+fn propose_sccp_route_governance_payload(instruction: &InstructionBox) -> Option<Value> {
+    let proposal = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>(
+    )?;
+    let mut value = Map::new();
+    value.insert("action".to_owned(), json::to_value(&proposal.action).ok()?);
+    value.insert("window".to_owned(), json::to_value(&proposal.window).ok()?);
+    value.insert("mode".to_owned(), json::to_value(&proposal.mode).ok()?);
+    Some(instruction_variant_value(
+        "ProposeSccpRouteGovernance",
+        Value::Object(value),
+    ))
 }
 
 fn fallback_instruction_payload(instruction: &InstructionBox) -> Value {
@@ -1173,7 +1202,7 @@ fn log_payload(instruction: &InstructionBox) -> Option<Value> {
 fn kagemusha_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
     let isi = instruction
         .as_any()
-        .downcast_ref::<TopUpKagemushaRecursiveV2>()?;
+        .downcast_ref::<TopUpKagemushaRecursiveV4>()?;
     let request = &isi.request;
     let mut value = Map::new();
     value.insert(
@@ -1205,7 +1234,7 @@ fn kagemusha_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
 fn kagemusha_redeem_payload(instruction: &InstructionBox) -> Option<Value> {
     let isi = instruction
         .as_any()
-        .downcast_ref::<RedeemKagemushaRecursiveV2>()?;
+        .downcast_ref::<RedeemKagemushaRecursiveV4>()?;
     let request = &isi.request;
     let mut value = Map::new();
     value.insert(
@@ -1292,6 +1321,7 @@ fn executable_label(executable: &Executable) -> &'static str {
         Executable::ContractCall(_) => "ContractCall",
         Executable::Ivm(_) => "Ivm",
         Executable::IvmProved(_) => "IvmProved",
+        Executable::Batch(_) => "Batch",
     }
 }
 
@@ -1337,6 +1367,39 @@ fn executable_payload(executable: &Executable) -> Value {
             map.insert(
                 "gas_policy_commitment".to_string(),
                 Value::String(proved.gas_policy_commitment.to_string()),
+            );
+            Value::Object(map)
+        }
+        Executable::Batch(items) => {
+            let mut map = Map::new();
+            map.insert("item_count".to_string(), usize_to_value(items.len()));
+            map.insert(
+                "instruction_count".to_string(),
+                usize_to_value(
+                    items
+                        .iter()
+                        .filter(|item| {
+                            matches!(
+                                item,
+                                iroha_data_model::transaction::ExecutableBatchItem::Instruction(_)
+                            )
+                        })
+                        .count(),
+                ),
+            );
+            map.insert(
+                "contract_call_count".to_string(),
+                usize_to_value(
+                    items
+                        .iter()
+                        .filter(|item| {
+                            matches!(
+                                item,
+                                iroha_data_model::transaction::ExecutableBatchItem::ContractCall(_)
+                            )
+                        })
+                        .count(),
+                ),
             );
             Value::Object(map)
         }
@@ -2118,7 +2181,7 @@ mod tests {
         let dto = ExplorerAssetDefinitionDto::from_definition(&definition, &aggregates);
         assert_eq!(dto.mintable, "Once");
         assert_eq!(dto.assets, 7);
-        assert_eq!(dto.total_quantity, "100");
+        assert_eq!(dto.total_quantity, Quantity::from(100_u32));
         assert!(dto.locked_quantity.is_none());
         assert!(dto.circulating_quantity.is_none());
         assert_eq!(dto.owned_by, ALICE_ID.to_string());
@@ -2135,7 +2198,7 @@ mod tests {
         let entry = Ref::new(&asset_id, &value);
         let dto = ExplorerAssetDto::from_entry(entry);
         assert_eq!(dto.id, asset_id.to_string());
-        assert_eq!(dto.value, "42");
+        assert_eq!(dto.value, Quantity::from(42_u32));
         assert_eq!(dto.account_id, ALICE_ID.to_string());
     }
 
@@ -2166,9 +2229,13 @@ mod tests {
     #[test]
     fn block_dto_counts_rejections() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
+        .sign(ALICE_KEYPAIR.private_key());
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 1_700_000_000_000, 0);
         let mut builder = BlockBuilder::new(header);
         builder.push_transaction(tx);
@@ -2210,8 +2277,12 @@ mod tests {
     #[test]
     fn block_dto_counts_sealed_commitment_entrypoints() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
-        let tx = TransactionBuilder::new(chain.clone(), ALICE_ID.clone())
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(ALICE_KEYPAIR.private_key());
         let reveal_deadline_height = 5;
         let commitment =
             iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
@@ -2289,9 +2360,13 @@ mod tests {
     #[test]
     fn transaction_summary_reflects_status() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
+        .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
         let dto = transaction_summary_dto(&tx, 5, &result);
         assert_eq!(dto.block, 5);
@@ -2307,9 +2382,13 @@ mod tests {
             "purpose".parse().unwrap(),
             json::Value::String("test".into()),
         );
-        let mut builder = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-            .with_metadata(metadata);
+        let mut builder = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
+        .with_metadata(metadata);
         builder.set_creation_time(StdDuration::from_millis(1_700_000_000));
         builder
             .set_ttl(StdDuration::from_secs(30))
@@ -2356,9 +2435,13 @@ mod tests {
     #[test]
     fn transaction_detail_includes_repetition_error_context_in_message() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
+        .sign(ALICE_KEYPAIR.private_key());
         let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
             isi::error::InstructionExecutionError::Repetition(isi::error::RepetitionError {
                 instruction: isi::InstructionType::Register,
@@ -2391,19 +2474,23 @@ mod tests {
         let contract_address = ContractAddress::derive(0, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
             .expect("contract address");
         let arguments = vec![0x4b, 0x4f, 0x54, 0x4f];
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_executable(Executable::ContractCall(ContractInvocation {
-                contract_address: contract_address.clone(),
-                expected_code_hash: iroha_crypto::Hash::prehashed([0_u8; 32]),
-                entrypoint: "contribute".to_string(),
-                arguments: Some(
-                    iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
-                        arguments.clone(),
-                    )
-                    .expect("bounded argument fixture"),
-                ),
-            }))
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::ContractCall(ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: iroha_crypto::Hash::prehashed([0_u8; 32]),
+            entrypoint: "contribute".to_string(),
+            arguments: Some(
+                iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
+                    arguments.clone(),
+                )
+                .expect("bounded argument fixture"),
+            ),
+        }))
+        .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
         let dto = transaction_detail_dto(&tx, 9, &result);
 
@@ -2778,9 +2865,13 @@ mod tests {
         assert_eq!(kind, ExplorerInstructionKind::Custom);
 
         let chain: ChainId = "test-chain".parse().expect("chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(core::iter::once(instruction.clone()))
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::once(instruction.clone()))
+        .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
         let dto = instruction_dto_with_kind(&tx, 7, &result, &instruction, kind, 0);
         assert_eq!(dto.kind, "AddSignatory");
@@ -2794,11 +2885,20 @@ mod tests {
         let instruction: InstructionBox = register.into();
         let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Register);
         assert!(dto.encoded.starts_with("0x"));
+        let wire_id = IsiInstruction::id(&*instruction);
+        let framed =
+            iroha_data_model::isi::frame_instruction_payload(wire_id, &instruction.dyn_encode())
+                .expect("registered instruction should frame");
+        assert_eq!(
+            dto.framed_sha256,
+            format!("0x{}", hex::encode(Sha256::digest(framed)))
+        );
 
         let serialized = json::to_value(&dto).expect("instruction box dto should serialize");
         match serialized {
             Value::Object(map) => {
                 assert!(map.contains_key("encoded"));
+                assert!(map.contains_key("framed_sha256"));
                 assert!(!map.contains_key("scale"));
             }
             _ => panic!("instruction box dto should serialize into object"),
@@ -2848,15 +2948,75 @@ mod tests {
     }
 
     #[test]
+    fn sccp_governance_instruction_payload_exposes_exact_typed_action() {
+        let action = iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(
+            iroha_data_model::bridge::SccpRouteKeyV1 {
+                lane_id: iroha_data_model::bridge::SccpLaneIdV1 {
+                    source: iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
+                    target: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                },
+                route_id: "taira_sol_xor".to_owned(),
+                asset_key: "xor".to_owned(),
+                revision: 1,
+            },
+        );
+        let proposal = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
+            action,
+            window: None,
+            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
+        };
+        let mut expected = Map::new();
+        expected.insert(
+            "action".to_owned(),
+            json::to_value(&proposal.action).expect("action should serialize"),
+        );
+        expected.insert(
+            "window".to_owned(),
+            json::to_value(&proposal.window).expect("window should serialize"),
+        );
+        expected.insert(
+            "mode".to_owned(),
+            json::to_value(&proposal.mode).expect("mode should serialize"),
+        );
+        let instruction: InstructionBox = proposal.into();
+        let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Custom);
+        let Value::Object(root) = dto.json else {
+            panic!("instruction JSON should be an object");
+        };
+        assert_eq!(root.get("kind").and_then(Value::as_str), Some("Custom"));
+        assert_eq!(
+            root.get("wire_id").and_then(Value::as_str),
+            Some("iroha_data_model::isi::governance::ProposeSccpRouteGovernance")
+        );
+        let payload = root
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("typed payload object");
+        assert_eq!(
+            payload.get("variant").and_then(Value::as_str),
+            Some("ProposeSccpRouteGovernance")
+        );
+        assert_eq!(payload.get("value"), Some(&Value::Object(expected)));
+        let serialized = json::to_json(&root).expect("explorer JSON should serialize");
+        assert!(!serialized.contains("private_key"));
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("mnemonic"));
+    }
+
+    #[test]
     fn instruction_dto_carries_index() {
         let register = Register::domain(iroha_data_model::domain::Domain::new(
             DomainId::try_new("index_test", "universal").expect("domain id"),
         ));
         let instruction = InstructionBox::from(register);
         let chain: ChainId = "test-chain".parse().expect("chain id");
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
-            .with_instructions(core::iter::once(instruction.clone()))
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::once(instruction.clone()))
+        .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
         let dto = instruction_dto_with_kind(
             &tx,

@@ -16,8 +16,11 @@ const EXPECTED_EXPORTS = [
   "browserSignedTransactionHashHex",
   "browserTransactionCodec",
   "browserTransactionPayloadHashHex",
+  "buildBrowserExecutableBatchPayload",
   "buildBrowserTransferPayload",
+  "finalizeBrowserExecutableBatchTransaction",
   "finalizeBrowserSignedTransaction",
+  "validateBrowserExecutableBatchSignable",
   "validateBrowserTransferSignable",
 ];
 
@@ -158,6 +161,7 @@ test("packed browser declarations compile without ambient Node types", () => {
         "const bytes: Uint8Array = buildBrowserTransferPayload({",
         '  chainId: "chain", authority: "authority", sourceAssetHoldingId: "asset#authority",',
         '  quantity: "1", destinationAccountId: "destination",',
+        '  feePayment: { payer: "authority", chargeLimits: [] },',
         "});",
         "void bytes;",
         'const waitOptions: NexusFinalizeOptions = { wait: true, successStatuses: new Set(["Committed"]), signal: new AbortController().signal };',

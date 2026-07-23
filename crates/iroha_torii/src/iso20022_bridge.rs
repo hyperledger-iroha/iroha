@@ -31,6 +31,7 @@ use iroha_data_model::{
         TransactionBuilder, Transfer,
     },
     transaction::error::TransactionRejectionReason,
+    transaction::{SignedTransaction, TransactionPayload},
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use ivm::iso20022::{IdentifierKind, InvalidValueKind, MsgError, ParsedMessage, parse_message};
@@ -2112,21 +2113,15 @@ impl Iso20022BridgeRuntime {
         })
     }
 
-    /// Create a signed transfer transaction from a validated pacs.008 message.
-    pub fn build_pacs008_transaction(
+    /// Create the exact unsigned transfer payload for a validated pacs.008 message.
+    pub fn build_pacs008_payload(
         &self,
         parsed: &ParsedMessage,
         world: &impl WorldReadOnly,
         now_ms: u64,
         chain_id: &ChainId,
         telemetry: &MaybeTelemetry,
-    ) -> Result<
-        (
-            iroha_data_model::transaction::SignedTransaction,
-            IsoMessageContext,
-        ),
-        MsgError,
-    > {
+    ) -> Result<(TransactionPayload, IsoMessageContext), MsgError> {
         let debtor_iban = require_identifier(
             "DbtrAcct",
             IdentifierKind::Iban,
@@ -2286,31 +2281,31 @@ impl Iso20022BridgeRuntime {
             }
         }
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), self.signer_account.clone())
-            .with_instructions(core::iter::once(InstructionBox::from(transfer)));
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            self.signer_account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::once(InstructionBox::from(transfer)));
         if metadata.iter().len() > 0 {
             builder = builder.with_metadata(metadata);
         }
 
-        let transaction = sign_iso_transaction(builder, &self.signer_private_key)?;
-        Ok((transaction, context))
+        let payload = builder
+            .into_payload()
+            .map_err(|_| MsgError::ValidationFailed)?;
+        Ok((payload, context))
     }
 
-    /// Create a signed transfer transaction from a validated pacs.009 message.
-    pub fn build_pacs009_transaction(
+    /// Create the exact unsigned transfer payload for a validated pacs.009 message.
+    pub fn build_pacs009_payload(
         &self,
         parsed: &ParsedMessage,
         world: &impl WorldReadOnly,
         now_ms: u64,
         chain_id: &ChainId,
         telemetry: &MaybeTelemetry,
-    ) -> Result<
-        (
-            iroha_data_model::transaction::SignedTransaction,
-            IsoMessageContext,
-        ),
-        MsgError,
-    > {
+    ) -> Result<(TransactionPayload, IsoMessageContext), MsgError> {
         let debtor_iban = require_identifier(
             "DbtrAcct",
             IdentifierKind::Iban,
@@ -2485,29 +2480,37 @@ impl Iso20022BridgeRuntime {
             }
         }
 
-        let mut builder = TransactionBuilder::new(chain_id.clone(), self.signer_account.clone())
-            .with_instructions(core::iter::once(InstructionBox::from(transfer)));
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            self.signer_account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::once(InstructionBox::from(transfer)));
         if metadata.iter().len() > 0 {
             builder = builder.with_metadata(metadata);
         }
 
-        let transaction = sign_iso_transaction(builder, &self.signer_private_key)?;
-        Ok((transaction, context))
+        let payload = builder
+            .into_payload()
+            .map_err(|_| MsgError::ValidationFailed)?;
+        Ok((payload, context))
     }
 
     /// Access signer account identifier.
     pub fn signer_account(&self) -> &AccountId {
         &self.signer_account
     }
-}
 
-fn sign_iso_transaction(
-    builder: TransactionBuilder,
-    private_key: &PrivateKey,
-) -> Result<iroha_data_model::transaction::SignedTransaction, MsgError> {
-    builder
-        .try_sign(private_key)
-        .map_err(|_| MsgError::ValidationFailed)
+    /// Sign the exact payload after Torii has inserted its fixed-point fee quote.
+    pub(crate) fn sign_transaction_payload(
+        &self,
+        payload: TransactionPayload,
+    ) -> Result<SignedTransaction, MsgError> {
+        TransactionBuilder::from_payload(payload)
+            .map_err(|_| MsgError::ValidationFailed)?
+            .try_sign(&self.signer_private_key)
+            .map_err(|_| MsgError::ValidationFailed)
+    }
 }
 
 impl Iso20022BridgeRuntime {
@@ -22141,8 +22144,8 @@ mod tests {
         let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
-        let (tx, context) = runtime
-            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+        let (payload, context) = runtime
+            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect("build");
         assert_eq!(context.ledger_id.as_deref(), Some(chain_id.as_str()));
         let (_expected_account, canonical_account, _) = sample_account_bundle();
@@ -22166,10 +22169,13 @@ mod tests {
         );
         assert!(context.asset_id.as_ref().is_some());
 
-        assert_eq!(tx.chain(), &chain_id);
-        tx.verify_signature()
+        assert_eq!(&payload.chain, &chain_id);
+        runtime
+            .sign_transaction_payload(payload.clone())
+            .expect("sign pacs.008 payload")
+            .verify_signature()
             .expect("pacs.008 transaction signature should verify");
-        let metadata = tx.metadata();
+        let metadata = &payload.metadata;
 
         let ledger_key = Name::from_str("iso20022_ledger_id").unwrap();
         let stored_ledger = metadata
@@ -22215,7 +22221,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let (_tx, context) = runtime
-            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect("build");
         let expected_asset_definition = sample_asset_definition_literal();
 
@@ -22253,7 +22259,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unknown BIC must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22279,7 +22285,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unmapped IBAN must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22305,7 +22311,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unbound currency must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22317,7 +22323,7 @@ mod tests {
     }
 
     #[test]
-    fn build_pacs009_transaction_extracts_transfer() {
+    fn build_pacs009_payload_extracts_transfer() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
             .expect("enabled");
@@ -22330,8 +22336,8 @@ mod tests {
         let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
-        let (tx, context) = runtime
-            .build_pacs009_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+        let (payload, context) = runtime
+            .build_pacs009_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect("build");
         assert_eq!(context.ledger_id.as_deref(), Some(chain_id.as_str()));
         let (_expected_account, canonical_account, _) = sample_account_bundle();
@@ -22349,9 +22355,12 @@ mod tests {
             Some(asset_definition.as_str())
         );
 
-        tx.verify_signature()
+        runtime
+            .sign_transaction_payload(payload.clone())
+            .expect("sign pacs.009 payload")
+            .verify_signature()
             .expect("pacs.009 transaction signature should verify");
-        let metadata = tx.metadata();
+        let metadata = &payload.metadata;
         let purpose_key = Name::from_str("iso20022_category_purpose").unwrap();
         let stored_purpose = metadata
             .get(&purpose_key)
@@ -22375,7 +22384,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs009_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("non-SECU purpose must fail");
         match err {
             MsgError::InvalidValue { field, kind } => {
@@ -22401,7 +22410,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs009_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unmapped IBAN must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22427,7 +22436,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs009_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unbound currency must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22466,7 +22475,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs009_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unknown BIC must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22562,7 +22571,7 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let (_tx, context) = runtime
-            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect("build");
         assert_eq!(context.settlement_amount(), Some("10.25"));
         assert_eq!(context.settlement_currency(), Some("USD"));

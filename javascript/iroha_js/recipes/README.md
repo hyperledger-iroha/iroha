@@ -160,41 +160,6 @@ purpose codes, supplementary data). The script deep-merges nested objects so
 JSON files can override just a subset of identifiers without rewriting every
 field.
 
-## contracts.mjs
-
-- Automates the alias-first `POST /v1/contracts/deploy` flow so roadmap JS-06
-  deliverables have a reproducible CLI. Bytecode is read from
-  `CONTRACT_CODE_PATH`, `CONTRACT_ALIAS` is required, and the helper enforces
-  the same validation rules as `ToriiClient.deployContract`.
-- `CONTRACT_LEASE_EXPIRY_MS` optionally stages a leased alias binding. The
-  script also honours `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` and accepts private
-  keys via `PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`.
-- Prints the Torii response including `contract_alias`, `contract_address`,
-  `previous_contract_address`, `kaizen`, `dataspace`, `tx_hash_hex`,
-  `code_hash_hex`, and `abi_hash_hex` so CI jobs can archive evidence bundles
-  alongside release artifacts.
-
-Run with:
-
-```bash
-npm install
-TORII_URL=https://torii.devnet.example \
-AUTHORITY=sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB \
-PRIVATE_KEY_HEX="$(tr -d '\\r\\n' < ~/.iroha/keys/alice.hex)" \
-CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
-CONTRACT_ALIAS=demo_contract::universal \
-node ./recipes/contracts.mjs
-```
-
-Environment variables:
-
-- `CONTRACT_CODE_PATH` — path to the Kotodama `.to` artifact (required).
-- `CONTRACT_ALIAS` — stable public alias for the deploy target (required).
-- `CONTRACT_LEASE_EXPIRY_MS` — optional lease-expiry override for the alias binding.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for locked-down deployments.
-- `TORII_ALLOW_INSECURE=1` — explicitly allow a loopback/dev HTTP Torii URL.
-- `PRIVATE_KEY` / `PRIVATE_KEY_HEX` — signer credentials; defaults to `ed25519` when unspecified.
-
 ## streaming.mjs
 
 - Streams `/v1/events/sse` with a deterministic filter (pipeline transactions by default).

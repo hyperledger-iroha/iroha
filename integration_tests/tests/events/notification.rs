@@ -39,7 +39,11 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
         ),
     ));
     let client = network.client();
-    let register_tx = client.build_transaction([register_trigger], <_>::default());
+    let register_tx = client.build_transaction(
+        [register_trigger],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        <_>::default(),
+    );
     spawn_blocking(move || client.submit_transaction_blocking(&register_tx)).await??;
     network.ensure_blocks(2).await?;
 
@@ -162,7 +166,13 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
         ),
     ));
     let client = network.client();
-    spawn_blocking(move || client.submit_blocking(register_trigger)).await??;
+    spawn_blocking(move || {
+        client.submit_blocking(
+            register_trigger,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
     network.ensure_blocks(2).await?;
 
     let retry_delay = Duration::from_secs(2);
@@ -170,9 +180,14 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
     let err = loop {
         let call_trigger = ExecuteTrigger::new(trigger_id.clone());
         let client = network.client();
-        let err = spawn_blocking(move || client.submit_blocking(call_trigger))
-            .await?
-            .expect_err("should immediately result in error");
+        let err = spawn_blocking(move || {
+            client.submit_blocking(
+                call_trigger,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        })
+        .await?
+        .expect_err("should immediately result in error");
         let is_expected = err
             .chain()
             .any(|cause| cause.downcast_ref::<FindError>().is_some())

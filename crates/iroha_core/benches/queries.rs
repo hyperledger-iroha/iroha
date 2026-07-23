@@ -90,13 +90,14 @@ fn build_state_with_accounts(n: usize) -> State {
         accounts.push(account);
     }
 
-    State::new(
+    State::try_new(
         World::with([domain], accounts, []),
         kura,
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
     )
+    .expect("benchmark State startup must validate")
 }
 
 fn bench_find_accounts_small(c: &mut Criterion) {
@@ -307,13 +308,14 @@ fn build_state_for_typed_core_query_pages() -> (State, AccountId, [u64; 5]) {
         nfts.push(Nft::new(nft_id, Metadata::default()).build(&authority));
     }
 
-    let state = State::new(
+    let state = State::try_new(
         World::with_assets(domains, accounts, asset_definitions, assets, nfts),
         kura,
         query_handle.clone(),
         #[cfg(feature = "telemetry")]
         <_>::default(),
-    );
+    )
+    .expect("benchmark State startup must validate");
     let raw_query_response_bytes = TYPED_CORE_QUERY_FAMILIES.map(|family| {
         u64::try_from(
             norito::to_bytes(&raw_core_query_response(
@@ -719,17 +721,14 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
         defs.push(ad);
     }
     let world = World::with([domain], [Account::new(auth.clone()).build(&auth)], defs);
-    // Provide default telemetry only when enabled; otherwise call 3-arg ctor
-    let state = {
+    let state = State::try_new(
+        world,
+        kura,
+        query_handle.clone(),
         #[cfg(feature = "telemetry")]
-        {
-            State::new(world, kura, query_handle.clone(), <_>::default())
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            State::new(world, kura, query_handle.clone())
-        }
-    };
+        <_>::default(),
+    )
+    .expect("benchmark State startup must validate");
 
     // Params with sorting by metadata key rank
     let mut params = iroha_data_model::query::parameters::QueryParams::default();
@@ -880,13 +879,14 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
         accounts.push(account);
     }
 
-    State::new(
+    State::try_new(
         World::with_assets([domain], accounts, definitions, assets, []),
         kura,
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
     )
+    .expect("benchmark State startup must validate")
 }
 
 fn bench_find_assets_iter(c: &mut Criterion) {
@@ -990,13 +990,14 @@ fn build_state_with_domains(n: usize) -> State {
         domains.push(Domain::new(id).build(&authority_id));
     }
 
-    State::new(
+    State::try_new(
         World::with(domains, [], []),
         kura,
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
     )
+    .expect("benchmark State startup must validate")
 }
 
 fn bench_find_domains_iter(c: &mut Criterion) {
@@ -1045,13 +1046,14 @@ fn build_state_with_asset_definitions(n: usize) -> State {
         defs.push(AssetDefinition::numeric(def_id).build(&authority_id));
     }
 
-    State::new(
+    State::try_new(
         World::with_assets([domain], [owner], defs, [], []),
         kura,
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
     )
+    .expect("benchmark State startup must validate")
 }
 
 fn bench_find_asset_defs_iter(c: &mut Criterion) {
@@ -1091,7 +1093,11 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
             .expect("valid chain id");
         let keypair = KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])

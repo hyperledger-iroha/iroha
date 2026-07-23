@@ -182,7 +182,7 @@ const sidebars = {
           type: 'category',
           label: 'Regulatory notes',
           items: [
-            'sns/regulatory/eu-dsa-2026-03'
+            'sns/regulatory/regulatory-eu-dsa-2026-03'
           ]
         }
       ]
@@ -227,14 +227,14 @@ const sidebars = {
           type: 'category',
           label: 'Preview feedback',
           items: [
-            'devportal/preview-feedback/w0/summary',
-            'devportal/preview-feedback/w1/plan',
-            'devportal/preview-feedback/w1/log',
-            'devportal/preview-feedback/w1/summary',
-            'devportal/preview-feedback/w2/plan',
-            'devportal/preview-feedback/w2/summary',
-            'devportal/preview-feedback/w3/log',
-            'devportal/preview-feedback/w3/summary'
+            'devportal/preview-feedback/w0/preview-feedback-w0-summary',
+            'devportal/preview-feedback/w1/preview-feedback-w1-plan',
+            'devportal/preview-feedback/w1/preview-feedback-w1-log',
+            'devportal/preview-feedback/w1/preview-feedback-w1-summary',
+            'devportal/preview-feedback/w2/preview-feedback-w2-plan',
+            'devportal/preview-feedback/w2/preview-feedback-w2-summary',
+            'devportal/preview-feedback/w3/preview-feedback-w3-log',
+            'devportal/preview-feedback/w3/preview-feedback-w3-summary'
           ]
         },
         'devportal/reviewer-onboarding',

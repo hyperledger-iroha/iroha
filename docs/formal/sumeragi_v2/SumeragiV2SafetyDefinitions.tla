@@ -57,12 +57,12 @@ HonestIntentSound(intents, durable, validSubjects) ==
     vote.signer \in Honest
       => /\ vote.subject \in validSubjects
          /\ BodyHeldBy(durable, vote.signer,
-                       vote.context, vote.subject)
+                       vote.context, vote.view, vote.subject)
 
 CertificateValidityAndAvailability(qc, durable, validSubjects) ==
   /\ qc.subject \in validSubjects
   /\ \E signer \in qc.signers \cap Honest:
-       BodyHeldBy(durable, signer, qc.context, qc.subject)
+       BodyHeldBy(durable, signer, qc.context, qc.view, qc.subject)
 
 LockValue(rank, subject) == [rank |-> rank, subject |-> subject]
 
@@ -94,6 +94,27 @@ TimeoutIntentProtectsCommits(timeoutVotes, commitIntentSet) ==
   \A timeoutVote \in timeoutVotes:
     TimeoutVoteProtectsCommitSet(timeoutVote, commitIntentSet)
 
+(***************************************************************************
+The algebraic grouped-timeout kernel below predates Commit creation: every
+intersecting honest timeout must itself report a high QC protecting the
+candidate Commit.  Keep that strict premise separate from the executable
+state invariant above, which also admits a later exact Commit authorized by a
+durably installed TC.  Relating those cross-TC histories is an explicit
+inductive obligation, not part of the already-proved quorum-set kernel.
+***************************************************************************)
+StrictTimeoutVoteProtectsCommitSet(timeoutVote, commitIntentSet) ==
+  \A commitVote \in commitIntentSet:
+    (/\ timeoutVote.signer \in Honest
+     /\ commitVote.signer = timeoutVote.signer
+     /\ commitVote.context = timeoutVote.context
+     /\ commitVote.phase = "Commit"
+     /\ commitVote.view <= timeoutVote.view)
+    => TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
+
+StrictTimeoutIntentProtectsCommits(timeoutVotes, commitIntentSet) ==
+  \A timeoutVote \in timeoutVotes:
+    StrictTimeoutVoteProtectsCommitSet(timeoutVote, commitIntentSet)
+
 TCMaximumProtectsReports(tc) ==
   \A timeoutVote \in tc.votes:
     /\ TcHighRank(tc) >= timeoutVote.highRank
@@ -118,10 +139,10 @@ TimeoutProtectionKernel(epoch, tc, commitIntentSet,
   IN /\ protectedView <= tc.view
      /\ DualQuorum(epoch, commitSigners)
      /\ DualQuorum(epoch, timeoutSigners)
+     /\ StrictTimeoutIntentProtectsCommits(tc.votes, commitIntentSet)
      /\ TimeoutVotesDisjoint(tc.votes)
      /\ TimeoutVotesBindCertificate(tc)
      /\ TimeoutRanksTyped(tc, protectedView)
-     /\ TimeoutIntentProtectsCommits(tc.votes, commitIntentSet)
      /\ TCMaximumProtectsReports(tc)
 
 TCProtectsViewSubject(tc, protectedView, subject) ==

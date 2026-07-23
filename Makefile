@@ -7,7 +7,7 @@
 .PHONY: bridge-xcframework bridge-checksum
 .PHONY: docs-syscalls
 .PHONY: android-fixtures android-fixtures-check
-.PHONY: android-tests android-lint android-transport-guard android-publish-snapshot
+.PHONY: android-tests android-lint android-transport-guard android-publish-snapshot kotlin-reflection-guard
 .PHONY: swift-fixtures swift-fixtures-check swift-ci swift-status
 .PHONY: python-checks
 .PHONY: python-release-smoke
@@ -212,15 +212,14 @@ check-sorafs-adoption:
 check-sns-annex:
 	@bash ci/check_sns_annex.sh
 
-# Regenerate CLI Markdown help from the live binaries
+# Render Iroha CLI Markdown help from the live binary. Unlike Kagami's compact
+# reference below, the full Iroha help is intentionally not checked in.
 docs-cli:
-	@echo "Regenerating iroha CLI Markdown help..."
-	@cargo run -p iroha_cli -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md
-	@echo "Done: crates/iroha_cli/CommandLineHelp.md"
+	@cargo run -p iroha_cli -- tools markdown-help
 
 docs-kagami-cli:
 	@echo "Regenerating kagami CLI Markdown help..."
-	@cargo run -p iroha_kagami -- markdown-help > crates/iroha_kagami/CommandLineHelp.md
+	@cargo run -p iroha_kagami -- advanced markdown-help > crates/iroha_kagami/CommandLineHelp.md
 	@echo "Done: crates/iroha_kagami/CommandLineHelp.md"
 
 # Run GOST perf benchmark + tolerance check.
@@ -295,6 +294,9 @@ android-lint:
 
 android-transport-guard:
 	@bash ci/check_android_transport_guard.sh
+
+kotlin-reflection-guard:
+	@bash scripts/check_kotlin_no_reflection.sh
 
 android-codegen-docs:
 	@cargo run -p norito_codegen_exporter -- --out target-codex/android_codegen

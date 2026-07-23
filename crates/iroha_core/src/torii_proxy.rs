@@ -419,6 +419,14 @@ pub enum ToriiReadEndpointV1 {
     MusubiAliasResolve,
     /// `GET /v1/accounts/{account_id}/history`
     AccountHistoryGet,
+    /// `GET /v1/internal/accounts/{account_id}`
+    InternalAccountGet,
+    /// `GET /v1/internal/accounts/{account_id}/transactions/{entrypoint_hash}`
+    InternalAccountTransactionGet,
+    /// `GET /v1/internal/accounts/{account_id}/assets/{asset_definition_id}?scope=...`
+    InternalAccountAssetGet,
+    /// `POST /v1/contracts/deployment-state`
+    ContractDeploymentState,
 }
 
 /// Canonical routed read executed on an authoritative Torii peer.
@@ -542,19 +550,19 @@ pub enum ToriiProxyRequestKindV1 {
         /// Response encoding negotiated by the ingress node.
         response_format: ToriiProxyResponseFormatV1,
     },
-    /// Execute an ingress-verified query request on the authoritative peer.
-    VerifiedQuery {
-        /// Norito-encoded verified query payload forwarded by the ingress node.
-        request_bytes: Vec<u8>,
+    /// Exhaust a client-signed query on one exact authoritative route.
+    SignedQueryRouteScan {
+        /// Original versioned Norito-encoded signed query from the client.
+        query_bytes: Vec<u8>,
         /// Route resolved by the ingress node.
         expected_route: ToriiRouteHintV1,
         /// Response encoding negotiated by the ingress node.
         response_format: ToriiProxyResponseFormatV1,
     },
-    /// Execute a verified query fanout coordinated by the Nexus/default route.
-    VerifiedQueryFanout {
-        /// Norito-encoded verified query payload forwarded by the ingress node.
-        request_bytes: Vec<u8>,
+    /// Execute a client-signed query fanout coordinated by the Nexus/default route.
+    SignedQueryFanout {
+        /// Original versioned Norito-encoded signed query from the client.
+        query_bytes: Vec<u8>,
         /// Response encoding negotiated by the ingress node.
         response_format: ToriiProxyResponseFormatV1,
     },
@@ -646,6 +654,22 @@ mod tests {
         assert_eq!(
             torii_read_endpoint_wire_index(ToriiReadEndpointV1::AccountHistoryGet),
             45
+        );
+        assert_eq!(
+            torii_read_endpoint_wire_index(ToriiReadEndpointV1::InternalAccountGet),
+            46
+        );
+        assert_eq!(
+            torii_read_endpoint_wire_index(ToriiReadEndpointV1::InternalAccountTransactionGet),
+            47
+        );
+        assert_eq!(
+            torii_read_endpoint_wire_index(ToriiReadEndpointV1::InternalAccountAssetGet),
+            48
+        );
+        assert_eq!(
+            torii_read_endpoint_wire_index(ToriiReadEndpointV1::ContractDeploymentState),
+            49
         );
     }
 

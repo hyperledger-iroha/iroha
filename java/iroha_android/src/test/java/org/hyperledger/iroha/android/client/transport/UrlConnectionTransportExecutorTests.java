@@ -11,12 +11,14 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 
 public final class UrlConnectionTransportExecutorTests {
@@ -67,6 +69,61 @@ public final class UrlConnectionTransportExecutorTests {
   }
 
   @Test
+  public void redirectsAreReturnedWithoutForwardingSensitiveHeaders() throws Exception {
+    try (ServerSocket server = new ServerSocket(0)) {
+      server.setSoTimeout(1_000);
+      final int port = server.getLocalPort();
+      final AtomicReference<String> redirectedRequest = new AtomicReference<>();
+      final Thread serverThread =
+          new Thread(
+              () -> {
+                try (Socket socket = server.accept()) {
+                  readHeaders(socket.getInputStream());
+                  final OutputStream output = socket.getOutputStream();
+                  output.write(
+                      ("HTTP/1.1 302 Found\r\n"
+                              + "Location: http://127.0.0.1:"
+                              + port
+                              + "/redirected\r\n"
+                              + "Content-Length: 0\r\nConnection: close\r\n\r\n")
+                          .getBytes(StandardCharsets.UTF_8));
+                  output.flush();
+                } catch (final IOException ignored) {
+                  return;
+                }
+                try (Socket socket = server.accept()) {
+                  redirectedRequest.set(readHeaders(socket.getInputStream()));
+                  final OutputStream output = socket.getOutputStream();
+                  output.write(
+                      "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                          .getBytes(StandardCharsets.UTF_8));
+                  output.flush();
+                } catch (final SocketTimeoutException expected) {
+                  // Expected: the executor must expose the redirect without following it.
+                } catch (final IOException ignored) {
+                  // The assertion below still detects an unexpected redirected request.
+                }
+              });
+      serverThread.setDaemon(true);
+      serverThread.start();
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(URI.create("http://127.0.0.1:" + port + "/original"))
+              .addHeader("X-Iroha-Onboarding-Token", "sensitive-runtime-token")
+              .build();
+
+      final TransportResponse response =
+          new UrlConnectionTransportExecutor().execute(request).get();
+
+      assertEquals(302, response.statusCode());
+      serverThread.join(3_000);
+      assertEquals(
+          "redirect target must not receive a second request", null, redirectedRequest.get());
+    }
+  }
+
+  @Test
   public void bufferedResponseAcceptsExactConfiguredLimit() throws Exception {
     final TransportResponse response =
         executeRawResponse(
@@ -74,6 +131,16 @@ public final class UrlConnectionTransportExecutorTests {
             8L);
 
     assertArrayEquals("12345678".getBytes(StandardCharsets.UTF_8), response.body());
+  }
+
+  private static String readHeaders(final InputStream input) throws IOException {
+    final StringBuilder result = new StringBuilder();
+    while (!result.toString().endsWith("\r\n\r\n")) {
+      final int next = input.read();
+      if (next == -1) break;
+      result.append((char) next);
+    }
+    return result.toString();
   }
 
   @Test

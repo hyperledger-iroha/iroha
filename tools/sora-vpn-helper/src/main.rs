@@ -23,17 +23,16 @@ use blake3::hash as blake3_hash;
 use clap::{Parser, Subcommand};
 use hex::FromHexError;
 use iroha_crypto::{
-    Algorithm, KeyPair, PublicKey, Signature,
+    Algorithm, KeyPair, Signature,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         RuntimeParams, build_client_hello, client_handle_relay_hello,
     },
 };
 use iroha_data_model::soranet::vpn::{
-    VPN_CELL_LEN, VPN_HELPER_TICKET_LEN, VPN_HELPER_TICKET_MAGIC, VPN_USAGE_VOUCHER_CONTROL_MAGIC,
-    VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1,
-    VpnHelperTicketV1, VpnPaddedCellV1, VpnTariffV1, VpnUsageVoucherBodyV1,
-    VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
+    VPN_CELL_LEN, VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1,
+    VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1,
+    VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
 };
 use nix::{
     errno::Errno,
@@ -172,7 +171,6 @@ struct ConnectPayload {
     tunnel_addresses: Vec<String>,
     mtu_bytes: u64,
     lease_secs: u64,
-    lease_fee_nanos: u64,
     metering_private_key_seed_hex: Option<String>,
     usage_voucher_interval_ms: u64,
 }
@@ -1318,7 +1316,7 @@ impl UsageVoucherSigner {
     fn build_envelope(
         &mut self,
         counters: &UsageVoucherCounters,
-    ) -> Result<VpnUsageVoucherEnvelopeV1, iroha_crypto::Error> {
+    ) -> Result<VpnUsageVoucherEnvelopeV1, ControllerError> {
         let (ingress_bytes, egress_bytes) = counters.snapshot();
         let active_ms = self
             .started_at
@@ -1340,12 +1338,18 @@ impl UsageVoucherSigner {
             client_public_key: self.key_pair.public_key().clone(),
             body,
         };
-        let earned_fee_nanos = self.ticket.tariff.earned_fee_nanos(&voucher.body);
+        let earned_fee = self
+            .ticket
+            .tariff
+            .earned_fee(&voucher.body)
+            .map_err(|error| {
+                ControllerError::State(format!("usage voucher tariff arithmetic failed: {error}"))
+            })?;
         self.sequence = self.sequence.saturating_add(1);
         self.last_emitted_at = Instant::now();
         Ok(VpnUsageVoucherEnvelopeV1 {
             voucher,
-            earned_fee_nanos,
+            earned_fee,
         })
     }
 }
@@ -1395,64 +1399,8 @@ async fn send_usage_voucher_control_cell(
 
 fn decode_helper_ticket_metadata(hex_ticket: &str) -> Result<VpnHelperTicketV1, ControllerError> {
     let bytes = decode_hex(hex_ticket)?;
-    if bytes.len() != VPN_HELPER_TICKET_LEN || !bytes.starts_with(VPN_HELPER_TICKET_MAGIC) {
-        return Err(ControllerError::InvalidPayload(
-            "helperTicketHex is not a v1 helper ticket".to_owned(),
-        ));
-    }
-    let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
-    let mut session_id = [0u8; 16];
-    session_id.copy_from_slice(&bytes[cursor..cursor + 16]);
-    cursor += 16;
-    let mut quote_id = [0u8; 32];
-    quote_id.copy_from_slice(&bytes[cursor..cursor + 32]);
-    cursor += 32;
-    let mut account_hash = [0u8; 32];
-    account_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
-    cursor += 32;
-    let mut relay_id = [0u8; 32];
-    relay_id.copy_from_slice(&bytes[cursor..cursor + 32]);
-    cursor += 32;
-    let mut payment_tx_hash = [0u8; 32];
-    payment_tx_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
-    cursor += 32;
-    let metering_public_key =
-        PublicKey::from_bytes(Algorithm::Ed25519, &bytes[cursor..cursor + 32]).map_err(
-            |error| {
-                ControllerError::InvalidPayload(format!(
-                    "helperTicketHex has invalid metering public key: {error}"
-                ))
-            },
-        )?;
-    cursor += 32;
-    let mut lease_fee_nanos = [0u8; 8];
-    lease_fee_nanos.copy_from_slice(&bytes[cursor..cursor + 8]);
-    cursor += 8;
-    let mut active_fee_nanos_per_minute = [0u8; 8];
-    active_fee_nanos_per_minute.copy_from_slice(&bytes[cursor..cursor + 8]);
-    cursor += 8;
-    let mut ingress_fee_nanos_per_mib = [0u8; 8];
-    ingress_fee_nanos_per_mib.copy_from_slice(&bytes[cursor..cursor + 8]);
-    cursor += 8;
-    let mut egress_fee_nanos_per_mib = [0u8; 8];
-    egress_fee_nanos_per_mib.copy_from_slice(&bytes[cursor..cursor + 8]);
-    cursor += 8;
-    let mut expires_at = [0u8; 8];
-    expires_at.copy_from_slice(&bytes[cursor..cursor + 8]);
-    Ok(VpnHelperTicketV1 {
-        session_id,
-        quote_id,
-        account_hash,
-        relay_id,
-        payment_tx_hash,
-        metering_public_key,
-        tariff: VpnTariffV1 {
-            lease_fee_nanos: u64::from_be_bytes(lease_fee_nanos),
-            active_fee_nanos_per_minute: u64::from_be_bytes(active_fee_nanos_per_minute),
-            ingress_fee_nanos_per_mib: u64::from_be_bytes(ingress_fee_nanos_per_mib),
-            egress_fee_nanos_per_mib: u64::from_be_bytes(egress_fee_nanos_per_mib),
-        },
-        expires_at_ms: u64::from_be_bytes(expires_at),
+    VpnHelperTicketV1::decode_unverified(&bytes).map_err(|error| {
+        ControllerError::InvalidPayload(format!("helperTicketHex has invalid v1 metadata: {error}"))
     })
 }
 
@@ -2453,8 +2401,6 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
         )?,
         mtu_bytes: require_json_u64(object, &["mtuBytes", "mtu_bytes"], "mtuBytes")?,
         lease_secs: optional_json_u64(object, &["leaseSecs", "lease_secs"])?.unwrap_or_default(),
-        lease_fee_nanos: optional_json_u64(object, &["leaseFeeNanos", "lease_fee_nanos"])?
-            .unwrap_or_default(),
         metering_private_key_seed_hex: optional_json_string(
             object,
             &["meteringPrivateKeySeedHex", "metering_private_key_seed_hex"],
@@ -2823,6 +2769,11 @@ fn read_der_element(
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::{
+        prelude::{Numeric, Quantity},
+        soranet::vpn::{VPN_HELPER_TICKET_MAGIC, VpnTariffV1},
+    };
+
     use super::*;
 
     const HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET: usize =
@@ -2831,6 +2782,11 @@ mod tests {
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
+
+    fn quantity_nanos(value: u64) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(value, 9))
+            .expect("u64 nano-XOR test value fits Quantity")
+    }
 
     #[test]
     fn parse_multiaddr_accepts_ipv4_quic() {
@@ -2928,10 +2884,10 @@ mod tests {
         let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
             .expect("derive metering fixture key");
         let tariff = VpnTariffV1 {
-            lease_fee_nanos: 1_000,
-            active_fee_nanos_per_minute: 100,
-            ingress_fee_nanos_per_mib: 7,
-            egress_fee_nanos_per_mib: 11,
+            lease_fee: quantity_nanos(1_000),
+            active_fee_per_minute: quantity_nanos(100),
+            ingress_fee_per_mib: quantity_nanos(7),
+            egress_fee_per_mib: quantity_nanos(11),
         };
         let ticket = VpnHelperTicketV1 {
             session_id: [0x11; 16],
@@ -2961,17 +2917,17 @@ mod tests {
             payment_tx_hash: [0x55; 32],
             metering_public_key: metering_keys.public_key().clone(),
             tariff: VpnTariffV1 {
-                lease_fee_nanos: 1_000,
-                active_fee_nanos_per_minute: 100,
-                ingress_fee_nanos_per_mib: 7,
-                egress_fee_nanos_per_mib: 11,
+                lease_fee: quantity_nanos(1_000),
+                active_fee_per_minute: quantity_nanos(100),
+                ingress_fee_per_mib: quantity_nanos(7),
+                egress_fee_per_mib: quantity_nanos(11),
             },
             expires_at_ms: 99_000,
         };
 
-        for (label, public_key, expected) in [
-            ("all-zero", [0u8; 32], "all zero"),
-            ("small-order", SMALL_ORDER_ED25519_POINT, "small-order"),
+        for (label, public_key) in [
+            ("all-zero", [0u8; 32]),
+            ("small-order", SMALL_ORDER_ED25519_POINT),
         ] {
             let mut bytes = ticket.to_bytes(&[0xAA; 32]);
             bytes[HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET
@@ -2982,11 +2938,7 @@ mod tests {
             match decode_helper_ticket_metadata(&encoded) {
                 Err(ControllerError::InvalidPayload(message)) => {
                     assert!(
-                        message.contains("invalid metering public key"),
-                        "unexpected {label} ticket metadata error: {message}"
-                    );
-                    assert!(
-                        message.contains(expected),
+                        message.contains("metering public key is invalid"),
                         "unexpected {label} ticket metadata error: {message}"
                     );
                 }
@@ -3001,10 +2953,10 @@ mod tests {
         let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
             .expect("derive metering fixture key");
         let tariff = VpnTariffV1 {
-            lease_fee_nanos: 1_000,
-            active_fee_nanos_per_minute: 6_000,
-            ingress_fee_nanos_per_mib: 3,
-            egress_fee_nanos_per_mib: 5,
+            lease_fee: quantity_nanos(1_000),
+            active_fee_per_minute: quantity_nanos(6_000),
+            ingress_fee_per_mib: quantity_nanos(3),
+            egress_fee_per_mib: quantity_nanos(5),
         };
         let ticket = VpnHelperTicketV1 {
             session_id: relay_session_id_from_session_id(session_id),
@@ -3041,8 +2993,11 @@ mod tests {
         assert_eq!(envelope.voucher.body.ingress_bytes, 10);
         assert_eq!(envelope.voucher.body.egress_bytes, 20);
         assert_eq!(
-            envelope.earned_fee_nanos,
-            ticket.tariff.earned_fee_nanos(&envelope.voucher.body)
+            envelope.earned_fee,
+            ticket
+                .tariff
+                .earned_fee(&envelope.voucher.body)
+                .expect("bounded fixture fee")
         );
     }
 
@@ -3059,10 +3014,10 @@ mod tests {
             payment_tx_hash: [0x55; 32],
             metering_public_key: metering_keys.public_key().clone(),
             tariff: VpnTariffV1 {
-                lease_fee_nanos: 1_000,
-                active_fee_nanos_per_minute: 100,
-                ingress_fee_nanos_per_mib: 7,
-                egress_fee_nanos_per_mib: 11,
+                lease_fee: quantity_nanos(1_000),
+                active_fee_per_minute: quantity_nanos(100),
+                ingress_fee_per_mib: quantity_nanos(7),
+                egress_fee_per_mib: quantity_nanos(11),
             },
             expires_at_ms: 99_000,
         };

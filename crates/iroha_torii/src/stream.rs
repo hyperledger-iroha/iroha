@@ -263,6 +263,32 @@ mod ws_io {
         buf: Vec<u8>,
     }
 
+    impl WsWriteHalf {
+        fn poll_send_buffered(
+            &mut self,
+            cx: &mut core::task::Context<'_>,
+        ) -> core::task::Poll<std::io::Result<()>> {
+            if self.buf.is_empty() {
+                return core::task::Poll::Ready(Ok(()));
+            }
+            {
+                let mut sink = core::pin::Pin::new(&mut self.inner);
+                futures::ready!(sink.as_mut().poll_ready(cx).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws ready error: {e}"))
+                }))?;
+            }
+            let data = core::mem::take(&mut self.buf);
+            debug_assert!(data.len() <= iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES);
+            let mut sink = core::pin::Pin::new(&mut self.inner);
+            sink.as_mut()
+                .start_send(Message::Binary(axum::body::Bytes::from(data)))
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws send error: {e}"))
+                })?;
+            core::task::Poll::Ready(Ok(()))
+        }
+    }
+
     impl AsyncRead for WsReadHalf {
         fn poll_read(
             mut self: core::pin::Pin<&mut Self>,
@@ -276,6 +302,13 @@ mod ws_io {
             }
             let next = futures::ready!(core::pin::Pin::new(&mut self.inner).poll_next(cx));
             match next {
+                Some(Ok(Message::Binary(b))) if b.is_empty() => {
+                    // Empty WebSocket data messages contribute no bytes and do
+                    // not terminate the adapted byte stream. Yield after one
+                    // ignored message to keep each poll bounded.
+                    cx.waker().wake_by_ref();
+                    core::task::Poll::Pending
+                }
                 Some(Ok(Message::Binary(b))) => {
                     self.buf = b;
                     let n = core::cmp::min(self.buf.len(), dst.remaining());
@@ -300,40 +333,24 @@ mod ws_io {
     impl AsyncWrite for WsWriteHalf {
         fn poll_write(
             mut self: core::pin::Pin<&mut Self>,
-            _cx: &mut core::task::Context<'_>,
+            cx: &mut core::task::Context<'_>,
             data: &[u8],
         ) -> core::task::Poll<std::io::Result<usize>> {
-            self.buf.extend_from_slice(data);
-            core::task::Poll::Ready(Ok(data.len()))
+            if self.buf.len() == iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES {
+                futures::ready!(self.poll_send_buffered(cx))?;
+            }
+            let accepted = data.len().min(
+                iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES.saturating_sub(self.buf.len()),
+            );
+            self.buf.extend_from_slice(&data[..accepted]);
+            core::task::Poll::Ready(Ok(accepted))
         }
 
         fn poll_flush(
             mut self: core::pin::Pin<&mut Self>,
             cx: &mut core::task::Context<'_>,
         ) -> core::task::Poll<std::io::Result<()>> {
-            if !self.buf.is_empty() {
-                {
-                    let mut sink = core::pin::Pin::new(&mut self.inner);
-                    futures::ready!(sink.as_mut().poll_ready(cx).map_err(|e| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("ws ready error: {e}"),
-                        )
-                    }))?;
-                }
-                let data = core::mem::take(&mut self.buf);
-                {
-                    let mut sink = core::pin::Pin::new(&mut self.inner);
-                    sink.as_mut()
-                        .start_send(Message::Binary(axum::body::Bytes::from(data)))
-                        .map_err(|e| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws send error: {e}"),
-                            )
-                        })?;
-                }
-            }
+            futures::ready!(self.poll_send_buffered(cx))?;
             let mut sink = core::pin::Pin::new(&mut self.inner);
             futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::Other, format!("ws flush error: {e}"))
@@ -367,6 +384,246 @@ mod ws_io {
                 buf: Vec::new(),
             },
         )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::sync::{Arc, Mutex};
+
+        use axum::{Router, extract::ws::WebSocketUpgrade, routing::get};
+        use tokio::{
+            io::{AsyncReadExt as _, AsyncWriteExt as _},
+            net::TcpListener,
+            sync::oneshot,
+            task::spawn_blocking,
+            time::{Duration, timeout},
+        };
+        use tungstenite::{
+            Message as TungsteniteMessage, client::connect_with_config, protocol::WebSocketConfig,
+            stream::MaybeTlsStream,
+        };
+
+        use super::*;
+
+        const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+        fn websocket_config() -> WebSocketConfig {
+            let chunk_bytes = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;
+            WebSocketConfig::default()
+                .read_buffer_size(chunk_bytes)
+                .write_buffer_size(chunk_bytes)
+                .max_write_buffer_size(chunk_bytes * 4)
+                .max_message_size(Some(chunk_bytes))
+                .max_frame_size(Some(chunk_bytes))
+        }
+
+        async fn assert_chunked_stream(byte_len: usize) {
+            let expected = Arc::new(
+                (0..byte_len)
+                    .map(|index| {
+                        u8::try_from(index % 251).expect("fixture byte is bounded below 251")
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            let server_payload = Arc::clone(&expected);
+            let (write_done_tx, write_done_rx) = oneshot::channel();
+            let write_done_tx = Arc::new(Mutex::new(Some(write_done_tx)));
+            let server_write_done = Arc::clone(&write_done_tx);
+            let chunk_bytes = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;
+
+            let app = Router::new().route(
+                "/p2p",
+                get(move |ws: WebSocketUpgrade| {
+                    let payload = Arc::clone(&server_payload);
+                    let write_done = Arc::clone(&server_write_done);
+                    async move {
+                        ws.read_buffer_size(chunk_bytes)
+                            .write_buffer_size(chunk_bytes)
+                            .max_write_buffer_size(chunk_bytes * 4)
+                            .max_message_size(chunk_bytes)
+                            .max_frame_size(chunk_bytes)
+                            .on_upgrade(move |socket| async move {
+                                let (_read, mut write) = split(socket);
+                                let result = async {
+                                    write.write_all(payload.as_ref()).await?;
+                                    write.flush().await
+                                }
+                                .await
+                                .map_err(|error| error.to_string());
+                                let sender = write_done
+                                    .lock()
+                                    .expect("write completion mutex must not be poisoned")
+                                    .take()
+                                    .expect("test route must be upgraded exactly once");
+                                let _ = sender.send(result);
+                            })
+                    }
+                }),
+            );
+
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind loopback WebSocket server");
+            let address = listener.local_addr().expect("read loopback server address");
+            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+            let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            });
+            let server_task = tokio::spawn(async move { server.await });
+
+            let client_task = spawn_blocking(move || {
+                let (mut client, _response) =
+                    connect_with_config(format!("ws://{address}/p2p"), Some(websocket_config()), 0)
+                        .expect("WebSocket handshake must succeed");
+                if let MaybeTlsStream::Plain(stream) = client.get_mut() {
+                    stream
+                        .set_read_timeout(Some(TEST_TIMEOUT))
+                        .expect("set loopback WebSocket read timeout");
+                }
+
+                let mut received = Vec::with_capacity(byte_len);
+                let mut binary_messages = 0usize;
+                while received.len() < byte_len {
+                    match client.read().expect("WebSocket message must be valid") {
+                        TungsteniteMessage::Binary(chunk) => {
+                            assert!(
+                                !chunk.is_empty(),
+                                "writer must not emit empty data messages"
+                            );
+                            assert!(
+                                chunk.len() <= chunk_bytes,
+                                "binary message length {} exceeds the {chunk_bytes}-byte transport cap",
+                                chunk.len()
+                            );
+                            received.extend_from_slice(&chunk);
+                            binary_messages = binary_messages
+                                .checked_add(1)
+                                .expect("test message count must remain bounded");
+                        }
+                        other => panic!("expected a bounded binary message, got {other:?}"),
+                    }
+                }
+                (received, binary_messages)
+            });
+            let (received, binary_messages) = timeout(TEST_TIMEOUT, client_task)
+                .await
+                .expect("WebSocket observer must not time out")
+                .expect("WebSocket observer must not panic");
+
+            assert_eq!(
+                received.as_slice(),
+                expected.as_slice(),
+                "WebSocket chunking must preserve bytes"
+            );
+            assert_eq!(
+                binary_messages,
+                byte_len.div_ceil(chunk_bytes),
+                "writer must emit the minimum number of bounded messages"
+            );
+            timeout(TEST_TIMEOUT, write_done_rx)
+                .await
+                .expect("server writer completion must not time out")
+                .expect("server writer completion channel must remain open")
+                .expect("server writer must flush successfully");
+
+            let _ = shutdown_tx.send(());
+            timeout(TEST_TIMEOUT, server_task)
+                .await
+                .expect("loopback server shutdown must not time out")
+                .expect("loopback server task must not panic")
+                .expect("loopback server must shut down cleanly");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn write_half_chunks_boundaries_and_default_maximum_p2p_frame() {
+            let chunk_bytes = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;
+            for byte_len in [
+                chunk_bytes - 1,
+                chunk_bytes,
+                chunk_bytes + 1,
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get()
+                    + core::mem::size_of::<u32>(),
+            ] {
+                assert_chunked_stream(byte_len).await;
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn read_half_ignores_empty_binary_without_reporting_stream_eof() {
+            let (read_done_tx, read_done_rx) = oneshot::channel();
+            let read_done_tx = Arc::new(Mutex::new(Some(read_done_tx)));
+            let server_read_done = Arc::clone(&read_done_tx);
+            let chunk_bytes = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;
+
+            let app = Router::new().route(
+                "/p2p",
+                get(move |ws: WebSocketUpgrade| {
+                    let read_done = Arc::clone(&server_read_done);
+                    async move {
+                        ws.read_buffer_size(chunk_bytes)
+                            .write_buffer_size(chunk_bytes)
+                            .max_write_buffer_size(chunk_bytes * 4)
+                            .max_message_size(chunk_bytes)
+                            .max_frame_size(chunk_bytes)
+                            .on_upgrade(move |socket| async move {
+                                let (mut read, _write) = split(socket);
+                                let mut received = [0_u8; 4];
+                                let result = read
+                                    .read_exact(&mut received)
+                                    .await
+                                    .map(|_| received)
+                                    .map_err(|error| error.to_string());
+                                let sender = read_done
+                                    .lock()
+                                    .expect("read completion mutex must not be poisoned")
+                                    .take()
+                                    .expect("test route must be upgraded exactly once");
+                                let _ = sender.send(result);
+                            })
+                    }
+                }),
+            );
+
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind loopback WebSocket server");
+            let address = listener.local_addr().expect("read loopback server address");
+            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+            let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            });
+            let server_task = tokio::spawn(async move { server.await });
+
+            let expected = [0xA5, 0x5A, 0x11, 0x22];
+            let client_task = spawn_blocking(move || {
+                let (mut client, _response) =
+                    connect_with_config(format!("ws://{address}/p2p"), Some(websocket_config()), 0)
+                        .expect("WebSocket handshake must succeed");
+                client
+                    .send(TungsteniteMessage::Binary(Vec::new().into()))
+                    .expect("send legal empty WebSocket data message");
+                client
+                    .send(TungsteniteMessage::Binary(expected.to_vec().into()))
+                    .expect("send following non-empty WebSocket data message");
+            });
+            timeout(TEST_TIMEOUT, client_task)
+                .await
+                .expect("WebSocket writer must not time out")
+                .expect("WebSocket writer must not panic");
+            let received = timeout(TEST_TIMEOUT, read_done_rx)
+                .await
+                .expect("server reader completion must not time out")
+                .expect("server reader completion channel must remain open")
+                .expect("empty Binary message must not terminate the byte stream");
+            assert_eq!(received, expected);
+
+            let _ = shutdown_tx.send(());
+            timeout(TEST_TIMEOUT, server_task)
+                .await
+                .expect("loopback server shutdown must not time out")
+                .expect("loopback server task must not panic")
+                .expect("loopback server must shut down cleanly");
+        }
     }
 }
 

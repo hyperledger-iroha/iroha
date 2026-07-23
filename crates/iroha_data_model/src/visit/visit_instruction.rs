@@ -6,8 +6,12 @@ use crate::{
         ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
         RegisterPeerWithPop, RevokeIdentifier,
         nexus::{
-            RegisterVerifiedLaneRelay, RegisterVerifiedNexusFeeBudget,
-            SetLaneRelayEmergencyValidators,
+            ActivateFeeSponsorProgramRevision, BeginCloseFeeSponsorProgram, CloseFeeSponsorProgram,
+            CreateFeeSponsorProgram, EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
+            PauseFeeSponsorProgram, RegisterVerifiedFeeSponsorVaultAllocation,
+            RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators,
+            StageFeeSponsorProgramRevision, UnenrollFeeSponsorBeneficiary,
+            WithdrawFeeSponsorProgram,
         },
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdvanceSoracloudRollout, AdvertiseSoracloudInrouHost,
@@ -57,41 +61,29 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_execute_trigger(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::account_alias_lease::AcquireAccountAliasLease>()
+        .downcast_ref::<crate::isi::alias_setup::EnsureAlias>()
     {
-        visitor.visit_acquire_account_alias_lease(v);
+        visitor.visit_ensure_alias(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::account_alias_lease::RenewAccountAliasLease>()
+        .downcast_ref::<crate::isi::alias_setup::RenewAliasLease>()
     {
-        visitor.visit_renew_account_alias_lease(v);
+        visitor.visit_renew_alias_lease(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::sns::RegisterSnsName>()
+        .downcast_ref::<crate::isi::alias_setup::ConfigureAliasAutoRenew>()
     {
-        visitor.visit_register_sns_name(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<crate::isi::sns::RenewSnsName>() {
-        visitor.visit_renew_sns_name(v);
+        visitor.visit_configure_alias_auto_renew(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::sns::TransferSnsName>()
+        .downcast_ref::<crate::isi::alias_setup::RebindAccountAlias>()
     {
-        visitor.visit_transfer_sns_name(v);
+        visitor.visit_rebind_account_alias(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<crate::isi::sns::UpdateSnsNameControllers>()
+        .downcast_ref::<crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
-        visitor.visit_update_sns_name_controllers(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::sns::FreezeSnsName>()
-    {
-        visitor.visit_freeze_sns_name(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::sns::UnfreezeSnsName>()
-    {
-        visitor.visit_unfreeze_sns_name(v);
+        visitor.visit_compare_and_set_primary_account_alias(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<Log>() {
         visitor.visit_log(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<BurnBox>() {
@@ -167,9 +159,35 @@ fn visit_staking_and_identifier_instruction<V: Visit + ?Sized>(
         visitor.visit_register_verified_lane_relay(v);
     } else if let Some(v) = isi
         .as_any()
-        .downcast_ref::<RegisterVerifiedNexusFeeBudget>()
+        .downcast_ref::<RegisterVerifiedFeeSponsorVaultAllocation>()
     {
-        visitor.visit_register_verified_nexus_fee_budget(v);
+        visitor.visit_register_verified_fee_sponsor_vault_allocation(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<CreateFeeSponsorProgram>() {
+        visitor.visit_create_fee_sponsor_program(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<StageFeeSponsorProgramRevision>()
+    {
+        visitor.visit_stage_fee_sponsor_program_revision(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<ActivateFeeSponsorProgramRevision>()
+    {
+        visitor.visit_activate_fee_sponsor_program_revision(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<PauseFeeSponsorProgram>() {
+        visitor.visit_pause_fee_sponsor_program(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<BeginCloseFeeSponsorProgram>() {
+        visitor.visit_begin_close_fee_sponsor_program(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<CloseFeeSponsorProgram>() {
+        visitor.visit_close_fee_sponsor_program(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<EnrollFeeSponsorBeneficiary>() {
+        visitor.visit_enroll_fee_sponsor_beneficiary(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<UnenrollFeeSponsorBeneficiary>() {
+        visitor.visit_unenroll_fee_sponsor_beneficiary(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<FundFeeSponsorProgram>() {
+        visitor.visit_fund_fee_sponsor_program(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<WithdrawFeeSponsorProgram>() {
+        visitor.visit_withdraw_fee_sponsor_program(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RegisterIdentifierPolicy>() {
         visitor.visit_register_identifier_policy(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ActivateIdentifierPolicy>() {
@@ -510,14 +528,11 @@ macro_rules! instruction_visitors {
             visit_upgrade(&Upgrade),
             visit_set_parameter(&SetParameter),
             visit_execute_trigger(&ExecuteTrigger),
-            visit_acquire_account_alias_lease(&$crate::isi::account_alias_lease::AcquireAccountAliasLease),
-            visit_renew_account_alias_lease(&$crate::isi::account_alias_lease::RenewAccountAliasLease),
-            visit_register_sns_name(&$crate::isi::sns::RegisterSnsName),
-            visit_renew_sns_name(&$crate::isi::sns::RenewSnsName),
-            visit_transfer_sns_name(&$crate::isi::sns::TransferSnsName),
-            visit_update_sns_name_controllers(&$crate::isi::sns::UpdateSnsNameControllers),
-            visit_freeze_sns_name(&$crate::isi::sns::FreezeSnsName),
-            visit_unfreeze_sns_name(&$crate::isi::sns::UnfreezeSnsName),
+            visit_ensure_alias(&$crate::isi::alias_setup::EnsureAlias),
+            visit_renew_alias_lease(&$crate::isi::alias_setup::RenewAliasLease),
+            visit_configure_alias_auto_renew(&$crate::isi::alias_setup::ConfigureAliasAutoRenew),
+            visit_rebind_account_alias(&$crate::isi::alias_setup::RebindAccountAlias),
+            visit_compare_and_set_primary_account_alias(&$crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias),
             visit_log(&Log),
             visit_custom_instruction(&CustomInstruction),
             visit_publish_pedersen_params(&PublishPedersenParams),
@@ -533,7 +548,17 @@ macro_rules! instruction_visitors {
             visit_exit_public_lane_validator(&ExitPublicLaneValidator),
             visit_set_lane_relay_emergency_validators(&SetLaneRelayEmergencyValidators),
             visit_register_verified_lane_relay(&RegisterVerifiedLaneRelay),
-            visit_register_verified_nexus_fee_budget(&$crate::isi::nexus::RegisterVerifiedNexusFeeBudget),
+            visit_register_verified_fee_sponsor_vault_allocation(&$crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation),
+            visit_create_fee_sponsor_program(&$crate::isi::nexus::CreateFeeSponsorProgram),
+            visit_stage_fee_sponsor_program_revision(&$crate::isi::nexus::StageFeeSponsorProgramRevision),
+            visit_activate_fee_sponsor_program_revision(&$crate::isi::nexus::ActivateFeeSponsorProgramRevision),
+            visit_pause_fee_sponsor_program(&$crate::isi::nexus::PauseFeeSponsorProgram),
+            visit_begin_close_fee_sponsor_program(&$crate::isi::nexus::BeginCloseFeeSponsorProgram),
+            visit_close_fee_sponsor_program(&$crate::isi::nexus::CloseFeeSponsorProgram),
+            visit_enroll_fee_sponsor_beneficiary(&$crate::isi::nexus::EnrollFeeSponsorBeneficiary),
+            visit_unenroll_fee_sponsor_beneficiary(&$crate::isi::nexus::UnenrollFeeSponsorBeneficiary),
+            visit_fund_fee_sponsor_program(&$crate::isi::nexus::FundFeeSponsorProgram),
+            visit_withdraw_fee_sponsor_program(&$crate::isi::nexus::WithdrawFeeSponsorProgram),
             visit_register_identifier_policy(&RegisterIdentifierPolicy),
             visit_activate_identifier_policy(&ActivateIdentifierPolicy),
             visit_claim_identifier(&ClaimIdentifier),

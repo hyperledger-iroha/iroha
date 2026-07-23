@@ -151,6 +151,13 @@ pub fn visit_transaction<V: Visit + ?Sized>(visitor: &mut V, transaction: &Signe
                 visitor.visit_instruction(isi);
             }
         }
+        Executable::Batch(items) => {
+            for item in items {
+                if let crate::transaction::ExecutableBatchItem::Instruction(isi) = item {
+                    visitor.visit_instruction(isi);
+                }
+            }
+        }
     }
 }
 

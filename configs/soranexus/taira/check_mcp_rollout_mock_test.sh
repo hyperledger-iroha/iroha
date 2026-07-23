@@ -259,8 +259,8 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/musubi/packag
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/instructions/yank-release" ]]; then
   body='{"instructions":[]}'
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/contracts/deploy" ]]; then
-  status="400"
-  body='{"error":"empty deploy body"}'
+  status="404"
+  body='{"code":"route_not_found","message":"route not found"}'
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/bridge/messages" ]]; then
   status="400"
   body='{"error":"empty bridge body"}'

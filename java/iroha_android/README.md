@@ -50,6 +50,230 @@ It uses the local snapshot repository when it exists and otherwise uses the
 in-repo project dependency. Set `irohaAndroidVersion` to match the
 published coordinates when consuming from Maven.
 
+The Java peer facades reuse the Kotlin SDK artifacts published as
+`org.hyperledger.iroha.sdk:core-jvm` and `client-android`. Their Maven version
+is pinned by `irohaKotlinSdkVersion` in `gradle.properties`; update that pin
+when publishing a new compatible Kotlin transport release. An explicit
+`-PirohaKotlinSdkVersion` overrides the pin, followed by the optional shared
+`irohaSdkVersion` property and finally `irohaAndroidVersion` when the more
+specific properties are absent. Composite builds substitute the in-tree
+Kotlin projects while preserving these exact coordinates in generated POMs.
+
+## Offline peer transport V1 (Java)
+
+The first-release peer transport has one wire family only: IPM1 messages,
+IQR1/IRQR QR frames, authenticated IPN1 Nearby records, and the NFC application
+identifier `F049524F48415045455201`. The new `IrohaPeer*V1` APIs never fall
+back to the older Kagemusha QR, Nearby service, or NFC APDU formats.
+
+Create the common envelope with `IrohaPeerWireMessageV1`. QR senders call
+`IrohaPeerQRCodecV1.encode(...)`; receivers feed camera text to
+`IrohaPeerQRScanSessionV1.ingest(...)`. The scan session is bounded and its default
+policy keeps at most three streams, limits header-last buffering, expires both
+idle and absolute-age state, removes successful streams, and quarantines a
+stream after conflicting frames. Bind optional expected profile, kind, and
+schema in the scan-session constructor, and call `reset()` whenever the camera
+session changes. After application-domain rejection of a structurally valid
+completion, call the bounded `scanSession.quarantine(streamId)` API before
+resuming capture. Scan input is exact IQR1 text; leading or trailing whitespace
+is rejected. Camera capture belongs to the application, so declare and request
+`android.permission.CAMERA` when the UI uses it.
+Those defaults are hard V1 ceilings: three active streams, twelve pre-header
+frames, 3,072 pre-header bytes, 30 seconds idle, and 180 seconds absolute.
+Custom limit objects may only tighten them.
+
+Google Nearby Connections is pinned to `19.3.0` and uses exact service ID
+`org.hyperledger.iroha.offline.transfer.v1` with
+`Strategy.P2P_POINT_TO_POINT`. Create discovery records through
+`IrohaPeerNearbyAndroidV1.discoveryContext(...)` (or the sender-only bootstrap
+sentinel), require the listener's 4-to-12 ASCII-digit verification decision, and feed
+received BYTES only into `IrohaPeerNearbySecureChannelV1`. The transitive Kotlin
+`IrohaPeerNearbyConnectionsTransportV1` owns advertising, discovery, send, and
+stop lifecycle. A send completion is success only after the exact payload's
+framework update is terminal `PayloadTransferUpdate.Status.SUCCESS`; enqueue or
+connection acceptance is never delivery success.
+IPN1 plaintext records are capped at 32,704 bytes; the encrypted record must
+remain within 32 KiB after its 54-byte framing overhead, and adapters reserve
+64 bytes by default.
+Authentication records are capped at 32 KiB, operation timeouts at 300
+seconds, and one receive phase admits the four-record V1 transcript. Android
+defers callback-executor submission until after releasing the lifecycle
+monitor, including for an injected direct executor. Epoch invalidation
+suppresses callbacks not yet admitted; an already-admitted callback may finish.
+Listener callbacks reject bounded overload. Terminal send completions remain
+exact-once through a separately bounded serial fallback; saturation of both a
+stalled configured executor and that fallback uses a nonblocking inline path,
+which cannot promise the configured context or global FIFO order.
+
+For NFC reader mode, `IrohaPeerAndroidNfcV1.transceiver(tag)` derives local
+read/write limits from `IsoDep.maxTransceiveLength` and extended-length
+support; a short WRITE chunk is capped at 203 bytes. HCE applications use
+`IrohaPeerAndroidNfcV1.receiverBridge(...)`. Its COMMIT callback must persist
+the exact payment outcome and IDA1 acknowledgement before completing; only
+then can the bridge return status `9000`. The two-tap sender's
+`IrohaPeerNfcSenderCheckpointStoreV1.loadOrCreateDurableCheckpoint` callback
+atomically loads an exact request- and peer-bound ISC1 or creates, debits, and
+stores it, returning only the durable value. The runner validates it before
+BEGIN_PAYMENT, so store failure sends no BEGIN_PAYMENT and restart cannot debit
+a replacement payment. The separate
+`IrohaPeerNfcSenderCheckpointUpdaterV1.updateDurableCheckpoint` callback
+installs the ACK-bearing ISC1 before CONFIRM_ACK; update failure sends no
+confirmation. The sender treats GET_STATUS as authoritative after a retap.
+Use `IrohaPeerNfcV1.runReaderExchange(...)` for the complete shared Kotlin
+runner; Java supplies only callbacks for transceive, atomic checkpoint
+load-or-create, and the monotonic ACK update, so it cannot drift into a second
+NFC state machine. One NFC profile policy binds request, payment, and
+acknowledgement to the same profile; mixed-profile sessions fail closed. A
+complete NFC IPM1 value is capped at 24,660 bytes, and the portable runner's
+whole-exchange default is 73,996 actions.
+The bridge's separate BEGIN callback receives a transient payment-admission
+context and must atomically store and return a
+`IrohaPeerNfcDurablePaymentAdmissionV1` containing the exact 244-byte IPA1.
+Restore that record with the Java facade; never reconstruct it from summary
+fields. Both BEGIN and COMMIT callbacks have a five-second fail-closed deadline
+and must be idempotent because a timeout makes the durable result ambiguous.
+Late callbacks cannot mutate a newer tap. IPA1 resumes at byte zero, while IDA1
+takes precedence after COMMIT and ACK-phase BEGIN is rejected.
+The NFC value and the 32-KiB canonical and 24,576-byte encoded-body limits for
+both Offline Note and bounded Kagemusha handoffs are hard constructor ceilings.
+
+The AAR merges the version-bounded Nearby/NFC permissions and ships
+`@xml/iroha_peer_nfc_v1_aids`. A wallet must still register its concrete HCE
+service explicitly. The service subclasses the transitive Kotlin
+`IrohaPeerAsyncHostApduServiceV1` and returns one stable bridge from its
+`commandHandler` property:
+
+```xml
+<service
+    android:name=".OfflinePeerHostApduService"
+    android:exported="true"
+    android:permission="android.permission.BIND_NFC_SERVICE">
+    <intent-filter>
+        <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+    </intent-filter>
+    <meta-data
+        android:name="android.nfc.cardemulation.host_apdu_service"
+        android:resource="@xml/iroha_peer_nfc_v1_aids" />
+</service>
+```
+
+The merged manifest includes `NFC`, legacy `ACCESS_WIFI_STATE` /
+`CHANGE_WIFI_STATE`, legacy `BLUETOOTH` / `BLUETOOTH_ADMIN`,
+`ACCESS_COARSE_LOCATION` through API 28, `ACCESS_FINE_LOCATION` on APIs 29–31,
+`BLUETOOTH_ADVERTISE` / `BLUETOOTH_CONNECT` / `BLUETOOTH_SCAN` from API 31,
+`NEARBY_WIFI_DEVICES` from API 32, and `ACCESS_LOCAL_NETWORK` from API 37.
+Before starting a rail, the host app requests every applicable dangerous
+permission for the running OS and role. Discoverers need scan, advertisers need
+advertise, established connections need connect, and Android 37+ needs local
+network permission when the platform requires it. `NFC` and legacy
+Wi-Fi/Bluetooth state permissions are manifest-only; a missing permission is
+never a reason to use an unauthenticated fallback.
+
+The Java build consumes the default SDK's pure-JVM NFC/IPN1 state machines and
+Android radio adapters through explicit Gradle composite substitutions during
+repository development. Published artifacts carry the equivalent transitive
+dependencies, so Java and Kotlin do not maintain divergent cryptographic or
+APDU implementations. Shared vectors live in `fixtures/offline/peer_*.json`.
+
+Profile `1` requires schema `1` and a maximum 24,576-byte encoded body. Profile
+`2` requires schema `0x0102` and is a 24,576-byte bounded handoff for a mainline
+typed Kagemusha native archive. Generic IPM validates its exact ABI21 envelope
+without native code; production code then performs deeper semantic decoding
+through `IrohaPeerKagemushaAdapterV1`. Full ABI21
+QR/NFC/native archives up to 32 MiB continue to use the independent
+`KagemushaQrStream`, `KagemushaNfcProtocol`, and `KagemushaNearby`
+facades. Kagemusha retains its distinct `PKK2*`/`PKKQ1` text and Bonjour
+identifiers, while NFC uses the sole canonical AID
+`F049524F48415045455201`. Nearby uses the authenticated binary `PKNB1`
+envelope and its own smaller bound. Those rails are never negotiated,
+reinterpreted, or used as fallback for Retail Offline Peer V1. The
+no-raw-text/no-unauthenticated-Nearby rule applies to `IrohaPeer*V1`; the
+retained ABI21 family also has no old AID. Do not use profile `2` for a
+sidecar/demo representation.
+
+These transport changes are client-side and require no backend API change.
+
+IPM1 profile-1 canonical application bytes are opaque. Offline Note apps can
+use `IrohaPeerCanonicalTextPayloadCodecV1` for an exact UTF-8 round trip; the
+codec rejects profile 2. Profile-2 construction and decode instead enforce
+native-independent ABI21 NRT0 framing, the authoritative fully-qualified kind
+schema, CRC64, exact compact-length flags, and static padding
+(request/payment 8, ACK 0). Deeper semantics remain in the typed adapter.
+`../../fixtures/offline/kagemusha_peer_transport_v2.json` additionally pins a
+qualified 49-byte structural archive through exact IPM1, IQR1, NFC, and
+authenticated Nearby bytes in Swift, Kotlin, and Java. Its one-byte body is
+structural-only and must not be passed to the typed adapter.
+`PEER_OPTIMIZED` compression is cross-rail and
+uses zlib only when it saves at least 32 bytes and one 256-byte shard.
+
+From `java/iroha_android`, the normal checks below exercise the Java facades,
+shared fixture parity, Kotlin dependency wiring, manifest contract, and Android
+adapters:
+
+```bash
+./gradlew :core:check :android:testDebugUnitTest
+```
+
+For a fast portable peer-only iteration, use:
+
+```bash
+./gradlew :core:test \
+  --tests 'org.hyperledger.iroha.android.offline.IrohaPeer*'
+```
+
+## Fee quotes and sponsorship
+
+Every transaction payload requires a typed `FeePaymentIntent`. Authority-paid
+and exact sponsor-program selections are explicit:
+
+```java
+import java.util.Collections;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
+
+FeePaymentIntent authorityPaid =
+    FeePaymentIntent.authority(Collections.emptyList());
+FeePaymentIntent sponsored =
+    FeePaymentIntent.sponsor(
+        new FeeSponsorProgramId(sponsorAccountId, "wallet_payments"),
+        3L,
+        Collections.emptyList());
+```
+
+An empty charge-limit list is only an initial quote draft. Freeze the complete
+unsigned payload, put `requested.toJsonMap()` in its required `fee_payment`
+field, and call `HttpClientTransport.quoteFees(unsignedPayload, canonicalAuth)`.
+Verify that the quote retained the payer, exact sponsor program/revision, and
+gas bound; replace only `fee_payment` with the returned intent before signing
+and submitting the same payload. Use
+`HttpClientTransport.getFeeSponsorProgram(programId, canonicalAuth)` to inspect
+one exact lifecycle record before selecting its revision. Contract/IVM drafts
+require a positive gas bound in the intent.
+
+The metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
+rejected. Sponsor rejection never falls back to the authority.
+
+## Atomic mixed executable batches
+
+`Executable.batch(...)` preserves an exact interleaving of native instructions
+and deployed-contract calls:
+
+```java
+Executable executable =
+    Executable.batch(
+        Arrays.asList(
+            ExecutableBatchItem.instruction(registerInstruction),
+            ExecutableBatchItem.contractCall(
+                new ContractInvocation(
+                    contractAddress, expectedCodeHash, "apply", argumentRecord)),
+            ExecutableBatchItem.instruction(transferInstruction)));
+```
+
+The node applies the batch atomically. Empty batches are rejected. Contract
+addresses must be canonical lowercase V1 Bech32m literals, and any batch that
+contains a contract call must provide one positive signature-bound gas limit in
+the `FeePaymentIntent`; these constraints are checked before signing.
+
 ## Account addresses
 
 ```java
@@ -71,31 +295,53 @@ network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`
 ## Kagemusha proof artifacts and device registration
 
 The Android/JVM offline surface has exactly two current pieces. `KagemushaRecursiveSpendProver`
-requires native bridge ABI 19, streams the six authenticated V3 proof-key artifacts into an atomic
-generation install, and exposes typed `initSpend`, `appendSpend`, `verifySpend`, and `buildRedeem`
-calls over the fixed native exports. `KagemushaScaledAmount` converts decimal input to positive
+requires native bridge ABI 21, streams the eight authenticated V4 proof artifacts into an atomic
+generation install, and exposes typed `initSpendV4`, `appendSpendV4`, `verifySpendV4`, and
+`buildRedeemV4` calls over the fixed native exports. `KagemushaScaledAmount` converts decimal input to positive
 `u128` atomic units exactly at the authoritative asset scale and never rounds. The standalone
 `DeviceAttestationRegistration` plus `RegisterOfflineDeviceAttestation` path validates finalized
 KeyMint/App Attest material and builds the exact one-instruction on-chain registration transaction.
 Android products remain fail-closed until the native proof backend reports available and the
-matching artifact generation is installed. The protocol accepts one or two inputs and enforces an
-eight-peer-hop ceiling natively; the current JVM convenience append builder constructs one-input
-spends, while canonical two-input archives remain valid at the native boundary. Receiver request
-signing exposes only the typed `ED25519`
-authority algorithm; callers never pass native wire discriminants.
+matching artifact generation is installed. The exact external inventory is `ParamsIPA`, processed
+proving key, processed verifying key, and final-key selector-zero bootstrap witness for each Eq/Ep
+parity. Bounded circuit parameters are authenticated inline in the V4 manifest, not streamed as
+extra artifacts. The protocol and JVM append builder accept one or two
+inputs and enforce an eight-peer-hop ceiling natively. Inputs are canonicalized by authenticated
+bundle digest; duplicate or conflicting exact-state branches fail closed. Peer request and
+acknowledgement signing expose only strict P-256 device key/signature wrappers; callers never pass
+native wire discriminants.
+
+Artifact installation requires the canonical candidate-bound promotion record through
+`ReleaseAuthentication`, in addition to the trusted policy, attestation, benchmark evidence, and
+cryptographic review. An authenticated-but-unpromoted release cannot become active.
 
 `newToriiClient(...)` exposes only `getReadiness`, `submitTopUp`, `submitRedeem`, and
 `getOperation`. Commands send the typed Norito request directly with `application/x-norito` and the
-signed lowercase operation id as `Idempotency-Key`; responses must be typed Norito as well.
-`projectReadiness` returns the live asset scale, committed height/hash, and all role-specific
-verifier commitments and activation windows. `prepareTopUp` accepts Torii's authoritative
+signed lowercase operation id as `Idempotency-Key`; responses must be typed Norito as well. Top-up
+bodies are limited to 512 KiB and redemption bodies to 48 MiB, exposed as
+`MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and `MAX_TORII_REDEEM_REQUEST_BYTES_V4`.
+`projectReadiness` returns the live asset scale, committed height/hash, all role-specific verifier
+commitments and activation windows, and the required nullable authenticated `artifactSet`. A
+present set binds the V4 generation, manifest, release-policy and release-attestation digests,
+issuance window, proof-pair bound, and asset scale to exact logical roles
+`kagemusha_recursive_step_eq_v4_verifier_record` and
+`kagemusha_recursive_step_ep_v4_verifier_record` with circuits
+`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
+`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`, respectively. An absent artifact set
+requires both recursive records and backend construction to be unavailable with exactly one
+`recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed` blocker; a present set
+forbids both. `proofBackendAvailable` reports exact backend construction independently.
+`recursiveLineageSupported` additionally requires the authenticated artifact set and distinct
+active Eq/Ep records, while `ready` is true only when the complete blocker set is empty.
+`recursive_lineage_unavailable` is present exactly when lineage is false. `prepareTopUp` accepts Torii's authoritative
 `next_zero_path`; the resulting recursive init persists its own native membership witness rather
 than the earlier shield-tree witness. Typed decoders restore the opening and exact canonical
 top-up/redemption submissions for idempotent restart retries. Secret-bearing append/redemption
 build requests are single-use and zeroized when native proving consumes them.
-Each projected branch carries an opaque current `BranchClaim`. Native `conflictsWith` comparison
-rejects equality, ancestor/descendant overlap, and incompatible transition histories while allowing
-the two consistent sibling outputs from one split; applications never parse lineage paths.
+Each projected branch carries its complete ordered exact-state claim set and authenticated V4
+artifact binding. Native `conflictsWith` compares every claim pair, rejecting equality and
+ancestor/descendant overlap while allowing the two consistent sibling outputs from one split;
+applications never parse lineage paths.
 
 ## Multisig specs and TTL preview
 
@@ -373,9 +619,10 @@ bash ci/check_android_transport_guard.sh /path/to/classes.jar
   `ToriiEventStreamClient.builder()` (without `setTransportExecutor(...)`),
   `SorafsGatewayClient.builder()`, and `HttpSafetyDetectService.createDefault(...)` all pick the
   platform executor so Android apps land on the shared OkHttp client without extra wiring.
-- WebSockets use a strict runtime split: Android loads `OkHttpWebSocketConnectorFactory`, while JVM
-  builds load `JdkWebSocketConnectorFactory`. Inject `setTransportExecutor`/`setWebSocketConnector`
-  in client builders when you want a custom transport.
+- WebSocket clients require an explicit connector. Android callers should inject
+  `OkHttpWebSocketConnectorFactory.createDefault()`, while JVM callers should inject
+  `JdkWebSocketConnectorFactory.createDefault()`. This keeps platform selection deterministic and
+  avoids reflective discovery; `AndroidClientFactory` performs the injection for its clients.
 - Android artefacts must not contain `java.net.http` bytecode. The `android-and6` workflow now runs a
   `transport-guard` job that assembles the release AAR and executes
   `ci/check_android_transport_guard.sh` (also available locally via `make android-transport-guard`)
@@ -705,10 +952,11 @@ mutating the primary listener.
 
 ### Torii streaming (WebSocket)
 
-The WebSocket surface now rides on the transport abstractions
-(`TransportRequest`/`TransportWebSocket`) so JVM and Android can inject platform
-connectors. The default connector uses the JDK client; Android apps should pass
-the OkHttp connector to keep `java.net.http` out of the AAR:
+The WebSocket surface rides on the transport abstractions
+(`TransportRequest`/`TransportWebSocket`) so JVM and Android inject their platform
+connectors explicitly. Android apps should pass the OkHttp connector to keep
+`java.net.http` out of the AAR; JVM apps can instead inject
+`JdkWebSocketConnectorFactory.createDefault()`:
 
 ```java
 import okhttp3.OkHttpClient;

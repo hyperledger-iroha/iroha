@@ -150,6 +150,7 @@ PROFILE_ORDER = (
 )
 
 HUB_CHAIN_IDS = {"sora-taira": "fc56984b-2be7-431d-840e-21514d1883f0"}
+SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION = 3
 
 # Fixture keys are disposable and non-production. Production policy loading
 # denies every published generation even if an attacker relabels the fixture
@@ -237,6 +238,14 @@ FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
         # Validator-source-refresh ephemeral in-memory release-role seal.
         "eaacd450eb2a2b841138668261a89e9174d49337712020c83495a9964c53df74",
         "a57061eb537a96ccc110a42c30875354f4c1939356b30018e80fc731400a6087",
+        # Retired alias-release-refresh ephemeral in-memory release-role seal.
+        "fffc070b38e8fe79f58372450d6d235679d4c53409dd5ab71d65fb898a3939d8",
+        "224ee4a3491eb6dd8cb8669402b795c94766857d9ed42efd8ea98cdb379b1218",
+        # Protocol-v3 release-role and circuit-auditor seal.
+        "14e856453288b642c8a670c52c3559c229b358fd83c356cf6dd522fb6d128284",
+        "e61d512ed09e72e6d680872844ac1c3632f2bb4f676155eab5492a8439132232",
+        "55e4ba52faa1a07a3e8630dcdd1c0472153d58497bb81e2c92dfcbf7d172f857",
+        "bd463cf2379a295d6efdd6e3815d9f8724f5e4118a3a9e430192d3a0480e6f4e",
     )
 )
 
@@ -443,8 +452,8 @@ def sora_finality_anchor_hash(anchor: Mapping[str, Any]) -> bytes:
     protocol_version = _require_int(
         value["protocol_version"],
         label="SORA anchor protocol_version",
-        minimum=2,
-        maximum=2,
+        minimum=SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION,
+        maximum=SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION,
     )
     chain_id_hash = bytes.fromhex(
         _require_hex(

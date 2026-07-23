@@ -540,10 +540,18 @@ pub mod genesis_instructions_json {
         isi::{
             ActivatePublicLaneValidator, CustomInstruction, Grant, GrantBox, InstructionBox, Mint,
             MintBox, Register, RegisterPublicLaneValidator, SetAssetDefinitionAlias, SetParameter,
-            Transfer, TransferBox, domain_link::SetAccountAliasBinding, register::RegisterBox,
+            Transfer, TransferBox,
+            nexus::{
+                ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
+                EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
+            },
+            register::RegisterBox,
         },
         metadata::Metadata,
-        nexus::{LaneId, UniversalAccountId},
+        nexus::{
+            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
+            UniversalAccountId,
+        },
         parameter::Parameter,
         permission::Permission,
         prelude::{AccountId, AssetDefinitionId, AssetId, DomainId},
@@ -647,15 +655,27 @@ pub mod genesis_instructions_json {
                             "SetAssetDefinitionAlias" => {
                                 try_decode_set_asset_definition_alias(inner.clone())?
                             }
-                            "SetAccountAliasBinding" => {
-                                try_decode_set_account_alias_binding(inner.clone())?
-                            }
                             "Custom" => try_decode_custom(inner.clone())?,
                             "RegisterPublicLaneValidator" => {
                                 try_decode_register_public_lane_validator(inner.clone())?
                             }
                             "ActivatePublicLaneValidator" => {
                                 try_decode_activate_public_lane_validator(inner.clone())?
+                            }
+                            "CreateFeeSponsorProgram" => {
+                                try_decode_create_fee_sponsor_program(inner.clone())?
+                            }
+                            "StageFeeSponsorProgramRevision" => {
+                                try_decode_stage_fee_sponsor_program_revision(inner.clone())?
+                            }
+                            "EnrollFeeSponsorBeneficiary" => {
+                                try_decode_enroll_fee_sponsor_beneficiary(inner.clone())?
+                            }
+                            "FundFeeSponsorProgram" => {
+                                try_decode_fund_fee_sponsor_program(inner.clone())?
+                            }
+                            "ActivateFeeSponsorProgramRevision" => {
+                                try_decode_activate_fee_sponsor_program_revision(inner.clone())?
                             }
                             _ => None,
                         };
@@ -967,59 +987,6 @@ pub mod genesis_instructions_json {
         Ok(Some(InstructionBox::from(instruction)))
     }
 
-    fn try_decode_set_account_alias_binding(
-        inner: Value,
-    ) -> Result<Option<InstructionBox>, json::Error> {
-        let mut fields = match inner {
-            Value::Object(map) => map,
-            _ => return Ok(None),
-        };
-        let account = match fields.remove("account") {
-            Some(Value::String(value)) => {
-                parse_account_id(&value, "SetAccountAliasBinding.account")?
-            }
-            Some(other) => {
-                return Err(json::Error::Message(format!(
-                    "expected string for SetAccountAliasBinding.account, found {other:?}"
-                )));
-            }
-            None => {
-                return Err(json::Error::Message(
-                    "missing SetAccountAliasBinding.account".to_string(),
-                ));
-            }
-        };
-
-        let alias = match fields.remove("alias") {
-            None | Some(Value::Null) => None,
-            Some(value) => Some(parse_account_alias(value, "SetAccountAliasBinding.alias")?),
-        };
-
-        let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
-            None | Some(Value::Null) => None,
-            Some(Value::Number(Number::U64(value))) => Some(value),
-            Some(Value::Number(Number::I64(value))) if value >= 0 => Some(value.cast_unsigned()),
-            Some(other) => {
-                return Err(json::Error::Message(format!(
-                    "expected unsigned integer or null for SetAccountAliasBinding.lease_expiry_ms, found {other:?}"
-                )));
-            }
-        };
-
-        if !fields.is_empty() {
-            return Err(json::Error::Message(format!(
-                "unexpected SetAccountAliasBinding fields: {}",
-                fields.keys().cloned().collect::<Vec<_>>().join(",")
-            )));
-        }
-
-        let instruction = match alias {
-            Some(alias) => SetAccountAliasBinding::bind(account, alias, lease_expiry_ms),
-            None => SetAccountAliasBinding::clear(account),
-        };
-        Ok(Some(InstructionBox::from(instruction)))
-    }
-
     fn try_decode_custom(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let mut fields = match inner {
             Value::Object(map) => map,
@@ -1105,6 +1072,119 @@ pub mod genesis_instructions_json {
         Ok(Some(InstructionBox::from(activate)))
     }
 
+    fn object_fields(
+        inner: Value,
+        instruction: &str,
+    ) -> Result<BTreeMap<String, Value>, json::Error> {
+        match inner {
+            Value::Object(fields) => Ok(fields),
+            other => Err(json::Error::Message(format!(
+                "expected object for {instruction} fields, found {other:?}"
+            ))),
+        }
+    }
+
+    fn take_typed<T>(
+        fields: &mut BTreeMap<String, Value>,
+        field: &'static str,
+    ) -> Result<T, json::Error>
+    where
+        T: norito::json::JsonDeserialize,
+    {
+        norito::json::value::from_value(
+            fields
+                .remove(field)
+                .ok_or_else(|| json::Error::missing_field(field))?,
+        )
+    }
+
+    fn try_decode_create_fee_sponsor_program(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "CreateFeeSponsorProgram")?;
+        let program = take_typed::<FeeSponsorProgram>(&mut fields, "program")?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(CreateFeeSponsorProgram {
+            program,
+        })))
+    }
+
+    fn try_decode_stage_fee_sponsor_program_revision(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "StageFeeSponsorProgramRevision")?;
+        let revision = take_typed::<FeeSponsorProgramRevision>(&mut fields, "revision")?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(StageFeeSponsorProgramRevision {
+            revision,
+        })))
+    }
+
+    fn try_decode_enroll_fee_sponsor_beneficiary(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "EnrollFeeSponsorBeneficiary")?;
+        let program_id = take_typed::<FeeSponsorProgramId>(&mut fields, "program_id")?;
+        let beneficiary = parse_account_id(
+            &take_string(&mut fields, "beneficiary")?,
+            "fee sponsor beneficiary",
+        )?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(EnrollFeeSponsorBeneficiary {
+            program_id,
+            beneficiary,
+        })))
+    }
+
+    fn try_decode_fund_fee_sponsor_program(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "FundFeeSponsorProgram")?;
+        let program_id = take_typed::<FeeSponsorProgramId>(&mut fields, "program_id")?;
+        let asset_definition_id =
+            AssetDefinitionId::from_str(&take_string(&mut fields, "asset_definition_id")?)
+                .map_err(|error| json::Error::Message(format!("invalid sponsor asset: {error}")))?;
+        let amount = Quantity::try_from_numeric(parse_numeric(
+            fields
+                .remove("amount")
+                .ok_or_else(|| json::Error::missing_field("amount"))?,
+        )?)
+        .map_err(|error| json::Error::Message(format!("invalid sponsor amount: {error}")))?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(FundFeeSponsorProgram {
+            program_id,
+            asset_definition_id,
+            amount,
+        })))
+    }
+
+    fn try_decode_activate_fee_sponsor_program_revision(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "ActivateFeeSponsorProgramRevision")?;
+        let program_id = take_typed::<FeeSponsorProgramId>(&mut fields, "program_id")?;
+        let revision = parse_u64(
+            fields
+                .remove("revision")
+                .ok_or_else(|| json::Error::missing_field("revision"))?,
+            "fee sponsor revision",
+        )?;
+        let activate_at_height = parse_u64(
+            fields
+                .remove("activate_at_height")
+                .ok_or_else(|| json::Error::missing_field("activate_at_height"))?,
+            "fee sponsor activation height",
+        )?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(
+            ActivateFeeSponsorProgramRevision {
+                program_id,
+                revision,
+                activate_at_height,
+            },
+        )))
+    }
+
     fn take_string(
         fields: &mut BTreeMap<String, Value>,
         field: &'static str,
@@ -1173,6 +1253,20 @@ pub mod genesis_instructions_json {
             Value::Number(Number::I64(v)) => {
                 u32::try_from(v).map_err(|_| json::Error::Message(format!("invalid {label}: {v}")))
             }
+            other => Err(json::Error::Message(format!(
+                "expected numeric {label} value, found {other:?}"
+            ))),
+        }
+    }
+
+    fn parse_u64(value: Value, label: &'static str) -> Result<u64, json::Error> {
+        match value {
+            Value::String(s) => s
+                .parse::<u64>()
+                .map_err(|err| json::Error::Message(format!("invalid {label}: {err}"))),
+            Value::Number(Number::U64(value)) => Ok(value),
+            Value::Number(Number::I64(value)) => u64::try_from(value)
+                .map_err(|_| json::Error::Message(format!("invalid {label}: {value}"))),
             other => Err(json::Error::Message(format!(
                 "expected numeric {label} value, found {other:?}"
             ))),
@@ -1370,47 +1464,6 @@ pub mod genesis_instructions_json {
             return Some(Value::Object(outer));
         }
 
-        if let Some(set_account_alias_binding) = instruction
-            .as_any()
-            .downcast_ref::<SetAccountAliasBinding>()
-        {
-            let mut fields = Map::new();
-            let account = account_literal(set_account_alias_binding.account())?;
-            fields.insert("account".to_string(), Value::String(account));
-            let alias = set_account_alias_binding
-                .alias()
-                .as_ref()
-                .map_or(Value::Null, |alias| {
-                    let mut alias_fields = Map::new();
-                    alias_fields.insert(
-                        "label".to_string(),
-                        Value::String(alias.label.as_ref().to_owned()),
-                    );
-                    alias_fields.insert(
-                        "domain".to_string(),
-                        alias.domain.as_ref().map_or(Value::Null, |domain| {
-                            Value::String(domain.name().as_ref().to_owned())
-                        }),
-                    );
-                    alias_fields.insert(
-                        "dataspace".to_string(),
-                        Value::Number(Number::U64(alias.dataspace.as_u64())),
-                    );
-                    Value::Object(alias_fields)
-                });
-            fields.insert("alias".to_string(), alias);
-            fields.insert(
-                "lease_expiry_ms".to_string(),
-                set_account_alias_binding
-                    .lease_expiry_ms()
-                    .as_ref()
-                    .map_or(Value::Null, |value| Value::Number(Number::U64(*value))),
-            );
-            let mut outer = Map::new();
-            outer.insert("SetAccountAliasBinding".to_string(), Value::Object(fields));
-            return Some(Value::Object(outer));
-        }
-
         if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>() {
             let payload = norito::json::parse_value(custom.payload().get()).ok()?;
             let mut inner = Map::new();
@@ -1423,14 +1476,9 @@ pub mod genesis_instructions_json {
         if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
             return match grant {
                 GrantBox::Permission(grant_perm) => {
-                    let mut permission_name = grant_perm.object().to_string();
-                    if let Some(idx) = permission_name.find('(') {
-                        permission_name.truncate(idx);
-                    }
-                    let mut permission = Map::new();
-                    permission.insert("name".to_string(), Value::String(permission_name));
+                    let permission = norito::json::value::to_value(grant_perm.object()).ok()?;
                     let mut fields = Map::new();
-                    fields.insert("object".to_string(), Value::Object(permission));
+                    fields.insert("object".to_string(), permission);
                     let destination = account_literal(grant_perm.destination())?;
                     fields.insert("destination".to_string(), Value::String(destination));
                     Some(wrap("Grant", "Permission", Value::Object(fields)))
@@ -1489,6 +1537,102 @@ pub mod genesis_instructions_json {
             return Some(Value::Object(outer));
         }
 
+        if let Some(create) = instruction
+            .as_any()
+            .downcast_ref::<CreateFeeSponsorProgram>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "program".to_owned(),
+                norito::json::value::to_value(create.program()).ok()?,
+            );
+            let mut outer = Map::new();
+            outer.insert("CreateFeeSponsorProgram".to_owned(), Value::Object(fields));
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(stage) = instruction
+            .as_any()
+            .downcast_ref::<StageFeeSponsorProgramRevision>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "revision".to_owned(),
+                norito::json::value::to_value(stage.revision()).ok()?,
+            );
+            let mut outer = Map::new();
+            outer.insert(
+                "StageFeeSponsorProgramRevision".to_owned(),
+                Value::Object(fields),
+            );
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(enroll) = instruction
+            .as_any()
+            .downcast_ref::<EnrollFeeSponsorBeneficiary>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "program_id".to_owned(),
+                norito::json::value::to_value(enroll.program_id()).ok()?,
+            );
+            fields.insert(
+                "beneficiary".to_owned(),
+                Value::String(account_literal(enroll.beneficiary())?),
+            );
+            let mut outer = Map::new();
+            outer.insert(
+                "EnrollFeeSponsorBeneficiary".to_owned(),
+                Value::Object(fields),
+            );
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(fund) = instruction.as_any().downcast_ref::<FundFeeSponsorProgram>() {
+            let mut fields = Map::new();
+            fields.insert(
+                "program_id".to_owned(),
+                norito::json::value::to_value(fund.program_id()).ok()?,
+            );
+            fields.insert(
+                "asset_definition_id".to_owned(),
+                Value::String(fund.asset_definition_id().canonical_address()),
+            );
+            fields.insert(
+                "amount".to_owned(),
+                Value::String(fund.amount().to_string()),
+            );
+            let mut outer = Map::new();
+            outer.insert("FundFeeSponsorProgram".to_owned(), Value::Object(fields));
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(activate) = instruction
+            .as_any()
+            .downcast_ref::<ActivateFeeSponsorProgramRevision>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "program_id".to_owned(),
+                norito::json::value::to_value(activate.program_id()).ok()?,
+            );
+            fields.insert(
+                "revision".to_owned(),
+                Value::Number(Number::U64(*activate.revision())),
+            );
+            fields.insert(
+                "activate_at_height".to_owned(),
+                Value::Number(Number::U64(*activate.activate_at_height())),
+            );
+            let mut outer = Map::new();
+            outer.insert(
+                "ActivateFeeSponsorProgramRevision".to_owned(),
+                Value::Object(fields),
+            );
+            return Some(Value::Object(outer));
+        }
+
         None
     }
 
@@ -1528,7 +1672,7 @@ pub mod genesis_instructions_json {
 
     #[cfg(test)]
     mod tests {
-        use std::{num::NonZeroU64, path::PathBuf};
+        use std::{collections::BTreeSet, num::NonZeroU64, path::PathBuf};
 
         #[allow(unused_imports)]
         use iroha_data_model::{
@@ -1536,18 +1680,32 @@ pub mod genesis_instructions_json {
             domain::Domain,
             isi::{
                 GrantBox, Log, MintBox, RegisterBox, SetParameter, TransferBox,
+                nexus::{
+                    ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
+                    EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
+                    StageFeeSponsorProgramRevision,
+                },
                 staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
             },
             level::Level,
             metadata::Metadata,
-            nexus::LaneId,
+            nexus::{
+                DataSpaceId, FeeSponsorAssetBudget, FeeSponsorEligibility,
+                FeeSponsorNativeInstructionSelector, FeeSponsorProgram, FeeSponsorProgramId,
+                FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
+                FeeSponsorRuleSelector, LaneId,
+            },
             parameter::{Parameter, TransactionParameter},
+            permission::Permission,
             prelude::{
                 AccountId, AssetDefinitionId, AssetId, Grant, InstructionBox, Mint, Register,
                 Transfer,
             },
         };
-        use iroha_executor_data_model::permission::parameter::CanSetParameters;
+        use iroha_executor_data_model::permission::{
+            account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
+            parameter::CanSetParameters,
+        };
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
 
@@ -1575,6 +1733,94 @@ pub mod genesis_instructions_json {
             let parsed = norito::json::from_str::<Value>(&out).expect("parse serialized JSON");
             let array = parsed.as_array().expect("instructions array");
             assert!(array.first().unwrap().is_object());
+        }
+
+        #[test]
+        fn fee_sponsor_lifecycle_uses_structured_genesis_json() {
+            let program_id = FeeSponsorProgramId::new(
+                ALICE_ID.clone(),
+                "default".parse().expect("program name"),
+            );
+            let fee_asset_id = AssetDefinitionId::new(
+                DomainId::try_new("universal", "universal").expect("domain"),
+                "xor".parse().expect("asset name"),
+            );
+            let revision = FeeSponsorProgramRevision {
+                program_id: program_id.clone(),
+                revision: 1,
+                eligibility: FeeSponsorEligibility::EnrolledOnly,
+                rules: vec![FeeSponsorRule {
+                    id: "onboarding".parse().expect("rule name"),
+                    effect: FeeSponsorRuleEffect::Allow,
+                    selectors: vec![FeeSponsorRuleSelector::NativeInstruction(
+                        FeeSponsorNativeInstructionSelector {
+                            wire_id: RegisterBox::WIRE_ID.to_owned(),
+                            asset_definition_id: None,
+                        },
+                    )],
+                }],
+                asset_budgets: vec![FeeSponsorAssetBudget {
+                    asset_definition_id: fee_asset_id.clone(),
+                    per_transaction: Quantity::from(10_u64),
+                    per_block: Quantity::from(100_u64),
+                    per_program_epoch: Quantity::from(1_000_u64),
+                    per_beneficiary_epoch: Quantity::from(100_u64),
+                    reserve_floor: Quantity::from(10_u64),
+                    epoch_length_blocks: NonZeroU64::new(100).expect("non-zero"),
+                }],
+            };
+            let instructions = vec![
+                InstructionBox::from(CreateFeeSponsorProgram {
+                    program: FeeSponsorProgram::new(program_id.clone()),
+                }),
+                InstructionBox::from(StageFeeSponsorProgramRevision { revision }),
+                InstructionBox::from(EnrollFeeSponsorBeneficiary {
+                    program_id: program_id.clone(),
+                    beneficiary: ALICE_ID.clone(),
+                }),
+                InstructionBox::from(FundFeeSponsorProgram {
+                    program_id: program_id.clone(),
+                    asset_definition_id: fee_asset_id,
+                    amount: Quantity::from(1_000_u64),
+                }),
+                InstructionBox::from(ActivateFeeSponsorProgramRevision {
+                    program_id,
+                    revision: 1,
+                    activate_at_height: 1,
+                }),
+            ];
+
+            let value = instructions_to_value(&instructions);
+            let array = value.as_array().expect("instruction array");
+            for (value, expected_key) in array.iter().zip([
+                "CreateFeeSponsorProgram",
+                "StageFeeSponsorProgramRevision",
+                "EnrollFeeSponsorBeneficiary",
+                "FundFeeSponsorProgram",
+                "ActivateFeeSponsorProgramRevision",
+            ]) {
+                assert!(
+                    value
+                        .as_object()
+                        .is_some_and(|object| object.contains_key(expected_key)),
+                    "missing structured {expected_key}: {value:?}"
+                );
+            }
+
+            let decoded = from_value(&value).expect("decode structured fee sponsor lifecycle");
+            assert_eq!(decoded.len(), instructions.len());
+            assert!(
+                decoded[0]
+                    .as_any()
+                    .downcast_ref::<CreateFeeSponsorProgram>()
+                    .is_some()
+            );
+            assert!(
+                decoded[4]
+                    .as_any()
+                    .downcast_ref::<ActivateFeeSponsorProgramRevision>()
+                    .is_some()
+            );
         }
 
         #[test]
@@ -1720,64 +1966,89 @@ pub mod genesis_instructions_json {
         }
 
         #[test]
-        fn deserialize_structured_alias_binding_and_custom_roundtrip() {
+        fn scoped_alias_permission_grants_preserve_payloads_through_genesis_json() {
             let account_id = ALICE_ID.clone();
-            let alias = iroha_data_model::account::rekey::AccountAlias::new(
-                "admin1".parse().expect("alias label"),
-                Some("hbl".parse().expect("alias domain")),
-                iroha_data_model::nexus::DataSpaceId::new(10),
+            let universal = AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL);
+            let private = AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10));
+            let domain = AccountAliasPermissionScope::Domain(
+                DomainId::parse_fully_qualified("hbl.sbp").expect("domain scope must parse"),
             );
-            let account_literal = account_literal(&account_id).expect("account literal");
-            let custom_payload: Value = norito::json::from_str(&format!(
-                r#"{{
-                    "Register": {{
-                        "account": "{account_literal}",
-                        "home_domain": "hbl.paynet",
-                        "spec": {{
-                            "signatories": ["{account_literal}"],
-                            "quorum": 1,
-                            "transaction_ttl_ms": 3600000
-                        }}
-                    }}
-                }}"#
-            ))
-            .expect("custom payload JSON");
-            let instructions: Vec<InstructionBox> = vec![
-                SetAccountAliasBinding::bind(account_id.clone(), alias.clone(), None).into(),
-                CustomInstruction::new(iroha_primitives::json::Json::new(custom_payload.clone()))
-                    .into(),
-            ];
+            let cases = [universal, private, domain]
+                .into_iter()
+                .flat_map(|scope| {
+                    [
+                        (
+                            Permission::from(CanManageAccountAlias {
+                                scope: scope.clone(),
+                            }),
+                            scope.clone(),
+                        ),
+                        (
+                            Permission::from(CanResolveAccountAlias {
+                                scope: scope.clone(),
+                            }),
+                            scope,
+                        ),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            let instructions = cases
+                .iter()
+                .map(|(permission, _)| {
+                    Grant::account_permission(permission.clone(), account_id.clone()).into()
+                })
+                .collect::<Vec<InstructionBox>>();
 
-            let mut json_text = String::new();
-            serialize(&instructions, &mut json_text);
-            let parsed =
-                norito::json::from_str::<Value>(&json_text).expect("parse serialized JSON");
-            let instructions = from_value(&parsed).expect("deserialize instructions");
-            assert_eq!(instructions.len(), 2);
-
-            match instructions[0]
-                .as_any()
-                .downcast_ref::<SetAccountAliasBinding>()
-            {
-                Some(binding) => {
-                    assert_eq!(binding.account(), &account_id);
-                    assert_eq!(binding.alias().as_ref(), Some(&alias));
-                    assert_eq!(binding.lease_expiry_ms(), &None);
-                }
-                other => panic!("unexpected alias binding instruction: {other:?}"),
+            let encoded = instructions_to_value(&instructions);
+            for instruction in encoded.as_array().expect("instruction array") {
+                let payload = instruction
+                    .get("Grant")
+                    .and_then(|value| value.get("Permission"))
+                    .and_then(|value| value.get("object"))
+                    .and_then(|value| value.get("payload"))
+                    .expect("structured permission grant must include its payload");
+                assert_ne!(
+                    payload,
+                    &Value::Null,
+                    "scoped permission payload must not collapse to null"
+                );
             }
 
-            match instructions[1].as_any().downcast_ref::<CustomInstruction>() {
-                Some(custom) => {
-                    let payload: Value = norito::json::parse_value(custom.payload().get())
-                        .expect("custom payload must parse");
-                    assert_eq!(payload, custom_payload);
+            let decoded = from_value(&encoded).expect("decode structured permission grants");
+            assert_eq!(decoded.len(), cases.len());
+            let mut unique = BTreeSet::new();
+            for (instruction, (expected_permission, expected_scope)) in decoded.iter().zip(&cases) {
+                let GrantBox::Permission(grant) = instruction
+                    .as_any()
+                    .downcast_ref::<GrantBox>()
+                    .expect("decoded instruction must be a permission grant")
+                else {
+                    panic!("decoded grant must target an account");
+                };
+                assert_eq!(grant.destination(), &account_id);
+                assert_eq!(grant.object(), expected_permission);
+                assert!(
+                    unique.insert((grant.destination().clone(), grant.object().clone())),
+                    "scoped permission grants must remain distinct"
+                );
+                match expected_permission.name() {
+                    "CanManageAccountAlias" => assert_eq!(
+                        CanManageAccountAlias::try_from(grant.object())
+                            .expect("decode manage permission")
+                            .scope,
+                        expected_scope.clone()
+                    ),
+                    "CanResolveAccountAlias" => assert_eq!(
+                        CanResolveAccountAlias::try_from(grant.object())
+                            .expect("decode resolve permission")
+                            .scope,
+                        expected_scope.clone()
+                    ),
+                    name => panic!("unexpected alias permission `{name}`"),
                 }
-                other => panic!("unexpected custom instruction: {other:?}"),
             }
         }
 
-        #[test]
         fn deserialize_structured_register_account_with_label() {
             let account_id = ALICE_ID.clone();
             let account_literal = account_literal(&account_id).expect("account literal");
@@ -2070,6 +2341,12 @@ impl norito::json::JsonSerialize for RawGenesisTx {
 }
 
 impl RawGenesisTx {
+    /// Instructions carried by this raw genesis transaction.
+    #[must_use]
+    pub fn instructions(&self) -> &[InstructionBox] {
+        &self.instructions
+    }
+
     /// Topology entries carried by this transaction.
     #[must_use]
     pub fn topology(&self) -> &[GenesisTopologyEntry] {
@@ -2779,6 +3056,60 @@ impl RawGenesisTransaction {
     #[must_use]
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
+    }
+
+    /// Replace one instruction-only raw transaction with one or more
+    /// instruction-only transactions.
+    ///
+    /// This deliberately refuses to rewrite a transaction that also carries
+    /// parameters, IVM triggers, or topology. Callers can therefore perform a
+    /// narrow transaction-boundary migration without silently moving any
+    /// other genesis semantics.
+    pub fn replace_instruction_only_transaction(
+        &mut self,
+        index: usize,
+        replacement_batches: Vec<Vec<InstructionBox>>,
+    ) -> Result<()> {
+        if replacement_batches.is_empty() {
+            return Err(eyre!(
+                "replacement for raw genesis transaction {index} must contain at least one batch"
+            ));
+        }
+        if let Some((batch_index, _)) = replacement_batches
+            .iter()
+            .enumerate()
+            .find(|(_, batch)| batch.is_empty())
+        {
+            return Err(eyre!(
+                "replacement batch {batch_index} for raw genesis transaction {index} must not be empty"
+            ));
+        }
+
+        let original = self.transactions.get(index).ok_or_else(|| {
+            eyre!(
+                "raw genesis transaction index {index} is out of bounds for {} transactions",
+                self.transactions.len()
+            )
+        })?;
+        if original.parameters.is_some()
+            || !original.ivm_triggers.is_empty()
+            || !original.topology.is_empty()
+        {
+            return Err(eyre!(
+                "raw genesis transaction {index} is not instruction-only; refusing to move parameters, IVM triggers, or topology"
+            ));
+        }
+
+        let replacements = replacement_batches
+            .into_iter()
+            .map(|instructions| RawGenesisTx {
+                parameters: None,
+                instructions,
+                ivm_triggers: Vec::new(),
+                topology: Vec::new(),
+            });
+        self.transactions.splice(index..=index, replacements);
+        Ok(())
     }
 
     /// Remove topology entries from all transactions.
@@ -4486,8 +4817,12 @@ impl RawGenesisTransaction {
                     encoded.len()
                 );
             }
-            let mut builder = TransactionBuilder::new(chain.clone(), genesis_account.clone())
-                .with_instructions(instructions);
+            let mut builder = TransactionBuilder::new(
+                chain.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions(instructions);
             builder.set_creation_time(Duration::from_millis(
                 genesis_creation_base_ms.saturating_add(
                     u64::try_from(tx_index).expect("too many genesis transactions"),
@@ -5006,9 +5341,17 @@ impl GenesisBuilder {
         }
     }
 
-    /// Entry a parameter setting to the end of entries.
+    /// Append a parameter to the authoritative snapshot in the first transaction.
+    ///
+    /// [`Parameters`] is a complete snapshot rather than a transaction-local patch, so a
+    /// genesis manifest must contain exactly one structured `parameters` block. Calling this
+    /// method after [`Self::next_transaction`] still updates that first authoritative snapshot.
     pub fn append_parameter(mut self, parameter: Parameter) -> Self {
-        self.current_tx_mut().parameters.push(parameter);
+        self.transactions
+            .first_mut()
+            .expect("genesis builder always contains at least one transaction")
+            .parameters
+            .push(parameter);
         self
     }
 
@@ -5098,34 +5441,27 @@ impl GenesisBuilder {
     /// Finish building and produce a [`RawGenesisTransaction`].
     pub fn build_raw(self) -> RawGenesisTransaction {
         let mut parameter_snapshot = Parameters::default();
-        let mut transactions: Vec<_> = self
-            .transactions
+        let mut source_transactions = self.transactions;
+        for tx in &mut source_transactions {
+            for parameter in std::mem::take(&mut tx.parameters) {
+                parameter_snapshot.set_parameter(parameter);
+            }
+        }
+        parameter_snapshot.sumeragi.block_cadence_ms = self.block_cadence_ms;
+
+        let mut transactions: Vec<_> = source_transactions
             .into_iter()
-            .map(|tx| {
-                let parameters = if tx.parameters.is_empty() {
-                    None
-                } else {
-                    for parameter in &tx.parameters {
-                        parameter_snapshot.set_parameter(parameter.clone());
-                    }
-                    Some(parameter_snapshot.clone())
-                };
-                RawGenesisTx {
-                    parameters,
-                    instructions: tx.instructions,
-                    ivm_triggers: tx.ivm_triggers,
-                    topology: tx.topology,
-                }
+            .map(|tx| RawGenesisTx {
+                parameters: None,
+                instructions: tx.instructions,
+                ivm_triggers: tx.ivm_triggers,
+                topology: tx.topology,
             })
             .collect();
         let first = transactions
             .first_mut()
             .expect("genesis builder always contains at least one transaction");
-        first
-            .parameters
-            .get_or_insert_with(Parameters::default)
-            .sumeragi
-            .block_cadence_ms = self.block_cadence_ms;
+        first.parameters = Some(parameter_snapshot);
 
         RawGenesisTransaction {
             chain: self.chain,
@@ -6531,11 +6867,12 @@ mod tests {
     }
 
     #[test]
-    fn build_raw_carries_forward_parameter_snapshots() -> Result<()> {
+    fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()> {
         use iroha_data_model::parameter::system::SumeragiParameter;
 
+        init_instruction_registry();
         let raw = GenesisBuilder::new_without_executor(
-            ChainId::from("iroha:test:build-raw-cumulative"),
+            ChainId::from("iroha:test:build-raw-authoritative"),
             ".",
         )
         .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
@@ -6548,30 +6885,51 @@ mod tests {
 
         let transactions = &raw.transactions;
         assert_eq!(transactions.len(), 3);
+        let parameter_positions = transactions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tx)| tx.parameters.as_ref().map(|_| index))
+            .collect::<Vec<_>>();
+        assert_eq!(parameter_positions, vec![0]);
 
-        let tx1_params = transactions[1]
+        let authoritative = transactions[0]
             .parameters
             .as_ref()
-            .expect("second transaction should carry cumulative params");
-        assert_eq!(tx1_params.sumeragi().max_clock_drift_ms(), 667);
-
-        let tx2_params = transactions[2]
-            .parameters
-            .as_ref()
-            .expect("third transaction should carry cumulative params");
-        assert_eq!(tx2_params.sumeragi().max_clock_drift_ms(), 333);
+            .expect("first transaction must carry the authoritative parameter snapshot");
+        assert_eq!(authoritative.sumeragi().max_clock_drift_ms(), 333);
+        assert!(transactions[1..].iter().all(|tx| tx.parameters.is_none()));
+        assert_eq!(
+            raw.effective_parameters()?.sumeragi().max_clock_drift_ms(),
+            333
+        );
+        raw.clone().parse()?;
 
         let json = norito::json::to_json(&raw)?;
         let decoded: RawGenesisTransaction = norito::json::from_str(&json)?;
+        let decoded_positions = decoded
+            .transactions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tx)| tx.parameters.as_ref().map(|_| index))
+            .collect::<Vec<_>>();
+        assert_eq!(decoded_positions, vec![0]);
         assert_eq!(
-            decoded.transactions[2]
+            decoded.transactions[0]
                 .parameters
                 .as_ref()
-                .expect("decoded third transaction should carry params")
+                .expect("decoded first transaction should carry authoritative params")
                 .sumeragi()
                 .max_clock_drift_ms(),
             333
         );
+        assert_eq!(
+            decoded
+                .effective_parameters()?
+                .sumeragi()
+                .max_clock_drift_ms(),
+            333
+        );
+        decoded.parse()?;
 
         Ok(())
     }

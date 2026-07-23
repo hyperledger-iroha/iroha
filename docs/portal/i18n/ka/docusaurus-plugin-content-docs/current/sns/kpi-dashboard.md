@@ -1,64 +1,18 @@
+<!-- Auto-generated stub for Georgian (ka) translation. Replace this content with the full translation. -->
+
 ---
 lang: ka
 direction: ltr
 source: docs/portal/docs/sns/kpi-dashboard.md
-status: complete
+status: needs-translation
 generator: docs/portal/scripts/sync-i18n.mjs
-title: SNS KPI dashboard
-description: Live Grafana panels that aggregate registrar, freeze, and revenue metrics for SN-8a.
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+source_hash: 7c53fdda3c7a758055ad60eea6328cc0c28aae4e1d236c67a81e0a88fb162d72
+source_last_modified: "2026-07-18T23:03:42.072Z"
+translation_last_reviewed: null
 ---
 
-# Sora Name Service KPI Dashboard
+# Translation In Progress
 
-KPI დაფა აძლევს სტიუარდებს, მეურვეებს და მარეგულირებლებს ერთ ადგილს
-გადახედეთ მიღების, შეცდომის და შემოსავლის სიგნალებს ყოველთვიურ დანართამდე
-(SN-8a). Grafana განმარტება იგზავნება საცავში:
-`dashboards/grafana/sns_suffix_analytics.json` და პორტალი იგივეა
-პანელები ჩაშენებული iframe-ის მეშვეობით, რათა გამოცდილება ემთხვეოდეს შიდა Grafana-ს
-მაგალითად.
+This file is a placeholder for the Georgian translation of the English document. Once the translation is complete, update the `status` metadata above.
 
-## ფილტრები და მონაცემთა წყაროები
-
-- **სუფიქსის ფილტრი** - ამოძრავებს `sns_registrar_status_total{suffix}` შეკითხვებს ასე
-  `.sora`, `.nexus` და `.dao` შეიძლება დამოუკიდებლად შემოწმდეს.
-- **ნაყარი გამოშვების ფილტრი** – მოიცავს `sns_bulk_release_payment_*` მეტრიკას ასე
-  ფინანსებს შეუძლია შეათანხმოს კონკრეტული რეგისტრატორის მანიფესტი.
-- **მეტრიკა** – გამოდის Torii-დან (`sns_registrar_status_total`,
-  `torii_request_duration_seconds`), მეურვე CLI (`guardian_freeze_active`),
-  `sns_governance_activation_total` და ნაყარი ჩართვის დამხმარე მეტრიკა.
-
-## პანელები
-
-1. **რეგისტრაციები (ბოლო 24 საათი)** – წარმატებული რეგისტრატორის ღონისძიებების რაოდენობა
-   შერჩეული სუფიქსი.
-2. **მმართველობის გააქტიურება (30d)** – წესდების/დამატებების შუამდგომლობები დაფიქსირებული
-   CLI.
-3. **რეგისტრატორის გამტარუნარიანობა** – წარმატებული რეგისტრატორის ქმედებების თითო სუფიქსის მაჩვენებელი.
-4. **რეგისტრატორის შეცდომის რეჟიმები** – შეცდომის ეტიკეტირების 5 წუთი
-   `sns_registrar_status_total` მრიცხველები.
-5. **Guardian freeze windows** – ცოცხალი სელექტორები, სადაც `guardian_freeze_active`
-   იტყობინება ღია გაყინვის ბილეთი.
-6. ** წმინდა გადახდის ერთეულები აქტივების მიხედვით ** – ჯამები მოხსენებული
-   `sns_bulk_release_payment_net_units` თითო აქტივზე.
-7. **ნაყარი მოთხოვნები სუფიქსზე ** – მანიფესტის ტომები სუფიქსის id-ზე.
-8. ** წმინდა ერთეულები თითო მოთხოვნაზე ** – ARPU-ის სტილის გაანგარიშება, რომელიც მიღებულია გამოშვებიდან
-   მეტრიკა.
-
-## ყოველთვიური KPI მიმოხილვის ჩამონათვალი
-
-ფინანსური ლიდერი ატარებს განმეორებით მიმოხილვას ყოველი თვის პირველ სამშაბათს:
-
-1. გახსენით პორტალის **Analytics → SNS KPI** გვერდი (ან Grafana დაფა `sns-kpis`).
-2. გადაიღეთ რეგისტრატორის გამტარუნარიანობის და შემოსავლების ცხრილების PDF/CSV ექსპორტი.
-3. შეადარეთ სუფიქსები SLA დარღვევისთვის (შეცდომის სიხშირის მწვერვალები, გაყინული სელექტორები >72 სთ,
-   ARPU დელტა >10%).
-4. ჟურნალის რეზიუმეები + მოქმედების ელემენტები შესაბამის დანართში ქვემოთ
-   `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
-5. მიამაგრეთ ექსპორტირებული დაფის არტეფაქტები დანართში და დააკავშირეთ ისინი
-   საბჭოს დღის წესრიგში.
-
-თუ მიმოხილვა გამოავლენს SLA-ს დარღვევას, შეიტანეთ PagerDuty ინციდენტი დაზარალებულებისთვის
-მფლობელი (რეგისტრატორი მოვალეობის მენეჯერი, მეურვის მორიგეობა, ან პროგრამის ხელმძღვანელი) და
-თვალყური ადევნეთ რემედიაციას დანართის ჟურნალში.
+Replace this stub with the completed Georgian translation and update `translation_last_reviewed` after verification against the English source.

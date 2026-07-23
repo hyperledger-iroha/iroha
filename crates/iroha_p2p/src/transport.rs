@@ -19,7 +19,7 @@ pub mod quic {
 
     use quinn::{
         ClientConfig, Connection, Endpoint, IdleTimeout, RecvStream, SendStream, TransportConfig,
-        crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
+        VarInt, crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
     };
     use rustls::{
         DigitallySignedStruct, Error as RustlsError, SignatureScheme,
@@ -29,6 +29,297 @@ pub mod quic {
 
     /// ALPN negotiated for Iroha P2P QUIC connections.
     pub const P2P_ALPN: &[u8] = b"iroha-p2p/1";
+
+    /// Number of bidirectional streams used by one Iroha P2P QUIC session.
+    pub const P2P_BIDI_STREAMS_PER_CONNECTION: u32 = 2;
+    /// Smallest per-direction flow-control allocation used by the budget split.
+    pub const FLOW_CONTROL_GRANULE_BYTES: usize = 64 * 1024;
+    const FLOW_CONTROL_DIRECTIONS_PER_CONNECTION: usize = 4;
+    // Quinn's endpoint configuration expresses the maximum UDP payload as a
+    // `u16`, and its receive path additionally caps one datagram at 64 KiB.
+    // The first datagram retained by `Incoming` is explicitly excluded from
+    // both configured incoming-buffer limits, so reserve a whole granule for it.
+    const INCOMING_FIRST_PACKET_RESERVE_BYTES: usize = FLOW_CONTROL_GRANULE_BYTES;
+
+    /// Inputs used to derive bounded QUIC flow-control credit.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct FlowControlConfig {
+        /// Largest encrypted P2P frame body accepted on a stream.
+        pub max_encrypted_frame_bytes: usize,
+        /// Process-wide upper bound on simultaneously active P2P connections.
+        pub max_total_connections: usize,
+        /// Process-wide byte budget shared by QUIC send and receive flow control.
+        pub process_budget_bytes: usize,
+    }
+
+    impl Default for FlowControlConfig {
+        fn default() -> Self {
+            Self {
+                max_encrypted_frame_bytes: crate::MAX_ENCRYPTED_FRAME_BYTES,
+                max_total_connections: 1,
+                process_budget_bytes: FLOW_CONTROL_DIRECTIONS_PER_CONNECTION
+                    * FLOW_CONTROL_GRANULE_BYTES,
+            }
+        }
+    }
+
+    /// Checked QUIC flow-control limits shared by client and server endpoints.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct FlowControlGeometry {
+        /// Credit granted to each individual stream.
+        pub stream_receive_window_bytes: u64,
+        /// Aggregate receive credit granted to one connection.
+        pub connection_receive_window_bytes: u64,
+        /// Aggregate send credit retained for one connection.
+        pub connection_send_window_bytes: u64,
+    }
+
+    /// Checked endpoint-side admission and datagram buffer geometry.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct EndpointBufferGeometry {
+        /// Quinn `Incoming` records allowed before the application accepts them.
+        pub max_incoming: usize,
+        /// Bytes buffered after the first packet for one pending `Incoming`.
+        pub incoming_buffer_size_bytes: u64,
+        /// Aggregate post-first-packet bytes for all pending `Incoming` records.
+        pub incoming_buffer_size_total_bytes: u64,
+        /// Payload-byte reserve for the first packet retained by one `Incoming`.
+        pub incoming_first_packet_reserve_bytes: usize,
+        /// Aggregate first-packet reserve across all admitted `Incoming` records.
+        pub incoming_first_packet_reserve_total_bytes: usize,
+        /// Configured QUIC datagram buffers retained per active connection.
+        pub datagram_buffer_bytes_per_connection: usize,
+        /// Checked aggregate datagram buffer geometry for all connections.
+        pub datagram_buffer_bytes_total: usize,
+        /// Checked aggregate stream flow-control geometry for all connections.
+        pub flow_control_buffer_bytes_total: usize,
+        /// Combined flow-control, pending-Incoming payload, and datagram buffer bound.
+        pub endpoint_buffer_bytes_total: usize,
+    }
+
+    /// Derive bounded Quinn endpoint admission and datagram buffer limits.
+    ///
+    /// Pending handshakes get one flow-control granule after their first packet,
+    /// plus a separate granule for the first packet that Quinn excludes from
+    /// both incoming-buffer limits. Since [`flow_control_geometry`] requires
+    /// four such granules per active connection, each aggregate pending region
+    /// fits within one quarter of the same minimum process geometry. Datagram
+    /// buffers are separately configured, but their per-connection sum and
+    /// aggregate multiplication are still checked explicitly. Fixed Quinn
+    /// object and allocator metadata is count-bounded by `max_incoming`, but is
+    /// not part of this payload/flow-credit byte geometry.
+    pub fn endpoint_buffer_geometry(
+        flow_control: FlowControlConfig,
+        max_incoming: usize,
+        datagram_receive_buffer: Option<usize>,
+        datagram_send_buffer: usize,
+    ) -> io::Result<EndpointBufferGeometry> {
+        let flow_geometry = flow_control_geometry(flow_control)?;
+        if max_incoming == 0 || max_incoming > flow_control.max_total_connections {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "QUIC max_incoming ({max_incoming}) must be between 1 and max_total_connections ({})",
+                    flow_control.max_total_connections
+                ),
+            ));
+        }
+        let incoming_buffer_size_total = max_incoming
+            .checked_mul(FLOW_CONTROL_GRANULE_BYTES)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC aggregate Incoming buffer geometry overflows usize",
+                )
+            })?;
+        let incoming_buffer_size_bytes =
+            u64::try_from(FLOW_CONTROL_GRANULE_BYTES).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC per-Incoming buffer does not fit u64",
+                )
+            })?;
+        let incoming_buffer_size_total_bytes =
+            u64::try_from(incoming_buffer_size_total).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC aggregate Incoming buffer does not fit u64",
+                )
+            })?;
+        let incoming_first_packet_reserve_total_bytes = max_incoming
+            .checked_mul(INCOMING_FIRST_PACKET_RESERVE_BYTES)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC aggregate Incoming first-packet reserve overflows usize",
+                )
+            })?;
+        let datagram_buffer_bytes_per_connection = datagram_receive_buffer
+            .unwrap_or(0)
+            .checked_add(datagram_send_buffer)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC per-connection datagram buffer geometry overflows usize",
+                )
+            })?;
+        let datagram_buffer_bytes_total = datagram_buffer_bytes_per_connection
+            .checked_mul(flow_control.max_total_connections)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC aggregate datagram buffer geometry overflows usize",
+                )
+            })?;
+        let flow_control_buffer_bytes_per_connection = flow_geometry
+            .connection_receive_window_bytes
+            .checked_add(flow_geometry.connection_send_window_bytes)
+            .and_then(|bytes| usize::try_from(bytes).ok())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC per-connection flow-control buffer geometry overflows usize",
+                )
+            })?;
+        let flow_control_buffer_bytes_total = flow_control_buffer_bytes_per_connection
+            .checked_mul(flow_control.max_total_connections)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC aggregate flow-control buffer geometry overflows usize",
+                )
+            })?;
+        let endpoint_buffer_bytes_total = flow_control_buffer_bytes_total
+            .checked_add(incoming_buffer_size_total)
+            .and_then(|bytes| bytes.checked_add(incoming_first_packet_reserve_total_bytes))
+            .and_then(|bytes| bytes.checked_add(datagram_buffer_bytes_total))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC combined endpoint buffer geometry overflows usize",
+                )
+            })?;
+
+        Ok(EndpointBufferGeometry {
+            max_incoming,
+            incoming_buffer_size_bytes,
+            incoming_buffer_size_total_bytes,
+            incoming_first_packet_reserve_bytes: INCOMING_FIRST_PACKET_RESERVE_BYTES,
+            incoming_first_packet_reserve_total_bytes,
+            datagram_buffer_bytes_per_connection,
+            datagram_buffer_bytes_total,
+            flow_control_buffer_bytes_total,
+            endpoint_buffer_bytes_total,
+        })
+    }
+
+    /// Derive the per-connection QUIC flow-control geometry from a process budget.
+    ///
+    /// A connection has two receive streams and may retain the same aggregate
+    /// amount for sending. Consequently, `4 * max_total_connections * W` is
+    /// bounded by `process_budget_bytes`, where `W` is the stream window. Large
+    /// frames do not require equally large static credit: QUIC replenishes the
+    /// window as the application consumes stream bytes.
+    pub fn flow_control_geometry(cfg: FlowControlConfig) -> io::Result<FlowControlGeometry> {
+        if cfg.max_encrypted_frame_bytes == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "QUIC max encrypted frame bytes must be non-zero",
+            ));
+        }
+        if cfg.max_total_connections == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "QUIC max total connections must be non-zero",
+            ));
+        }
+
+        let minimum_budget = cfg
+            .max_total_connections
+            .checked_mul(FLOW_CONTROL_DIRECTIONS_PER_CONNECTION)
+            .and_then(|value| value.checked_mul(FLOW_CONTROL_GRANULE_BYTES))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC minimum flow-control budget overflows usize",
+                )
+            })?;
+        if cfg.process_budget_bytes < minimum_budget {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "QUIC process flow-control budget ({}) must be at least {} bytes for {} connections",
+                    cfg.process_budget_bytes, minimum_budget, cfg.max_total_connections
+                ),
+            ));
+        }
+
+        let complete_frame_bytes = cfg
+            .max_encrypted_frame_bytes
+            .checked_add(crate::P2P_FRAME_LENGTH_PREFIX_BYTES)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "QUIC complete encrypted-frame length overflows usize",
+                )
+            })?;
+        let denominator = cfg
+            .max_total_connections
+            .checked_mul(FLOW_CONTROL_DIRECTIONS_PER_CONNECTION)
+            .expect("minimum-budget calculation already checked this product");
+        let budget_share = cfg.process_budget_bytes / denominator;
+        let rounded_budget_share =
+            (budget_share / FLOW_CONTROL_GRANULE_BYTES) * FLOW_CONTROL_GRANULE_BYTES;
+        let stream_window = complete_frame_bytes.min(rounded_budget_share);
+        let connection_window = stream_window.checked_mul(2).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "QUIC per-connection flow-control window overflows usize",
+            )
+        })?;
+
+        let stream_receive_window_bytes = u64::try_from(stream_window).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "QUIC stream flow-control window does not fit u64",
+            )
+        })?;
+        let connection_window_bytes = u64::try_from(connection_window).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "QUIC connection flow-control window does not fit u64",
+            )
+        })?;
+        VarInt::from_u64(stream_receive_window_bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+        VarInt::from_u64(connection_window_bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+
+        Ok(FlowControlGeometry {
+            stream_receive_window_bytes,
+            connection_receive_window_bytes: connection_window_bytes,
+            connection_send_window_bytes: connection_window_bytes,
+        })
+    }
+
+    /// Apply the protocol stream count and checked flow-control geometry.
+    pub fn configure_flow_control(
+        transport: &mut TransportConfig,
+        cfg: FlowControlConfig,
+    ) -> io::Result<FlowControlGeometry> {
+        let geometry = flow_control_geometry(cfg)?;
+        let stream_receive_window = VarInt::from_u64(geometry.stream_receive_window_bytes)
+            .expect("flow-control geometry validated the stream window");
+        let connection_receive_window = VarInt::from_u64(geometry.connection_receive_window_bytes)
+            .expect("flow-control geometry validated the connection window");
+        transport
+            .max_concurrent_bidi_streams(VarInt::from_u32(P2P_BIDI_STREAMS_PER_CONNECTION))
+            .max_concurrent_uni_streams(VarInt::from_u32(0))
+            .stream_receive_window(stream_receive_window)
+            .receive_window(connection_receive_window)
+            .send_window(geometry.connection_send_window_bytes);
+        Ok(geometry)
+    }
 
     #[derive(Debug)]
     struct NoCertificateVerification;
@@ -81,10 +372,13 @@ pub mod quic {
         pub max_idle_timeout: Option<Duration>,
         /// QUIC keep-alive interval, if set.
         pub keep_alive_interval: Option<Duration>,
-        /// Total receive buffer reserved for QUIC datagrams (bytes). `None` disables datagrams.
+        /// Receive buffer reserved for QUIC datagrams on each connection (bytes).
+        /// `None` disables datagrams.
         pub datagram_receive_buffer: Option<usize>,
-        /// Total send buffer reserved for QUIC datagrams (bytes). Set to 0 to disable.
+        /// Send buffer reserved for QUIC datagrams on each connection (bytes). Set to 0 to disable.
         pub datagram_send_buffer: usize,
+        /// Checked process-wide flow-control geometry inputs.
+        pub flow_control: FlowControlConfig,
     }
 
     impl Default for DialerConfig {
@@ -95,6 +389,7 @@ pub mod quic {
                 keep_alive_interval: Some(Duration::from_secs(10)),
                 datagram_receive_buffer: None,
                 datagram_send_buffer: 0,
+                flow_control: FlowControlConfig::default(),
             }
         }
     }
@@ -115,7 +410,9 @@ pub mod quic {
                 .dangerous()
                 .with_custom_certificate_verifier(verifier)
                 .with_no_client_auth();
-            tls.enable_early_data = true;
+            // Application authentication happens after the transport
+            // handshake; replayable 0-RTT bytes must never enter that path.
+            tls.enable_early_data = false;
             tls.alpn_protocols = vec![P2P_ALPN.to_vec()];
             let tls = Arc::new(tls);
             let crypto = QuinnRustlsClientConfig::try_from(tls)
@@ -182,7 +479,14 @@ pub mod quic {
     }
 
     fn build_transport_config(cfg: DialerConfig) -> io::Result<Arc<TransportConfig>> {
+        endpoint_buffer_geometry(
+            cfg.flow_control,
+            cfg.flow_control.max_total_connections,
+            cfg.datagram_receive_buffer,
+            cfg.datagram_send_buffer,
+        )?;
         let mut transport = TransportConfig::default();
+        configure_flow_control(&mut transport, cfg.flow_control)?;
         if let Some(timeout) = cfg.max_idle_timeout {
             let idle = IdleTimeout::try_from(timeout)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
@@ -192,6 +496,200 @@ pub mod quic {
         transport.datagram_receive_buffer_size(cfg.datagram_receive_buffer);
         transport.datagram_send_buffer_size(cfg.datagram_send_buffer);
         Ok(Arc::new(transport))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const MIB: usize = 1024 * 1024;
+
+        #[test]
+        fn core_profile_flow_control_stays_within_process_budget() {
+            let cfg = FlowControlConfig {
+                max_encrypted_frame_bytes: 16 * MIB,
+                max_total_connections: 120,
+                process_budget_bytes: 128 * MIB,
+            };
+            let geometry = flow_control_geometry(cfg).expect("valid core geometry");
+
+            assert_eq!(geometry.stream_receive_window_bytes, 256 * 1024);
+            assert_eq!(geometry.connection_receive_window_bytes, 512 * 1024);
+            assert_eq!(geometry.connection_send_window_bytes, 512 * 1024);
+            let total = usize::try_from(
+                geometry
+                    .connection_receive_window_bytes
+                    .checked_add(geometry.connection_send_window_bytes)
+                    .expect("small connection budget"),
+            )
+            .expect("connection budget fits usize")
+            .checked_mul(cfg.max_total_connections)
+            .expect("small process budget");
+            assert!(total <= cfg.process_budget_bytes);
+        }
+
+        #[test]
+        fn home_profile_uses_larger_window_under_same_process_budget() {
+            let geometry = flow_control_geometry(FlowControlConfig {
+                max_encrypted_frame_bytes: 16 * MIB,
+                max_total_connections: 32,
+                process_budget_bytes: 128 * MIB,
+            })
+            .expect("valid home geometry");
+
+            assert_eq!(geometry.stream_receive_window_bytes, MIB as u64);
+            assert_eq!(geometry.connection_receive_window_bytes, (2 * MIB) as u64);
+            assert_eq!(geometry.connection_send_window_bytes, (2 * MIB) as u64);
+        }
+
+        #[test]
+        fn budget_one_byte_below_minimum_is_rejected() {
+            let connections = 7;
+            let minimum =
+                connections * FLOW_CONTROL_DIRECTIONS_PER_CONNECTION * FLOW_CONTROL_GRANULE_BYTES;
+            let error = flow_control_geometry(FlowControlConfig {
+                max_encrypted_frame_bytes: MIB,
+                max_total_connections: connections,
+                process_budget_bytes: minimum - 1,
+            })
+            .expect_err("undersized process budget must fail closed");
+
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains("must be at least"));
+        }
+
+        #[test]
+        fn small_frame_window_includes_stream_length_prefix() {
+            let geometry = flow_control_geometry(FlowControlConfig {
+                max_encrypted_frame_bytes: 4096,
+                max_total_connections: 1,
+                process_budget_bytes: 4 * FLOW_CONTROL_GRANULE_BYTES,
+            })
+            .expect("valid small-frame geometry");
+
+            assert_eq!(
+                geometry.stream_receive_window_bytes,
+                (4096 + crate::P2P_FRAME_LENGTH_PREFIX_BYTES) as u64
+            );
+        }
+
+        #[test]
+        fn zero_connections_and_arithmetic_overflow_are_rejected() {
+            let zero_connections = flow_control_geometry(FlowControlConfig {
+                max_encrypted_frame_bytes: 1,
+                max_total_connections: 0,
+                process_budget_bytes: usize::MAX,
+            })
+            .expect_err("zero connections must fail closed");
+            assert_eq!(zero_connections.kind(), io::ErrorKind::InvalidInput);
+
+            let overflow = flow_control_geometry(FlowControlConfig {
+                max_encrypted_frame_bytes: 1,
+                max_total_connections: usize::MAX,
+                process_budget_bytes: usize::MAX,
+            })
+            .expect_err("minimum budget multiplication must be checked");
+            assert_eq!(overflow.kind(), io::ErrorKind::InvalidInput);
+        }
+
+        #[test]
+        fn endpoint_buffers_follow_connection_cap_with_checked_aggregates() {
+            let cfg = FlowControlConfig {
+                max_encrypted_frame_bytes: MIB,
+                max_total_connections: 4,
+                process_budget_bytes: 4 * 4 * FLOW_CONTROL_GRANULE_BYTES,
+            };
+            let geometry = endpoint_buffer_geometry(cfg, 2, Some(1024), 2048)
+                .expect("small endpoint geometry must fit");
+
+            assert_eq!(geometry.max_incoming, 2);
+            assert_eq!(
+                geometry.incoming_buffer_size_bytes,
+                FLOW_CONTROL_GRANULE_BYTES as u64
+            );
+            assert_eq!(
+                geometry.incoming_buffer_size_total_bytes,
+                (2 * FLOW_CONTROL_GRANULE_BYTES) as u64
+            );
+            assert_eq!(
+                geometry.incoming_first_packet_reserve_bytes,
+                FLOW_CONTROL_GRANULE_BYTES
+            );
+            assert_eq!(
+                geometry.incoming_first_packet_reserve_total_bytes,
+                2 * FLOW_CONTROL_GRANULE_BYTES
+            );
+            assert_eq!(geometry.datagram_buffer_bytes_per_connection, 3072);
+            assert_eq!(geometry.datagram_buffer_bytes_total, 12_288);
+            assert_eq!(geometry.flow_control_buffer_bytes_total, 1_048_576);
+            assert_eq!(geometry.endpoint_buffer_bytes_total, 1_323_008);
+        }
+
+        #[test]
+        fn cap_one_and_datagram_overflow_fail_closed() {
+            let cap_one = FlowControlConfig {
+                max_encrypted_frame_bytes: MIB,
+                max_total_connections: 1,
+                process_budget_bytes: 4 * FLOW_CONTROL_GRANULE_BYTES,
+            };
+            let geometry = endpoint_buffer_geometry(cap_one, 1, None, 0)
+                .expect("cap-one endpoint geometry must be valid");
+            assert_eq!(geometry.max_incoming, 1);
+            assert_eq!(
+                geometry.incoming_buffer_size_total_bytes,
+                geometry.incoming_buffer_size_bytes
+            );
+            assert_eq!(
+                geometry.endpoint_buffer_bytes_total,
+                6 * FLOW_CONTROL_GRANULE_BYTES
+            );
+            let excessive_incoming = endpoint_buffer_geometry(cap_one, 2, None, 0)
+                .expect_err("Incoming cap may not exceed total connection geometry");
+            assert_eq!(excessive_incoming.kind(), io::ErrorKind::InvalidInput);
+
+            let overflow = endpoint_buffer_geometry(
+                FlowControlConfig {
+                    max_encrypted_frame_bytes: 1,
+                    max_total_connections: 2,
+                    process_budget_bytes: 8 * FLOW_CONTROL_GRANULE_BYTES,
+                },
+                2,
+                Some(usize::MAX),
+                1,
+            )
+            .expect_err("per-connection datagram addition must be checked");
+            assert_eq!(overflow.kind(), io::ErrorKind::InvalidInput);
+
+            let aggregate_overflow = endpoint_buffer_geometry(
+                FlowControlConfig {
+                    max_encrypted_frame_bytes: 1,
+                    max_total_connections: 2,
+                    process_budget_bytes: 8 * FLOW_CONTROL_GRANULE_BYTES,
+                },
+                2,
+                Some(usize::MAX / 2 + 1),
+                0,
+            )
+            .expect_err("aggregate datagram multiplication must be checked");
+            assert_eq!(aggregate_overflow.kind(), io::ErrorKind::InvalidInput);
+        }
+
+        #[test]
+        fn incoming_first_packet_reserve_is_checked_in_combined_endpoint_geometry() {
+            let combined_overflow = endpoint_buffer_geometry(
+                FlowControlConfig {
+                    max_encrypted_frame_bytes: usize::MAX / 8,
+                    max_total_connections: 2,
+                    process_budget_bytes: usize::MAX,
+                },
+                2,
+                None,
+                2 * FLOW_CONTROL_GRANULE_BYTES,
+            )
+            .expect_err("first-packet reserve must participate in checked endpoint total");
+            assert_eq!(combined_overflow.kind(), io::ErrorKind::InvalidInput);
+            assert!(combined_overflow.to_string().contains("combined endpoint"));
+        }
     }
 }
 
@@ -460,12 +958,28 @@ pub mod ws {
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio_tungstenite::{
         MaybeTlsStream, client_async_tls_with_config,
-        tungstenite::{Message, client::IntoClientRequest},
+        tungstenite::{Message, client::IntoClientRequest, protocol::WebSocketConfig},
     };
 
+    /// Maximum payload carried by one WebSocket transport message.
+    ///
+    /// P2P's encrypted stream framing remains continuous across these chunks;
+    /// this bound prevents a maximal P2P frame from becoming one equally large
+    /// WebSocket allocation before the inner frame cap can run.
+    pub const WEBSOCKET_CHUNK_BYTES: usize = 64 * 1024;
+
+    fn websocket_config() -> WebSocketConfig {
+        WebSocketConfig::default()
+            .read_buffer_size(WEBSOCKET_CHUNK_BYTES)
+            .write_buffer_size(WEBSOCKET_CHUNK_BYTES)
+            .max_write_buffer_size(WEBSOCKET_CHUNK_BYTES * 4)
+            .max_message_size(Some(WEBSOCKET_CHUNK_BYTES))
+            .max_frame_size(Some(WEBSOCKET_CHUNK_BYTES))
+    }
+
     /// A duplex adaptor that implements `AsyncRead`/`AsyncWrite` over a WebSocket stream.
-    /// Bytes written are sent as a single Binary frame on `poll_flush`. Bytes are read by
-    /// consuming incoming Binary frames. This preserves application framing above.
+    /// Bytes written are segmented into bounded Binary messages. Reads concatenate
+    /// those messages back into one byte stream, preserving application framing above.
     pub struct WsDuplex<S> {
         inner: tokio_tungstenite::WebSocketStream<S>,
         read_buf: bytes::Bytes, // remaining unread bytes from last Binary frame
@@ -483,6 +997,30 @@ pub mod ws {
                 write_buf: Vec::new(),
             }
         }
+
+        fn poll_send_buffered(
+            &mut self,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if self.write_buf.is_empty() {
+                return std::task::Poll::Ready(Ok(()));
+            }
+            let mut sink = std::pin::Pin::new(&mut self.inner);
+            futures::ready!(sink.as_mut().poll_ready(cx).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("ws poll_ready error: {e}"),
+                )
+            }))?;
+            let data = std::mem::take(&mut self.write_buf);
+            debug_assert!(data.len() <= WEBSOCKET_CHUNK_BYTES);
+            sink.as_mut()
+                .start_send(Message::Binary(data.into()))
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws send error: {e}"))
+                })?;
+            std::task::Poll::Ready(Ok(()))
+        }
     }
 
     /// Perform a websocket client handshake over an already-established stream.
@@ -498,11 +1036,12 @@ pub mod ws {
         S: 'static + AsyncRead + AsyncWrite + Send + Unpin,
         MaybeTlsStream<S>: Unpin,
     {
-        let (ws_stream, _resp) = client_async_tls_with_config(request, stream, None, None)
-            .await
-            .map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
-            })?;
+        let (ws_stream, _resp) =
+            client_async_tls_with_config(request, stream, Some(websocket_config()), None)
+                .await
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
+                })?;
         Ok(WsDuplex::new(ws_stream))
     }
 
@@ -522,6 +1061,14 @@ pub mod ws {
             }
             // Pull next Binary frame
             match futures::ready!(std::pin::Pin::new(&mut self.inner).poll_next(cx)) {
+                Some(Ok(Message::Binary(b))) if b.is_empty() => {
+                    // An empty WebSocket data message carries no stream bytes;
+                    // it is not the end of the byte stream. Yield after one
+                    // ignored message so a hostile peer cannot monopolize a
+                    // single poll with an unbounded run of empty messages.
+                    cx.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                }
                 Some(Ok(Message::Binary(b))) => {
                     self.read_buf = b;
                     let n = std::cmp::min(self.read_buf.len(), buf.remaining());
@@ -551,33 +1098,25 @@ pub mod ws {
     {
         fn poll_write(
             mut self: std::pin::Pin<&mut Self>,
-            _cx: &mut std::task::Context<'_>,
+            cx: &mut std::task::Context<'_>,
             data: &[u8],
         ) -> std::task::Poll<std::io::Result<usize>> {
-            self.write_buf.extend_from_slice(data);
-            std::task::Poll::Ready(Ok(data.len()))
+            if self.write_buf.len() == WEBSOCKET_CHUNK_BYTES {
+                futures::ready!(self.poll_send_buffered(cx))?;
+            }
+            let accepted = data
+                .len()
+                .min(WEBSOCKET_CHUNK_BYTES.saturating_sub(self.write_buf.len()));
+            self.write_buf.extend_from_slice(&data[..accepted]);
+            std::task::Poll::Ready(Ok(accepted))
         }
 
         fn poll_flush(
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
-            if self.write_buf.is_empty() {
-                return std::task::Poll::Ready(Ok(()));
-            }
-            let data = std::mem::take(&mut self.write_buf);
+            futures::ready!(self.poll_send_buffered(cx))?;
             let mut sink = std::pin::Pin::new(&mut self.inner);
-            futures::ready!(sink.as_mut().poll_ready(cx).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("ws poll_ready error: {e}"),
-                )
-            }))?;
-            sink.as_mut()
-                .start_send(Message::Binary(data.into()))
-                .map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws send error: {e}"))
-                })?;
             futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::Other, format!("ws flush error: {e}"))
             }))?;
@@ -593,22 +1132,8 @@ pub mod ws {
                 futures::ready!(self.as_mut().poll_flush(cx))?;
             }
             let mut sink = std::pin::Pin::new(&mut self.inner);
-            futures::ready!(sink.as_mut().poll_ready(cx).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("ws close poll_ready error: {e}"),
-                )
-            }))?;
-            sink.as_mut()
-                .start_send(Message::Close(None))
-                .map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws close error: {e}"))
-                })?;
-            futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("ws close flush error: {e}"),
-                )
+            futures::ready!(sink.as_mut().poll_close(cx).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, format!("ws close error: {e}"))
             }))?;
             std::task::Poll::Ready(Ok(()))
         }
@@ -622,9 +1147,12 @@ pub mod ws {
         let req = url.into_client_request().map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
         })?;
-        let (ws_stream, _resp) = tokio_tungstenite::connect_async(req).await.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("wss connect: {e}"))
-        })?;
+        let (ws_stream, _resp) =
+            tokio_tungstenite::connect_async_with_config(req, Some(websocket_config()), false)
+                .await
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("wss connect: {e}"))
+                })?;
         Ok(WsDuplex::new(ws_stream))
     }
 
@@ -636,10 +1164,218 @@ pub mod ws {
         let req = url.into_client_request().map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
         })?;
-        let (ws_stream, _resp) = tokio_tungstenite::connect_async(req).await.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
-        })?;
+        let (ws_stream, _resp) =
+            tokio_tungstenite::connect_async_with_config(req, Some(websocket_config()), false)
+                .await
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
+                })?;
         Ok(WsDuplex::new(ws_stream))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        use futures::{SinkExt as _, StreamExt as _};
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
+
+        use super::*;
+
+        async fn assert_chunked_stream_roundtrip(byte_len: usize) {
+            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
+            let (client_ws, mut server_ws) = tokio::join!(
+                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
+                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
+            );
+            let mut client = WsDuplex::new(client_ws);
+            let expected = (0..byte_len)
+                .map(|index| u8::try_from(index % 251).expect("bounded fixture byte"))
+                .collect::<Vec<_>>();
+
+            let send = async {
+                client
+                    .write_all(&expected)
+                    .await
+                    .expect("write complete P2P byte stream");
+                client.flush().await.expect("flush P2P byte stream");
+            };
+            let receive = async {
+                let mut received = Vec::with_capacity(byte_len);
+                let mut chunks = 0usize;
+                while received.len() < byte_len {
+                    match server_ws.next().await.expect("next WebSocket message") {
+                        Ok(Message::Binary(chunk)) => {
+                            assert!(!chunk.is_empty());
+                            assert!(chunk.len() <= WEBSOCKET_CHUNK_BYTES);
+                            received.extend_from_slice(&chunk);
+                            chunks = chunks.checked_add(1).expect("small chunk count");
+                        }
+                        other => panic!("expected bounded binary chunk, got {other:?}"),
+                    }
+                }
+                (received, chunks)
+            };
+            let ((), (received, chunks)) = tokio::join!(send, receive);
+            assert_eq!(received, expected);
+            assert_eq!(chunks, byte_len.div_ceil(WEBSOCKET_CHUNK_BYTES));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn websocket_duplex_chunks_boundaries_and_default_maximum_p2p_frame() {
+            for byte_len in [
+                WEBSOCKET_CHUNK_BYTES - 1,
+                WEBSOCKET_CHUNK_BYTES,
+                WEBSOCKET_CHUNK_BYTES + 1,
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get()
+                    + crate::P2P_FRAME_LENGTH_PREFIX_BYTES,
+            ] {
+                assert_chunked_stream_roundtrip(byte_len).await;
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn websocket_config_rejects_one_oversized_transport_message() {
+            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
+            let (mut client_ws, mut server_ws) = tokio::join!(
+                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
+                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
+            );
+            let send = async {
+                futures::SinkExt::send(
+                    &mut client_ws,
+                    Message::Binary(vec![0xA5; WEBSOCKET_CHUNK_BYTES + 1].into()),
+                )
+                .await
+            };
+            let receive = async { server_ws.next().await.expect("oversized message result") };
+            let (send_result, receive_result) = tokio::join!(send, receive);
+            send_result.expect("peer can emit adversarial oversized transport message");
+            assert!(
+                receive_result.is_err(),
+                "the receiver must reject a WebSocket message one byte above the chunk cap"
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn websocket_duplex_ignores_empty_binary_without_reporting_stream_eof() {
+            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
+            let (client_ws, mut server_ws) = tokio::join!(
+                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
+                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
+            );
+            let mut client = WsDuplex::new(client_ws);
+            let expected = [0xA5, 0x5A, 0x11, 0x22];
+
+            server_ws
+                .send(Message::Binary(Vec::new().into()))
+                .await
+                .expect("send legal empty WebSocket data message");
+            server_ws
+                .send(Message::Binary(expected.to_vec().into()))
+                .await
+                .expect("send following non-empty WebSocket data message");
+
+            let mut received = [0_u8; 4];
+            client
+                .read_exact(&mut received)
+                .await
+                .expect("empty Binary message must not terminate the byte stream");
+            assert_eq!(received, expected);
+        }
+
+        struct PendingFlushOnce<S> {
+            inner: S,
+            observed: Arc<AtomicBool>,
+            pending: bool,
+        }
+
+        impl<S> PendingFlushOnce<S> {
+            fn new(inner: S, observed: Arc<AtomicBool>) -> Self {
+                Self {
+                    inner,
+                    observed,
+                    pending: true,
+                }
+            }
+        }
+
+        impl<S: AsyncRead + Unpin> AsyncRead for PendingFlushOnce<S> {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+            }
+        }
+
+        impl<S: AsyncWrite + Unpin> AsyncWrite for PendingFlushOnce<S> {
+            fn poll_write(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                data: &[u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                std::pin::Pin::new(&mut self.inner).poll_write(cx, data)
+            }
+
+            fn poll_flush(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                if self.pending {
+                    self.pending = false;
+                    self.observed.store(true, Ordering::SeqCst);
+                    cx.waker().wake_by_ref();
+                    return std::task::Poll::Pending;
+                }
+                std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+            }
+
+            fn poll_shutdown(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn websocket_duplex_shutdown_is_stateful_across_pending_close_flush() {
+            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
+            let pending_observed = Arc::new(AtomicBool::new(false));
+            let client_io = PendingFlushOnce::new(client_io, Arc::clone(&pending_observed));
+            let (client_ws, mut server_ws) = tokio::join!(
+                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
+                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
+            );
+            let mut client = WsDuplex::new(client_ws);
+
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let shutdown = client.shutdown();
+                let observe_close = async {
+                    loop {
+                        match server_ws.next().await.expect("client close message") {
+                            Ok(Message::Close(_)) => break,
+                            Ok(other) => panic!("expected WebSocket Close, got {other:?}"),
+                            Err(error) => panic!("failed to observe WebSocket Close: {error}"),
+                        }
+                    }
+                };
+                let (shutdown_result, ()) = tokio::join!(shutdown, observe_close);
+                shutdown_result.expect("stateful close must survive a Pending flush");
+            })
+            .await
+            .expect("WebSocket shutdown must not stall");
+            assert!(
+                pending_observed.load(Ordering::SeqCst),
+                "fixture must force the close flush through Pending"
+            );
+        }
     }
 }
 

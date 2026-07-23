@@ -55,6 +55,10 @@ default = []
 handshake_chain_id = []
 # If enabled, use bounded queues for peer post channel to reduce unbounded growth.
 p2p_bounded_queues = []
+# Expose opaque reply-route minting only to dependent-crate test builds.
+test-fixtures = []
+# Enable Chinese SM public-key support in transport geometry and tests.
+sm = ["iroha_crypto/sm"]
 # Optional future transport/handshake features (scaffolding)
 quic = ["dep:quinn", "dep:rcgen", "dep:rustls", "rustls/ring", "rustls/std"]
 noise_handshake = ["dep:snow"]

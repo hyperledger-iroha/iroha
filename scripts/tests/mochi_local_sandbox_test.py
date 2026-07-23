@@ -41,6 +41,24 @@ class MochiLocalSandboxSafetyTest(unittest.TestCase):
         self.assertNotIn("killall", text)
         self.assertNotIn("SIGKILL", text)
 
+    def test_headless_launcher_enables_the_cli_implementation(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve",
+            text,
+        )
+        self.assertNotIn("cargo run -p mochi-ui --features gui -- sandbox serve", text)
+        self.assertNotIn("cargo run -p mochi-ui -- sandbox serve", text)
+
+    def test_python_interpreter_is_explicitly_configurable(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('PYTHON_BIN="${MOCHI_PYTHON:-python3}"', text)
+        self.assertIn('"$PYTHON_BIN" - "$root"', text)
+        self.assertIn('pid="$("$PYTHON_BIN" - "$REPO_ROOT"', text)
+        self.assertNotIn("python3 - ", text)
+
 
 if __name__ == "__main__":
     unittest.main()

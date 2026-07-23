@@ -416,6 +416,23 @@ pub mod isi {
                 .into(),
             )
         })?;
+        if crate::sns::resolve_active_account_alias(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            account_label,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .as_ref()
+            != Some(account_id)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "transfer-control target account {account_id} has no strictly active alias binding"
+                )
+                .into(),
+            )
+            .into());
+        }
         let account_domain = account_label.domain.as_ref().cloned().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 format!(
@@ -692,6 +709,16 @@ pub mod isi {
             .world
             .bound_account_aliases(subject)
             .into_iter()
+            .filter(|alias| {
+                crate::sns::resolve_active_account_alias(
+                    &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
+                    alias,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .as_ref()
+                    == Some(subject)
+            })
             .filter_map(|alias| {
                 alias
                     .domain_id(&state_transaction.nexus.dataspace_catalog)
@@ -914,18 +941,22 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         account_id: &AccountId,
     ) -> Result<Option<DataSpaceId>, Error> {
-        let hierarchy = state_transaction
+        state_transaction.world.account(account_id)?;
+        let mut linked_dataspaces: BTreeSet<_> = state_transaction
             .world
-            .account_scope_hierarchy(account_id)
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("account {account_id} dataspace scope could not be resolved: {err}")
-                        .into(),
+            .bound_account_aliases(account_id)
+            .into_iter()
+            .filter(|alias| {
+                crate::sns::resolve_active_account_alias(
+                    &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
+                    alias,
+                    state_transaction.block_unix_timestamp_ms(),
                 )
-            })?;
-        let mut linked_dataspaces: BTreeSet<_> = hierarchy
-            .keys()
-            .copied()
+                .as_ref()
+                    == Some(account_id)
+            })
+            .map(|alias| alias.dataspace)
             .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
             .collect();
         if let Ok(account) = state_transaction.world.account(account_id)
@@ -1130,6 +1161,8 @@ pub mod isi {
         NativeEscrowCustody,
         /// Permit exactly one verified SCCP native inbound release from governed custody.
         SccpInboundSettlement,
+        /// Permit a protocol-authorized debit from the isolated fee-sponsor custody account.
+        FeeSponsorCustody,
     }
 
     fn sccp_registry_references_custody_asset(
@@ -1591,6 +1624,23 @@ pub mod isi {
                 ensure_not_offline_escrow_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
             }
+            NumericAssetTransferSourcePolicy::FeeSponsorCustody => {
+                if source_id.account()
+                    != &state_transaction
+                        .nexus
+                        .fees
+                        .sponsor_vault_custody_account_id
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "fee sponsor custody transfer source does not match configured custody"
+                            .into(),
+                    )
+                    .into());
+                }
+                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+            }
         }
 
         Ok((source_id, destination_id))
@@ -1638,6 +1688,108 @@ pub mod isi {
             amount,
         )?;
         Ok((source_id, destination_id, delta))
+    }
+
+    /// Move assets out of the protocol fee-sponsor custody account after the
+    /// calling sponsor-program operation has performed its own authorization.
+    ///
+    /// This path deliberately does not require a custody signing key. It still
+    /// applies the ordinary deterministic asset policy, balance, scope, event,
+    /// and transfer-transcript invariants.
+    pub(crate) fn execute_fee_sponsor_custody_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        state_transaction.require_transfer_transcript_identity("fee sponsor custody transfer")?;
+        let destination_id = AssetId::with_scope(
+            source_id.definition().clone(),
+            destination,
+            source_id.scope().clone(),
+        );
+        let (source_id, destination_id, delta) = apply_numeric_asset_transfer_delta(
+            state_transaction,
+            &source_id,
+            &destination_id,
+            amount.as_numeric(),
+            NumericAssetTransferSourcePolicy::FeeSponsorCustody,
+        )?;
+        state_transaction.record_transfer_transcript(submitting_authority, delta)?;
+        state_transaction.world.emit_events([
+            AssetEvent::Removed(AssetChanged {
+                asset: source_id,
+                amount: amount.clone(),
+            }),
+            AssetEvent::Added(AssetChanged {
+                asset: destination_id,
+                amount,
+            }),
+        ]);
+        Ok(())
+    }
+
+    /// Burn a charged amount from the isolated fee-sponsor custody account.
+    pub(crate) fn execute_fee_sponsor_custody_burn(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        source_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        ensure_global_asset_write_on_authoritative_route(
+            state_transaction,
+            source_id.definition(),
+            "fee sponsor burn",
+        )?;
+        let source_id = state_transaction
+            .world
+            .resolve_asset_id_for_current_scope(&source_id)?;
+        if source_id.account()
+            != &state_transaction
+                .nexus
+                .fees
+                .sponsor_vault_custody_account_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "fee sponsor burn source does not match configured custody".into(),
+            )
+            .into());
+        }
+        let numeric = amount.as_numeric().clone();
+        let spec = state_transaction
+            .numeric_spec_for(source_id.definition())
+            .map_err(Error::from)?;
+        assert_numeric_spec_with(&numeric, spec)?;
+        ensure_transparent_allowed(
+            state_transaction,
+            source_id.definition(),
+            "transparent fee sponsor burn not permitted by policy",
+        )?;
+        ensure_usage_policy_for_accounts(
+            state_transaction,
+            source_id.definition(),
+            [(
+                source_id.account(),
+                asset_id_dataspace_hint(state_transaction, &source_id),
+            )],
+            Some(&numeric),
+        )?;
+        ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+        ensure_not_native_escrow_source(state_transaction, &source_id)?;
+        ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+        state_transaction
+            .world
+            .withdraw_numeric_asset(&source_id, &numeric)?;
+        state_transaction
+            .world
+            .decrease_asset_total_amount(source_id.definition(), &amount)?;
+        state_transaction
+            .world
+            .emit_events(Some(AssetEvent::Removed(AssetChanged {
+                asset: source_id,
+                amount,
+            })));
+        Ok(())
     }
 
     impl Execute for Mint<Quantity, Asset> {
@@ -1840,6 +1992,56 @@ pub mod isi {
             }),
         ]);
 
+        Ok(())
+    }
+
+    /// Apply a native owner-authorized numeric transfer without a transaction transcript.
+    ///
+    /// Deterministic block maintenance has no signed-transaction `call_hash`, so it cannot
+    /// produce a FASTPQ transaction transcript. The balance move still goes through the same
+    /// account, routing, transfer-control, asset-policy, and exact-delta validation as a user
+    /// transfer and emits the same asset events.
+    pub(crate) fn execute_native_authorized_numeric_asset_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Numeric,
+    ) -> Result<(), Error> {
+        if source_id.account() != authority {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native authorized transfer source must belong to its authority".into(),
+            )
+            .into());
+        }
+        let destination_id = AssetId::new(source_id.definition().clone(), destination);
+        let plan = PreparedNumericTransferPlan::prepare_user(
+            state_transaction,
+            authority,
+            source_id,
+            destination_id,
+            amount,
+        )?;
+        let applied = plan.apply(state_transaction)?;
+
+        #[allow(clippy::float_arithmetic)]
+        #[cfg(feature = "telemetry")]
+        state_transaction
+            .telemetry
+            .observe_tx_amount(applied.amount.clone().to_f64_lossy());
+
+        let amount = Quantity::from_canonical_numeric(applied.amount)
+            .map_err(|_| MathError::NegativeValue)?;
+        state_transaction.world.emit_events([
+            AssetEvent::Removed(AssetChanged {
+                asset: applied.source_id,
+                amount: amount.clone(),
+            }),
+            AssetEvent::Added(AssetChanged {
+                asset: applied.destination_id,
+                amount,
+            }),
+        ]);
         Ok(())
     }
 
@@ -3312,7 +3514,7 @@ pub mod query {
     mod tests {
         use std::collections::{BTreeMap, BTreeSet};
 
-        use iroha_crypto::Hash;
+        use iroha_crypto::{Algorithm, Hash, KeyPair};
         use iroha_data_model::account::{
             NewAccount,
             rekey::{AccountAlias, AccountAliasDomain},
@@ -3367,6 +3569,99 @@ pub mod query {
 
         fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
             state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
+        }
+
+        fn fee_sponsor_custody_state() -> (State, AccountId, AssetDefinitionId, AssetId) {
+            let custody_key = KeyPair::try_from_seed(vec![0xC5; 32], Algorithm::Ed25519)
+                .expect("custody fixture key");
+            let custody = AccountId::new(custody_key.public_key().clone());
+            drop(custody_key);
+            let domain_id = DomainId::try_new("fees", "universal").expect("fee domain");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let definition_id =
+                AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+            let definition = build_numeric_asset_definition(&definition_id, &ALICE_ID);
+            let source_id = AssetId::new(definition_id.clone(), custody.clone());
+            let world = World::with_assets(
+                [domain],
+                [
+                    Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                    Account::new(BOB_ID.clone()).build(&ALICE_ID),
+                    Account::new(custody.clone()).build(&ALICE_ID),
+                ],
+                [definition],
+                [Asset::new(source_id.clone(), Quantity::from(10_u32))],
+                [],
+            );
+            let mut state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            state.nexus.get_mut().fees.sponsor_vault_custody_account_id = custody.clone();
+            (state, custody, definition_id, source_id)
+        }
+
+        #[test]
+        fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance() {
+            let (state, custody, definition_id, source_id) = fee_sponsor_custody_state();
+            assert_ne!(custody, *ALICE_ID, "submitting authority is not custody");
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xC5);
+
+            super::isi::execute_fee_sponsor_custody_transfer(
+                &mut stx,
+                &ALICE_ID,
+                source_id.clone(),
+                BOB_ID.clone(),
+                Quantity::from(4_u32),
+            )
+            .expect("protocol custody transfer does not require custody authorization");
+
+            let destination_id = AssetId::new(definition_id, BOB_ID.clone());
+            assert_eq!(
+                stx.world.assets.get(&source_id).map(|value| value.as_ref()),
+                Some(&Quantity::from(6_u32))
+            );
+            assert_eq!(
+                stx.world
+                    .assets
+                    .get(&destination_id)
+                    .map(|value| value.as_ref()),
+                Some(&Quantity::from(4_u32))
+            );
+        }
+
+        #[test]
+        fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
+            let (state, _custody, definition_id, source_id) = fee_sponsor_custody_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.world
+                .increase_asset_total_amount(&definition_id, &Quantity::from(10_u32))
+                .expect("seed aggregate supply");
+
+            super::isi::execute_fee_sponsor_custody_burn(
+                &mut stx,
+                source_id.clone(),
+                Quantity::from(2_u32),
+            )
+            .expect("protocol custody burn does not require custody authorization");
+
+            assert_eq!(
+                stx.world.assets.get(&source_id).map(|value| value.as_ref()),
+                Some(&Quantity::from(8_u32))
+            );
+            assert_eq!(
+                stx.world
+                    .asset_definition(&definition_id)
+                    .expect("asset definition")
+                    .total_quantity(),
+                &Quantity::from(8_u32)
+            );
         }
 
         fn build_asset_transfer_control_test_state(

@@ -13,13 +13,14 @@ pub mod encryption;
 /// Baseline BFV fully homomorphic encryption primitives.
 pub mod fhe_bfv;
 mod hash;
-#[cfg(not(feature = "ffi_import"))]
+#[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
 /// Hybrid KEM/DEM helpers used by SoraFS payload envelopes.
 pub mod hybrid;
 #[cfg(not(feature = "ffi_import"))]
 /// Key exchange protocols.
 pub mod kex;
 mod merkle;
+#[cfg(feature = "pqc")]
 mod mldsa_seed;
 #[cfg(not(feature = "ffi_import"))]
 mod multihash;
@@ -34,9 +35,9 @@ mod secrecy;
 mod signature;
 #[cfg(not(feature = "ffi_import"))]
 pub mod sorafs;
-#[cfg(not(feature = "ffi_import"))]
+#[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
 pub mod soranet;
-#[cfg(not(feature = "ffi_import"))]
+#[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
 pub mod streaming;
 
 /// Canonical exact numeric facade for lower-level authenticated protocol crates.
@@ -88,6 +89,7 @@ pub mod vrf;
 pub mod sm;
 
 use core::{fmt, str::FromStr};
+#[cfg(any(feature = "bls", feature = "pqc"))]
 use std::sync::Arc;
 #[cfg(feature = "bls")]
 use std::sync::{Mutex, OnceLock};
@@ -125,7 +127,7 @@ use error::ParseError;
 pub use fhe_bfv::*;
 use getset::Getters;
 pub use hash::*;
-#[cfg(not(feature = "ffi_import"))]
+#[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
 pub use hybrid::{
     DerivedSecret as HybridDerivedSecret, HybridError, HybridKemCiphertext, HybridKeyPair,
     HybridPublicKey, HybridSecretKey, HybridSuite, decapsulate as hybrid_decapsulate,
@@ -173,6 +175,22 @@ const POP_DST: &str = "iroha:bls:pop:v1";
 fn is_all_zero_material(bytes: &[u8]) -> bool {
     !bytes.is_empty() && bytes.iter().all(|&byte| byte == 0)
 }
+
+// ML-DSA-65 wire widths are stable protocol constants. Keep them available
+// when the native PQC backend is disabled (for example in browser WASM) so
+// parsers preserve the same framing and algorithm discriminant.
+const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
+const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
+
+/// Protocol-wide ceiling for the raw payload of any canonical public key.
+///
+/// This excludes the one-byte algorithm tag stored by [`PublicKey`]. The
+/// largest accepted payload is an SM2 envelope: a two-byte identifier-length
+/// field, at most `u16::MAX / 8` identifier bytes because SM2 carries that
+/// length in bits, and a 65-byte uncompressed SEC1 point. The ceiling remains
+/// feature-independent so admission and transport geometry cannot vary with
+/// compiled algorithms.
+pub const MAX_PUBLIC_KEY_PAYLOAD_BYTES: usize = 2 + (u16::MAX as usize / 8) + 65;
 
 /// Key pair generation option. Passed to a specific algorithm.
 #[derive(Debug)]
@@ -230,8 +248,13 @@ impl KeyPair {
             Algorithm::Secp256k1 => {
                 secp256k1::EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::Random).map(Into::into)
             }
+            #[cfg(feature = "pqc")]
             Algorithm::MlDsa => mldsa_seed::mldsa65::random_keypair()
                 .and_then(|(public_key, private_key)| KeyPair::new(public_key, private_key)),
+            #[cfg(not(feature = "pqc"))]
+            Algorithm::MlDsa => Err(Error::KeyGen(String::from(
+                "ML-DSA backend is unavailable on this target",
+            ))),
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
             | Algorithm::Gost3410_2012_256ParamSetB
@@ -301,11 +324,16 @@ impl KeyPair {
                 secp256k1::EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::UseSeed(seed))
                     .map(Into::into)
             }
+            #[cfg(feature = "pqc")]
             Algorithm::MlDsa => {
                 let seed = Zeroizing::new(seed);
                 let (public, private) = mldsa_seed::mldsa65::keypair_from_seed(seed.as_slice())?;
                 KeyPair::new(public, private)
             }
+            #[cfg(not(feature = "pqc"))]
+            Algorithm::MlDsa => Err(Error::KeyGen(String::from(
+                "ML-DSA backend is unavailable on this target",
+            ))),
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
             | Algorithm::Gost3410_2012_256ParamSetB
@@ -409,6 +437,7 @@ impl KeyPair {
                 .map_err(|err| Error::KeyGen(err.to_string()))?;
         }
 
+        #[cfg(feature = "pqc")]
         if algorithm == Algorithm::MlDsa {
             use crate::secrecy::ExposeSecret;
 
@@ -429,6 +458,13 @@ impl KeyPair {
                 public_key,
                 private_key,
             });
+        }
+
+        #[cfg(not(feature = "pqc"))]
+        if algorithm == Algorithm::MlDsa {
+            return Err(Error::KeyGen(String::from(
+                "ML-DSA backend is unavailable on this target",
+            )));
         }
 
         if PublicKey::from(private_key.clone()) != public_key {
@@ -575,10 +611,11 @@ impl PublicKeyFull {
             }
             Algorithm::Secp256k1 => secp256k1::EcdsaSecp256k1Sha256::parse_public_key(payload)
                 .map(PublicKeyFull::Secp256k1),
+            #[cfg(feature = "pqc")]
             Algorithm::MlDsa => {
                 use pqcrypto_mldsa::mldsa65;
                 use pqcrypto_traits::sign::PublicKey as _;
-                if payload.len() != mldsa65::public_key_bytes() {
+                if payload.len() != ML_DSA_65_PUBLIC_KEY_BYTES {
                     return Err(ParseError("invalid ML-DSA public key length".to_string()));
                 }
                 if is_all_zero_material(payload) {
@@ -589,6 +626,18 @@ impl PublicKeyFull {
                 let pk = mldsa65::PublicKey::from_bytes(payload)
                     .map_err(|_| ParseError("invalid ML-DSA public key".to_string()))?;
                 Ok(PublicKeyFull::MlDsa(pk.as_bytes().to_vec()))
+            }
+            #[cfg(not(feature = "pqc"))]
+            Algorithm::MlDsa => {
+                if payload.len() != ML_DSA_65_PUBLIC_KEY_BYTES {
+                    return Err(ParseError("invalid ML-DSA public key length".to_string()));
+                }
+                if is_all_zero_material(payload) {
+                    return Err(ParseError(
+                        "invalid ML-DSA public key: all-zero material".to_string(),
+                    ));
+                }
+                Ok(PublicKeyFull::MlDsa(payload.to_vec()))
             }
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
@@ -779,14 +828,17 @@ pub fn ed25519_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
 /// detached signature encoding is malformed. Returns [`Error::Parse`] if the
 /// payload is empty or all zero.
 pub fn mldsa65_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
-    use pqcrypto_mldsa::mldsa65;
-    use pqcrypto_traits::sign::DetachedSignature as _;
-
     let signature = Signature::try_from_bytes(payload).map_err(Error::from)?;
-    if payload.len() != mldsa65::signature_bytes() {
+    if payload.len() != ML_DSA_65_SIGNATURE_BYTES {
         return Err(Error::BadSignature);
     }
-    mldsa65::DetachedSignature::from_bytes(payload).map_err(|_| Error::BadSignature)?;
+    #[cfg(feature = "pqc")]
+    {
+        use pqcrypto_mldsa::mldsa65;
+        use pqcrypto_traits::sign::DetachedSignature as _;
+
+        mldsa65::DetachedSignature::from_bytes(payload).map_err(|_| Error::BadSignature)?;
+    }
     Ok(signature)
 }
 
@@ -1057,40 +1109,49 @@ pub fn pqc_verify_batch_deterministic(
     public_keys: &[&[u8]],
     _seed32: [u8; 32],
 ) -> Result<(), Error> {
-    use pqcrypto_mldsa::mldsa65;
-    use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
-
-    if messages.is_empty()
-        || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+    #[cfg(not(feature = "pqc"))]
     {
+        let _ = (messages, signatures, public_keys);
         return Err(Error::BadSignature);
     }
-    let exp_sig = mldsa65::signature_bytes();
-    let exp_pk = mldsa65::public_key_bytes();
-    for ((m, s), pk) in messages
-        .iter()
-        .zip(signatures.iter())
-        .zip(public_keys.iter())
+
+    #[cfg(feature = "pqc")]
     {
-        if s.len() != exp_sig || pk.len() != exp_pk {
+        use pqcrypto_mldsa::mldsa65;
+        use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
+
+        if messages.is_empty()
+            || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+        {
             return Err(Error::BadSignature);
         }
-        if is_all_zero_material(s) || is_all_zero_material(pk) {
-            return Err(Error::BadSignature);
+        let exp_sig = mldsa65::signature_bytes();
+        let exp_pk = mldsa65::public_key_bytes();
+        for ((m, s), pk) in messages
+            .iter()
+            .zip(signatures.iter())
+            .zip(public_keys.iter())
+        {
+            if s.len() != exp_sig || pk.len() != exp_pk {
+                return Err(Error::BadSignature);
+            }
+            if is_all_zero_material(s) || is_all_zero_material(pk) {
+                return Err(Error::BadSignature);
+            }
+            let sig = match mldsa65::DetachedSignature::from_bytes(s) {
+                Ok(v) => v,
+                Err(_) => return Err(Error::BadSignature),
+            };
+            let vk = match mldsa65::PublicKey::from_bytes(pk) {
+                Ok(v) => v,
+                Err(_) => return Err(Error::BadSignature),
+            };
+            if mldsa65::verify_detached_signature(&sig, m, &vk).is_err() {
+                return Err(Error::BadSignature);
+            }
         }
-        let sig = match mldsa65::DetachedSignature::from_bytes(s) {
-            Ok(v) => v,
-            Err(_) => return Err(Error::BadSignature),
-        };
-        let vk = match mldsa65::PublicKey::from_bytes(pk) {
-            Ok(v) => v,
-            Err(_) => return Err(Error::BadSignature),
-        };
-        if mldsa65::verify_detached_signature(&sig, m, &vk).is_err() {
-            return Err(Error::BadSignature);
-        }
+        Ok(())
     }
-    Ok(())
 }
 
 /// Deterministic BLS (normal) batch verification wrapper.
@@ -1971,6 +2032,7 @@ impl PublicKey {
                 ))
                 .0,
             ),
+            #[cfg(feature = "pqc")]
             PrivateKeyInner::MlDsa(secret) => {
                 return mldsa_seed::mldsa65::public_key_from_secret(secret.as_secret());
             }
@@ -2326,14 +2388,17 @@ impl From<PrivateKey> for PublicKey {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "pqc")]
 struct MlDsaSecretKey {
     inner: Arc<MlDsaSecretKeyInner>,
 }
 
+#[cfg(feature = "pqc")]
 struct MlDsaSecretKeyInner {
     secret: pqcrypto_mldsa::mldsa65::SecretKey,
 }
 
+#[cfg(feature = "pqc")]
 impl MlDsaSecretKey {
     fn new(inner: &pqcrypto_mldsa::mldsa65::SecretKey) -> Self {
         Self {
@@ -2393,6 +2458,7 @@ impl MlDsaSecretKey {
     }
 }
 
+#[cfg(feature = "pqc")]
 impl PartialEq for MlDsaSecretKey {
     fn eq(&self, other: &Self) -> bool {
         use pqcrypto_traits::sign::SecretKey as _;
@@ -2400,10 +2466,13 @@ impl PartialEq for MlDsaSecretKey {
     }
 }
 
+#[cfg(feature = "pqc")]
 impl Eq for MlDsaSecretKey {}
 
+#[cfg(feature = "pqc")]
 impl ZeroizeOnDrop for MlDsaSecretKey {}
 
+#[cfg(feature = "pqc")]
 #[allow(unsafe_code)]
 fn zeroize_mldsa_secret_key(secret: &mut pqcrypto_mldsa::mldsa65::SecretKey) {
     use core::{mem, ptr};
@@ -2418,6 +2487,7 @@ fn zeroize_mldsa_secret_key(secret: &mut pqcrypto_mldsa::mldsa65::SecretKey) {
     }
 }
 
+#[cfg(feature = "pqc")]
 impl Drop for MlDsaSecretKeyInner {
     fn drop(&mut self) {
         zeroize_mldsa_secret_key(&mut self.secret);
@@ -2429,6 +2499,7 @@ impl Drop for MlDsaSecretKeyInner {
 enum PrivateKeyInner {
     Ed25519(ed25519::PrivateKey),
     Secp256k1(secp256k1::PrivateKey),
+    #[cfg(feature = "pqc")]
     MlDsa(MlDsaSecretKey),
     #[cfg(feature = "gost")]
     Gost {
@@ -2463,6 +2534,7 @@ impl PartialEq for PrivateKey {
         match (self.0.expose_secret(), other.0.expose_secret()) {
             (PrivateKeyInner::Ed25519(l), PrivateKeyInner::Ed25519(r)) => l == r,
             (PrivateKeyInner::Secp256k1(l), PrivateKeyInner::Secp256k1(r)) => l == r,
+            #[cfg(feature = "pqc")]
             (PrivateKeyInner::MlDsa(l), PrivateKeyInner::MlDsa(r)) => l == r,
             #[cfg(feature = "gost")]
             (
@@ -2513,11 +2585,16 @@ impl PrivateKey {
             }
             Algorithm::Secp256k1 => secp256k1::EcdsaSecp256k1Sha256::parse_private_key(payload)
                 .map(PrivateKeyInner::Secp256k1),
+            #[cfg(feature = "pqc")]
             Algorithm::MlDsa => MlDsaSecretKey::from_bytes(payload).and_then(|secret| {
                 mldsa_seed::mldsa65::public_key_from_secret(secret.as_secret())
                     .map_err(|err| ParseError(err.to_string()))?;
                 Ok(PrivateKeyInner::MlDsa(secret))
             }),
+            #[cfg(not(feature = "pqc"))]
+            Algorithm::MlDsa => Err(ParseError(String::from(
+                "ML-DSA backend is unavailable on this target",
+            ))),
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
             | Algorithm::Gost3410_2012_256ParamSetB
@@ -2562,6 +2639,7 @@ impl PrivateKey {
         match self.0.expose_secret() {
             PrivateKeyInner::Ed25519(_) => Algorithm::Ed25519,
             PrivateKeyInner::Secp256k1(_) => Algorithm::Secp256k1,
+            #[cfg(feature = "pqc")]
             PrivateKeyInner::MlDsa(_) => Algorithm::MlDsa,
             #[cfg(feature = "gost")]
             PrivateKeyInner::Gost { algorithm, .. } => *algorithm,
@@ -2588,6 +2666,7 @@ impl PrivateKey {
         let payload = match self.0.expose_secret() {
             PrivateKeyInner::Ed25519(key) => zeroizing_secret_bytes_to_vec(key.to_bytes()),
             PrivateKeyInner::Secp256k1(key) => zeroizing_secret_bytes_to_vec(key.to_bytes()),
+            #[cfg(feature = "pqc")]
             PrivateKeyInner::MlDsa(key) => key.to_vec(),
             #[cfg(feature = "gost")]
             PrivateKeyInner::Gost { secret, .. } => secret.as_bytes().to_vec(),
@@ -2710,6 +2789,7 @@ impl Drop for PrivateKeyInner {
             PrivateKeyInner::Secp256k1(key) => {
                 assert_will_zeroize_on_drop(key);
             }
+            #[cfg(feature = "pqc")]
             PrivateKeyInner::MlDsa(key) => {
                 assert_will_zeroize_on_drop(key);
             }
@@ -4323,6 +4403,27 @@ mod tests {
         let codec_decoded =
             <PublicKey as Decode>::decode(&mut cursor).expect("codec decode public key");
         assert_eq!(codec_decoded, pk);
+    }
+
+    #[test]
+    fn public_key_payload_ceiling_covers_feature_independent_algorithms() {
+        assert_eq!(MAX_PUBLIC_KEY_PAYLOAD_BYTES, 8_258);
+        assert!(MAX_PUBLIC_KEY_PAYLOAD_BYTES >= ML_DSA_65_PUBLIC_KEY_BYTES);
+    }
+
+    #[cfg(feature = "sm")]
+    #[test]
+    fn maximum_accepted_sm2_public_key_payload_matches_protocol_ceiling() {
+        let distid = "x".repeat(u16::MAX as usize / 8);
+        let private = Sm2PrivateKey::from_seed(&distid, b"maximum-distid-payload")
+            .expect("maximum SM2 distinguishing identifier is accepted");
+        let payload =
+            sm::encode_sm2_public_key_payload(&distid, &private.public_key().to_sec1_bytes(false))
+                .expect("encode maximum canonical SM2 public key payload");
+
+        assert_eq!(payload.len(), MAX_PUBLIC_KEY_PAYLOAD_BYTES);
+        PublicKey::from_bytes(Algorithm::Sm2, &payload)
+            .expect("maximum-size canonical SM2 public key remains decodable");
     }
 
     #[cfg(feature = "sm")]

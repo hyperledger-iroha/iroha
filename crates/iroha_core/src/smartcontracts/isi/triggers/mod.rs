@@ -97,7 +97,9 @@ pub mod isi {
         let bytecode = match executable {
             Executable::Ivm(bytecode) => bytecode.as_ref(),
             Executable::IvmProved(proved) => proved.bytecode.as_ref(),
-            Executable::Instructions(_) | Executable::ContractCall(_) => return Ok(()),
+            Executable::Instructions(_) | Executable::ContractCall(_) | Executable::Batch(_) => {
+                return Ok(());
+            }
         };
         let admitted = crate::smartcontracts::ivm::cache::IvmCache::new()
             .summarize_executable(bytecode)
@@ -265,9 +267,19 @@ pub mod isi {
             let is_owner = authority == &owner;
             let mut is_domain_owner = false;
             for alias in state_transaction.world.bound_account_aliases(&owner) {
-                let Some(domain_id) = alias
-                    .domain_id(&state_transaction.nexus.dataspace_catalog)
-                    .expect("bound account alias dataspace must exist in catalog")
+                if crate::sns::resolve_active_account_alias(
+                    &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
+                    &alias,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .as_ref()
+                    != Some(&owner)
+                {
+                    continue;
+                }
+                let Ok(Some(domain_id)) =
+                    alias.domain_id(&state_transaction.nexus.dataspace_catalog)
                 else {
                     continue;
                 };

@@ -4,11 +4,11 @@ description: Validate proposals, deduplicate fingerprints, and publish determini
 ---
 
 import CodeBlock from '@theme/CodeBlock';
-import sortitionSummary from '@site/docs/examples/ministry/agenda_sortition_summary_example.json';
+import sortitionSummary from '../../../examples/ministry/agenda_sortition_summary_example.json';
 
-const summary = sortitionSummary;
+export const summary = sortitionSummary;
 
-function SortitionSummaryTable({rows}) {
+export function SortitionSummaryTable({rows}) {
   return (
     <table>
       <thead>

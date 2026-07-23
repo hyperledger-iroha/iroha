@@ -20,10 +20,7 @@ use mv::storage::StorageReadOnly;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use super::{
-    NposEpochParams,
-    consensus::{NPOS_TAG, VrfCommit, VrfReveal, vrf_commit_preimage, vrf_reveal_preimage},
-};
+use super::consensus::{NPOS_TAG, VrfCommit, VrfReveal, vrf_commit_preimage, vrf_reveal_preimage};
 use crate::state::{State, WorldReadOnly};
 
 /// Domain separator for deterministic NPoS VRF input derivation.
@@ -106,19 +103,6 @@ pub(crate) enum V2VrfRejection {
     Capacity,
 }
 
-/// Reconciliation result after the finalized block has been applied to WSV.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum V2VrfReconcileOutcome {
-    /// There was no locally pending record.
-    NoPending,
-    /// The finalized world-state record covers every locally pending observation.
-    Committed,
-    /// The winning block did not include all compatible local observations.
-    Deferred,
-    /// The winning block contains a conflicting signed observation; local state was discarded.
-    ConflictDiscarded,
-}
-
 /// Fatal construction or local-emission failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2NposError {
@@ -170,6 +154,13 @@ struct EpochSchedule {
     commit_end: u64,
     reveal_end: u64,
     position: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NposEpochParams {
+    epoch_length_blocks: u64,
+    commit_deadline_offset: u64,
+    reveal_deadline_offset: u64,
 }
 
 fn committed_epoch_params(world: &impl WorldReadOnly) -> Result<NposEpochParams, V2NposError> {
@@ -375,32 +366,6 @@ impl V2NposVrfLifecycle {
             .and_then(ActiveVrfLifecycle::pending_record)
             .into_iter()
             .collect()
-    }
-
-    /// Reconcile the winning block's committed effects after application.
-    pub(crate) fn reconcile_committed(&mut self, state: &State) -> V2VrfReconcileOutcome {
-        let Some(active) = self.active.as_mut() else {
-            return V2VrfReconcileOutcome::NoPending;
-        };
-        let Some(pending) = active.pending_record() else {
-            return V2VrfReconcileOutcome::NoPending;
-        };
-        let committed = {
-            let world = state.world_view();
-            world.vrf_epochs().get(&pending.epoch).cloned()
-        };
-        let Some(committed) = committed else {
-            return V2VrfReconcileOutcome::Deferred;
-        };
-        if record_extends(&pending, &committed) {
-            active.committed_record = Some(committed);
-            return V2VrfReconcileOutcome::Committed;
-        }
-        if record_extends(&committed, &pending) {
-            return V2VrfReconcileOutcome::Deferred;
-        }
-        active.committed_record = Some(committed);
-        V2VrfReconcileOutcome::ConflictDiscarded
     }
 }
 
@@ -1357,12 +1322,14 @@ mod tests {
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
 
     fn keys() -> Vec<KeyPair> {
-        (1_u8..=4)
+        let mut keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
                     .expect("deterministic BLS key")
             })
-            .collect()
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        keys
     }
 
     fn context(height: u64, keys: &[KeyPair]) -> wire::HeightContext {
@@ -1403,6 +1370,13 @@ mod tests {
         // the fields consumed by the lifecycle are relevant after height one.
         wire::QuorumCertificate {
             round: wire::ConsensusRound {
+                context_id: wire::HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
+                    Hash::new(b"parent-context"),
+                )),
+                height: parent_height,
+                view: 0,
+            },
+            proposal_round: wire::ConsensusRound {
                 context_id: wire::HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
                     Hash::new(b"parent-context"),
                 )),
@@ -1565,11 +1539,11 @@ mod tests {
 
         assert!(matches!(
             V2NposVrfLifecycle::open(&context, &state, None, &keys[0]),
-            Err(V2NposError::InvalidSchedule)
+            Err(V2NposError::MissingCommittedParameters)
         ));
         assert!(matches!(
             validate_candidate_records(&context, &state, None),
-            Err(V2NposError::InvalidSchedule)
+            Err(V2NposError::MissingCommittedParameters)
         ));
     }
 
@@ -2260,7 +2234,25 @@ mod tests {
             V2VrfIngressOutcome::Accepted
         );
         let committed = lifecycle.pending_records().pop().expect("commit record");
-        let boundary_context = context(10, &keys);
+        let mut boundary_context = context(10, &keys);
+        boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+            epoch: boundary_context.epoch + 1,
+            epoch_end_height: 20,
+            mode: boundary_context.mode,
+            roster: boundary_context.roster.clone(),
+            validator_set_pops: keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("next-epoch validator proof of possession")
+                })
+                .collect(),
+            quorum: boundary_context.quorum,
+            leader_seed: [0x45; 32],
+        });
+        boundary_context
+            .validate()
+            .expect("boundary fixture carries the mandatory next-epoch snapshot");
         let boundary = lifecycle_at(10, 10, Some(committed.clone()), None, &keys);
         let seal = boundary.pending_records().pop().expect("boundary seal");
         validate_candidate_records(

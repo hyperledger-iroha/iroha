@@ -5,14 +5,14 @@
 //! synchronously while delivering network messages through a deterministic
 //! lossy, duplicating, and reordering scheduler.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 
 use super::{
-    CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, Effect, EquivocationKind,
-    Event, EventTag, Generation, HeightContext, IgnoreReason, OpaqueSignature, PayloadManifest,
-    Phase, QuorumCertificate, Reducer, Round, SignableMessage, SignatureShare, SignedVote,
-    StepDisposition, Subject, TimeoutCertificate, TimeoutSignatureGroup, Validator, ValidatorId,
-    Vote, VotingMode, VotingPower, WalEntry, WalRecord,
+    BodyState, CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, Effect,
+    EquivocationKind, Event, EventTag, Generation, HeightContext, IgnoreReason, OpaqueSignature,
+    PayloadManifest, Phase, QuorumCertificate, Reducer, Round, SignableMessage, SignatureShare,
+    SignedVote, StepDisposition, Subject, TimeoutCertificate, TimeoutSignatureGroup, Validator,
+    ValidatorId, Vote, VotingMode, VotingPower, WalEntry, WalRecord,
 };
 
 const HEIGHT: u64 = 42;
@@ -57,6 +57,7 @@ struct Simulation {
     broadcasts: usize,
     signatures: u64,
     partition: Option<Vec<usize>>,
+    directed_partition_drops: BTreeSet<(usize, usize)>,
     withhold_commit_traffic: bool,
     stats: NetworkStats,
 }
@@ -86,6 +87,7 @@ impl Simulation {
             broadcasts: 0,
             signatures: 0,
             partition: None,
+            directed_partition_drops: BTreeSet::new(),
             withhold_commit_traffic: false,
             stats: NetworkStats::default(),
         }
@@ -216,7 +218,9 @@ impl Simulation {
                         .expect("application completion matches the durable decision")
                         .into_effects()
                 }
-                Effect::EnterView { tag, certificate } => {
+                Effect::EnterView {
+                    tag, certificate, ..
+                } => {
                     assert_eq!(tag, self.nodes[index].reducer.current_tag());
                     assert_eq!(tag.view(), certificate.round().view() + 1);
                     Vec::new()
@@ -296,6 +300,9 @@ impl Simulation {
                 .partition
                 .as_ref()
                 .is_some_and(|groups| groups.get(envelope.from) != groups.get(envelope.to))
+                || self
+                    .directed_partition_drops
+                    .contains(&(envelope.from, envelope.to))
             {
                 self.stats.partition_drops += 1;
                 continue;
@@ -329,8 +336,16 @@ impl Simulation {
         self.partition = Some(groups);
     }
 
+    fn install_directed_partition(
+        &mut self,
+        dropped_links: impl IntoIterator<Item = (usize, usize)>,
+    ) {
+        self.directed_partition_drops = dropped_links.into_iter().collect();
+    }
+
     fn heal_partition(&mut self) {
         self.partition = None;
+        self.directed_partition_drops.clear();
     }
 
     fn restart(&mut self, index: usize) {
@@ -562,6 +577,29 @@ fn two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits() 
 }
 
 #[test]
+fn asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies() {
+    let mut simulation = Simulation::new(4, VotingMode::Npos, None);
+    simulation.install_directed_partition([(2, 0), (2, 1), (3, 0), (3, 1)]);
+
+    let subject = Subject::repeat(0x6e);
+    simulation.begin_proposal(subject);
+    simulation.drain_network();
+    simulation.retransmit_all_online(6);
+
+    assert!(
+        simulation
+            .nodes
+            .iter()
+            .all(|node| node.reducer.durable_state().decision().is_none())
+    );
+    assert!(simulation.stats.partition_drops > 0);
+
+    simulation.heal_partition();
+    simulation.retransmit_all_online(6);
+    simulation.assert_online_committed(subject);
+}
+
+#[test]
 fn leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum() {
     for mode in [VotingMode::Permissioned, VotingMode::Npos] {
         let mut simulation = Simulation::new(4, mode, None);
@@ -577,6 +615,63 @@ fn leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum() {
 
         simulation.assert_online_committed(subject);
         assert!(simulation.stats.offline_drops > 0);
+    }
+}
+
+#[test]
+fn leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum() {
+    for (validator_count, mode) in [(4, VotingMode::Permissioned), (7, VotingMode::Npos)] {
+        let mut simulation = Simulation::new(validator_count, mode, None);
+        let subject = Subject::repeat(
+            0x7c + u8::try_from(validator_count).expect("fixture size fits in u8")
+                + u8::from(mode == VotingMode::Npos),
+        );
+        simulation.withhold_commit_traffic = true;
+
+        let (locked_view, leader_index) = simulation.begin_proposal(subject);
+        assert_eq!(locked_view, 0);
+        simulation.drain_network();
+        simulation.retransmit_all_online(5);
+
+        let locked_round = Round::new(simulation.context.height(), locked_view);
+        assert!(simulation.nodes.iter().all(|node| {
+            node.reducer
+                .durable_state()
+                .locked()
+                .map(QuorumCertificate::subject)
+                == Some(subject)
+                && node.reducer.body_state(locked_round, subject) == BodyState::Validated
+                && node.reducer.durable_state().decision().is_none()
+                && node.applied.is_empty()
+        }));
+        assert!(simulation.stats.withheld_commit_messages > 0);
+
+        // The original leader crashes only after it has the same durable lock
+        // and body pipeline as its peers. The responsive dual quorum must be
+        // able to install a TC without it while Commit traffic is still held.
+        simulation.nodes[leader_index].online = false;
+        simulation.timeout_all_online();
+        assert_eq!(simulation.current_online_view(), 1);
+        assert!(
+            simulation
+                .nodes
+                .iter()
+                .filter(|node| node.online)
+                .all(|node| node
+                    .reducer
+                    .durable_state()
+                    .locked()
+                    .map(QuorumCertificate::subject)
+                    == Some(subject)
+                    && node.reducer.body_state(locked_round, subject) == BodyState::Validated)
+        );
+
+        // Healing only the Commit lane models the exact reset-boundary
+        // regression: retransmitted old-round votes must repopulate each new
+        // volatile pool and finish the already locked body without the leader.
+        simulation.withhold_commit_traffic = false;
+        simulation.retransmit_all_online(6);
+        simulation.assert_online_committed(subject);
     }
 }
 
@@ -707,6 +802,11 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
                 .map(QuorumCertificate::reference),
             Some(prepare.reference())
         );
+        let pools = node.reducer.vote_pool_snapshots();
+        assert_eq!(pools.len(), 1);
+        assert_eq!(pools[0].round, prepare.round());
+        assert_eq!(pools[0].phase, Phase::Commit);
+        assert_eq!(pools[0].subject, subject);
     }
 
     // One node receives a delayed CommitQC from view zero after advancing to
@@ -724,6 +824,29 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
     );
     let successful_view = simulation.propose(subject);
     simulation.assert_online_committed(subject);
+    let mut current_lock_nodes = 0usize;
+    for node in &simulation.nodes {
+        if node
+            .reducer
+            .durable_state()
+            .locked()
+            .is_none_or(|locked| locked.round().view() != successful_view)
+        {
+            continue;
+        }
+        current_lock_nodes += 1;
+        assert!(
+            node.reducer
+                .vote_pool_snapshots()
+                .iter()
+                .all(|pool| pool.round.view() == successful_view),
+            "a newly durable lock must retire the inert historical Commit pool"
+        );
+    }
+    assert!(
+        current_lock_nodes > 0,
+        "the converged proposal must install at least one current-view lock"
+    );
     assert_eq!(successful_view, 3);
     assert!(successful_view <= simulation.context.roster().len() as u64);
 }
@@ -853,6 +976,16 @@ fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
             tag: message_tag(current, proposal.proposal().round()),
             proposal: proposal.clone(),
         },
+        ConsensusMessageV2::Vote(vote) if vote.vote().phase() == Phase::Commit => {
+            // The production adapter admits the one exact durable locked-round
+            // Commit exception and retags it to the current consumer
+            // generation. Preserve that boundary here so a TC-reset pool can
+            // be reconstructed by an old-round retransmission.
+            Event::VoteReceived {
+                tag: current,
+                vote: vote.clone(),
+            }
+        }
         ConsensusMessageV2::Vote(vote) => Event::VoteReceived {
             tag: message_tag(current, vote.vote().round()),
             vote: vote.clone(),

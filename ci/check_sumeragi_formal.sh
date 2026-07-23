@@ -4,24 +4,71 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-release=false
-if [[ "${1:-}" == "--release" ]]; then
-  release=true
-  shift
-fi
 if (($#)); then
-  echo "usage: $0 [--release]" >&2
+  echo "usage: $0" >&2
   exit 2
 fi
 
-checker=(python3 scripts/formal/check_sumeragi_v2_proof_ledger.py)
-if [[ "$release" == true ]]; then
-  checker+=(--release)
+if [[ -n "${JAVA_BIN:-}" ]]; then
+  JAVA_BIN="$(scripts/formal/resolve_java.sh "$JAVA_BIN")"
+else
+  JAVA_BIN="$(scripts/formal/resolve_java.sh)"
 fi
-"${checker[@]}"
+export JAVA_BIN
 
+readonly proof_ledger="docs/formal/sumeragi_v2/proof_coverage.json"
+readonly proof_evidence="target/formal/sumeragi_v2/proof_evidence.json"
+readonly verus_evidence="target/formal/sumeragi_v2/verus_evidence.json"
+readonly cross_tool_evidence="target/formal/sumeragi_v2/cross_tool_evidence.json"
+cross_tool_obligations="$(
+  python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
+    --ledger "$proof_ledger" \
+    --print-cross-tool-obligations
+)"
+readonly cross_tool_obligations
+# A previous invocation must not make a dormant or failed generation look
+# current. The canonical document is recreated only after both component
+# evidence files have passed their fresh runs.
+rm -f -- "$cross_tool_evidence"
+
+python3 scripts/formal/check_sumeragi_v2_proof_ledger.py
 bash scripts/formal/run_sumeragi_v2_tlaps.sh
-bash scripts/formal/run_sumeragi_v2_tlc.sh "${SUMERAGI_V2_TLC_PROFILE:-ci}"
+if [[ -z "$cross_tool_obligations" ]]; then
+  python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
+    --release \
+    --evidence "$proof_evidence"
+fi
+bash scripts/formal/run_sumeragi_v2_service_rank_mutation.sh
+bash scripts/formal/run_sumeragi_v2_productive_mutation.sh
+bash scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh
+bash scripts/formal/run_sumeragi_v2_progress_mutations.sh
+bash scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh
+bash scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh
+bash scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh
+bash scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh
+bash scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh
+bash scripts/formal/run_sumeragi_v2_tlc.sh ci
+bash scripts/formal/check_sumeragi_v2_replay_trace.sh
 bash scripts/verify_sumeragi_v2.sh
+python3 scripts/formal/sumeragi_v2_verus_evidence.py validate \
+  --root "$repo_root" \
+  --evidence "$verus_evidence"
+if [[ -n "$cross_tool_obligations" ]]; then
+  python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
+    --ledger "$proof_ledger" \
+    --evidence "$proof_evidence" \
+    --verus-evidence "$verus_evidence" \
+    --write-cross-tool-evidence "$cross_tool_evidence"
+fi
+release_args=(
+  --ledger "$proof_ledger"
+  --release
+  --evidence "$proof_evidence"
+  --verus-evidence "$verus_evidence"
+)
+if [[ -n "$cross_tool_obligations" ]]; then
+  release_args+=(--cross-tool-evidence "$cross_tool_evidence")
+fi
+python3 scripts/formal/check_sumeragi_v2_proof_ledger.py "${release_args[@]}"
 
-echo "Sumeragi v2 formal gate passed: deductive TLAPS, bounded TLC, and production Verus"
+echo "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness mutations, bounded TLC, trace replay, and production Verus"

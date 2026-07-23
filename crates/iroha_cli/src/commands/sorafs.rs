@@ -28002,7 +28002,7 @@ mod tests {
             assert_eq!(proposal.auditor_account, expected_auditor);
             assert_eq!(
                 proposal.proposed_penalty,
-                "0.0000009".parse::<Quantity>().expect("valid quantity")
+                "0.0000009".parse::<XorQuantity>().expect("valid quantity")
             );
             assert_eq!(proposal.submitted_at_unix, 1_700_000_504);
             assert!(proposal.approval.is_none());
@@ -28040,7 +28040,7 @@ mod tests {
             assert_eq!(proposal.auditor_account, expected_auditor);
             assert_eq!(
                 proposal.proposed_penalty,
-                "0.0000012".parse::<Quantity>().expect("valid quantity")
+                "0.0000012".parse::<XorQuantity>().expect("valid quantity")
             );
             assert_eq!(proposal.submitted_at_unix, 1_700_000_605);
             assert!(proposal.approval.is_none());

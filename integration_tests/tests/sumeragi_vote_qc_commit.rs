@@ -39,7 +39,10 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
 
         let (new_account_id, _) = gen_account_in("wonderland");
         let register_new_account = Register::account(Account::new(new_account_id.clone()));
-        client.submit_blocking(register_new_account)?;
+        client.submit_blocking(
+            register_new_account,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let target_non_empty = baseline_non_empty + 1;
         rt.block_on(async {

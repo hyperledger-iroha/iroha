@@ -1,7 +1,7 @@
 //! Multi-peer STARK integration coverage for governance voting and shielded IVM admission.
 #![cfg(feature = "zk-stark")]
 
-use std::{str::FromStr as _, time::Duration};
+use std::{num::NonZeroU64, time::Duration};
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
@@ -10,12 +10,13 @@ use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{
     isi::{Grant, InstructionBox},
     metadata::Metadata,
-    name::Name,
     permission::Permission,
     proof::{
         ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
     },
-    transaction::{Executable, IvmBytecode, IvmProved, signed::TransactionBuilder},
+    transaction::{
+        Executable, FeePaymentIntent, IvmBytecode, IvmProved, signed::TransactionBuilder,
+    },
     zk::BackendTag,
 };
 use iroha_executor_data_model::permission::governance::{
@@ -30,6 +31,7 @@ use reqwest::{Client as HttpClient, StatusCode};
 struct ZkIvmDeriveRequest {
     vk_ref: VerifyingKeyId,
     authority: iroha_data_model::account::AccountId,
+    fee_payment: FeePaymentIntent,
     metadata: Metadata,
     bytecode: IvmBytecode,
 }
@@ -43,6 +45,7 @@ struct ZkIvmDeriveResponse {
 struct ZkIvmProveRequest {
     vk_ref: VerifyingKeyId,
     authority: iroha_data_model::account::AccountId,
+    fee_payment: FeePaymentIntent,
     metadata: Metadata,
     bytecode: IvmBytecode,
     proved: Option<IvmProved>,
@@ -137,7 +140,11 @@ where
     I: Into<InstructionBox>,
 {
     client
-        .submit_with_metadata(instruction, Metadata::default())
+        .submit_with_metadata(
+            instruction,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        )
         .wrap_err_with(|| format!("submit {context}"))?;
     *expected_height = expected_height.saturating_add(1);
     network
@@ -437,12 +444,15 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     );
     let mismatched_nullifier =
         derive_ballot_nullifier(&nullifier_domain, &client.chain, &election_id, &bad_commit);
-    let bad_ballot = client.submit_blocking(iroha_data_model::isi::zk::SubmitBallot {
-        election_id: election_id.clone(),
-        ciphertext: bad_commit.to_vec(),
-        ballot_proof: mismatched_ballot_attachment,
-        nullifier: mismatched_nullifier,
-    });
+    let bad_ballot = client.submit_blocking(
+        iroha_data_model::isi::zk::SubmitBallot {
+            election_id: election_id.clone(),
+            ciphertext: bad_commit.to_vec(),
+            ballot_proof: mismatched_ballot_attachment,
+            nullifier: mismatched_nullifier,
+        },
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     assert!(
         bad_ballot.is_err(),
         "mismatched ballot circuit/backend binding should be rejected"
@@ -509,15 +519,13 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     let mut program = meta.encode();
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let bytecode = IvmBytecode::from_compiled(program);
-    let mut tx_meta = Metadata::default();
-    tx_meta.insert(
-        Name::from_str("gas_limit").expect("static gas_limit key"),
-        Json::new(50_000_000_u64),
-    );
+    let tx_meta = Metadata::default();
+    let fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(50_000_000));
 
     let derive_req = ZkIvmDeriveRequest {
         vk_ref: ivm_vk_id.clone(),
         authority: client.account.clone(),
+        fee_payment: fee_payment.clone(),
         metadata: tx_meta.clone(),
         bytecode: bytecode.clone(),
     };
@@ -535,6 +543,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     let prove_req = ZkIvmProveRequest {
         vk_ref: ivm_vk_id.clone(),
         authority: client.account.clone(),
+        fee_payment: fee_payment.clone(),
         metadata: tx_meta.clone(),
         bytecode,
         proved: Some(derive_resp.proved.clone()),
@@ -551,18 +560,22 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         norito::json::from_value(prove_created_json).wrap_err("decode prove created response")?;
     let attachment = wait_for_prove_attachment(&client, &prove_created.job_id).await?;
 
-    let tx_valid = TransactionBuilder::new(client.chain.clone(), client.account.clone())
-        .with_executable(Executable::IvmProved(derive_resp.proved.clone()))
-        .with_metadata(tx_meta.clone())
-        .with_attachments(ProofAttachmentList(vec![attachment.clone()]))
-        .sign(client.key_pair.private_key());
+    let tx_valid = TransactionBuilder::new(
+        client.chain.clone(),
+        client.account.clone(),
+        fee_payment.clone(),
+    )
+    .with_executable(Executable::IvmProved(derive_resp.proved.clone()))
+    .with_metadata(tx_meta.clone())
+    .with_attachments(ProofAttachmentList(vec![attachment.clone()]))
+    .sign(client.key_pair.private_key());
     client
         .submit_transaction_blocking(&tx_valid)
         .wrap_err("submit STARK IvmProved tx after AIR proving is re-enabled")?;
 
     let bad_attachment =
         ProofAttachment::new_ref(backend.to_owned(), attachment.proof.clone(), ballot_vk_id);
-    let tx_bad = TransactionBuilder::new(client.chain.clone(), client.account.clone())
+    let tx_bad = TransactionBuilder::new(client.chain.clone(), client.account.clone(), fee_payment)
         .with_executable(Executable::IvmProved(derive_resp.proved))
         .with_metadata(tx_meta)
         .with_attachments(ProofAttachmentList(vec![bad_attachment]))

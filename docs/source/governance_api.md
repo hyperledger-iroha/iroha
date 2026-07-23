@@ -43,32 +43,33 @@ Endpoints
     - `mode`, when supplied, must be `Zk` or `Plain`.
   - Submission model: this endpoint is draft-first. `private_key` is rejected because governance server-side signing is disabled; clients should consume `tx_instructions`, sign locally, and submit via `/v1/pipeline/transactions`.
 
-Contracts API (deploy)
-- POST `/v1/contracts/deploy`
-  - Request: { "authority": "<i105-account-id>", "private_key": "…", "code_b64": "…", "contract_alias": "router::universal", "lease_expiry_ms": 1735689600000? }
-  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes the domain-separated `code_hash` over the complete artifact including the fixed IVM execution header and `abi_hash` from the enforced ABI policy, derives a fresh immutable `contract_address` from `(chain_discriminant, authority, deploy_nonce, dataspace(contract_alias))`, then submits `RegisterSmartContractBytes`, `RegisterSmartContractCode`, `ActivateContractInstance`, `SetContractAlias::bind`, and the deploy-nonce bump on behalf of `authority`.
-  - Redeploying the same `contract_alias` is the public `kaizen`/`改善` path: Torii clears the old alias binding, deactivates the retired address, binds the alias to the new address, and reports `previous_contract_address` plus `kaizen = true`.
-  - Response: `DeployContractBundleReceiptDto`; the single-contract shortcut returns the canonical bundle receipt with one entry in `contracts[]`.
-  - Related:
-    - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
-    - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
-  - Notes:
-    - this public shortcut is alias-first and is intended for public/unprotected dataspaces;
-    - runtime calls no longer resend bytecode or manifests on each invocation; once deployed, `/v1/contracts/call` references the active contract by address; and
-    - protected-namespace deployment remains governed by the proposal/metadata flow (`gov_contract_address`, enacted proposal tuple, quorum metadata) rather than by a separate public `/v1/contracts/instance*` shortcut.
+Contracts API (locally signed deployment)
+- Torii does not expose a server-side deployment endpoint and never accepts a
+  deployment private key.
+- Clients upload/finalize bytecode, register a locally signed manifest, and
+  submit `CommitContractDeployment` through the standard transaction pipeline.
+- Client tooling records the result as `DeployContractBundleReceiptDto`: its
+  `contracts[]` entries preserve the per-contract address, hashes, nonce, and
+  outcome instead of flattening a multi-contract deployment into one response.
+- The commit instruction atomically checks the expected deployment nonce and
+  previous alias target before activation or rotation.
+- Related reads:
+  - GET `/v1/contracts/code/{code_hash}` → stored manifest
+  - GET `/v1/contracts/code-bytes/{code_hash}` → `{ code_b64 }`
+
 Alias Service
 - POST `/v1/aliases/resolve`
   - Request: { "alias": "merchant@paynet" }
   - Response: { "alias": "merchant@paynet", "account_id": "<i105-account-id>", "index": 12, "source": "on_chain" }
-  - Notes: Torii routes the lookup through the Nexus read proxy using the alias dataspace encoded in the literal, so `merchant@paynet` can be resolved through any configured Nexus ingress instead of only the PAYNET-local Torii surface. Public/unsigned requests remain allowed for ordinary public alias resolution. Returns HTTP `403` with `ErrorEnvelope.code = "permission_denied"` only when the routed dataspace blocks the lookup and no allowed route can resolve it; returns `404` when reachable routes miss and `503` when no route can be reached.
+  - Notes: This is an exact public mapping, not a search endpoint. The request must contain the canonical fully-qualified alias. Torii routes through the alias dataspace, independently rate-limits the route, and accepts unsigned requests. If canonical-signature headers are supplied they must verify; invalid or partial signing headers never downgrade to anonymous access. Returns `404` for an unknown exact alias and `503` when its authoritative route cannot be reached.
 - POST `/v1/aliases/resolve-index`
   - Request: { "index": 0 }
   - Response: { "index": 0, "alias": "merchant@paynet", "account_id": "<i105-account-id>", "source": "fanout" }
-  - Notes: Because the index alone does not encode a dataspace, Torii fans this lookup out across every configured dataspace route, dedupes identical results, and returns `source = "fanout"` when the response comes from multi-route merging. Returns `409 route_conflict` if multiple dataspaces return incompatible bindings for the same index, `403 permission_denied` if only blocked routes could resolve it, `404` when all reachable routes miss, and `503` when no route can be reached.
+  - Notes: Canonical request signing is required. Because the index alone does not encode a dataspace, Torii fans this lookup out across the signed caller's visible dataspace routes, dedupes identical results, and returns `source = "fanout"` when the response comes from multi-route merging. Returns `409 route_conflict` if multiple dataspaces return incompatible bindings, `403` for missing/invalid signing or inaccessible routes, `404` when reachable routes miss, and `503` when no route can be reached.
 - POST `/v1/aliases/by-account`
   - Request: { "account_id": "<i105-account-id>", "dataspace": "paynet"?, "domain": "merchant"?" }
   - Response: { "account_id": "<i105-account-id>", "total": 2, "items": [{ "alias": "merchant@paynet", "dataspace": "paynet", "domain": null, "is_primary": false }], "source": "fanout" }
-  - Notes: Torii routes the lookup through the target-account dataspace set, merges deduplicated alias rows across reachable dataspaces, and recomputes `total` after merging. If one or more routes are denied but another route succeeds, Torii still returns `200` and includes the usual routing diagnostics headers plus an HTTP `Warning` header. Returns `403 permission_denied` only when no allowed route can return aliases, `404` when reachable routes miss, and `503` when no route can be reached.
+  - Notes: This is the exact public reverse mapping for one canonical I105 account, not prefix/index enumeration. Torii queries the target account's routes, merges and deterministically sorts at most 64 deduplicated public alias rows, and recomputes `total`. The route is independently rate limited and accepts unsigned requests; supplied canonical-signature headers must verify. Returns `404` when the exact account has no reachable alias result, `409` for conflicting account roots, and `503` when no route can be reached.
 
 Code Size Cap
 - Custom parameter: `max_contract_code_bytes` (JSON u64)

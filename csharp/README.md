@@ -31,15 +31,11 @@ This initial slice provides the foundation needed for a usable managed SDK:
   signature, and public-key copies after use or failure
 - a `LedgerClient` plus `TransactionBuilder` that can build, sign, and submit canonical asset/domain/asset-definition/NFT transfer transactions, asset mint/burn transactions, `SetAssetKeyValue`, `RemoveAssetKeyValue`, `SetDomainKeyValue`, `RemoveDomainKeyValue`, `SetAccountKeyValue`, `RemoveAccountKeyValue`, `SetAssetDefinitionKeyValue`, `RemoveAssetDefinitionKeyValue`, `SetNftKeyValue`, `RemoveNftKeyValue`, `SetTriggerKeyValue`, `RemoveTriggerKeyValue`, `MintTriggerRepetitions`, `BurnTriggerRepetitions`, and `ExecuteTrigger` transactions with deterministic hashes and pipeline-status polling
 - managed transaction builders and Norito encoders validate exact chain/account/asset/domain/NFT/trigger/metadata/numeric/hash boundary fields before signing, including canonical I105 transaction authorities and account-bearing instruction fields, noncanonical numeric aliases such as signed positives, exponent notation, missing integer/fraction digits, leading integer zeros, trailing fractional zeros, negative values, scale overflow, and 512-bit mantissa overflow; asset transfer/mint/burn inputs are stored as nominal `NumericV1.QuantityValue` instances and accept only canonical non-negative V1 quantity strings or the validated lossless type, transaction creation times must be positive Unix milliseconds, and trigger repetition mints/burns must be positive before signing; JSON metadata values remain free-form but are defensively snapshotted by transaction builders and JSON-bearing instruction records so later caller mutation cannot alter signed payloads, public transaction-builder instruction/metadata accessors return detached snapshots, and signed transaction/query envelopes defensively copy all exposed byte arrays while rejecting empty, mismatched, malformed encoded-body, or wrong-size direct constructor byte fields before callers submit or trust them
-- typed Torii runtime and account-query models for capabilities, ABI, account pages, explorer account/domain/asset inventory pages and details, explorer QR snapshots, explorer asset-definition econometrics and holder snapshots, explorer block/transaction/instruction pages, details, latest snapshots, health, metrics, and instruction contract-view reads, typed contract metadata/code-bytes/instance/state reads, write-side contract deploy/instance-activate/call/multisig propose/approve helpers, verifying-key registry register/update helpers, read-only contract-view execution under `/v1/contracts/view`, typed verified-source job submit/status helpers, typed contract code-view reads under `/v1/contracts/code/{code_hash}/contract-view`, asset balances, transaction summaries, permissions, identifier policy listing, identifier resolution, reverse alias lookup, account and contract alias resolution, alias-index lookup, account onboarding, faucet puzzle and claim flows, multisig onboarding, UAID portfolio reads, and space-directory bindings and manifest inventory reads; node capabilities responses plus raw node capability DTO deserialization reject null nested capability objects, duplicate/type-confused capability fields, duplicate keys inside ignored capability extension JSON, missing or malformed signed-transaction schema hashes, missing or malformed query/projection capability adverts, drifted query projection constants/feature flags, missing or malformed crypto capability labels/lists, duplicate or missing control-plane signing labels, SM2/default-hash mismatches, inconsistent SM acceleration adverts, inconsistent curve allowlist id/bitmap pairs, non-`1` ABI versions, and negative data-model values; runtime metadata responses and raw runtime metadata DTO deserialization reject duplicate raw runtime properties at any nested depth, missing runtime ABI version/policy/hash fields, malformed runtime ABI policy/hash text, negative runtime counters, and inconsistent runtime upgrade counter totals; onboarding requests require an explicit canonical UAID, exactly one account material field (`account_id` or `public_key_hex`), canonical I105 `account_id` values when supplied, digest-only `identity_commitment_hex` instead of raw identity metadata, exact permissions, canonical I105 multisig member account ids, and checked multisig member/weight shapes before HTTP dispatch; faucet puzzle responses and raw faucet puzzle DTO deserialization reject missing or non-exact PoW algorithms and anchor hashes, duplicate raw properties, duplicate keys inside ignored puzzle extension JSON, malformed numeric shapes, malformed salt hex, and unsafe scrypt parameters before solving, and direct faucet-puzzle DTO construction rejects malformed algorithms, anchors, hashes, salts, age windows, and scrypt work factors; onboarding, faucet, contract-call, and multisig responses plus raw onboarding/faucet DTO deserialization reject duplicate/type-confused envelopes, duplicate keys inside ignored onboarding/faucet response extension JSON, missing or noncanonical onboarding/faucet account ids, malformed UAID, asset, amount, and status strings, and non-exact non-empty transaction hashes before callers trust queued or executed transaction ids, and direct onboarding/faucet response DTO construction rejects malformed account ids, UAID, asset, amount, status, and transaction hash metadata; UAID route literals and UAID portfolio asset filters reject padded, whitespace-containing, and control-character values before dispatch while still canonicalizing accepted bare/`uaid:` hex casing, and UAID portfolio/bindings/manifest responses plus raw UAID DTO deserialization reject duplicate/type-confused envelopes, duplicate keys inside ignored UAID portfolio/bindings/manifest extension JSON, noncanonical UAID literals, noncanonical nested account ids, malformed nested dataspace/asset text, noncanonical quantities, null nested lists/items, non-exact manifest hashes, duplicate object keys inside preserved manifest JSON, and negative counters before callers trust space-directory inventory; contract write and multisig propose/approve requests validate exact selectors, aliases, signer material, canonical I105 contract authorities, contract-call fee sponsors, and multisig fee sponsors, canonical I105 explicit multisig account selectors and signer account ids, canonical base64 frames, 32-byte hashes, and positive gas limits before HTTP dispatch, deploy/activation responses plus raw deployment/activation DTO deserialization reject false `ok` envelopes, duplicate/type-confused fields, duplicate keys inside ignored deployment/activation extension JSON, missing or malformed deploy nonces, missing or non-exact returned contract address, dataspace, namespace, contract id, and deployment hash material, contract-call responses plus raw contract-call DTO deserialization reject false `ok` envelopes, duplicate/type-confused fields, duplicate keys inside ignored contract-call extension JSON, non-exact returned dataspace/contract-id/address/entrypoint text, returned code/ABI/transaction hashes, creation-time counters, and canonical scaffold/signed-transaction/signing-message base64 material, contract-view success responses plus raw success DTO deserialization reject false `ok` envelopes, duplicate/type-confused fields, duplicate keys inside ignored contract-view success extension JSON, non-exact returned dataspace/contract-id/address/entrypoint text and returned code/ABI hashes while preserving opaque non-duplicate result JSON, contract-view error responses plus raw error/VM-diagnostic DTO deserialization reject true `ok` envelopes, duplicate/type-confused fields, duplicate keys inside ignored error/VM-diagnostic extension JSON, non-exact returned dataspace/contract-id/address/entrypoint/error text, VM diagnostic text/counter inconsistencies, missing VM diagnostic counters/flags, non-positive VM diagnostic gas/cycle/stack limits, and returned code/ABI hashes, generic and contract-call multisig responses plus raw multisig response DTO deserialization reject false `ok` envelopes, duplicate/type-confused fields, duplicate keys inside ignored multisig extension JSON, noncanonical I105 resolved multisig account ids, non-exact proposal ids, instructions hashes, transaction hashes, creation-time counters, and canonical `signing_message_b64` text before callers trust returned signing material, and contract deploy uses Torii's current `contract_alias` request field; contract read/admin routes validate exact 32-byte code hashes, namespace/job ids, state paths, and instance/state query filters, including positive limits, before HTTP dispatch, contract metadata/code-view/verified-source/runtime-ABI responses plus raw contract manifest/code-view/source-reference/job DTO deserialization reject duplicate/type-confused manifests, access hints, entrypoints, params, analysis/memory/syscall counters, verified-source refs and jobs, non-exact returned hash fields and runtime ABI policy labels, missing or non-exact instance inventory namespace/contract-id text, inconsistent instance pagination counters, missing or malformed verified-source job ids/status/timestamps/messages, nested verified-source provenance digests/text, and malformed code-view permissions, access hints, entrypoints, analysis/syscall lists, warnings, and rendered-source fields, contract code-byte responses reject non-exact `code_b64` before returning code material, and contract state responses reject missing or non-exact entry paths/path-list elements, non-exact path/prefix/decode-error text, malformed/null state entries, duplicate object keys inside decoded `value_json`, not-found entries carrying value material, stale `next_offset`, over-limit item counts, non-exact `value_b64`, and mismatched decoded lengths before returning state material
+- typed Torii runtime and account-query models for capabilities, ABI, account pages, explorer inventory, contract reads and writes, identifier and alias resolution, sponsored account-onboarding plan/receipt apply, faucet flows, multisig transaction proposals, UAID portfolios, and space-directory inventory. Sponsored onboarding accepts only a versioned secret-free alias/account intent, requires explicit authority and chain pins plus a canonical Norito body encoder, recomputes the receipt hash before validating the authority signature, and applies the exact receipt through the ordinary onboarding endpoint; there is no direct-request or multisig-specific onboarding route. Faucet, account-query, contract, multisig, explorer, and UAID models retain their strict canonical identifiers, hashes, quantities, duplicate-field rejection, and pagination consistency checks before callers submit or trust data.
 - direct generic and contract-call multisig response DTO construction rejects
   false `ok`, malformed resolved account ids, proposal/instruction hashes,
   transaction hashes, creation times, and signing-message base64 before callers
   can serialize or trust manually constructed signing material
-- direct contract deploy, deploy-and-activate, and activate response DTO
-  construction rejects false `ok`, malformed contract addresses, dataspace,
-  namespace, contract id, and code/ABI hash metadata before callers can
-  serialize or trust manually constructed deployment results
 - direct contract-call, contract-view success, contract-view error, and
   contract-view VM diagnostic response DTO construction rejects malformed
   `ok` envelopes, dataspace/contract-id/address/entrypoint/error text,
@@ -83,11 +79,19 @@ This initial slice provides the foundation needed for a usable managed SDK:
   aggregate resources, projection metadata keys, and export resources while
   preserving malformed null/missing list rejection in raw converters
 - raw contract instance inventory DTO deserialization shares the same fail-closed checks as `ToriiClient`, rejecting null, duplicate, or type-confused list/item fields, duplicate keys inside ignored instance/response extension JSON, missing or malformed unsigned counters, missing or non-exact namespace/contract-id/code-hash text, and inconsistent pagination counters before callers trust instance listings
-- account and multisig onboarding request DTOs snapshot permission, member
-  account, and member-weight lists on assignment and access, and direct
-  permission/member-account list initialization rejects null elements; multisig
-  normalization also copies the member lists into dispatch snapshots before
-  HTTP serialization
+- sponsored onboarding uses only the secret-free
+  `ToriiAccountOnboardingPlanRequest` followed by receipt-only apply; both
+  calls require explicit authority and chain pins plus a canonical Norito body
+  encoder, recompute the signed receipt hash before dispatch, and reject request
+  substitution. The
+  dedicated `X-Iroha-Onboarding-Token` argument remains 32–256 printable ASCII
+  bytes, stays separate from global API authentication, is emitted exactly
+  once outside the JSON body, and is never replayed across redirects. There is
+  no direct-registration overload or multisig-specific onboarding route.
+
+When injecting a custom `HttpClient`, configure its underlying
+`HttpClientHandler.AllowAutoRedirect` to `false`; redirect policy belongs to the
+injected transport and cannot be changed after `HttpClient` construction.
 - multisig propose/approve helpers reject zero `creation_time_ms` when supplied, and generic/contract-call multisig response DTOs reject zero returned `creation_time_ms` before callers trust signing material
 - native multisig propose instruction-list DTOs snapshot assigned arrays, return
   detached arrays on access, reject null instruction elements during direct
@@ -100,7 +104,9 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - contract state query/response path-list DTOs snapshot assigned arrays and
   return detached arrays on access while preserving nullable single-path,
   path-list, and prefix query modes
-- raw contract deploy and state response DTO deserialization requires returned `deploy_nonce`, `offset`, and `limit` counters to be present instead of defaulting absent wire fields to trusted zero values
+- raw contract state response DTO deserialization requires returned `offset` and
+  `limit` counters to be present instead of defaulting absent wire fields to
+  trusted zero values
 - raw contract-view VM diagnostic DTO deserialization requires returned
   gas/cycle/stack limit fields to be present instead of defaulting absent limit
   fields to trusted zero values
@@ -132,8 +138,8 @@ This initial slice provides the foundation needed for a usable managed SDK:
   account permissions, account transactions, and by-account alias lookup items
   while preserving malformed null/missing list rejection in raw converters
 - Torii DTOs that expose arbitrary JSON nodes snapshot assigned `JsonNode` and
-  `JsonObject` values and return detached clones on access for onboarding
-  identity, account permission payloads, explorer metadata/rejection/instruction
+  `JsonObject` values and return detached clones on access for account
+  permission payloads, explorer metadata/rejection/instruction
   payloads, UAID manifests, identifier parameter/signature payloads, contract
   state/view/call payloads, multisig contract-call payloads, and SSE JSON data
 - raw explorer block, transaction, and instruction page/latest DTO deserialization requires pagination, item lists, latest sample timestamps, summary creation timestamps, and unsigned projection counters to be present instead of defaulting absent page envelopes, item arrays, block height, transaction block, instruction block/index, block transaction-count, or summary `created_at` fields to trusted zero/empty values
@@ -161,7 +167,7 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - raw faucet puzzle DTO deserialization requires algorithm, anchor hash, and
   numeric challenge/work-factor fields to be present instead of defaulting
   absent PoW parameters to trusted empty/zero values
-- raw account transaction, account-alias lookup, VPN profile, contract deploy,
+- raw account transaction, account-alias lookup, VPN profile,
   contract-call/view, and contract-state DTO deserialization requires returned
   boolean fields to be present instead of defaulting absent wire fields to
   trusted `false` values
@@ -375,6 +381,22 @@ This initial slice provides the foundation needed for a usable managed SDK:
 
 Broader iterable families beyond the current fast_dsl subset, richer typed event coverage beyond the current pipeline/proof/explorer SSE projections, broader contract admin/lifecycle helpers beyond deploy/activate/call/multisig plus verified-source job helpers, Connect, Nexus, and the remaining parity work are still planned.
 
+## Kagemusha Torii transport
+
+The managed SDK exposes the unchanged Kagemusha routes through
+`GetKagemushaReadinessV4Async`, `SubmitKagemushaTopUpV4Async`,
+`SubmitKagemushaRedeemV4Async`, and `GetKagemushaOperationStatusAsync`.
+Readiness accepts bridge ABI 21 and the manifest-V4 Eq/Ep verifier identity;
+ABI-19 and V3 projections fail instead of being upgraded.
+
+The C# surface is transport-only and does not claim a native prover. Top-up and
+redemption methods accept bounded canonical Norito archives created by a
+supported wallet/prover implementation, snapshot the bytes, and bind
+`Idempotency-Key` to the signed operation id. Witness construction, recursive
+artifact installation, and device-key handling remain outside this SDK. The
+transport accepts at most 512 KiB for top-up and 48 MiB for redemption, matching
+Torii's route-specific request limits.
+
 `CreateVpnQuoteAsync(...)`, `CreateVpnSessionAsync(...)`,
 `SubmitVpnReceiptAsync(...)`, and `DeleteVpnSessionAsync(...)` call signed Torii
 routes, so set `ToriiClientOptions.CanonicalRequestCredentials` with a
@@ -509,12 +531,66 @@ Optional live-smoke environment variables:
 - `IROHA_CSHARP_SMOKE_SORAFS_CID` and optional `IROHA_CSHARP_SMOKE_SORAFS_PATH` to also probe `/v1/sorafs/cid/{cid}` plus `/sorafs/cid/{cid}/...`
 - `IROHA_CSHARP_CANONICAL_ACCOUNT_ID` plus `IROHA_CSHARP_PRIVATE_KEY_SEED_HEX` to also create a signed VPN quote and verify that Torii returns an `OpenVpnLeaseEscrow` instruction skeleton
 
+## Fee quotes and sponsor programs
+
+Every `TransactionBuilder` requires a `FeePaymentIntent`. The guided ledger
+flow freezes the unsigned payload, account-signs `POST /v1/fees/quote`, verifies
+that the quote retained the payer, exact sponsor program/revision, and gas
+bound, then replaces only the charge maxima before signing:
+
+```csharp
+using Hyperledger.Iroha.Transactions;
+
+var requested = FeePaymentIntent.Sponsor(
+    new FeeSponsorProgramId(sponsorAccountId, "wallet_payments"),
+    programRevision: 3,
+    chargeLimits: Array.Empty<FeeChargeLimit>());
+
+var transaction = client.Ledger
+    .BuildTransaction(chainId, authorityAccountId, requested)
+    .TransferAsset(assetId, NumericV1.QuantityValue.ParseCanonical("1"), destinationAccountId)
+    .SetCreationTime(DateTimeOffset.UtcNow)
+    .SetTimeToLiveMilliseconds(30_000);
+
+var quoted = await client.Ledger.QuoteAndSignAsync(transaction, privateKeySeed);
+```
+
+Configure `ToriiClientOptions.CanonicalRequestCredentials` for the same
+authority before calling the guided flow. Use
+`client.Torii.GetFeeSponsorProgramAsync(programId)` to inspect one exact
+lifecycle record. Contract/IVM intents also require a positive gas bound.
+Metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and
+rejected, and sponsor rejection never falls back to the authority.
+
+### Atomic mixed executable batches
+
+Append native instructions and deployed-contract calls to the same builder in
+their intended execution order:
+
+```csharp
+var transaction = client.Ledger
+    .BuildTransaction(chainId, authorityAccountId, feeIntentWithGasLimit)
+    .AddInstruction(registerInstruction)
+    .AddContractCall(new TransactionContractInvocation(
+        contractAddress,
+        expectedCodeHash,
+        "apply",
+        argumentRecord))
+    .AddInstruction(transferInstruction);
+```
+
+The builder emits `Executable::Batch` as soon as a contract call is present.
+The node applies all items atomically, and the batch shares one positive,
+signature-bound gas limit. Empty batches and noncanonical contract addresses
+are rejected before signing; contract addresses must use lowercase V1 Bech32m.
+
 ## Sample
 
 ```csharp
 using Hyperledger.Iroha;
 using Hyperledger.Iroha.Numeric;
 using Hyperledger.Iroha.Torii;
+using Hyperledger.Iroha.Transactions;
 
 using var client = new IrohaClient(new Uri("https://taira.sora.org"));
 try
@@ -533,17 +609,23 @@ try
     // var seedHex = Environment.GetEnvironmentVariable("IROHA_CSHARP_PRIVATE_KEY_SEED_HEX");
     // if (!string.IsNullOrWhiteSpace(seedHex))
     // {
-    //     var signed = client.Ledger
-    //         .BuildTransaction("00000042", accounts.Items[0].Id)
+    //     var transaction = client.Ledger
+    //         .BuildTransaction(
+    //             "00000042",
+    //             accounts.Items[0].Id,
+    //             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
     //         .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", NumericV1.QuantityValue.ParseCanonical("1"), accounts.Items[0].Id)
     //         .SetCreationTime(DateTimeOffset.UtcNow)
     //         .SetTimeToLiveMilliseconds(5_000)
-    //         .SetNonce(1)
-    //         .BuildSigned(Convert.FromHexString(seedHex));
+    //         .SetNonce(1);
+    //     // Configure matching CanonicalRequestCredentials on the client first.
+    //     var signed = await client.Ledger.QuoteAndSignAsync(
+    //         transaction,
+    //         Convert.FromHexString(seedHex));
     //
-    //     Console.WriteLine($"Signed tx hash: {signed.TransactionHashHex}");
-    //     // await client.Ledger.SubmitAsync(signed);
-    //     // var status = await client.Ledger.WaitForAsync(signed.TransactionHashHex);
+    //     Console.WriteLine($"Signed tx hash: {signed.Transaction.TransactionHashHex}");
+    //     // await client.Ledger.SubmitAsync(signed.Transaction);
+    //     // var status = await client.Ledger.WaitForAsync(signed.Transaction.TransactionHashHex);
     // }
 }
 catch (ToriiApiException exception)

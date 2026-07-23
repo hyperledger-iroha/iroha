@@ -8,6 +8,11 @@ on:
       - "scripts/build_norito_xcframework.sh"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/check_kotlin_no_reflection.sh"
+      - "scripts/build_kagemusha_candidate_android_native.sh"
+      - "scripts/run_kagemusha_candidate_android_lab.sh"
+      - "ci/check_kagemusha_candidate_android_lab.sh"
+      - "ci/check_kagemusha_candidate_android_lab_compile.sh"
       - "scripts/package_mobile_sdk_artifacts.sh"
       - "IrohaSwift/**"
       - "kotlin/**"
@@ -47,7 +52,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Shell syntax
-        run: bash -n scripts/build_norito_xcframework.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh
+        run: bash -n ci/check_kagemusha_candidate_android_lab.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh
+      - name: Kotlin production reflection guard
+        run: scripts/check_kotlin_no_reflection.sh
+      - name: Candidate Android lab isolation contract
+        run: ci/check_kagemusha_candidate_android_lab.sh
       - name: Artifact checker fixture tests
         run: bash scripts/check_mobile_sdk_artifacts_test.sh
 
@@ -154,6 +163,8 @@ jobs:
         run: |
           rustup target add aarch64-linux-android x86_64-linux-android
           cargo install cargo-ndk --locked
+      - name: Compile candidate Android lab main and instrumentation sources only
+        run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Build Android native bridge libraries
         working-directory: kotlin
         run: ./gradlew :client-android:buildNativeLibs

@@ -1875,7 +1875,7 @@ mod tests {
             provider_id: provider_id.as_bytes().to_owned(),
             stake: StakePointer {
                 pool_id: [0xAA; 32],
-                stake_amount: 42,
+                stake_amount: "42".parse().expect("canonical stake quantity"),
             },
             committed_capacity_gib: 1_024,
             chunker_commitments: vec![ChunkerCommitmentV1 {

@@ -21,7 +21,7 @@ use std::{
     num::NonZeroUsize,
 };
 
-use iroha_crypto::{HashOf, KeyPair, Signature};
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{ChainId, block::consensus_v2 as wire, peer::PeerId};
 use thiserror::Error;
 
@@ -32,8 +32,17 @@ use super::v2_transport::{
     authenticate_commit_certificate_request_identity,
 };
 use super::{
-    v2::verify_persisted_quorum_certificate, v2_chunks::encode_payload,
+    v2::verify_persisted_quorum_certificate,
+    v2_chunks::encode_payload,
     v2_context_store::V2ContextStore,
+    v2_core::{
+        CanonicalIdentityProjection, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_PAYLOAD,
+        IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST, IDENTITY_KIND_CONSENSUS_MESSAGE,
+        IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+        ProductionHistoricalCertificateTraceProjection,
+        production_historical_certificate_trace_refines_indexed_async_kernel,
+    },
+    v2_effects::CommitCertificateReducerAdmission,
 };
 use crate::kura::Kura;
 
@@ -452,11 +461,73 @@ impl V2BlockSyncDiscovery {
         enqueue: Enqueue,
     ) -> Result<(), CommitCertificateAdmissionError<EnqueueError>>
     where
-        Enqueue: FnOnce(wire::ConsensusMessageV2) -> Result<(), EnqueueError>,
+        Enqueue: FnOnce(
+            wire::ConsensusMessageV2,
+        ) -> Result<CommitCertificateReducerAdmission, EnqueueError>,
     {
-        enqueue(discovered.message()).map_err(CommitCertificateAdmissionError::Enqueue)?;
+        let message = discovered.message();
+        let request_hash = discovered.request_hash;
+        let response_request_hash = discovered.response.request_hash;
+        let certificate = discovered.response.certificate.clone();
+        let request_present_before = self.outstanding.contains(request_hash);
+        let admission =
+            enqueue(message.clone()).map_err(CommitCertificateAdmissionError::Enqueue)?;
+        if !admission.matches(&message) {
+            return Err(CommitCertificateAdmissionError::MismatchedReducerAdmission);
+        }
+        let admitted_message_hash = admission.refinement_projection();
         if !self.complete(discovered) {
             return Err(CommitCertificateAdmissionError::RequestDisappeared);
+        }
+        let historical_trace = ProductionHistoricalCertificateTraceProjection {
+            context_id: historical_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                self.context.id().0,
+            ),
+            context_height: self.context.height,
+            certificate_context_id: historical_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                certificate.round.context_id.0,
+            ),
+            certificate_height: certificate.round.height,
+            request_hash: historical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST,
+                request_hash,
+            ),
+            response_request_hash: historical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST,
+                response_request_hash,
+            ),
+            response_certificate: historical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_QUORUM_CERTIFICATE,
+                HashOf::new(&certificate),
+            ),
+            message_certificate: match &message.payload {
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                    historical_typed_identity(
+                        IDENTITY_DOMAIN_PAYLOAD,
+                        IDENTITY_KIND_QUORUM_CERTIFICATE,
+                        HashOf::new(certificate),
+                    )
+                }
+                _ => CanonicalIdentityProjection::zero(),
+            },
+            message_hash: historical_typed_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CONSENSUS_MESSAGE,
+                HashOf::new(&message),
+            ),
+            admitted_message_hash,
+            request_present_before,
+            request_present_after: self.outstanding.contains(request_hash),
+        };
+        if !production_historical_certificate_trace_refines_indexed_async_kernel(historical_trace) {
+            return Err(CommitCertificateAdmissionError::RefinementRejected);
         }
         Ok(())
     }
@@ -466,6 +537,14 @@ impl V2BlockSyncDiscovery {
     pub(crate) fn outstanding_len(&self) -> usize {
         self.outstanding.len()
     }
+}
+
+fn historical_typed_identity<T>(
+    domain: u8,
+    kind: u8,
+    hash: HashOf<T>,
+) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
 }
 
 /// Serve a signed request from a canonical historical Kura finality artifact.
@@ -715,17 +794,25 @@ pub(crate) enum V2BlockSyncError {
 pub(crate) enum CommitCertificateAdmissionError<E> {
     /// The serialized reducer queue rejected or deferred the message.
     Enqueue(E),
+    /// The callback returned reducer ownership for a different canonical message.
+    MismatchedReducerAdmission,
     /// The exact request disappeared between authentication and serialized enqueue.
     RequestDisappeared,
+    /// The authenticated discovery handoff failed its shared pure refinement gate.
+    RefinementRejected,
 }
 
 impl<E: fmt::Display> fmt::Display for CommitCertificateAdmissionError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Enqueue(error) => write!(formatter, "CommitQC reducer enqueue failed: {error}"),
+            Self::MismatchedReducerAdmission => formatter
+                .write_str("CommitQC reducer admission belongs to a different canonical message"),
             Self::RequestDisappeared => formatter.write_str(
                 "CommitQC discovery request disappeared before reducer admission completed",
             ),
+            Self::RefinementRejected => formatter
+                .write_str("CommitQC discovery failed its exact historical refinement gate"),
         }
     }
 }
@@ -734,7 +821,8 @@ impl<E> std::error::Error for CommitCertificateAdmissionError<E> where E: std::e
 {}
 
 #[cfg(test)]
-mod tests {
+/// Shared deterministic fixtures for sibling Sumeragi v2 unit tests.
+pub(super) mod tests {
     use std::{cell::Cell, num::NonZeroU64, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash};
@@ -804,6 +892,11 @@ mod tests {
             };
             let mut commit_qc = wire::QuorumCertificate {
                 round: wire::ConsensusRound {
+                    context_id: context.id(),
+                    height: context.height,
+                    view: 7,
+                },
+                proposal_round: wire::ConsensusRound {
                     context_id: context.id(),
                     height: context.height,
                     view: 7,
@@ -878,7 +971,7 @@ mod tests {
 
         fn body_request(&self, certificate: wire::QuorumCertificate) -> wire::CertifiedBodyRequest {
             let mut request = wire::CertifiedBodyRequest {
-                round: certificate.round,
+                round: certificate.proposal_round,
                 subject: certificate.subject,
                 certificate,
                 requester: peer(&self.requester),
@@ -916,6 +1009,7 @@ mod tests {
     fn aggregate_commit(certificate: &wire::QuorumCertificate, keys: &[KeyPair]) -> Vec<u8> {
         let preimage = wire::Vote {
             round: certificate.round,
+            proposal_round: certificate.proposal_round,
             phase: certificate.phase,
             subject: certificate.subject,
             execution_commitment: certificate.execution_commitment,
@@ -951,6 +1045,137 @@ mod tests {
             .to_vec();
     }
 
+    /// Exact historical source and responses shared with worker rollover tests.
+    pub(in crate::sumeragi) struct DurableHistoryFixture {
+        /// Kura containing the canonical block and finality artifact.
+        pub(in crate::sumeragi) kura: Arc<Kura>,
+        /// Historical finality artifact at height one.
+        pub(in crate::sumeragi) artifact: wire::finality::V2FinalityArtifact,
+        /// Historical validator keys used only by deterministic tests.
+        pub(in crate::sumeragi) validators: Vec<KeyPair>,
+        /// Authenticated requester targeted by both responses.
+        pub(in crate::sumeragi) requester: PeerId,
+        /// Signed CommitQC response reconstructed from the finality artifact.
+        pub(in crate::sumeragi) commit_response: wire::ConsensusMessageV2,
+        /// Signed body response reconstructed from the canonical block.
+        pub(in crate::sumeragi) body_response: wire::ConsensusMessageV2,
+    }
+
+    /// Build exact Kura-backed historical responses for worker rollover tests.
+    pub(in crate::sumeragi) fn durable_history_fixture() -> DurableHistoryFixture {
+        let fixture = Fixture::new();
+        let committed = ValidBlock::new_dummy_and_modify_header(
+            fixture.old_validators[0].private_key(),
+            |header| {
+                header.set_height(NonZeroU64::new(1).expect("non-zero height"));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(4);
+                header.merkle_root = None;
+            },
+        )
+        .commit_unchecked()
+        .unpack(|_| {});
+        let mut executed_block: iroha_data_model::block::SignedBlock = committed.into();
+        executed_block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("attach deterministic history-fixture results");
+        let executed_block_wire_hash = executed_block
+            .executed_block_wire_hash()
+            .expect("encode executed history-fixture block");
+        let proposal = executed_block.canonical_resultless_proposal();
+        let canonical_wire = proposal
+            .encode_wire()
+            .expect("encode history-fixture proposal");
+        let block = Arc::new(executed_block);
+        let mut context = fixture.context.clone();
+        context.da_layout.max_payload_size_bytes = 1_048_576;
+        context.da_layout.max_chunk_count = 1024;
+        context.validate().expect("valid history-fixture context");
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: block.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let mut execution = execution_commitment(0x43);
+        execution.executed_block_wire_hash = executed_block_wire_hash;
+        let mut certificate = wire::QuorumCertificate {
+            round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 4,
+            },
+            proposal_round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 4,
+            },
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: execution,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        certificate.aggregate_signature = aggregate_commit(&certificate, &fixture.old_validators);
+        let artifact = wire::finality::V2FinalityArtifact::new(
+            context.clone(),
+            subject,
+            certificate.clone(),
+            fixture.proofs_of_possession.clone(),
+        );
+        artifact.validate().expect("valid history-fixture finality");
+
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(block)
+            .expect("store history-fixture block");
+        let _receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("store history-fixture finality");
+        let context_store =
+            V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("history context store");
+        let verified =
+            VerifiedHeightContext::genesis(context.clone(), fixture.proofs_of_possession.clone())
+                .expect("verify history-fixture context");
+        context_store
+            .persist(&PersistedHeightContext::from_verified(&verified))
+            .expect("persist history-fixture context");
+
+        let requester = peer(&fixture.requester);
+        let mut commit_request = wire::CommitCertificateRequest {
+            protocol_version: wire::PROTOCOL_VERSION,
+            chain_id: context.chain_id.clone(),
+            context_id: context.id(),
+            height: context.height,
+            requester: requester.clone(),
+            signature: Vec::new(),
+        };
+        resign_request(&mut commit_request, &fixture.requester);
+        let commit_response = serve_commit_certificate_from_artifact(
+            &artifact,
+            commit_request,
+            &requester,
+            &fixture.old_validators[0],
+        )
+        .expect("build durable CommitQC response");
+        let body_request = fixture.body_request(certificate);
+        let body_response = build_historical_body_response(
+            kura.as_ref(),
+            &context_store,
+            body_request,
+            &requester,
+            &fixture.old_validators[0],
+        )
+        .expect("build durable body response")
+        .expect("history fixture has a certified responder");
+        DurableHistoryFixture {
+            kura,
+            artifact,
+            validators: fixture.old_validators,
+            requester,
+            commit_response,
+            body_response,
+        }
+    }
+
     #[test]
     fn discovery_outputs_only_normal_commit_qc_ingress_and_waits_for_enqueue() {
         let fixture = Fixture::new();
@@ -965,7 +1190,7 @@ mod tests {
             ))
         );
 
-        let response = fixture.response(request);
+        let response = fixture.response(request.clone());
         let late_replay = response.clone();
         let discovered = discovery
             .authenticate_response(response, &peer(&fixture.rotated_responder))
@@ -977,8 +1202,9 @@ mod tests {
                 if certificate == &fixture.artifact.commit_qc
         ));
 
-        let rejected = discovery
-            .enqueue_and_complete(discovered.clone(), |_| Err::<(), _>("runtime backpressure"));
+        let rejected = discovery.enqueue_and_complete(discovered.clone(), |_| {
+            Err::<CommitCertificateReducerAdmission, _>("runtime backpressure")
+        });
         assert_eq!(
             rejected,
             Err(CommitCertificateAdmissionError::Enqueue(
@@ -987,11 +1213,29 @@ mod tests {
         );
         assert_eq!(discovery.outstanding_len(), 1);
 
+        let foreign_admission =
+            CommitCertificateReducerAdmission::for_test(&wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CommitCertificateRequest(request.clone()),
+            ));
+        let mismatched = discovery.enqueue_and_complete(discovered.clone(), |_| {
+            Ok::<_, &'static str>(foreign_admission)
+        });
+        assert_eq!(
+            mismatched,
+            Err(CommitCertificateAdmissionError::MismatchedReducerAdmission)
+        );
+        assert_eq!(
+            discovery.outstanding_len(),
+            1,
+            "foreign reducer ownership must not retire authenticated discovery"
+        );
+
         let mut enqueued = None;
         discovery
             .enqueue_and_complete(discovered, |message| {
+                let admission = CommitCertificateReducerAdmission::for_test(&message);
                 enqueued = Some(message);
-                Ok::<(), &'static str>(())
+                Ok::<_, &'static str>(admission)
             })
             .expect("successful reducer enqueue retires request");
         assert_eq!(discovery.outstanding_len(), 0);
@@ -1113,8 +1357,9 @@ mod tests {
             .authenticate_response(valid.clone(), &peer(&fixture.rotated_responder))
             .expect("transport authenticates before ordinary QC ingress");
         assert_eq!(
-            discovery
-                .enqueue_and_complete(invalid_aggregate, |_| { Err::<(), _>("invalid aggregate") }),
+            discovery.enqueue_and_complete(invalid_aggregate, |_| {
+                Err::<CommitCertificateReducerAdmission, _>("invalid aggregate")
+            }),
             Err(CommitCertificateAdmissionError::Enqueue(
                 "invalid aggregate"
             ))
@@ -1142,7 +1387,9 @@ mod tests {
             .authenticate_response(response_one.clone(), &peer(&fixture.rotated_responder))
             .expect("height-one response");
         height_one
-            .enqueue_and_complete(discovered_one, |_| Ok::<(), &'static str>(()))
+            .enqueue_and_complete(discovered_one, |message| {
+                Ok::<_, &'static str>(CommitCertificateReducerAdmission::for_test(&message))
+            })
             .expect("height one reducer admission");
 
         let mut context_two = fixture.context.clone();
@@ -1156,6 +1403,11 @@ mod tests {
         };
         let commit_two = wire::QuorumCertificate {
             round: wire::ConsensusRound {
+                context_id: context_two.id(),
+                height: 2,
+                view: 1,
+            },
+            proposal_round: wire::ConsensusRound {
                 context_id: context_two.id(),
                 height: 2,
                 view: 1,
@@ -1419,6 +1671,7 @@ mod tests {
             |header| {
                 header.set_height(NonZeroU64::new(1).expect("non-zero height"));
                 header.set_prev_block_hash(None);
+                header.set_view_change_index(4);
                 header.merkle_root = None;
             },
         )
@@ -1451,6 +1704,11 @@ mod tests {
         exact_execution_commitment.executed_block_wire_hash = executed_block_wire_hash;
         let mut certificate = wire::QuorumCertificate {
             round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: 1,
+                view: 4,
+            },
+            proposal_round: wire::ConsensusRound {
                 context_id: context.id(),
                 height: 1,
                 view: 4,
@@ -1506,7 +1764,7 @@ mod tests {
         let decoded_response = iroha_data_model::block::decode_framed_signed_block(&response.body)
             .expect("decode historical response proposal");
         assert!(decoded_response.is_resultless_proposal());
-        assert_eq!(response.manifest.round, certificate.round);
+        assert_eq!(response.manifest.round, certificate.proposal_round);
         assert_eq!(response.manifest.subject, subject);
         assert_eq!(response.responder, 0);
         let replay = server
@@ -1544,9 +1802,13 @@ mod tests {
         outstanding
             .register(authenticated_request)
             .expect("register request");
+        let request_hash = HashOf::new(&request);
         let _ = outstanding
             .authenticate_response(&context, response, &peer(&fixture.old_validators[0]))
             .expect("lagging peer accepts exact certified Kura body");
+        assert!(outstanding.contains(request_hash));
+        assert!(outstanding.complete(request_hash));
+        assert!(outstanding.is_empty());
 
         assert!(
             server

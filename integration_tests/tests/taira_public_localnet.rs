@@ -4,6 +4,7 @@
 use std::{
     any::Any,
     cmp::Reverse,
+    collections::BTreeSet,
     fs,
     net::SocketAddr as StdSocketAddr,
     path::{Path, PathBuf},
@@ -17,9 +18,12 @@ use integration_tests::{kagami::resolve_kagami_bin, process as test_process, san
 use iroha::{
     client::Client,
     config::{Config, LoadPath},
-    crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey, bls_normal_pop_prove},
+    crypto::{
+        Algorithm, ExposedPrivateKey, Hash, KeyPair, PrivateKey, PublicKey, bls_normal_pop_prove,
+    },
     data_model::{
         Level,
+        block::consensus_v2::{SumeragiV2LivenessBlocker, SumeragiV2Status},
         isi::{InstructionBox, Log, Unregister, register::RegisterPeerWithPop},
         peer::PeerId,
         prelude::AccountId,
@@ -56,6 +60,10 @@ const DEFAULT_MAX_LAGGED_CYCLE_RATIO: f64 = 0.35;
 const DEFAULT_MIN_COMMITTED_TPS_RATIO: f64 = 0.6;
 const MIN_SCHEDULED_TPS_RATIO: f64 = 0.8;
 const MIN_ACCEPTED_TPS_RATIO: f64 = 0.55;
+const MIN_CHURN_CYCLE_NUMERATOR: u64 = 9;
+const MIN_CHURN_CYCLE_DENOMINATOR: u64 = 10;
+const MAX_CHURN_PAUSED_RATIO: f64 = 0.25;
+const MAX_SOAK_OVERRUN_SECS: u64 = 15 * 60;
 const PROCESS_DOWNTIME_SECS: u64 = 5;
 const JOINER_CATCHUP_TIMEOUT_SECS: u64 = 60;
 const RESTART_CATCHUP_TIMEOUT_SECS: u64 = 60;
@@ -83,6 +91,12 @@ const LOG_TAIL_LINES: usize = 80;
 struct SimulationModes {
     process_churn: bool,
     membership_churn: bool,
+}
+
+#[derive(Clone, Debug)]
+struct ReleaseExecutionProfile {
+    build_profile: String,
+    cargo_net_offline: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -176,18 +190,46 @@ impl SimulationConfig {
 
 #[derive(Clone, Debug)]
 struct SimulationSummary {
+    git_revision: String,
+    workspace_source_manifest_sha256: String,
+    build_profile: String,
+    cargo_net_offline: bool,
+    localnet_artifact_path: String,
+    daemon_binary_path: String,
+    daemon_binary_blake2b_256: String,
+    kagami_binary_path: String,
+    kagami_binary_blake2b_256: String,
+    test_binary_path: String,
+    test_binary_blake2b_256: String,
+    generated_config_blake2b_256: String,
+    seed: String,
     duration_secs: u64,
     target_tps: u64,
     packet_loss_percent: u8,
+    churn_interval_secs: u64,
+    max_height_skew: u64,
+    max_height_skew_grace_secs: u64,
+    max_transient_height_skew: u64,
+    stall_timeout_secs: u64,
+    max_view_change_rate: f64,
+    max_lagged_cycle_ratio: f64,
+    min_committed_tps_ratio: f64,
+    process_downtime_secs: u64,
     tx_attempted: u64,
     tx_sent: u64,
     tx_submit_errors: u64,
     process_churn_cycles: u64,
+    expected_process_churn_cycles: u64,
     process_churn_lagged_cycles: u64,
     membership_join_cycles: u64,
     membership_leave_cycles: u64,
+    expected_membership_churn_cycles: u64,
+    membership_cleanup_leave: bool,
     membership_churn_lagged_cycles: u64,
     membership_churn_warning_cycles: u64,
+    churn_paused_secs: f64,
+    churn_paused_ratio: f64,
+    soak_overrun_secs: f64,
     max_height_skew_observed: u64,
     view_changes_start: u64,
     view_changes_end: u64,
@@ -198,23 +240,55 @@ struct SimulationSummary {
     committed_txs_min_delta: u64,
     saturated_samples: u64,
     total_samples: u64,
+    initial_status_snapshots: Vec<norito::json::Value>,
+    final_status_snapshots: Vec<norito::json::Value>,
+    no_progress_intervals: Vec<NoProgressInterval>,
+    unclassified_no_progress_intervals: u64,
 }
 
 impl SimulationSummary {
     fn to_json_value(&self) -> norito::json::Value {
         norito::json!({
+            "git_revision": (self.git_revision.clone()),
+            "workspace_source_manifest_sha256": (self.workspace_source_manifest_sha256.clone()),
+            "build_profile": (self.build_profile.clone()),
+            "cargo_net_offline": (self.cargo_net_offline),
+            "localnet_artifact_path": (self.localnet_artifact_path.clone()),
+            "daemon_binary_path": (self.daemon_binary_path.clone()),
+            "daemon_binary_blake2b_256": (self.daemon_binary_blake2b_256.clone()),
+            "kagami_binary_path": (self.kagami_binary_path.clone()),
+            "kagami_binary_blake2b_256": (self.kagami_binary_blake2b_256.clone()),
+            "test_binary_path": (self.test_binary_path.clone()),
+            "test_binary_blake2b_256": (self.test_binary_blake2b_256.clone()),
+            "generated_config_blake2b_256": (self.generated_config_blake2b_256.clone()),
+            "seed": (self.seed.clone()),
             "duration_secs": (self.duration_secs),
             "target_tps": (self.target_tps),
             "packet_loss_percent": (self.packet_loss_percent),
+            "churn_interval_secs": (self.churn_interval_secs),
+            "max_height_skew": (self.max_height_skew),
+            "max_height_skew_grace_secs": (self.max_height_skew_grace_secs),
+            "max_transient_height_skew": (self.max_transient_height_skew),
+            "stall_timeout_secs": (self.stall_timeout_secs),
+            "max_view_change_rate": (self.max_view_change_rate),
+            "max_lagged_cycle_ratio": (self.max_lagged_cycle_ratio),
+            "min_committed_tps_ratio": (self.min_committed_tps_ratio),
+            "process_downtime_secs": (self.process_downtime_secs),
             "tx_attempted": (self.tx_attempted),
             "tx_sent": (self.tx_sent),
             "tx_submit_errors": (self.tx_submit_errors),
             "process_churn_cycles": (self.process_churn_cycles),
+            "expected_process_churn_cycles": (self.expected_process_churn_cycles),
             "process_churn_lagged_cycles": (self.process_churn_lagged_cycles),
             "membership_join_cycles": (self.membership_join_cycles),
             "membership_leave_cycles": (self.membership_leave_cycles),
+            "expected_membership_churn_cycles": (self.expected_membership_churn_cycles),
+            "membership_cleanup_leave": (self.membership_cleanup_leave),
             "membership_churn_lagged_cycles": (self.membership_churn_lagged_cycles),
             "membership_churn_warning_cycles": (self.membership_churn_warning_cycles),
+            "churn_paused_secs": (self.churn_paused_secs),
+            "churn_paused_ratio": (self.churn_paused_ratio),
+            "soak_overrun_secs": (self.soak_overrun_secs),
             "max_height_skew_observed": (self.max_height_skew_observed),
             "view_changes_start": (self.view_changes_start),
             "view_changes_end": (self.view_changes_end),
@@ -225,8 +299,114 @@ impl SimulationSummary {
             "committed_txs_min_delta": (self.committed_txs_min_delta),
             "saturated_samples": (self.saturated_samples),
             "total_samples": (self.total_samples),
+            "initial_status_snapshots": (self.initial_status_snapshots.clone()),
+            "final_status_snapshots": (self.final_status_snapshots.clone()),
+            "no_progress_intervals": (self.no_progress_intervals.iter().map(NoProgressInterval::to_json_value).collect::<Vec<_>>()),
+            "unclassified_no_progress_intervals": (self.unclassified_no_progress_intervals),
         })
     }
+}
+
+#[derive(Clone, Debug)]
+struct NoProgressInterval {
+    start_elapsed_ms: u64,
+    end_elapsed_ms: u64,
+    classifications: Vec<String>,
+    classified: bool,
+    status_snapshots: Vec<norito::json::Value>,
+}
+
+impl NoProgressInterval {
+    fn to_json_value(&self) -> norito::json::Value {
+        norito::json!({
+            "start_elapsed_ms": (self.start_elapsed_ms),
+            "end_elapsed_ms": (self.end_elapsed_ms),
+            "classifications": (self.classifications.clone()),
+            "classified": (self.classified),
+            "status_snapshots": (self.status_snapshots.clone()),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ActiveNoProgressInterval {
+    start_elapsed_ms: u64,
+    classifications: BTreeSet<String>,
+    classified: bool,
+    status_snapshots: Vec<norito::json::Value>,
+}
+
+impl ActiveNoProgressInterval {
+    fn finish(self, end_elapsed_ms: u64) -> NoProgressInterval {
+        NoProgressInterval {
+            start_elapsed_ms: self.start_elapsed_ms,
+            end_elapsed_ms,
+            classifications: self.classifications.into_iter().collect(),
+            classified: self.classified,
+            status_snapshots: self.status_snapshots,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LivenessObservation {
+    classifications: BTreeSet<String>,
+    classified: bool,
+    status_snapshots: Vec<norito::json::Value>,
+}
+
+fn blocker_label(blocker: SumeragiV2LivenessBlocker) -> &'static str {
+    match blocker {
+        SumeragiV2LivenessBlocker::MissingProposal => "missing_proposal",
+        SumeragiV2LivenessBlocker::BodyUnavailable => "body_unavailable",
+        SumeragiV2LivenessBlocker::PrepareQuorumMissing => "prepare_quorum_missing",
+        SumeragiV2LivenessBlocker::CommitQuorumMissing => "commit_quorum_missing",
+        SumeragiV2LivenessBlocker::TimeoutCertificateMissing => "timeout_certificate_missing",
+        SumeragiV2LivenessBlocker::SchedulerStarvation => "scheduler_starvation",
+        SumeragiV2LivenessBlocker::ApplicationPending => "application_pending",
+        SumeragiV2LivenessBlocker::LocalControlPending => "local_control_pending",
+    }
+}
+
+fn observe_liveness(clients: &[Client], required_responsive: usize) -> LivenessObservation {
+    let mut classifications = BTreeSet::new();
+    let mut statuses = Vec::<(usize, SumeragiV2Status)>::new();
+    let mut all_classified = true;
+    for (validator_index, client) in clients.iter().enumerate() {
+        let Ok(status) = client.get_sumeragi_status() else {
+            continue;
+        };
+        if let Some(blocker) = status.liveness.blocker {
+            classifications.insert(blocker_label(blocker).to_owned());
+        } else {
+            all_classified = false;
+        }
+        statuses.push((validator_index, status));
+    }
+    let classified = statuses.len() >= required_responsive && all_classified;
+    let status_snapshots = statuses
+        .iter()
+        .filter_map(|(validator_index, status)| {
+            norito::json::to_value(status)
+                .ok()
+                .map(|status| status_snapshot_value(*validator_index, status))
+        })
+        .collect();
+    LivenessObservation {
+        classifications,
+        classified,
+        status_snapshots,
+    }
+}
+
+fn status_snapshot_value(
+    validator_index: usize,
+    status: norito::json::Value,
+) -> norito::json::Value {
+    norito::json!({
+        "validator_index": (validator_index),
+        "status": (status),
+    })
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -252,8 +432,22 @@ struct JoinerPeer {
     client: Client,
 }
 
+struct GeneratedLocalnetEvidence {
+    kagami_binary_path: PathBuf,
+    kagami_binary_blake2b_256: String,
+}
+
 struct TairaHarness {
     out_dir: PathBuf,
+    seed: String,
+    git_revision: String,
+    daemon_binary_path: PathBuf,
+    daemon_binary_blake2b_256: String,
+    kagami_binary_path: PathBuf,
+    kagami_binary_blake2b_256: String,
+    test_binary_path: PathBuf,
+    test_binary_blake2b_256: String,
+    generated_config_blake2b_256: String,
     localnet: ManagedLocalnet,
     primary_client: Client,
     validator_clients: Vec<Client>,
@@ -521,6 +715,9 @@ async fn taira_profile_24h_packet_impairment_and_restart_soak() -> Result<()> {
     let _guard = sandbox::serial_guard();
 
     let cfg = SimulationConfig::from_env();
+    let workspace_source_manifest_sha256 = required_release_source_manifest_sha256()?;
+    let evidence_path = required_release_evidence_path()?;
+    let release_execution_profile = required_release_execution_profile()?;
     let seed = std::env::var("IROHA_TAIRA_SIM_SEED")
         .ok()
         .filter(|seed| !seed.trim().is_empty())
@@ -536,9 +733,11 @@ async fn taira_profile_24h_packet_impairment_and_restart_soak() -> Result<()> {
                 process_churn: true,
                 membership_churn: true,
             },
+            &workspace_source_manifest_sha256,
+            &release_execution_profile,
         )
         .await?;
-        write_summary(&harness.summary_path(), &summary)?;
+        write_summary(&harness.summary_path(), &evidence_path, &summary)?;
         Ok(())
     }
     .await;
@@ -554,6 +753,8 @@ async fn run_taira_simulation(
     harness: &mut TairaHarness,
     cfg: SimulationConfig,
     modes: SimulationModes,
+    workspace_source_manifest_sha256: &str,
+    release_execution_profile: &ReleaseExecutionProfile,
 ) -> Result<SimulationSummary> {
     ensure!(cfg.tps > 0, "tps must be greater than zero");
     ensure!(
@@ -583,6 +784,7 @@ async fn run_taira_simulation(
     let mut membership_leave_cycles = 0_u64;
     let mut membership_churn_lagged_cycles = 0_u64;
     let mut membership_churn_warning_cycles = 0_u64;
+    let mut membership_cleanup_leave = false;
     let mut max_height_skew_observed = 0_u64;
     let mut saturated_samples = 0_u64;
     let mut total_samples = 0_u64;
@@ -592,30 +794,46 @@ async fn run_taira_simulation(
     let mut paused_for_churn = Duration::ZERO;
     let mut skew_breach_started_at = None;
 
+    let initial_status_observations = collect_indexed_statuses_quorum_with_retry(
+        &harness.validator_clients,
+        validator_quorum,
+        STATUS_QUORUM_RETRY_TIMEOUT,
+    )
+    .await?;
     let initial_statuses = top_quorum_statuses(
-        &collect_statuses_quorum_with_retry(
-            &harness.validator_clients,
-            validator_quorum,
-            STATUS_QUORUM_RETRY_TIMEOUT,
-        )
-        .await?,
+        &statuses_from_indexed(&initial_status_observations),
         validator_quorum,
     );
-    let view_changes_start = max_view_changes(&initial_statuses);
-    let mut view_changes_end = view_changes_start;
+    let view_changes_start = total_indexed_view_changes(&initial_status_observations);
+    let mut view_change_tracker = ViewChangeTracker::new(harness.validator_clients.len());
+    view_change_tracker.establish_baseline(&initial_status_observations);
+    let initial_status_snapshots =
+        observe_liveness(&harness.validator_clients, validator_quorum).status_snapshots;
+    ensure!(
+        initial_status_snapshots.len() >= validator_quorum,
+        "failed to capture an authoritative Sumeragi v2 status quorum before the soak: captured={}, required={validator_quorum}",
+        initial_status_snapshots.len()
+    );
     let initial_min_txs_approved = min_txs_approved(&initial_statuses);
     let mut last_progress_height = max_height(&initial_statuses);
     let mut last_progress_at = Instant::now();
     let mut last_min_progress_height = min_height(&initial_statuses);
     let mut last_min_progress_at = Instant::now();
+    let mut no_progress_intervals = Vec::new();
+    let mut active_no_progress_interval: Option<ActiveNoProgressInterval> = None;
+    let classification_delay = cfg.stall_timeout / 2;
 
     let mut next_tx = Instant::now();
     let mut next_monitor = Instant::now();
     let final_settle_window = effective_final_settle_window(cfg.duration);
     let churn_window = cfg.duration.saturating_sub(final_settle_window);
-    let mut next_process_churn =
-        Instant::now() + initial_churn_delay(cfg.churn_interval, churn_window);
+    let process_initial_delay = initial_churn_delay(cfg.churn_interval, churn_window);
     let membership_offset = initial_churn_delay(cfg.churn_interval / 2, churn_window);
+    let expected_process_churn_cycles =
+        scheduled_churn_cycles(churn_window, process_initial_delay, cfg.churn_interval);
+    let expected_membership_churn_cycles =
+        scheduled_churn_cycles(churn_window, membership_offset, cfg.churn_interval);
+    let mut next_process_churn = Instant::now() + process_initial_delay;
     let mut next_membership_churn = Instant::now() + membership_offset;
     let tx_period = Duration::from_secs_f64(1.0 / cfg.tps as f64);
     let start_time = Instant::now();
@@ -636,28 +854,42 @@ async fn run_taira_simulation(
                 restart_idx,
                 INTERIM_CONVERGENCE_MAX_SKEW,
             );
+            let statuses_before_restart = collect_indexed_statuses_quorum_with_retry(
+                &harness.validator_clients,
+                validator_quorum,
+                STATUS_QUORUM_RETRY_TIMEOUT,
+            )
+            .await?;
+            view_change_tracker.observe(&statuses_before_restart);
             let lagged =
                 process_churn_cycle(harness, selected_restart_idx, cfg.process_downtime).await?;
             paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
+            let status_observations_after_churn = collect_indexed_statuses_quorum_with_retry(
+                &harness.validator_clients,
+                validator_quorum,
+                STATUS_QUORUM_RETRY_TIMEOUT,
+            )
+            .await?;
+            view_change_tracker.observe(&status_observations_after_churn);
             let statuses_after_churn = top_quorum_statuses(
-                &collect_statuses_quorum_with_retry(
-                    &harness.validator_clients,
-                    validator_quorum,
-                    STATUS_QUORUM_RETRY_TIMEOUT,
-                )
-                .await?,
+                &statuses_from_indexed(&status_observations_after_churn),
                 validator_quorum,
             );
             let max_after_churn = max_height(&statuses_after_churn);
             if max_after_churn > last_progress_height {
                 last_progress_height = max_after_churn;
+                if let Some(interval) = active_no_progress_interval.take() {
+                    no_progress_intervals.push(interval.finish(
+                        u64::try_from(start_time.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    ));
+                }
+                last_progress_at = Instant::now();
             }
-            last_progress_at = Instant::now();
             let min_after_churn = min_height(&statuses_after_churn);
             if min_after_churn > last_min_progress_height {
                 last_min_progress_height = min_after_churn;
+                last_min_progress_at = Instant::now();
             }
-            last_min_progress_at = Instant::now();
             restart_idx =
                 next_process_churn_index(selected_restart_idx, harness.validator_clients.len());
             process_churn_cycles = process_churn_cycles.saturating_add(1);
@@ -669,7 +901,7 @@ async fn run_taira_simulation(
                 );
             }
             next_process_churn =
-                next_process_churn_deadline(Instant::now(), cfg.churn_interval, lagged);
+                next_process_churn_deadline(next_process_churn, cfg.churn_interval, lagged);
             continue;
         }
 
@@ -690,25 +922,32 @@ async fn run_taira_simulation(
                 membership_join_cycles = membership_join_cycles.saturating_add(1);
             }
             paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
+            let status_observations_after_churn = collect_indexed_statuses_quorum_with_retry(
+                &harness.validator_clients,
+                validator_quorum,
+                STATUS_QUORUM_RETRY_TIMEOUT,
+            )
+            .await?;
+            view_change_tracker.observe(&status_observations_after_churn);
             let statuses_after_churn = top_quorum_statuses(
-                &collect_statuses_quorum_with_retry(
-                    &harness.validator_clients,
-                    validator_quorum,
-                    STATUS_QUORUM_RETRY_TIMEOUT,
-                )
-                .await?,
+                &statuses_from_indexed(&status_observations_after_churn),
                 validator_quorum,
             );
             let max_after_churn = max_height(&statuses_after_churn);
             if max_after_churn > last_progress_height {
                 last_progress_height = max_after_churn;
+                if let Some(interval) = active_no_progress_interval.take() {
+                    no_progress_intervals.push(interval.finish(
+                        u64::try_from(start_time.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    ));
+                }
+                last_progress_at = Instant::now();
             }
-            last_progress_at = Instant::now();
             let min_after_churn = min_height(&statuses_after_churn);
             if min_after_churn > last_min_progress_height {
                 last_min_progress_height = min_after_churn;
+                last_min_progress_at = Instant::now();
             }
-            last_min_progress_at = Instant::now();
             joiner_active = !joiner_active;
             if outcome.hard_lagged {
                 membership_churn_lagged_cycles = membership_churn_lagged_cycles.saturating_add(1);
@@ -721,7 +960,7 @@ async fn run_taira_simulation(
                 membership_churn_warning_cycles = membership_churn_warning_cycles.saturating_add(1);
             }
             next_membership_churn = next_membership_churn_deadline(
-                Instant::now(),
+                next_membership_churn,
                 cfg.churn_interval,
                 membership_backoff_requires_hard_lag(outcome),
             );
@@ -760,13 +999,15 @@ async fn run_taira_simulation(
         }
 
         if now >= next_monitor {
+            let status_observations = collect_indexed_statuses_quorum_with_retry(
+                &harness.validator_clients,
+                validator_quorum,
+                STATUS_QUORUM_RETRY_TIMEOUT,
+            )
+            .await?;
+            view_change_tracker.observe(&status_observations);
             let statuses = top_quorum_statuses(
-                &collect_statuses_quorum_with_retry(
-                    &harness.validator_clients,
-                    validator_quorum,
-                    STATUS_QUORUM_RETRY_TIMEOUT,
-                )
-                .await?,
+                &statuses_from_indexed(&status_observations),
                 validator_quorum,
             );
             let max_height = max_height(&statuses);
@@ -804,16 +1045,48 @@ async fn run_taira_simulation(
 
             if max_height > last_progress_height {
                 last_progress_height = max_height;
-                last_progress_at = Instant::now();
+                last_progress_at = now;
+                if let Some(interval) = active_no_progress_interval.take() {
+                    no_progress_intervals.push(interval.finish(
+                        u64::try_from(start_time.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    ));
+                }
+            }
+
+            let no_progress_age = now.saturating_duration_since(last_progress_at);
+            if no_progress_age >= classification_delay {
+                let observation = observe_liveness(&harness.validator_clients, validator_quorum);
+                let elapsed_ms =
+                    u64::try_from(start_time.elapsed().as_millis()).unwrap_or(u64::MAX);
+                match &mut active_no_progress_interval {
+                    Some(interval) => {
+                        let changed = interval.classifications != observation.classifications;
+                        interval.classifications.extend(observation.classifications);
+                        interval.classified &= observation.classified;
+                        if changed && interval.status_snapshots.len() < 32 {
+                            interval
+                                .status_snapshots
+                                .extend(observation.status_snapshots);
+                            interval.status_snapshots.truncate(32);
+                        }
+                    }
+                    None => {
+                        active_no_progress_interval = Some(ActiveNoProgressInterval {
+                            start_elapsed_ms: elapsed_ms,
+                            classifications: observation.classifications,
+                            classified: observation.classified,
+                            status_snapshots: observation.status_snapshots,
+                        });
+                    }
+                }
             }
 
             ensure!(
-                Instant::now().saturating_duration_since(last_progress_at) <= cfg.stall_timeout,
-                "consensus stalled: no max-height progression for {:?} (max_height={max_height}, min_height={min_height}, last_progress_height={last_progress_height})",
+                no_progress_age <= cfg.stall_timeout,
+                "consensus stalled: no max-height progression for {:?} (max_height={max_height}, min_height={min_height}, last_progress_height={last_progress_height}, liveness={active_no_progress_interval:?})",
                 cfg.stall_timeout,
             );
 
-            view_changes_end = max_view_changes(&statuses);
             for client in &harness.validator_clients {
                 if let Ok(diagnostics) = client.get_sumeragi_diagnostics() {
                     total_samples = total_samples.saturating_add(1);
@@ -850,37 +1123,47 @@ async fn run_taira_simulation(
         }
     }
 
+    let soak_elapsed = Instant::now().saturating_duration_since(start_time);
     if joiner_active {
-        let churn_start = Instant::now();
         let outcome = membership_leave_cycle(harness).await?;
-        paused_for_churn = paused_for_churn.saturating_add(churn_start.elapsed());
-        membership_leave_cycles = membership_leave_cycles.saturating_add(1);
+        membership_cleanup_leave = true;
         if outcome.hard_lagged {
-            membership_churn_lagged_cycles = membership_churn_lagged_cycles.saturating_add(1);
+            eprintln!("membership cleanup leave lagged after the scheduled soak window");
         }
         if outcome.warning_lagged {
-            membership_churn_warning_cycles = membership_churn_warning_cycles.saturating_add(1);
+            eprintln!("membership cleanup leave completed with a catch-up warning");
         }
     }
 
-    let elapsed = Instant::now().saturating_duration_since(start_time);
+    let elapsed = soak_elapsed;
     let duration_secs = elapsed.as_secs().max(1);
-    let active_elapsed = elapsed.saturating_sub(paused_for_churn);
-    let scheduled_tps = tx_attempted as f64 / active_elapsed.as_secs_f64().max(1.0);
-    let submitted_tps = tx_sent as f64 / active_elapsed.as_secs_f64().max(1.0);
+    let elapsed_secs = elapsed.as_secs_f64().max(1.0);
+    let soak_overrun_secs = elapsed.saturating_sub(cfg.duration).as_secs_f64();
+    let churn_paused_secs = paused_for_churn.as_secs_f64();
+    let churn_paused_ratio = churn_paused_secs / elapsed_secs;
+    let scheduled_tps = tx_attempted as f64 / elapsed_secs;
+    let submitted_tps = tx_sent as f64 / elapsed_secs;
     let membership_churn_cycles = membership_join_cycles.saturating_add(membership_leave_cycles);
-    let view_change_rate_per_sec = (view_changes_end.saturating_sub(view_changes_start)) as f64
-        / elapsed.as_secs_f64().max(1.0);
 
     if modes.process_churn {
+        let required_process_churn_cycles =
+            minimum_required_churn_cycles(expected_process_churn_cycles);
         ensure!(
-            process_churn_cycles > 0,
-            "process churn did not execute (duration={:?}, churn_interval={:?}, final_settle_window={final_settle_window:?})",
+            process_churn_cycles >= required_process_churn_cycles,
+            "process churn cadence fell below the scheduled release floor: observed={process_churn_cycles}, expected={expected_process_churn_cycles}, required={required_process_churn_cycles}, duration={:?}, churn_interval={:?}, final_settle_window={final_settle_window:?}",
             cfg.duration,
             cfg.churn_interval
         );
     }
     if modes.membership_churn {
+        let required_membership_churn_cycles =
+            minimum_required_churn_cycles(expected_membership_churn_cycles);
+        ensure!(
+            membership_churn_cycles >= required_membership_churn_cycles,
+            "membership churn cadence fell below the scheduled release floor: observed={membership_churn_cycles}, expected={expected_membership_churn_cycles}, required={required_membership_churn_cycles}, duration={:?}, churn_interval={:?}, final_settle_window={final_settle_window:?}",
+            cfg.duration,
+            cfg.churn_interval
+        );
         ensure!(
             membership_join_cycles > 0,
             "membership join churn did not execute (duration={:?}, churn_interval={:?}, final_settle_window={final_settle_window:?})",
@@ -895,18 +1178,27 @@ async fn run_taira_simulation(
         );
     }
 
-    let max_process_lagged =
-        max_allowed_lagged_cycles(process_churn_cycles, cfg.max_lagged_cycle_ratio);
     ensure!(
-        process_churn_lagged_cycles <= max_process_lagged,
-        "process churn lagged cycles exceeded threshold: lagged={process_churn_lagged_cycles}, total={process_churn_cycles}, allowed={max_process_lagged}, ratio={}",
+        churn_paused_ratio <= MAX_CHURN_PAUSED_RATIO,
+        "churn work consumed too much of the wall-clock soak: paused_secs={churn_paused_secs:.3}, elapsed_secs={elapsed_secs:.3}, observed_ratio={churn_paused_ratio:.4}, threshold={MAX_CHURN_PAUSED_RATIO}"
+    );
+    ensure!(
+        soak_overrun_secs <= MAX_SOAK_OVERRUN_SECS as f64,
+        "soak exceeded the configured wall-clock duration by too much: overrun_secs={soak_overrun_secs:.3}, threshold_secs={MAX_SOAK_OVERRUN_SECS}"
+    );
+
+    let process_lagged_ratio =
+        lagged_cycle_ratio(process_churn_lagged_cycles, process_churn_cycles);
+    ensure!(
+        process_lagged_ratio <= cfg.max_lagged_cycle_ratio,
+        "process churn lagged cycles exceeded threshold: lagged={process_churn_lagged_cycles}, total={process_churn_cycles}, observed_ratio={process_lagged_ratio:.4}, threshold={}",
         cfg.max_lagged_cycle_ratio
     );
-    let max_membership_lagged =
-        max_allowed_lagged_cycles(membership_churn_cycles, cfg.max_lagged_cycle_ratio);
+    let membership_lagged_ratio =
+        lagged_cycle_ratio(membership_churn_lagged_cycles, membership_churn_cycles);
     ensure!(
-        membership_churn_lagged_cycles <= max_membership_lagged,
-        "membership churn lagged cycles exceeded threshold: lagged={membership_churn_lagged_cycles}, total={membership_churn_cycles}, allowed={max_membership_lagged}, ratio={}",
+        membership_lagged_ratio <= cfg.max_lagged_cycle_ratio,
+        "membership churn lagged cycles exceeded threshold: lagged={membership_churn_lagged_cycles}, total={membership_churn_cycles}, observed_ratio={membership_lagged_ratio:.4}, threshold={}",
         cfg.max_lagged_cycle_ratio
     );
 
@@ -931,12 +1223,6 @@ async fn run_taira_simulation(
         "tx submission errors too high: errors={tx_submit_errors}, attempted={tx_attempted}, sent={tx_sent}"
     );
     ensure!(tx_sent > 0, "no transactions were accepted during soak run");
-    ensure!(
-        view_change_rate_per_sec <= cfg.max_view_change_rate,
-        "view-change rate exceeded threshold: observed={view_change_rate_per_sec:.4}, threshold={}",
-        cfg.max_view_change_rate
-    );
-
     let final_target =
         validator_max_height_with_retry(&harness.validator_clients, READY_TIMEOUT).await?;
     wait_for_cluster_convergence_quorum(
@@ -958,19 +1244,35 @@ async fn run_taira_simulation(
         eprintln!("final all-validator convergence lagged; quorum convergence is healthy: {err:?}");
     }
 
+    let final_status_observations = collect_indexed_statuses_quorum_with_retry(
+        &harness.validator_clients,
+        validator_quorum,
+        STATUS_QUORUM_RETRY_TIMEOUT,
+    )
+    .await?;
+    view_change_tracker.observe(&final_status_observations);
     let final_statuses = top_quorum_statuses(
-        &collect_statuses_quorum_with_retry(
-            &harness.validator_clients,
-            validator_quorum,
-            STATUS_QUORUM_RETRY_TIMEOUT,
-        )
-        .await?,
+        &statuses_from_indexed(&final_status_observations),
         validator_quorum,
     );
-    view_changes_end = max_view_changes(&final_statuses);
+    let final_status_snapshots =
+        observe_liveness(&harness.validator_clients, validator_quorum).status_snapshots;
+    ensure!(
+        final_status_snapshots.len() >= validator_quorum,
+        "failed to capture an authoritative Sumeragi v2 status quorum after the soak: captured={}, required={validator_quorum}",
+        final_status_snapshots.len()
+    );
+    let view_changes_end =
+        view_changes_start.saturating_add(view_change_tracker.total_since_baseline());
+    let view_change_rate_per_sec = view_change_rate(view_changes_start, view_changes_end, elapsed);
+    ensure!(
+        view_change_rate_per_sec <= cfg.max_view_change_rate,
+        "view-change rate exceeded threshold: observed={view_change_rate_per_sec:.4}, threshold={}",
+        cfg.max_view_change_rate
+    );
     let final_min_txs_approved = min_txs_approved(&final_statuses);
     let committed_txs_min_delta = final_min_txs_approved.saturating_sub(initial_min_txs_approved);
-    let committed_tps = committed_txs_min_delta as f64 / active_elapsed.as_secs_f64().max(1.0);
+    let committed_tps = committed_txs_min_delta as f64 / elapsed_secs;
     ensure!(
         committed_tps >= (cfg.tps as f64 * cfg.min_committed_tps_ratio),
         "committed/finalized tps is below threshold: committed_tps={committed_tps:.2}, target={}, min_ratio={}",
@@ -978,19 +1280,64 @@ async fn run_taira_simulation(
         cfg.min_committed_tps_ratio
     );
 
+    if let Some(interval) = active_no_progress_interval.take() {
+        no_progress_intervals.push(
+            interval.finish(u64::try_from(start_time.elapsed().as_millis()).unwrap_or(u64::MAX)),
+        );
+    }
+    let unclassified_no_progress_intervals = u64::try_from(
+        no_progress_intervals
+            .iter()
+            .filter(|interval| !interval.classified)
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    ensure!(
+        unclassified_no_progress_intervals == 0,
+        "Taira soak observed {unclassified_no_progress_intervals} unclassified no-progress intervals: {no_progress_intervals:?}"
+    );
+
     Ok(SimulationSummary {
+        git_revision: harness.git_revision.clone(),
+        workspace_source_manifest_sha256: workspace_source_manifest_sha256.to_owned(),
+        build_profile: release_execution_profile.build_profile.clone(),
+        cargo_net_offline: release_execution_profile.cargo_net_offline,
+        localnet_artifact_path: harness.out_dir.display().to_string(),
+        daemon_binary_path: harness.daemon_binary_path.display().to_string(),
+        daemon_binary_blake2b_256: harness.daemon_binary_blake2b_256.clone(),
+        kagami_binary_path: harness.kagami_binary_path.display().to_string(),
+        kagami_binary_blake2b_256: harness.kagami_binary_blake2b_256.clone(),
+        test_binary_path: harness.test_binary_path.display().to_string(),
+        test_binary_blake2b_256: harness.test_binary_blake2b_256.clone(),
+        generated_config_blake2b_256: harness.generated_config_blake2b_256.clone(),
+        seed: harness.seed.clone(),
         duration_secs,
         target_tps: cfg.tps,
         packet_loss_percent: cfg.packet_loss_percent,
+        churn_interval_secs: cfg.churn_interval.as_secs(),
+        max_height_skew: cfg.max_height_skew,
+        max_height_skew_grace_secs: cfg.max_height_skew_grace.as_secs(),
+        max_transient_height_skew: cfg.max_transient_height_skew,
+        stall_timeout_secs: cfg.stall_timeout.as_secs(),
+        max_view_change_rate: cfg.max_view_change_rate,
+        max_lagged_cycle_ratio: cfg.max_lagged_cycle_ratio,
+        min_committed_tps_ratio: cfg.min_committed_tps_ratio,
+        process_downtime_secs: cfg.process_downtime.as_secs(),
         tx_attempted,
         tx_sent,
         tx_submit_errors,
         process_churn_cycles,
+        expected_process_churn_cycles,
         process_churn_lagged_cycles,
         membership_join_cycles,
         membership_leave_cycles,
+        expected_membership_churn_cycles,
+        membership_cleanup_leave,
         membership_churn_lagged_cycles,
         membership_churn_warning_cycles,
+        churn_paused_secs,
+        churn_paused_ratio,
+        soak_overrun_secs,
         max_height_skew_observed,
         view_changes_start,
         view_changes_end,
@@ -1001,6 +1348,10 @@ async fn run_taira_simulation(
         committed_txs_min_delta,
         saturated_samples,
         total_samples,
+        initial_status_snapshots,
+        final_status_snapshots,
+        no_progress_intervals,
+        unclassified_no_progress_intervals,
     })
 }
 
@@ -1362,7 +1713,7 @@ async fn setup_taira_harness(
     let base_api_port = api_ports.base();
     let base_p2p_port = p2p_ports.base();
 
-    generate_localnet(
+    let generated = generate_localnet(
         out_dir,
         base_api_port,
         base_p2p_port,
@@ -1373,6 +1724,13 @@ async fn setup_taira_harness(
     let irohad_bin = Program::Irohad
         .resolve()
         .wrap_err("resolve irohad binary")?;
+    let daemon_binary_blake2b_256 = file_blake2b_256(&irohad_bin)?;
+    let test_binary_path = std::env::current_exe()
+        .wrap_err("resolve current Taira test binary")?
+        .canonicalize()
+        .wrap_err("canonicalize current Taira test binary")?;
+    let test_binary_blake2b_256 = file_blake2b_256(&test_binary_path)?;
+    let git_revision = current_git_revision()?;
     let mut localnet = ManagedLocalnet::start(
         out_dir,
         &irohad_bin,
@@ -1433,9 +1791,19 @@ async fn setup_taira_harness(
         joiner_api_port,
         joiner_p2p_port,
     )?;
+    let generated_config_blake2b_256 = generated_config_blake2b_256(out_dir)?;
 
     Ok(TairaHarness {
         out_dir: out_dir.to_path_buf(),
+        seed: seed.to_owned(),
+        git_revision,
+        daemon_binary_path: irohad_bin,
+        daemon_binary_blake2b_256,
+        kagami_binary_path: generated.kagami_binary_path,
+        kagami_binary_blake2b_256: generated.kagami_binary_blake2b_256,
+        test_binary_path,
+        test_binary_blake2b_256,
+        generated_config_blake2b_256,
         localnet,
         primary_client,
         validator_clients,
@@ -1708,6 +2076,75 @@ fn collect_statuses(clients: &[Client]) -> Result<Vec<iroha::client::Status>> {
         .collect::<Result<Vec<_>>>()
 }
 
+type IndexedStatus = (usize, iroha::client::Status);
+
+#[derive(Debug)]
+struct ViewChangeTracker {
+    last_seen: Vec<Option<u64>>,
+    total_since_baseline: u64,
+}
+
+impl ViewChangeTracker {
+    fn new(validator_count: usize) -> Self {
+        Self {
+            last_seen: vec![None; validator_count],
+            total_since_baseline: 0,
+        }
+    }
+
+    fn establish_baseline(&mut self, observations: &[IndexedStatus]) {
+        for (index, status) in observations {
+            if let Some(last_seen) = self.last_seen.get_mut(*index) {
+                *last_seen = Some(u64::from(status.view_changes));
+            }
+        }
+    }
+
+    fn observe(&mut self, observations: &[IndexedStatus]) {
+        for (index, status) in observations {
+            let current = u64::from(status.view_changes);
+            let Some(last_seen) = self.last_seen.get_mut(*index) else {
+                continue;
+            };
+            let delta = if let Some(previous) = *last_seen {
+                if current >= previous {
+                    current - previous
+                } else {
+                    // A process restart resets the status counter. Count the
+                    // post-restart prefix instead of discarding it.
+                    current
+                }
+            } else {
+                // If this validator was unavailable while the baseline quorum
+                // was collected, count its first observable value rather than
+                // silently discarding possible in-soak view changes. The
+                // counter may include pre-soak changes, which is deliberately
+                // conservative for a maximum-rate release gate.
+                current
+            };
+            self.total_since_baseline = self.total_since_baseline.saturating_add(delta);
+            *last_seen = Some(current);
+        }
+    }
+
+    fn total_since_baseline(&self) -> u64 {
+        self.total_since_baseline
+    }
+}
+
+fn statuses_from_indexed(observations: &[IndexedStatus]) -> Vec<iroha::client::Status> {
+    observations
+        .iter()
+        .map(|(_, status)| status.clone())
+        .collect()
+}
+
+fn total_indexed_view_changes(observations: &[IndexedStatus]) -> u64 {
+    observations.iter().fold(0_u64, |total, (_, status)| {
+        total.saturating_add(u64::from(status.view_changes))
+    })
+}
+
 fn top_quorum_statuses(
     statuses: &[iroha::client::Status],
     quorum_size: usize,
@@ -1733,6 +2170,14 @@ fn collect_statuses_quorum(
     clients: &[Client],
     min_required: usize,
 ) -> Result<Vec<iroha::client::Status>> {
+    collect_indexed_statuses_quorum(clients, min_required)
+        .map(|observations| statuses_from_indexed(&observations))
+}
+
+fn collect_indexed_statuses_quorum(
+    clients: &[Client],
+    min_required: usize,
+) -> Result<Vec<IndexedStatus>> {
     ensure!(
         min_required > 0 && min_required <= clients.len(),
         "invalid status quorum requirement min_required={min_required} for {} clients",
@@ -1740,9 +2185,9 @@ fn collect_statuses_quorum(
     );
     let mut statuses = Vec::with_capacity(clients.len());
     let mut errored_clients = Vec::new();
-    for client in clients {
+    for (index, client) in clients.iter().enumerate() {
         match get_status_with_retry(client) {
-            Ok(status) => statuses.push(status),
+            Ok(status) => statuses.push((index, status)),
             Err(err) => errored_clients.push(format!("{}: {err:?}", client.torii_url)),
         }
     }
@@ -1760,9 +2205,19 @@ async fn collect_statuses_quorum_with_retry(
     min_required: usize,
     timeout: Duration,
 ) -> Result<Vec<iroha::client::Status>> {
+    collect_indexed_statuses_quorum_with_retry(clients, min_required, timeout)
+        .await
+        .map(|observations| statuses_from_indexed(&observations))
+}
+
+async fn collect_indexed_statuses_quorum_with_retry(
+    clients: &[Client],
+    min_required: usize,
+    timeout: Duration,
+) -> Result<Vec<IndexedStatus>> {
     let deadline = Instant::now() + timeout;
     loop {
-        match collect_statuses_quorum(clients, min_required) {
+        match collect_indexed_statuses_quorum(clients, min_required) {
             Ok(statuses) => return Ok(statuses),
             Err(err) => {
                 let err_msg = format!("{err:?}");
@@ -1826,14 +2281,6 @@ fn min_height(statuses: &[iroha::client::Status]) -> u64 {
 
 fn min_txs_approved(statuses: &[iroha::client::Status]) -> u64 {
     statuses.iter().map(|s| s.txs_approved).min().unwrap_or(0)
-}
-
-fn max_view_changes(statuses: &[iroha::client::Status]) -> u64 {
-    statuses
-        .iter()
-        .map(|s| u64::from(s.view_changes))
-        .max()
-        .unwrap_or(0)
 }
 
 fn update_skew_breach_started(
@@ -2057,7 +2504,10 @@ async fn submit_instruction_with_retry(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        match client.submit::<InstructionBox>(instruction.clone()) {
+        match client.submit::<InstructionBox>(
+            instruction.clone(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             Ok(_) => return Ok(()),
             Err(err) if is_submit_timeout_error(&err) && Instant::now() < deadline => {
                 sleep(STATUS_POLL).await;
@@ -2380,19 +2830,23 @@ fn next_process_churn_index(current: usize, validator_count: usize) -> usize {
     (current + 1) % validator_count
 }
 
-fn next_process_churn_deadline(now: Instant, interval: Duration, lagged: bool) -> Instant {
-    if lagged {
-        return now + Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS);
-    }
-    now + interval
+fn next_process_churn_deadline(
+    scheduled_deadline: Instant,
+    interval: Duration,
+    lagged: bool,
+) -> Instant {
+    let backoff = lagged
+        .then_some(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
+        .unwrap_or(Duration::ZERO);
+    scheduled_deadline + interval + backoff
 }
 
-fn next_membership_churn_deadline(now: Instant, interval: Duration, lagged: bool) -> Instant {
-    let mut delay = interval;
-    if lagged {
-        delay = delay.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS));
-    }
-    now + delay
+fn next_membership_churn_deadline(
+    scheduled_deadline: Instant,
+    interval: Duration,
+    lagged: bool,
+) -> Instant {
+    next_process_churn_deadline(scheduled_deadline, interval, lagged)
 }
 
 fn effective_final_settle_window(duration: Duration) -> Duration {
@@ -2413,8 +2867,35 @@ fn initial_churn_delay(interval: Duration, churn_window: Duration) -> Duration {
     }
 }
 
-fn max_allowed_lagged_cycles(total_cycles: u64, max_ratio: f64) -> u64 {
-    ((total_cycles as f64) * max_ratio).ceil() as u64
+fn scheduled_churn_cycles(
+    churn_window: Duration,
+    first_delay: Duration,
+    interval: Duration,
+) -> u64 {
+    if interval.is_zero() || first_delay >= churn_window {
+        return 0;
+    }
+    let available = churn_window.saturating_sub(first_delay).as_nanos();
+    let count = available.div_ceil(interval.as_nanos());
+    u64::try_from(count).unwrap_or(u64::MAX)
+}
+
+fn minimum_required_churn_cycles(expected_cycles: u64) -> u64 {
+    let numerator = u128::from(expected_cycles) * u128::from(MIN_CHURN_CYCLE_NUMERATOR);
+    let required = numerator.div_ceil(u128::from(MIN_CHURN_CYCLE_DENOMINATOR));
+    u64::try_from(required).unwrap_or(u64::MAX)
+}
+
+fn lagged_cycle_ratio(lagged_cycles: u64, total_cycles: u64) -> f64 {
+    if total_cycles == 0 {
+        0.0
+    } else {
+        lagged_cycles as f64 / total_cycles as f64
+    }
+}
+
+fn view_change_rate(start: u64, end: u64, elapsed: Duration) -> f64 {
+    end.saturating_sub(start) as f64 / elapsed.as_secs_f64().max(1.0)
 }
 
 async fn validator_max_height_with_retry(clients: &[Client], timeout: Duration) -> Result<u64> {
@@ -2441,10 +2922,10 @@ async fn submit_load_instruction_with_retry(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        match harness
-            .primary_client
-            .submit::<InstructionBox>(instruction.clone())
-        {
+        match harness.primary_client.submit::<InstructionBox>(
+            instruction.clone(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             Ok(_) => return Ok(()),
             Err(err)
                 if (is_submit_timeout_error(&err) || is_connect_error(&err))
@@ -2468,17 +2949,181 @@ fn is_peer_present(client: &Client, peer_id: &PeerId) -> Result<bool> {
     query_peer_presence_with_retry(client, peer_id)
 }
 
-fn write_summary(path: &Path, summary: &SimulationSummary) -> Result<()> {
+fn file_blake2b_256(path: &Path) -> Result<String> {
+    let bytes =
+        fs::read(path).wrap_err_with(|| format!("read evidence file {}", path.display()))?;
+    Ok(Hash::new(bytes).to_string())
+}
+
+fn generated_config_blake2b_256(root: &Path) -> Result<String> {
+    fn collect(root: &Path, current: &Path, paths: &mut Vec<PathBuf>) -> Result<()> {
+        let mut entries = fs::read_dir(current)
+            .wrap_err_with(|| format!("read generated-config directory {}", current.display()))?
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                if path == root.join("storage") {
+                    continue;
+                }
+                collect(root, &path, paths)?;
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let include = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    matches!(extension, "toml" | "json" | "to" | "sh" | "yaml" | "yml")
+                });
+            if include
+                && path
+                    .file_name()
+                    .is_none_or(|name| name != "taira_simulation_summary.json")
+            {
+                paths.push(path);
+            }
+        }
+        Ok(())
+    }
+
+    let mut paths = Vec::new();
+    collect(root, root, &mut paths)?;
+    paths.sort();
+    let mut manifest = b"iroha-taira-generated-config-v1\0".to_vec();
+    for path in paths {
+        let relative = path
+            .strip_prefix(root)
+            .wrap_err_with(|| format!("strip generated-config root from {}", path.display()))?;
+        let relative = relative.to_string_lossy();
+        let bytes = fs::read(&path)
+            .wrap_err_with(|| format!("read generated config {}", path.display()))?;
+        manifest.extend_from_slice(&(relative.len() as u64).to_be_bytes());
+        manifest.extend_from_slice(relative.as_bytes());
+        manifest.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+        manifest.extend_from_slice(&bytes);
+    }
+    Ok(Hash::new(manifest).to_string())
+}
+
+fn current_git_revision() -> Result<String> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg("HEAD")
+        .current_dir(repo_root())
+        .output()
+        .wrap_err("run git rev-parse HEAD")?;
+    ensure!(
+        output.status.success(),
+        "git rev-parse HEAD failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let revision = String::from_utf8(output.stdout)
+        .wrap_err("git revision is not UTF-8")?
+        .trim()
+        .to_owned();
+    ensure!(
+        matches!(revision.len(), 40 | 64) && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "git rev-parse HEAD returned an invalid revision: {revision:?}"
+    );
+    Ok(revision)
+}
+
+fn required_release_source_manifest_sha256() -> Result<String> {
+    let manifest = std::env::var("IROHA_RELEASE_SOURCE_MANIFEST_SHA256")
+        .wrap_err("IROHA_RELEASE_SOURCE_MANIFEST_SHA256 must be set by the release launcher")?;
+    ensure!(
+        manifest.len() == 64
+            && manifest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && manifest == manifest.to_ascii_lowercase(),
+        "IROHA_RELEASE_SOURCE_MANIFEST_SHA256 must be a lowercase SHA-256 digest"
+    );
+    Ok(manifest)
+}
+
+fn required_release_execution_profile() -> Result<ReleaseExecutionProfile> {
+    let build_profile = std::env::var("IROHA_TEST_BUILD_PROFILE")
+        .wrap_err("IROHA_TEST_BUILD_PROFILE must be set by the release launcher")?;
+    let cargo_profile =
+        std::env::var("PROFILE").wrap_err("PROFILE must be set by the release launcher")?;
+    let cargo_net_offline = std::env::var("CARGO_NET_OFFLINE")
+        .wrap_err("CARGO_NET_OFFLINE must be set by the release launcher")?;
+    validate_release_execution_profile(&build_profile, &cargo_profile, &cargo_net_offline)
+}
+
+fn validate_release_execution_profile(
+    build_profile: &str,
+    cargo_profile: &str,
+    cargo_net_offline: &str,
+) -> Result<ReleaseExecutionProfile> {
+    ensure!(
+        build_profile == "release",
+        "IROHA_TEST_BUILD_PROFILE must be exactly release"
+    );
+    ensure!(
+        cargo_profile == build_profile,
+        "PROFILE and IROHA_TEST_BUILD_PROFILE must both select release"
+    );
+    ensure!(
+        cargo_net_offline == "true",
+        "CARGO_NET_OFFLINE must be exactly true"
+    );
+    Ok(ReleaseExecutionProfile {
+        build_profile: build_profile.to_owned(),
+        cargo_net_offline: true,
+    })
+}
+
+fn required_release_evidence_path() -> Result<PathBuf> {
+    let raw = std::env::var("IROHA_TAIRA_EVIDENCE_PATH")
+        .wrap_err("IROHA_TAIRA_EVIDENCE_PATH must be set by the release launcher")?;
+    let path = PathBuf::from(raw);
+    ensure!(
+        path.is_absolute(),
+        "IROHA_TAIRA_EVIDENCE_PATH must be absolute"
+    );
+    ensure!(
+        path.extension()
+            .is_some_and(|extension| extension == "json"),
+        "IROHA_TAIRA_EVIDENCE_PATH must name a JSON file"
+    );
+    Ok(path)
+}
+
+fn write_summary(
+    local_path: &Path,
+    evidence_path: &Path,
+    summary: &SimulationSummary,
+) -> Result<()> {
     let mut rendered = norito::json::to_json_pretty(&summary.to_json_value())
         .wrap_err("serialize summary JSON")?;
     rendered.push('\n');
-    fs::write(path, rendered).wrap_err_with(|| format!("write summary {}", path.display()))?;
+    fs::write(local_path, rendered.as_bytes())
+        .wrap_err_with(|| format!("write summary {}", local_path.display()))?;
+    if let Some(parent) = evidence_path.parent() {
+        fs::create_dir_all(parent)
+            .wrap_err_with(|| format!("create evidence directory {}", parent.display()))?;
+    }
+    fs::write(evidence_path, rendered.as_bytes())
+        .wrap_err_with(|| format!("write durable summary {}", evidence_path.display()))?;
     Ok(())
 }
 
 fn finalize_result(temp_dir: TempDir, context: &str, result: Result<()>) -> Result<()> {
     if let Err(err) = result {
         if let Some(reason) = sandbox::sandbox_reason(&err) {
+            // Developer runs may still skip a sandbox-denied localnet, but CI
+            // and release corridors set `IROHA_TEST_REQUIRE_NETWORK=1`. Reuse
+            // the shared parser so malformed values and required-network
+            // failures both fail closed before reporting a skip.
+            let _ = sandbox::enforce_network_start_requirement::<()>(None, context)?;
             eprintln!("sandbox restriction detected while running {context}; skipping ({reason})");
             return Ok(());
         }
@@ -2560,9 +3205,10 @@ fn generate_localnet(
     peers: u16,
     seed: &str,
     packet_loss_percent: u8,
-) -> Result<()> {
+) -> Result<GeneratedLocalnetEvidence> {
     let kagami_bin = resolve_kagami_bin()?;
-    let mut command = Command::new(kagami_bin);
+    let kagami_binary_blake2b_256 = file_blake2b_256(&kagami_bin)?;
+    let mut command = Command::new(&kagami_bin);
     command
         .arg("localnet")
         .arg("--build-line")
@@ -2598,7 +3244,10 @@ fn generate_localnet(
     );
     override_localnet_transaction_ttl(out_dir, peers, LOCALNET_TRANSACTION_TTL_MS)?;
     override_localnet_packet_impairment(out_dir, peers, packet_loss_percent)?;
-    Ok(())
+    Ok(GeneratedLocalnetEvidence {
+        kagami_binary_path: kagami_bin,
+        kagami_binary_blake2b_256,
+    })
 }
 
 fn load_localnet_client(out_dir: &Path) -> Result<Client> {
@@ -2738,13 +3387,13 @@ fn next_process_churn_deadline_uses_interval_without_lag() {
 }
 
 #[test]
-fn next_process_churn_deadline_retries_soon_when_lagged() {
+fn next_process_churn_deadline_adds_backoff_without_schedule_drift() {
     let now = Instant::now();
     let interval = Duration::from_secs(30);
     let deadline = next_process_churn_deadline(now, interval, true);
     assert_eq!(
         deadline.duration_since(now),
-        Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS)
+        interval.saturating_add(Duration::from_secs(INTERIM_LAG_CHURN_BACKOFF_SECS))
     );
 }
 
@@ -2847,10 +3496,111 @@ fn initial_churn_delay_stays_inside_churn_window() {
 }
 
 #[test]
-fn max_allowed_lagged_cycles_uses_ceiling_ratio() {
-    assert_eq!(max_allowed_lagged_cycles(0, 0.35), 0);
-    assert_eq!(max_allowed_lagged_cycles(3, 0.35), 2);
-    assert_eq!(max_allowed_lagged_cycles(10, 0.1), 1);
+fn scheduled_churn_floor_requires_sustained_cycles() {
+    assert_eq!(
+        scheduled_churn_cycles(
+            Duration::from_secs(60),
+            Duration::from_secs(30),
+            Duration::from_secs(30)
+        ),
+        1
+    );
+    assert_eq!(
+        scheduled_churn_cycles(
+            Duration::from_secs(60),
+            Duration::from_secs(15),
+            Duration::from_secs(30)
+        ),
+        2
+    );
+    assert_eq!(minimum_required_churn_cycles(1), 1);
+    assert_eq!(minimum_required_churn_cycles(10), 9);
+    assert_eq!(minimum_required_churn_cycles(287), 259);
+
+    let duration = Duration::from_secs(DEFAULT_SIM_DURATION_SECS);
+    let churn_window = duration.saturating_sub(effective_final_settle_window(duration));
+    assert_eq!(
+        scheduled_churn_cycles(
+            churn_window,
+            initial_churn_delay(
+                Duration::from_secs(DEFAULT_CHURN_INTERVAL_SECS),
+                churn_window
+            ),
+            Duration::from_secs(DEFAULT_CHURN_INTERVAL_SECS),
+        ),
+        287
+    );
+    assert_eq!(
+        scheduled_churn_cycles(
+            churn_window,
+            initial_churn_delay(
+                Duration::from_secs(DEFAULT_CHURN_INTERVAL_SECS / 2),
+                churn_window,
+            ),
+            Duration::from_secs(DEFAULT_CHURN_INTERVAL_SECS),
+        ),
+        288
+    );
+    assert_eq!(minimum_required_churn_cycles(288), 260);
+}
+
+#[test]
+fn lagged_cycle_ratio_rejects_one_bad_cycle() {
+    assert_eq!(lagged_cycle_ratio(0, 0), 0.0);
+    assert_eq!(lagged_cycle_ratio(1, 1), 1.0);
+    assert!((lagged_cycle_ratio(1, 3) - (1.0 / 3.0)).abs() < f64::EPSILON);
+    assert!(lagged_cycle_ratio(1, 1) > DEFAULT_MAX_LAGGED_CYCLE_RATIO);
+}
+
+#[test]
+fn view_change_rate_uses_final_counter_and_full_soak_time() {
+    assert_eq!(view_change_rate(10, 22, Duration::from_secs(60)), 0.2);
+    assert_eq!(view_change_rate(22, 10, Duration::from_secs(60)), 0.0);
+    assert_eq!(view_change_rate(0, 1, Duration::ZERO), 1.0);
+}
+
+fn status_with_view_changes(view_changes: u32) -> iroha::client::Status {
+    iroha::client::Status {
+        view_changes,
+        ..iroha::client::Status::default()
+    }
+}
+
+#[test]
+fn view_change_tracker_accumulates_each_validator_across_restart_resets() {
+    let mut first = iroha::client::Status::default();
+    first.view_changes = 10;
+    let mut second = iroha::client::Status::default();
+    second.view_changes = 5;
+    let baseline = vec![(0, first.clone()), (1, second.clone())];
+    let mut tracker = ViewChangeTracker::new(3);
+    tracker.establish_baseline(&baseline);
+    assert_eq!(total_indexed_view_changes(&baseline), 15);
+
+    first.view_changes = 13;
+    second.view_changes = 7;
+    let mut newly_observed = iroha::client::Status::default();
+    newly_observed.view_changes = 4;
+    tracker.observe(&[(0, first.clone()), (1, second.clone()), (2, newly_observed)]);
+    assert_eq!(tracker.total_since_baseline(), 9);
+
+    first.view_changes = 2;
+    second.view_changes = 9;
+    tracker.observe(&[(0, first), (1, second)]);
+    assert_eq!(tracker.total_since_baseline(), 13);
+}
+
+#[test]
+fn view_change_tracker_conservatively_counts_a_late_first_observation() {
+    let mut tracker = ViewChangeTracker::new(2);
+    tracker.establish_baseline(&[(0, status_with_view_changes(5))]);
+
+    tracker.observe(&[
+        (0, status_with_view_changes(7)),
+        (1, status_with_view_changes(3)),
+    ]);
+
+    assert_eq!(tracker.total_since_baseline(), 5);
 }
 
 #[test]
@@ -2937,20 +3687,85 @@ fn joiner_stall_warning_threshold_matches_policy() {
 }
 
 #[test]
-fn simulation_summary_json_includes_membership_warning_cycles() {
-    let summary = SimulationSummary {
+fn release_execution_profile_accepts_only_the_exact_positive_profile() {
+    let profile = validate_release_execution_profile("release", "release", "true")
+        .expect("exact release/offline profile");
+    assert_eq!(profile.build_profile, "release");
+    assert!(profile.cargo_net_offline);
+}
+
+#[test]
+fn release_execution_profile_rejects_wrong_or_blank_build_profiles() {
+    for build_profile in ["", "debug", " release", "release "] {
+        assert!(
+            validate_release_execution_profile(build_profile, build_profile, "true").is_err(),
+            "unexpectedly accepted build profile {build_profile:?}"
+        );
+    }
+}
+
+#[test]
+fn release_execution_profile_rejects_cargo_profile_mismatch() {
+    for cargo_profile in ["", "debug", "release ", "Release"] {
+        assert!(
+            validate_release_execution_profile("release", cargo_profile, "true").is_err(),
+            "unexpectedly accepted Cargo profile {cargo_profile:?}"
+        );
+    }
+}
+
+#[test]
+fn release_execution_profile_rejects_non_exact_offline_values() {
+    for cargo_net_offline in ["", "1", "TRUE", " true", "true ", "false"] {
+        assert!(
+            validate_release_execution_profile("release", "release", cargo_net_offline).is_err(),
+            "unexpectedly accepted CARGO_NET_OFFLINE={cargo_net_offline:?}"
+        );
+    }
+}
+
+fn sample_simulation_summary() -> SimulationSummary {
+    SimulationSummary {
+        git_revision: "1".repeat(40),
+        workspace_source_manifest_sha256: "a".repeat(64),
+        build_profile: "release".to_owned(),
+        cargo_net_offline: true,
+        localnet_artifact_path: "/tmp/taira-localnet".to_owned(),
+        daemon_binary_path: "/tmp/iroha3d".to_owned(),
+        daemon_binary_blake2b_256: "b".repeat(64),
+        kagami_binary_path: "/tmp/kagami".to_owned(),
+        kagami_binary_blake2b_256: "c".repeat(64),
+        test_binary_path: "/tmp/taira-test".to_owned(),
+        test_binary_blake2b_256: "d".repeat(64),
+        generated_config_blake2b_256: "e".repeat(64),
+        seed: "taira-public-sim".to_owned(),
         duration_secs: 60,
         target_tps: 5,
         packet_loss_percent: 10,
+        churn_interval_secs: 300,
+        max_height_skew: 2,
+        max_height_skew_grace_secs: 30,
+        max_transient_height_skew: 32,
+        stall_timeout_secs: 300,
+        max_view_change_rate: 0.2,
+        max_lagged_cycle_ratio: 0.35,
+        min_committed_tps_ratio: 0.6,
+        process_downtime_secs: 5,
         tx_attempted: 300,
         tx_sent: 295,
         tx_submit_errors: 0,
         process_churn_cycles: 4,
+        expected_process_churn_cycles: 4,
         process_churn_lagged_cycles: 0,
         membership_join_cycles: 3,
         membership_leave_cycles: 3,
+        expected_membership_churn_cycles: 6,
+        membership_cleanup_leave: false,
         membership_churn_lagged_cycles: 1,
         membership_churn_warning_cycles: 2,
+        churn_paused_secs: 5.0,
+        churn_paused_ratio: 1.0 / 12.0,
+        soak_overrun_secs: 0.0,
         max_height_skew_observed: 1,
         view_changes_start: 0,
         view_changes_end: 0,
@@ -2961,21 +3776,191 @@ fn simulation_summary_json_includes_membership_warning_cycles() {
         committed_txs_min_delta: 288,
         saturated_samples: 0,
         total_samples: 60,
-    };
+        initial_status_snapshots: vec![norito::json!({"height": 1_u64})],
+        final_status_snapshots: vec![norito::json!({"height": 61_u64})],
+        no_progress_intervals: vec![NoProgressInterval {
+            start_elapsed_ms: 1_000,
+            end_elapsed_ms: 2_000,
+            classifications: vec!["commit_quorum_missing".to_owned()],
+            classified: true,
+            status_snapshots: Vec::new(),
+        }],
+        unclassified_no_progress_intervals: 0,
+    }
+}
+
+#[test]
+fn simulation_summary_json_records_release_profile_and_status_evidence() {
+    let summary = sample_simulation_summary();
     let value = summary.to_json_value();
     let object = value
         .as_object()
         .expect("summary must render to JSON object");
+    assert_eq!(
+        object.get("seed").and_then(norito::json::Value::as_str),
+        Some("taira-public-sim")
+    );
+    assert_eq!(
+        object
+            .get("workspace_source_manifest_sha256")
+            .and_then(norito::json::Value::as_str),
+        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+    assert_eq!(
+        object
+            .get("build_profile")
+            .and_then(norito::json::Value::as_str),
+        Some("release")
+    );
+    assert_eq!(
+        object
+            .get("cargo_net_offline")
+            .and_then(norito::json::Value::as_bool),
+        Some(true)
+    );
+    for name in [
+        "daemon_binary_blake2b_256",
+        "kagami_binary_blake2b_256",
+        "test_binary_blake2b_256",
+        "generated_config_blake2b_256",
+    ] {
+        assert_eq!(
+            object
+                .get(name)
+                .and_then(norito::json::Value::as_str)
+                .map(str::len),
+            Some(64),
+            "evidence digest {name}"
+        );
+    }
     assert_eq!(
         object
             .get("membership_churn_warning_cycles")
             .and_then(norito::json::Value::as_u64),
         Some(2)
     );
+    for (name, expected) in [
+        ("duration_secs", 60),
+        ("target_tps", 5),
+        ("packet_loss_percent", 10),
+        ("churn_interval_secs", 300),
+        ("max_height_skew", 2),
+        ("max_height_skew_grace_secs", 30),
+        ("max_transient_height_skew", 32),
+        ("stall_timeout_secs", 300),
+        ("process_downtime_secs", 5),
+        ("expected_process_churn_cycles", 4),
+        ("expected_membership_churn_cycles", 6),
+    ] {
+        assert_eq!(
+            object.get(name).and_then(norito::json::Value::as_u64),
+            Some(expected),
+            "profile field {name}"
+        );
+    }
+    for (name, expected) in [
+        ("max_view_change_rate", 0.2),
+        ("max_lagged_cycle_ratio", 0.35),
+        ("min_committed_tps_ratio", 0.6),
+    ] {
+        assert_eq!(
+            object.get(name).and_then(norito::json::Value::as_f64),
+            Some(expected),
+            "profile field {name}"
+        );
+    }
     assert_eq!(
         object
-            .get("packet_loss_percent")
+            .get("unclassified_no_progress_intervals")
             .and_then(norito::json::Value::as_u64),
-        Some(10)
+        Some(0)
+    );
+    assert_eq!(
+        object
+            .get("initial_status_snapshots")
+            .and_then(norito::json::Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        object
+            .get("final_status_snapshots")
+            .and_then(norito::json::Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        blocker_label(SumeragiV2LivenessBlocker::ApplicationPending),
+        "application_pending"
+    );
+    assert_eq!(
+        blocker_label(SumeragiV2LivenessBlocker::LocalControlPending),
+        "local_control_pending"
+    );
+}
+
+#[test]
+fn write_summary_persists_local_and_durable_evidence() {
+    let temp = tempfile::tempdir().expect("temporary evidence directory");
+    let local = temp.path().join("local/summary.json");
+    let durable = temp.path().join("durable/taira-summary.json");
+    fs::create_dir_all(local.parent().expect("local parent")).expect("create local parent");
+
+    write_summary(&local, &durable, &sample_simulation_summary())
+        .expect("write both summary copies");
+    let local_bytes = fs::read(&local).expect("read local summary");
+    let durable_bytes = fs::read(&durable).expect("read durable summary");
+    assert_eq!(local_bytes, durable_bytes);
+    assert!(
+        String::from_utf8(local_bytes)
+            .expect("summary UTF-8")
+            .contains("workspace_source_manifest_sha256")
+    );
+}
+
+#[test]
+fn status_snapshot_preserves_the_source_validator_index() {
+    let snapshot = status_snapshot_value(3, norito::json!({"height": 9_u64}));
+    let object = snapshot.as_object().expect("snapshot object");
+    assert_eq!(
+        object
+            .get("validator_index")
+            .and_then(norito::json::Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        object
+            .get("status")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|status| status.get("height"))
+            .and_then(norito::json::Value::as_u64),
+        Some(9)
+    );
+}
+
+#[test]
+fn generated_config_digest_tracks_config_but_not_runtime_logs() {
+    let temp = tempfile::tempdir().expect("temporary config directory");
+    fs::write(temp.path().join("peer0.toml"), "chain = 'a'\n").expect("write config");
+    fs::write(temp.path().join("peer0.log"), "startup\n").expect("write log");
+    fs::create_dir_all(temp.path().join("storage")).expect("create storage");
+    fs::write(temp.path().join("storage/block.json"), "dynamic\n").expect("write storage");
+
+    let first = generated_config_blake2b_256(temp.path()).expect("digest generated config");
+    fs::write(temp.path().join("peer0.log"), "different log\n").expect("update log");
+    fs::write(
+        temp.path().join("storage/block.json"),
+        "different storage\n",
+    )
+    .expect("update storage");
+    assert_eq!(
+        first,
+        generated_config_blake2b_256(temp.path()).expect("digest without runtime artifacts")
+    );
+
+    fs::write(temp.path().join("peer0.toml"), "chain = 'b'\n").expect("update config");
+    assert_ne!(
+        first,
+        generated_config_blake2b_256(temp.path()).expect("digest changed config")
     );
 }

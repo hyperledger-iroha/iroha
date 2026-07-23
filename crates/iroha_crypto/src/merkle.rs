@@ -196,7 +196,6 @@ impl<T> JsonDeserialize for MerkleProof<T> {
             }
 
             let key = parser.parse_key()?;
-            parser.consume_char(b':')?;
             match key.as_str() {
                 "leaf_index" => {
                     if leaf_index.is_some() {
@@ -814,7 +813,6 @@ impl<T> JsonDeserialize for CompactMerkleProof<T> {
             }
 
             let key = parser.parse_key()?;
-            parser.consume_char(b':')?;
             match key.as_str() {
                 "depth" => {
                     if depth.is_some() {

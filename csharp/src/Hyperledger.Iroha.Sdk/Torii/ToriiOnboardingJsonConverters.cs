@@ -6,15 +6,6 @@ namespace Hyperledger.Iroha.Torii;
 
 internal static class ToriiOnboardingJson
 {
-    internal static void ValidateAccountOnboardingResponse(ToriiAccountOnboardingResponse response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        RequireCanonicalAccountId(response.AccountId, $"{context}.account_id");
-        ToriiSseEventJson.RequireExactTokenText(response.Uaid, $"{context}.uaid");
-        ValidateOptionalTransactionHashHex(response.TransactionHashHex, $"{context}.tx_hash_hex");
-        ToriiSseEventJson.RequireExactTokenText(response.Status, $"{context}.status");
-    }
-
     internal static void ValidateAccountFaucetResponse(ToriiAccountFaucetResponse response, string context)
     {
         ArgumentNullException.ThrowIfNull(response);
@@ -24,93 +15,6 @@ internal static class ToriiOnboardingJson
         _ = ToriiQuantityJson.RequireCanonicalQuantity(response.Amount, $"{context}.amount");
         ValidateOptionalTransactionHashHex(response.TransactionHashHex, $"{context}.tx_hash_hex");
         ToriiSseEventJson.RequireExactTokenText(response.Status, $"{context}.status");
-    }
-
-    internal static void ValidateMultisigAccountOnboardingResponse(
-        ToriiMultisigAccountOnboardingResponse response,
-        string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        RequireCanonicalAccountId(response.AccountId, $"{context}.account_id");
-        ValidateOptionalTransactionHashHex(response.TransactionHashHex, $"{context}.tx_hash_hex");
-        ToriiSseEventJson.RequireExactTokenText(response.Status, $"{context}.status");
-    }
-
-    internal static ToriiAccountOnboardingResponse ReadAccountOnboardingResponse(
-        ref Utf8JsonReader reader,
-        string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (reader.TokenType != JsonTokenType.StartObject)
-        {
-            throw new JsonException($"{context} must be an object.");
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        string? accountId = null;
-        string? uaid = null;
-        string? transactionHashHex = null;
-        string? status = null;
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-            {
-                try
-                {
-                    var response = new ToriiAccountOnboardingResponse
-                    {
-                        AccountId = RequireString(accountId, context, "account_id"),
-                        Uaid = RequireString(uaid, context, "uaid"),
-                        TransactionHashHex = transactionHashHex is null ? string.Empty : transactionHashHex,
-                        Status = RequireString(status, context, "status"),
-                    };
-                    ValidateAccountOnboardingResponse(response, context);
-                    return response;
-                }
-                catch (ArgumentException error) when (error.ParamName is not null)
-                {
-                    throw DirectMetadataErrorToJsonException(error, context);
-                }
-            }
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-            {
-                throw new JsonException($"{context} property name expected.");
-            }
-
-            var propertyName = reader.GetString() ?? throw new JsonException($"{context} property name must be a string.");
-            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, context);
-            if (!reader.Read())
-            {
-                throw new JsonException($"{context}.{propertyName} is truncated.");
-            }
-
-            switch (propertyName)
-            {
-                case "account_id":
-                    accountId = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.account_id");
-                    break;
-                case "uaid":
-                    uaid = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.uaid");
-                    break;
-                case "tx_hash_hex":
-                    transactionHashHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.tx_hash_hex");
-                    break;
-                case "status":
-                    status = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.status");
-                    break;
-                default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
-            }
-        }
-
-        throw new JsonException($"{context} JSON object is incomplete.");
     }
 
     internal static ToriiAccountFaucetResponse ReadAccountFaucetResponse(
@@ -200,93 +104,6 @@ internal static class ToriiOnboardingJson
         throw new JsonException($"{context} JSON object is incomplete.");
     }
 
-    internal static ToriiMultisigAccountOnboardingResponse ReadMultisigAccountOnboardingResponse(
-        ref Utf8JsonReader reader,
-        string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (reader.TokenType != JsonTokenType.StartObject)
-        {
-            throw new JsonException($"{context} must be an object.");
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        string? accountId = null;
-        string? transactionHashHex = null;
-        string? status = null;
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-            {
-                try
-                {
-                    var response = new ToriiMultisigAccountOnboardingResponse
-                    {
-                        AccountId = RequireString(accountId, context, "account_id"),
-                        TransactionHashHex = transactionHashHex is null ? string.Empty : transactionHashHex,
-                        Status = RequireString(status, context, "status"),
-                    };
-                    ValidateMultisigAccountOnboardingResponse(response, context);
-                    return response;
-                }
-                catch (ArgumentException error) when (error.ParamName is not null)
-                {
-                    throw DirectMetadataErrorToJsonException(error, context);
-                }
-            }
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-            {
-                throw new JsonException($"{context} property name expected.");
-            }
-
-            var propertyName = reader.GetString() ?? throw new JsonException($"{context} property name must be a string.");
-            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, context);
-            if (!reader.Read())
-            {
-                throw new JsonException($"{context}.{propertyName} is truncated.");
-            }
-
-            switch (propertyName)
-            {
-                case "account_id":
-                    accountId = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.account_id");
-                    break;
-                case "tx_hash_hex":
-                    transactionHashHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.tx_hash_hex");
-                    break;
-                case "status":
-                    status = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.status");
-                    break;
-                default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
-            }
-        }
-
-        throw new JsonException($"{context} JSON object is incomplete.");
-    }
-
-    internal static void WriteAccountOnboardingResponse(
-        Utf8JsonWriter writer,
-        ToriiAccountOnboardingResponse response,
-        string context)
-    {
-        ValidateAccountOnboardingResponse(response, context);
-
-        writer.WriteStartObject();
-        writer.WriteString("account_id", response.AccountId);
-        writer.WriteString("uaid", response.Uaid);
-        writer.WriteString("tx_hash_hex", response.TransactionHashHex);
-        writer.WriteString("status", response.Status);
-        writer.WriteEndObject();
-    }
-
     internal static void WriteAccountFaucetResponse(
         Utf8JsonWriter writer,
         ToriiAccountFaucetResponse response,
@@ -299,20 +116,6 @@ internal static class ToriiOnboardingJson
         writer.WriteString("asset_definition_id", response.AssetDefinitionId);
         writer.WriteString("asset_id", response.AssetId);
         writer.WriteString("amount", response.Amount);
-        writer.WriteString("tx_hash_hex", response.TransactionHashHex);
-        writer.WriteString("status", response.Status);
-        writer.WriteEndObject();
-    }
-
-    internal static void WriteMultisigAccountOnboardingResponse(
-        Utf8JsonWriter writer,
-        ToriiMultisigAccountOnboardingResponse response,
-        string context)
-    {
-        ValidateMultisigAccountOnboardingResponse(response, context);
-
-        writer.WriteStartObject();
-        writer.WriteString("account_id", response.AccountId);
         writer.WriteString("tx_hash_hex", response.TransactionHashHex);
         writer.WriteString("status", response.Status);
         writer.WriteEndObject();
@@ -364,27 +167,6 @@ internal static class ToriiOnboardingJson
     }
 }
 
-internal sealed class ToriiAccountOnboardingResponseJsonConverter : JsonConverter<ToriiAccountOnboardingResponse>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiAccountOnboardingResponse Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiOnboardingJson.ReadAccountOnboardingResponse(ref reader, "account onboarding response");
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiAccountOnboardingResponse value,
-        JsonSerializerOptions options)
-    {
-        ToriiOnboardingJson.WriteAccountOnboardingResponse(writer, value, "account onboarding response");
-    }
-}
-
 internal sealed class ToriiAccountFaucetResponseJsonConverter : JsonConverter<ToriiAccountFaucetResponse>
 {
     public override bool HandleNull => true;
@@ -403,32 +185,5 @@ internal sealed class ToriiAccountFaucetResponseJsonConverter : JsonConverter<To
         JsonSerializerOptions options)
     {
         ToriiOnboardingJson.WriteAccountFaucetResponse(writer, value, "account faucet response");
-    }
-}
-
-internal sealed class ToriiMultisigAccountOnboardingResponseJsonConverter :
-    JsonConverter<ToriiMultisigAccountOnboardingResponse>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiMultisigAccountOnboardingResponse Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiOnboardingJson.ReadMultisigAccountOnboardingResponse(
-            ref reader,
-            "multisig account onboarding response");
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiMultisigAccountOnboardingResponse value,
-        JsonSerializerOptions options)
-    {
-        ToriiOnboardingJson.WriteMultisigAccountOnboardingResponse(
-            writer,
-            value,
-            "multisig account onboarding response");
     }
 }

@@ -7,15 +7,19 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World},
+    state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
-    isi::governance::FinalizeReferendum,
+    isi::{
+        error::{InstructionExecutionError, MathError},
+        governance::FinalizeReferendum,
+    },
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
+use mv::storage::StorageReadOnly;
 
 fn checked_random_governance_threshold_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance threshold keypair")
@@ -166,7 +170,10 @@ fn finalize_referendum_rejects_tally_overflow_without_side_effects() {
     .execute(&ALICE_ID, &mut stx)
     .expect_err("overflowing tally must fail");
 
-    assert!(err.to_string().contains("overflow"));
+    assert!(
+        matches!(&err, InstructionExecutionError::Math(MathError::Overflow)),
+        "unexpected finalization error: {err}"
+    );
     assert!(stx.world.take_external_events().is_empty());
     let stored = stx
         .world

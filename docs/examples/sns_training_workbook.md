@@ -1,53 +1,87 @@
-# SNS Training Workbook Template
+# SNS training workbook template
 
-Use this workbook as the canonical handout for each training cohort. Replace
-placeholders (`<...>`) before distributing to attendees.
+Replace placeholders before distribution. Do not put a raw token, private key,
+credential header, or client-generated payment proof in this workbook.
 
 ## Session details
-- Suffix: `<.sora | .nexus | .dao>`
-- Cycle: `<YYYY-MM>`
-- Language: `<ar/es/fr/ja/pt/ru/ur>`
+
+- Cohort: `<name>`
+- Network: `<staging network>`
+- Language: `<language>`
 - Facilitator: `<name>`
 
-## Lab 1 — KPI export
-1. Open the portal KPI dashboard (`docs/portal/docs/sns/kpi-dashboard.md`).
-2. Filter by suffix `<suffix>` and time range `<window>`.
-3. Export PDF + CSV snapshots.
-4. Record SHA-256 of the exported JSON/PDF here: `______________________`.
+## Lab 1 — Readiness diagnostics
 
-## Lab 2 — Manifest drill
-1. Fetch the sample manifest from `artifacts/sns/training/<suffix>/<cycle>/manifests/<lang>.json`.
-2. Validate with `cargo run --bin sns_manifest_check -- --input <file>`.
-3. Generate resolver skeleton with `scripts/sns_zonefile_skeleton.py`.
-4. Paste the diff summary:
-   ```
-   <git diff output>
-   ```
+1. Validate the supplied node configuration with `irohad --check-config`.
+2. Use the authenticated alias doctor/readiness flow documented in
+   `docs/source/sns/registrar_api.md`.
+3. Record the overall status: `Ready | Pending | Blocked`.
+4. Record only redacted diagnostic fields: phase, stable code, severity,
+   resource, config path, expected/actual values, and remediation.
 
-## Lab 3 — Dispute simulation
-1. Use guardian CLI to start a freeze (case id `<case-id>`).
-2. Record the dispute hash: `______________________`.
-3. Upload the evidence log to `artifacts/sns/training/<suffix>/<cycle>/logs/`.
+Diagnostic notes: `________________________________________________________`
 
-## Lab 4 — Annex automation
-1. Export the Grafana dashboard JSON and copy it into `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json`.
-2. Run:
+## Lab 2 — Read-only setup plan
+
+1. Inspect the secret-free typed intent in `setup.json`.
+2. Produce a plan without applying it:
+
    ```bash
-   cargo xtask sns-annex \
-     --suffix <suffix> \
-     --cycle <cycle> \
-     --dashboard artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json \
-     --dashboard-artifact artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json \
-     --output docs/source/sns/reports/<suffix>/<cycle>.md \
-     --regulatory-entry docs/source/sns/regulatory/<memo>.md \
-     --portal-entry docs/portal/docs/sns/regulatory/<memo-id>.md
+   python3 scripts/sns_bulk_onboard.py setup.json \
+     --config client.toml \
+     --plan-file setup.plan.json
    ```
-3. Paste the annex path + SHA-256 output: `________________________________`.
+
+3. Record the authority, chain/anchor, ordered resource dispositions, exact
+   quote totals, caps, expiry, warnings/blockers, and plan hash.
+4. Decode and re-encode the exact framed instructions; verify the hash again.
+
+Plan hash: `_______________________________________________________________`
+
+## Lab 3 — Replay, drift, and read visibility
+
+For each fixture, record the expected result:
+
+| Scenario | Expected result |
+|----------|-----------------|
+| Exact active state | `NoOp`, zero charge |
+| Missing derived index/capability | `Repair`, zero lease charge |
+| Missing resource | `Create`, exact calculated charge |
+| Owner/binding/primary/text-ID drift | Structured 409, no executable plan |
+| Restricted read without valid authentication | 401 |
+| Authenticated read without exact/applicable resolve scope | 403 before lookup |
+| Authorized missing alias | 404 |
+
+Conflict code and remediation: `___________________________________________`
+
+## Lab 4 — Atomic apply and evidence
+
+1. Apply the exact verified plan only with an explicit mutation flag:
+
+   ```bash
+   python3 scripts/sns_bulk_onboard.py setup.json \
+     --config client.toml \
+     --plan-file setup.plan.json \
+     --apply
+   ```
+
+   It must locally sign one normal transaction and submit through the existing
+   transaction endpoint.
+2. Record the transaction hash and committed/rejected result.
+3. Compare the exact planner quote with the committed ledger debit. Do not
+   report the cap as the charge.
+4. Fetch a post-commit readiness report. If rejected, verify that no earlier
+   resource, binding, index, permission, or balance write is visible.
+
+Transaction hash: `________________________________________________________`
+
+Evidence packet path: `____________________________________________________`
 
 ## Feedback notes
+
 - What was unclear?
-- Which labs ran over time?
+- Which diagnostics or plan fields need better explanation?
 - Tooling bugs observed?
 
-Return completed workbooks to the facilitator; they belong under
-`artifacts/sns/training/<suffix>/<cycle>/workbooks/`.
+Return only redacted workbooks and secret-free evidence to the facilitator.
+Keep runtime signer/token files in their protected sidecar location.

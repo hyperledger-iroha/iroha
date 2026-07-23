@@ -411,23 +411,36 @@ impl From<crate::isi::nexus::RegisterVerifiedLaneRelay> for InstructionBox {
     }
 }
 
-impl From<crate::isi::nexus::RegisterVerifiedNexusFeeBudget> for InstructionBox {
-    fn from(i: crate::isi::nexus::RegisterVerifiedNexusFeeBudget) -> Self {
+impl From<crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation> for InstructionBox {
+    fn from(i: crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::nexus::UpsertFeeSponsorPolicy> for InstructionBox {
-    fn from(i: crate::isi::nexus::UpsertFeeSponsorPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
+macro_rules! impl_nexus_program_instruction_box {
+    ($($ty:ident),+ $(,)?) => {
+        $(
+            impl From<crate::isi::nexus::$ty> for InstructionBox {
+                fn from(i: crate::isi::nexus::$ty) -> Self {
+                    InstructionBox(Box::new(i))
+                }
+            }
+        )+
+    };
 }
 
-impl From<crate::isi::nexus::RemoveFeeSponsorPolicy> for InstructionBox {
-    fn from(i: crate::isi::nexus::RemoveFeeSponsorPolicy) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+impl_nexus_program_instruction_box!(
+    CreateFeeSponsorProgram,
+    StageFeeSponsorProgramRevision,
+    ActivateFeeSponsorProgramRevision,
+    PauseFeeSponsorProgram,
+    BeginCloseFeeSponsorProgram,
+    CloseFeeSponsorProgram,
+    EnrollFeeSponsorBeneficiary,
+    UnenrollFeeSponsorBeneficiary,
+    FundFeeSponsorProgram,
+    WithdrawFeeSponsorProgram,
+);
 
 impl From<crate::isi::identifier::RegisterIdentifierPolicy> for InstructionBox {
     fn from(i: crate::isi::identifier::RegisterIdentifierPolicy) -> Self {
@@ -1129,53 +1142,28 @@ impl From<crate::isi::space_directory::ExpireSpaceDirectoryManifest> for Instruc
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::domain_link::SetAccountAliasBinding> for InstructionBox {
-    fn from(i: crate::isi::domain_link::SetAccountAliasBinding) -> Self {
+impl From<crate::isi::alias_setup::EnsureAlias> for InstructionBox {
+    fn from(i: crate::isi::alias_setup::EnsureAlias) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::domain_link::SetPrimaryAccountAlias> for InstructionBox {
-    fn from(i: crate::isi::domain_link::SetPrimaryAccountAlias) -> Self {
+impl From<crate::isi::alias_setup::RenewAliasLease> for InstructionBox {
+    fn from(i: crate::isi::alias_setup::RenewAliasLease) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::account_alias_lease::AcquireAccountAliasLease> for InstructionBox {
-    fn from(i: crate::isi::account_alias_lease::AcquireAccountAliasLease) -> Self {
+impl From<crate::isi::alias_setup::ConfigureAliasAutoRenew> for InstructionBox {
+    fn from(i: crate::isi::alias_setup::ConfigureAliasAutoRenew) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::account_alias_lease::RenewAccountAliasLease> for InstructionBox {
-    fn from(i: crate::isi::account_alias_lease::RenewAccountAliasLease) -> Self {
+impl From<crate::isi::alias_setup::RebindAccountAlias> for InstructionBox {
+    fn from(i: crate::isi::alias_setup::RebindAccountAlias) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::sns::RegisterSnsName> for InstructionBox {
-    fn from(i: crate::isi::sns::RegisterSnsName) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sns::RenewSnsName> for InstructionBox {
-    fn from(i: crate::isi::sns::RenewSnsName) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sns::TransferSnsName> for InstructionBox {
-    fn from(i: crate::isi::sns::TransferSnsName) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sns::UpdateSnsNameControllers> for InstructionBox {
-    fn from(i: crate::isi::sns::UpdateSnsNameControllers) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sns::FreezeSnsName> for InstructionBox {
-    fn from(i: crate::isi::sns::FreezeSnsName) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::sns::UnfreezeSnsName> for InstructionBox {
-    fn from(i: crate::isi::sns::UnfreezeSnsName) -> Self {
+impl From<crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias> for InstructionBox {
+    fn from(i: crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1240,14 +1228,32 @@ impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::offline::TopUpKagemushaRecursiveV2> for InstructionBox {
-    fn from(i: crate::isi::offline::TopUpKagemushaRecursiveV2) -> Self {
+impl From<crate::isi::offline::TopUpKagemushaRecursiveV4> for InstructionBox {
+    fn from(i: crate::isi::offline::TopUpKagemushaRecursiveV4) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::RedeemKagemushaRecursiveV2> for InstructionBox {
-    fn from(i: crate::isi::offline::RedeemKagemushaRecursiveV2) -> Self {
+impl From<crate::isi::offline::RedeemKagemushaRecursiveV4> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemKagemushaRecursiveV4) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::ActivateKagemushaRecursiveReleaseV4> for InstructionBox {
+    fn from(i: crate::isi::offline::ActivateKagemushaRecursiveReleaseV4) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::RegisterOfflineDeviceAttestation> for InstructionBox {
+    fn from(i: crate::isi::offline::RegisterOfflineDeviceAttestation) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::SetOfflineDeviceAttestationPolicy> for InstructionBox {
+    fn from(i: crate::isi::offline::SetOfflineDeviceAttestationPolicy) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1778,8 +1784,14 @@ pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
     encoded_instruction_payload(instr).map(|payload| payload.name)
 }
 
-#[cfg(test)]
-fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static str, Vec<u8>)> {
+/// Encode one registered instruction into its stable wire id and exact Norito frame.
+///
+/// The returned payload is the same framed byte sequence embedded in an
+/// [`InstructionBox`] wire tuple. It can be decoded with
+/// [`decode_instruction_from_pair`] and is suitable for planner responses that
+/// clients must verify and submit without altering instruction bytes.
+#[must_use]
+pub fn framed_instruction_payload(instr: &InstructionBox) -> Option<(&'static str, Vec<u8>)> {
     let encoded = encoded_instruction_payload(instr)?;
     let mut payload = Vec::with_capacity(encoded.framed_payload_len);
     (encoded.write_framed_payload)(
@@ -1789,6 +1801,11 @@ fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static 
     )
     .ok()?;
     Some((encoded.name, payload))
+}
+
+#[cfg(test)]
+fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static str, Vec<u8>)> {
+    framed_instruction_payload(instr)
 }
 
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
@@ -3030,10 +3047,10 @@ macro_rules! enum_type {
     };
 }
 
-/// Canonical paid account-alias lease instructions.
-pub mod account_alias_lease;
 /// Native account controller replacement and social recovery instructions.
 pub mod account_recovery;
+/// Declarative alias setup and explicit alias lifecycle instructions.
+pub mod alias_setup;
 /// Asset-definition alias binding instructions.
 pub mod asset_alias;
 /// Asset-scoped outbound transfer control instructions.
@@ -3049,8 +3066,6 @@ pub mod content;
 pub mod contract_alias;
 /// DeFi-native instructions.
 pub mod defi;
-/// Account subject and domain link instructions.
-pub mod domain_link;
 /// Ledger-managed asset escrow instructions.
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
@@ -3083,8 +3098,6 @@ pub mod rwa;
 pub mod settlement;
 /// Smart contract code management instructions.
 pub mod smart_contract_code;
-/// Consensus-backed SNS mutation instructions.
-pub mod sns;
 /// Viral incentive and social reward instructions.
 pub mod social;
 /// Soracloud lifecycle and runtime-state instructions.
@@ -3107,14 +3120,12 @@ pub mod vpn;
 /// Zero-knowledge instruction wrappers.
 pub mod zk;
 
-pub use account_alias_lease::*;
 pub use account_recovery::*;
 pub use asset_alias::*;
 pub use asset_transfer_control::*;
 pub use confidential::*;
 pub use contract_alias::*;
 pub use defi::*;
-pub use domain_link::*;
 pub use identifier::*;
 pub use kaigi::*;
 pub use ministry::*;
@@ -3126,7 +3137,6 @@ pub use ram_lfe::*;
 pub use register::*;
 pub use repo::*;
 pub use settlement::*;
-pub use sns::*;
 pub use soradns::*;
 pub use sorafs::*;
 pub use space_directory::*;
@@ -3891,11 +3901,14 @@ pub mod prelude {
         RollbackOracleChange, SetKeyValue, SetKeyValueBox, SetParameter, SubmitOracleObservation,
         Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister,
         UnregisterBox, Upgrade, VoteOracleChangeStage,
-        account_alias_lease::{AcquireAccountAliasLease, RenewAccountAliasLease},
         account_recovery::{
             ApproveAccountRecovery, CancelAccountRecovery, ClearAccountRecoveryPolicy,
             FinalizeAccountRecovery, ProposeAccountRecovery, ReplaceAccountController,
             SetAccountRecoveryPolicy,
+        },
+        alias_setup::{
+            CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
+            RebindAccountAlias, RenewAliasLease,
         },
         asset_transfer_control::{
             SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
@@ -3910,7 +3923,6 @@ pub mod prelude {
         consensus_keys::{DisableConsensusKey, RegisterConsensusKey, RotateConsensusKey},
         content::{PublishContentBundle, RetireContentBundle},
         contract_alias::SetContractAlias,
-        domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
         },
@@ -3942,10 +3954,6 @@ pub mod prelude {
             SettlementKind, SettlementLedger, SettlementLedgerEntry, SettlementLeg,
             SettlementLegRole, SettlementLegSnapshot, SettlementOutcomeRecord, SettlementPlan,
             SettlementSuccessRecord,
-        },
-        sns::{
-            FreezeSnsName, RegisterSnsName, RenewSnsName, TransferSnsName, UnfreezeSnsName,
-            UpdateSnsNameControllers,
         },
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         soracloud::{

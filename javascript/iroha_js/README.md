@@ -28,8 +28,10 @@ binary, Cargo workspace, install hook, or implicit downloader. Consequently,
 `npm run build:native` is a source-checkout command, not a supported operation
 inside a clean registry installation. Registry consumers can use the portable
 browser exports (`/browser`, `/transaction-codec`, `/canonical-request`,
-`/ivm-artifact`, `/connect-browser`, and `/nexus-app`) and the Node Ed25519
-fallback without a native host. Applications that need native-only APIs must
+`/ivm-artifact`, `/ivm-artifact-admission-wasm`,
+`/smart-contract-deployment`, `/connect-browser`, and `/nexus-app`) and the
+Node Ed25519 fallback without a native host. Applications that need native-only
+APIs must
 provide a separately built and checksum-verified host through
 `IROHA_JS_NATIVE_DIR`. The registry artifact includes only two portable,
 offline examples: `recipes/iso_bridge_builder.mjs` and
@@ -97,9 +99,23 @@ proof, `validatePdpCommitmentChallenge(...)` or
 
 ## Offline cash SDK boundary
 
-The JavaScript package is a general-purpose chain SDK. Kagemusha wallet
-operations are supported by the Swift SDK, so JavaScript does not publish a
-wallet lifecycle, Torii wallet helpers, proof wrappers, or peer transport.
+The JavaScript package exposes the four stable Kagemusha Torii routes through
+`getKagemushaReadinessV4`, `submitKagemushaTopUpV4`,
+`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Readiness is
+accepted only for bridge ABI 21, a maximum of eight hops, and the authenticated
+manifest-V4 Eq/Ep verifier pair. ABI-19 and V3 responses are rejected rather
+than upgraded.
+
+This is deliberately a transport-only boundary. Command helpers require an
+externally produced `{ version: 4, operationId, norito }` archive and never
+derive witnesses, install recursive artifacts, or claim a native prover. Use a
+supported Swift or JVM wallet implementation to create the archive, then pass a
+detached copy to JavaScript only when a web or Node service owns Torii
+submission and operation polling. Top-up archives are limited to 512 KiB and
+redeem archives to 48 MiB; the exported
+`KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES` and
+`KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES` constants expose those exact Torii
+boundaries.
 
 ## Native Privacy Bridge
 
@@ -166,6 +182,7 @@ const payloadBytes = buildBrowserTransferPayload({
   sourceAssetHoldingId: `${assetDefinitionId}#${authority}`,
   quantity: "1.25",
   destinationAccountId,
+  feePayment: quotedFeePayment, // exact ergonomic intent supplied by the app quote flow
   metadata: { memo: "wallet transfer" },
   creationTimeMs: Date.now(),
   ttlMs: 30_000,
@@ -211,6 +228,104 @@ The codec only returns verified bytes and the canonical compact-entrypoint
 pipeline hash: importing it does not enable Nexus, connect a wallet, submit to
 Torii, or turn on live-send behavior. Applications must authorize and perform
 those steps separately.
+
+### Fee quotes and sponsor programs
+
+All transaction builders require a typed `feePayment`. For live submission,
+use the guided quote flow instead of inventing charge maxima:
+
+```js
+import {
+  ToriiClient,
+  buildTransferAssetInstruction,
+  quoteAndSignTransaction,
+} from "@iroha/iroha-js";
+
+const torii = new ToriiClient(toriiUrl);
+const requestedFeePayment = {
+  payer: "sponsor",
+  programId: `${sponsorAccountId}/wallet_payments`,
+  programRevision: 3,
+  chargeLimits: [],
+};
+const canonicalAuth = { accountId: authority, privateKey };
+
+const program = await torii.findFeeSponsorProgramById(
+  requestedFeePayment.programId,
+  { canonicalAuth },
+);
+if (program?.lifecycle.state !== "active") throw new Error("sponsor is not active");
+
+const signed = await quoteAndSignTransaction(
+  torii,
+  {
+    chainId: "test-chain",
+    authority,
+    instructions: [buildTransferAssetInstruction({
+      sourceAssetHoldingId,
+      destinationAccountId,
+      quantity: "1",
+    })],
+    feePayment: requestedFeePayment,
+    privateKey,
+  },
+  { canonicalAuth },
+);
+console.log(signed.quote.intent, signed.hash.toString("hex"));
+```
+
+`quoteAndSignTransaction` freezes the exact unsigned payload, account-signs
+`POST /v1/fees/quote`, verifies that the returned intent retained the payer,
+exact program/revision, and gas bound, replaces only `fee_payment`, and signs.
+Contract/IVM drafts require a positive `gasLimit`. The metadata keys
+`fee_sponsor`, `gas_asset_id`, and `gas_limit` are retired and rejected, and a
+sponsor rejection never falls back to the authority.
+
+In standalone encoding examples below, `feePayment` denotes an already quoted
+ergonomic intent with canonical charge limits.
+
+### Mixed instruction and contract-call batches
+
+Use `buildExecutableBatchTransaction` when one atomic transaction must
+interleave native ISIs and deployed-contract calls. Entries execute in the
+exact array order, and any contract call requires a positive signature-bound
+`feePayment.gasLimit`. Empty batches and noncanonical contract addresses are
+rejected before native or browser signing; addresses must use lowercase V1
+Bech32m.
+
+```js
+import {
+  buildExecutableBatchTransaction,
+  buildTransferAssetInstruction,
+} from "@iroha/iroha-js";
+
+const mixed = buildExecutableBatchTransaction({
+  chainId,
+  authority,
+  entries: [
+    {
+      kind: "instruction",
+      instruction: buildTransferAssetInstruction(transferInput),
+    },
+    {
+      kind: "contractCall",
+      contractAddress,
+      expectedCodeHash, // exact marked 32-byte hash (bytes or 64 hex digits)
+      entrypoint: "settle",
+      arguments: canonicalArgumentRecord, // optional, at most 1 MiB
+    },
+  ],
+  feePayment: { ...quotedFeePayment, gasLimit: 100_000 },
+  privateKey,
+});
+```
+
+For external browser signing, pass the same ordered `entries` shape to
+`buildBrowserExecutableBatchPayload`, then use
+`validateBrowserExecutableBatchSignable` and
+`finalizeBrowserExecutableBatchTransaction`. Keep using `buildTransaction` or
+`buildBrowserInstructionTransactionPayload` for instruction-only transactions;
+those APIs retain the legacy `Executable::Instructions` wire tag.
 
 The `@iroha/iroha-js/nexus-app` export is also a browser-only dependency graph:
 it uses the browser codec and strict browser Ed25519 verifier by default and
@@ -323,6 +438,41 @@ not replace Rust instruction decoding or its control-flow, syscall, entrypoint,
 access-claim, and other semantic admission checks. The service must therefore be
 a trusted canonical Rust compiler endpoint; the ledger remains the final
 authority on whether an artifact is deployable.
+
+Browser deployment also runs the canonical Rust semantic admission policy
+locally through the raw `ivm_artifact_admission` WebAssembly exports. Provision
+the verifier with a SHA-256 trust anchor from signed application or release
+metadata; do not derive the expected digest from the same mutable response:
+
+```js
+import {
+  instantiateIvmArtifactAdmissionWasm,
+} from "@iroha/iroha-js/ivm-artifact-admission-wasm";
+import {
+  deploySmartContractBrowser,
+} from "@iroha/iroha-js/smart-contract-deployment";
+
+const verifier = await instantiateIvmArtifactAdmissionWasm({
+  wasmBytes: await fetch(admissionWasmUrl),
+  expectedSha256Hex: signedRelease.admissionWasmSha256Hex,
+});
+
+await deploySmartContractBrowser({
+  artifactAdmissionVerifier: verifier,
+  artifactBytes: result.output.artifactBytes,
+  manifest: result.output.manifest,
+  compilerCodeHash: result.output.codeHashHex,
+  compilerAbiHash: result.output.abiHashHex,
+  // chain, local-signing, authenticated-state, and submission callbacks...
+});
+```
+
+Deployment fails before node capability/state reads, signing, or submission if
+the authenticated module is absent, the shared verifier rejects the artifact,
+or its derived code hash, ABI hash, offsets, entrypoint count, or canonical
+manifest disagrees with the compiler output. JavaScript framing validation is
+retained as an earlier diagnostic boundary, but cannot authorize deployment by
+itself.
 The first release accepts only `provenance: null`; signed provenance remains
 disabled until its exact message and public-key algorithm can be verified.
 The native binding and service receive the same canonical JSON-shaped request,
@@ -384,6 +534,71 @@ app launchers stay consistent.
 If Torii sits behind nginx or another reverse proxy, `/v1/connect/ws` must
 forward websocket upgrade headers (`Connection: Upgrade`, `Upgrade: websocket`)
 to the upstream node or browser Connect joins will fail with `400 Bad Request`.
+
+To authenticate Torii canonical JSON requests with the wallet-approved account,
+request the `sign_raw` method explicitly and scope it to the fixed canonical
+request domain. The wallet is the permission enforcement boundary: it should
+reject raw-sign prompts when this method/resource pair was not granted.
+
+```js
+import {
+  TORII_CANONICAL_REQUEST_DOMAIN_TAG,
+  createConnectAppSession,
+  createConnectCanonicalRequestAuth,
+} from "@iroha/iroha-js/connect-browser";
+import { ToriiBrowserClient } from "@iroha/iroha-js/torii-browser";
+
+const appSession = createConnectAppSession({
+  baseUrl: "https://taira.sora.org",
+  preview,
+  session,
+  appMeta: { name: "My dApp", url: window.location.origin },
+  permissions: {
+    methods: ["sign_raw"],
+    resources: [TORII_CANONICAL_REQUEST_DOMAIN_TAG],
+  },
+});
+const canonicalAuth = await createConnectCanonicalRequestAuth(appSession);
+const torii = new ToriiBrowserClient("https://taira.sora.org");
+const multisigSpec = await torii.getMultisigSpec(
+  { multisigAccountId: canonicalAuth.authAccountId },
+  canonicalAuth,
+);
+```
+
+The same browser client exposes the ledger evidence routes without converting
+their proof payload into an untyped JSON transport. `getLedgerBlockProof()`
+requires Torii's canonical `application/x-norito` response, validates and
+decodes the exact `BlockProofs` schema, and returns data that can be checked
+locally:
+
+```js
+import {
+  ToriiBrowserClient,
+  verifyBlockProofs,
+} from "@iroha/iroha-js/browser";
+
+const torii = new ToriiBrowserClient("https://taira.sora.org");
+const proofs = await torii.getLedgerBlockProof(blockHeight, transactionHash);
+const verification = verifyBlockProofs(proofs);
+
+if (!verification.valid) throw new Error("invalid transaction Merkle evidence");
+```
+
+This verifies the entry and optional execution-result Merkle paths only. State
+roots and commit QCs returned by `getLedgerStateRoot()` and
+`getLedgerStateProof()` remain node-provided evidence until an official
+browser QC/BLS verifier is available.
+
+`createConnectCanonicalRequestAuth()` passes the exact canonical request
+message (including its timestamp and nonce) to `signRaw()` under
+`iroha:torii:canonical-request:v1`, binds `authAccountId` to the approved
+identity, and verifies the returned Ed25519 signature locally. The domain tag
+is wallet policy/prompt context and is not prepended to the signed bytes.
+Private keys never enter the dApp, and `signTransaction()` must not be used as
+a substitute for signing canonical request bytes. A session permits only one
+transaction or raw signature request in flight at a time; concurrent calls
+reject with `ConnectSignRequestError` code `REQUEST_IN_FLIGHT`.
 
 You can also use namespaced exports when you prefer grouped imports:
 
@@ -529,6 +744,7 @@ const propose = buildProposeMultisigInstruction({
 // Register the multisig controller with an explicit (non-derived) account id
 const register = buildRegisterMultisigTransaction({
   chainId: "wonderland",
+  feePayment,
   authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   accountId: "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6ﾀFoVDﾇXzｹCkﾙ4CQVXL",
   spec,
@@ -850,6 +1066,7 @@ const transferTx = buildTransaction({
   chainId: "demo-chain",
   authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   instructions: [transfer],
+  feePayment,
   privateKey,
 });
 console.log(noritoDecodeInstruction(registerDomain).Register.Domain.id);
@@ -919,6 +1136,7 @@ gate without requiring a full publish.
 const built = buildRegisterDomainTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   domainId: "wonderland",
   metadata: { key: "value" },
   creationTimeMs: Date.now(),
@@ -942,6 +1160,7 @@ console.log(noritoDecodeInstruction(mint)); // structured JSON
 const mintTx = buildMintAssetTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   assetHoldingId: roseAssetHoldingId,
   quantity: "10",
   privateKey,
@@ -950,6 +1169,7 @@ const mintTx = buildMintAssetTransaction({
 const burnTx = buildBurnAssetTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   assetHoldingId: roseAssetHoldingId,
   quantity: "2",
   privateKey,
@@ -958,6 +1178,7 @@ const burnTx = buildBurnAssetTransaction({
 const transferTx = buildTransferAssetTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   sourceAssetHoldingId: roseAssetHoldingId,
   quantity: "5",
   destinationAccountId: authority,
@@ -967,6 +1188,7 @@ const transferTx = buildTransferAssetTransaction({
 const registerRwaTx = buildRegisterRwaTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   rwa: {
     domain: "commodities",
     quantity: "10.5",
@@ -995,6 +1217,7 @@ console.log(noritoDecodeInstruction(setRwaMetadata));
 const mintAndTransferTx = buildMintAndTransferTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   mint: { assetHoldingId: roseAssetHoldingId, quantity: "10" },
   transfers: [
     {
@@ -1013,6 +1236,7 @@ const mintAndTransferTx = buildMintAndTransferTransaction({
 const domainAndMintTx = buildRegisterDomainAndMintTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   domain: { domainId: "garden_of_live_flowers", metadata: { key: "value" } },
   mints: [
     { assetId: roseAssetId, quantity: "5" },
@@ -1024,6 +1248,7 @@ const domainAndMintTx = buildRegisterDomainAndMintTransaction({
 const accountAndTransferTx = buildRegisterAccountAndTransferTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   account: { accountId: newAccountId, metadata: { nickname: "alice" } },
   transfers: [
     {
@@ -1043,6 +1268,7 @@ const accountAndTransferTx = buildRegisterAccountAndTransferTransaction({
 const assetDefinitionAndMintTx = buildRegisterAssetDefinitionAndMintTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   assetDefinition: {
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     metadata: { description: "Rose asset" },
@@ -1069,6 +1295,7 @@ const assetDefinitionAndMintTx = buildRegisterAssetDefinitionAndMintTransaction(
 const assetDefinitionMintAndTransferTx = buildRegisterAssetDefinitionMintAndTransferTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   assetDefinition: {
     assetDefinitionId: "4jAY5UbAxnGPt31CkijmAsqXP4o4",
     metadata: { description: "Lily asset" },
@@ -1102,12 +1329,14 @@ const genericTx = buildTransaction({
   chainId: "test-chain",
   authority,
   instructions: [mint, transfer],
+  feePayment,
   privateKey,
 });
 
 const kaigiCreateTx = buildCreateKaigiTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   call: {
     id: { domainId: "wonderland", callName: "weekly-sync" },
     host: authority,
@@ -1130,6 +1359,7 @@ const kaigiCreateTx = buildCreateKaigiTransaction({
 const kaigiJoinTx = buildJoinKaigiTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   join: {
     callId: "wonderland:weekly-sync",
     participant: authority,
@@ -1353,7 +1583,7 @@ if (resolved) {
 
 const permissioned = await torii.resolveAlias("tidal-river-4160@mibank.paynet", {
   canonicalAuth: {
-    accountId: operatorAccountId,
+    accountId: "operator-1@mibank.paynet",
     privateKey: operatorPrivateKey,
   },
 });
@@ -1365,7 +1595,12 @@ console.log(indexed?.source); // "iso_bridge"
 
 `resolveAlias*` returns `null` when the alias is missing and throws when the ISO
 bridge runtime is disabled, matching Torii’s semantics. Pass `canonicalAuth`
-when an alias namespace requires Torii request signatures.
+when an alias namespace requires Torii request signatures. Its `accountId`
+credential must be an exact canonical ASCII on-chain account alias
+(`name@dataspace` or `name@domain.dataspace`). I105 remains the canonical form
+for ordinary account fields, paths, and response models, but is intentionally
+rejected as an HTTP authentication header credential; values are never trimmed,
+case-folded, percent-decoded, base64-decoded, or sent through a raw socket.
 
 Browser wallets that keep private keys sealed can sign the same request through
 an async signer callback:
@@ -1374,7 +1609,7 @@ an async signer callback:
 import { buildCanonicalJsonRequest } from "@iroha/iroha-js/canonical-request";
 
 const request = await buildCanonicalJsonRequest({
-  accountId: operatorAccountIdOrAlias,
+  accountId: "operator-1@mibank.paynet",
   baseUrl: toriiBaseUrl,
   path: "/v1/aliases/resolve",
   body: { alias: "tidal-river-4160@mibank.paynet" },
@@ -1607,7 +1842,10 @@ await torii.submitSumeragiEvidence({
 Pin registration accepts only canonical HTTP field names. The manifest must be
 canonical padded base64 whose decoded size is between 1 byte and 512 KiB;
 legacy out-of-band chunker, digest, content-length, and pin-policy fields are
-rejected before any request is sent.
+rejected before any request is sent. Torii obtains the canonical fee quote for
+the server-built registration transaction before signing it. Any payer choice
+is a typed fee intent; transaction metadata cannot select a gas asset or
+sponsor.
 
 ```js
 const pinResult = await torii.pinSorafsManifest({
@@ -1621,7 +1859,6 @@ const registerRequest = {
   private_key: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
   manifest_payload: fs.readFileSync("./manifest.norito").toString("base64"),
   submitted_epoch: Date.now(),
-  gas_asset_id: "xor#universal",
   alias: {
     namespace: "docs",
     name: "main",
@@ -1814,7 +2051,7 @@ for await (const event of torii.streamSorafsOrderbookEventsWebSocket({
 }
 const orderResult = await torii.submitSorafsOrderbookOrder(orderRequestNoritoBytes, {
   canonicalAuth: {
-    accountId: "<canonical_i105_account_id>",
+    accountId: "operator-1@sorafs",
     privateKey: requestEnvelopePrivateKey,
   },
 });
@@ -1822,10 +2059,10 @@ console.log("local orderbook order status", orderResult.status);
 // Cancel and receipt helpers use the same envelope auth. The Norito payload
 // bytes must already include their embedded orderbook payload signature.
 await torii.submitSorafsOrderbookCancel(orderCancelNoritoBytes, {
-  canonicalAuth: { accountId: "<canonical_i105_account_id>", privateKey: requestEnvelopePrivateKey },
+  canonicalAuth: { accountId: "operator-1@sorafs", privateKey: requestEnvelopePrivateKey },
 });
 await torii.submitSorafsOrderbookReceipt(settlementReceiptNoritoBytes, {
-  canonicalAuth: { accountId: "<canonical_i105_account_id>", privateKey: requestEnvelopePrivateKey },
+  canonicalAuth: { accountId: "operator-1@sorafs", privateKey: requestEnvelopePrivateKey },
 });
 
 for await (const manifest of torii.iterateSorafsPinManifests({ pageSize: 25 })) {
@@ -2318,6 +2555,7 @@ import fs from "node:fs";
 const manifestTx = buildRegisterSmartContractCodeTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   manifest: {
     codeHash: Buffer.alloc(32, 0xaa),
     abiHash: "hash:…",
@@ -2333,6 +2571,7 @@ const manifestTx = buildRegisterSmartContractCodeTransaction({
 const codeTx = buildRegisterSmartContractBytesTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   codeHash: Buffer.alloc(32, 0xaa),
   code: fs.readFileSync("./contract.to"),
   privateKey,
@@ -2341,6 +2580,7 @@ const codeTx = buildRegisterSmartContractBytesTransaction({
 const removeBytesTx = buildRemoveSmartContractBytesTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   codeHash: Buffer.alloc(32, 0xaa),
   reason: "retire archived artifact",
   privateKey,
@@ -2368,8 +2608,10 @@ can stage a leased alias binding for rehearsal environments.
 
 `ToriiClient.callContract` wraps `/v1/contracts/call`, preparing the JSON
 payload that Torii expects (authority credentials, `contract_address` or `contract_alias`,
-a required explicit entrypoint, an optional payload, and a positive `gasLimit`) and
-normalising all hash fields. The helper returns the queued transaction hash,
+a required explicit entrypoint, an optional payload, and a typed requested
+`feePayment` whose payer and gas bound are signature-bound). Torii quotes the
+server-built transaction and replaces only the charge maxima before signing.
+The helper returns the queued transaction hash,
 transaction TTL and entrypoint hash when present, plus the mandatory normalized
 `operation_receipt` evidence and the code/ABI hashes Torii resolved for the call.
 
@@ -2386,8 +2628,13 @@ const response = await torii.callContract({
   contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
   entrypoint: "increment",
   payload: { amount: 1 },
-  gasAssetId: "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
-  gasLimit: 1_500_000,
+  feePayment: {
+    payer: "authority",
+    value: {
+      charge_limits: [],
+      gas_limit: 1_500_000,
+    },
+  },
 });
 
 console.log("queued tx:", response.tx_hash_hex);
@@ -2397,8 +2644,10 @@ console.log("payload digest:", response.operation_receipt.payload_digest_hex);
 
 Any JSON-serializable payload is cloned before submission so callers can reuse the
 object elsewhere without mutation. The helper rejects malformed entrypoint
-selectors, missing or invalid gas limits, or invalid contract target selectors
-before the request reaches Torii.
+selectors, missing or malformed typed fee intents, or invalid contract target
+selectors before the request reaches Torii. For detached/local signing paths,
+use the explicit `/v1/fees/quote` flow described above instead of the app-route
+convenience.
 
 ### Proof-carrying deployed contract calls
 
@@ -2562,6 +2811,7 @@ import {
 const proposalTx = buildProposeDeployContractTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   proposal: {
     contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     codeHash: Buffer.alloc(32, 0xaa),
@@ -2578,6 +2828,7 @@ const zkOwner = "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6�
 const zkBallotTx = buildCastZkBallotTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   ballot: {
     electionId: "referendum-1",
     proof: Buffer.from(proofBytes),
@@ -2594,6 +2845,7 @@ const zkBallotTx = buildCastZkBallotTransaction({
 const plainBallotTx = buildCastPlainBallotTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   ballot: {
     referendumId: "ref-plain",
     owner: authority,
@@ -2607,6 +2859,7 @@ const plainBallotTx = buildCastPlainBallotTransaction({
 const enactTx = buildEnactReferendumTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   enactment: {
     referendumId: Buffer.alloc(32, 0xee),
     preimageHash: Buffer.alloc(32, 0xdd),
@@ -2644,6 +2897,7 @@ import {
 const registerTx = buildRegisterZkAssetTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   registration: {
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     mode: "Hybrid",
@@ -2663,6 +2917,7 @@ const encryptedPayload = {
 const shieldTx = buildShieldTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   shield: {
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     fromAccountId: authority,
@@ -2676,6 +2931,7 @@ const shieldTx = buildShieldTransaction({
 const transferTx = buildZkTransferTransaction({
   chainId: "test-chain",
   authority,
+  feePayment,
   transfer: {
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     inputs: [Buffer.alloc(32, 0x01)],
@@ -3198,7 +3454,7 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_CONNECT_SESSION` — optional JSON string containing the payload for `createConnectSession()` (`{"sid":"<hex>","node":"torii.devnet.example"}` is a common pattern).
 - `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}` is sufficient). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
-- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"gasLimit":1500000}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, `gasAssetId`, and `gasLimit` (required).
+- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"feePayment":{"payer":"authority","value":{"charge_limits":[{"kind":{"kind":"pipeline_gas","value":null},"asset_definition_id":"xor#universal","max_amount":"1500000"}],"gas_limit":1500000}}}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, and the required exact quoted `feePayment` intent.
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) submitted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority`/`chainId`, so the env var only needs to override vote-specific fields.
 - `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional override for the default devnet chain id (`00000000-0000-0000-0000-000000000000`).
 - `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.
@@ -3367,11 +3623,12 @@ Asset and RWA quantities use the stricter `QuantityInput` surface:
 `number` is deliberately rejected, and strings are never trimmed or rewritten;
 for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
-Kagemusha offline cash is intentionally not exposed through the JavaScript
-client in the first release. Its top-up and redemption bodies are canonical
-Norito archives and its peer-transfer keys must remain device-bound, so browser
-and Node applications must not hand-encode or submit those payloads. Use the
-IrohaSwift or JVM Kagemusha APIs in a trusted mobile client.
+Kagemusha proving is intentionally not exposed through the JavaScript client.
+Its top-up and redemption bodies are canonical manifest-V4 Norito archives and
+its peer-transfer keys must remain device-bound, so browser and Node
+applications must not hand-encode those payloads. They may submit and poll an
+archive produced by a supported IrohaSwift or JVM wallet through the typed
+ABI-21/V4 Torii helpers described above.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,
@@ -3390,7 +3647,8 @@ console.log("filtered definitions", defs.items);
 const perms = await torii.listAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   limit: 5,
 });
-console.log("direct permissions", perms.items.map((item) => item.name));
+console.log("effective permissions", perms.items.map((item) => item.name));
+// The endpoint includes both direct grants and grants inherited from assigned roles.
 for await (const perm of torii.iterateAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   pageSize: 2,
 })) {

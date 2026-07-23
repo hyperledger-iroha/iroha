@@ -11,6 +11,7 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
@@ -18,7 +19,7 @@ import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 
-/** Canonical one-instruction transaction for the ABI-19 device-attestation path. */
+/** Canonical one-instruction transaction for the ABI-21 device-attestation path. */
 public final class RegisterOfflineDeviceAttestation {
 
   private final String chainId;
@@ -27,6 +28,7 @@ public final class RegisterOfflineDeviceAttestation {
   private final long creationTimeMs;
   private final Long timeToLiveMs;
   private final Integer nonce;
+  private final FeePaymentIntent feePayment;
   private final Map<String, JsonValue> metadata;
 
   public RegisterOfflineDeviceAttestation(
@@ -36,6 +38,7 @@ public final class RegisterOfflineDeviceAttestation {
       final long creationTimeMs,
       final Long timeToLiveMs,
       final Integer nonce,
+      final FeePaymentIntent feePayment,
       final Map<String, JsonValue> metadata) {
     this.chainId = requireExactText(chainId, "chainId");
     this.authority = requireExactText(authority, "authority");
@@ -64,19 +67,12 @@ public final class RegisterOfflineDeviceAttestation {
     this.creationTimeMs = creationTimeMs;
     this.timeToLiveMs = timeToLiveMs;
     this.nonce = nonce;
+    this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
     this.metadata =
         Collections.unmodifiableMap(
             new LinkedHashMap<>(metadata == null ? Collections.emptyMap() : metadata));
     // Reuse the canonical transaction model's I105 and metadata validation at construction time.
     transactionPayload();
-  }
-
-  public RegisterOfflineDeviceAttestation(
-      final String chainId,
-      final String authority,
-      final DeviceAttestationRegistration registration,
-      final long creationTimeMs) {
-    this(chainId, authority, registration, creationTimeMs, null, null, Collections.emptyMap());
   }
 
   /** Exact native instruction carried by this transaction. */
@@ -99,6 +95,7 @@ public final class RegisterOfflineDeviceAttestation {
         .setExecutable(Executable.instructions(List.of(instruction())))
         .setTimeToLiveMs(timeToLiveMs)
         .setNonce(nonce)
+        .setFeePayment(feePayment)
         .setMetadata(metadata)
         .build();
   }
@@ -114,6 +111,7 @@ public final class RegisterOfflineDeviceAttestation {
         || payload.creationTimeMs() != expected.creationTimeMs()
         || !payload.timeToLiveMs().equals(expected.timeToLiveMs())
         || !payload.nonce().equals(expected.nonce())
+        || !payload.feePayment().equals(expected.feePayment())
         || !payload.metadata().equals(expected.metadata())
         || !payload.executable().isInstructions()
         || payload.executable().instructions().size() != 1

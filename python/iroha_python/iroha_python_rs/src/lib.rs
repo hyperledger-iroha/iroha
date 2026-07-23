@@ -16,6 +16,7 @@ use std::{
     path::PathBuf,
     str::FromStr,
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -62,6 +63,7 @@ use iroha_data_model::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
             SettlementLeg, SettlementPlan,
         },
+        smart_contract_code::CommitContractDeployment,
         zk::{
             AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAceIdentityCommitment,
             RegisterZkAsset, RevokeZkAceIdentityCommitment, RotateZkAceIdentityCommitment, Shield,
@@ -71,9 +73,9 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     nexus::{
-        DataSpaceId, FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect,
-        LaneId, LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1,
-        LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
+        DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
+        LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof,
+        LaneRelayEnvelope, compute_settlement_hash,
     },
     nft::NftId,
     parameter::Parameter,
@@ -83,9 +85,14 @@ use iroha_data_model::{
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
+    smart_contract::{ContractAddress, ContractAlias},
     transaction::{
-        Executable, IvmBytecode, SignedTransaction, TransactionBuilder as ModelTransactionBuilder,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
+        TransactionBuilder as ModelTransactionBuilder, TransactionPayload,
         TransactionSubmissionReceipt,
+        executable::{
+            ContractArgumentRecord, ContractInvocation, MAX_CONTRACT_ARGUMENT_RECORD_BYTES,
+        },
     },
     trigger::{
         Trigger, TriggerId,
@@ -420,6 +427,30 @@ fn parse_account_id(value: &str) -> PyResult<AccountId> {
         Err(err) => Err(err.to_string()),
     };
     parsed.map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
+}
+
+fn parse_fee_sponsor_program_id(value: &str) -> PyResult<FeeSponsorProgramId> {
+    require_non_blank_unpadded(value, "fee sponsor program id")?;
+    let program_id = FeeSponsorProgramId::from_str(value).map_err(|err| {
+        PyValueError::new_err(format!("invalid fee sponsor program id `{value}`: {err}"))
+    })?;
+    if program_id.to_string() != value {
+        return Err(PyValueError::new_err(
+            "fee sponsor program id must use its exact canonical encoding",
+        ));
+    }
+    ensure_ed25519_account(&program_id.sponsor)?;
+    Ok(program_id)
+}
+
+fn parse_fee_payment_intent_json(value: &str) -> PyResult<FeePaymentIntent> {
+    require_non_blank_unpadded(value, "fee payment intent JSON")?;
+    let intent = json::from_str::<FeePaymentIntent>(value)
+        .map_err(|err| PyValueError::new_err(format!("invalid fee payment intent JSON: {err}")))?;
+    intent
+        .validate()
+        .map_err(|err| PyValueError::new_err(format!("invalid fee payment intent: {err}")))?;
+    Ok(intent)
 }
 
 fn parse_asset_id(value: &str) -> PyResult<AssetId> {
@@ -6527,6 +6558,21 @@ mod tests {
         AccountId::new(keypair.public_key().clone())
     }
 
+    fn authority_fee_payment_json() -> &'static str {
+        r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}"#
+    }
+
+    #[test]
+    fn fee_sponsor_program_ids_require_exact_canonical_literals() {
+        let sponsor_literal = taira_i105_from_seed(0x74);
+        let literal = format!("{sponsor_literal}/retail");
+        let parsed = parse_fee_sponsor_program_id(&literal).expect("program id parses");
+        assert_eq!(parsed.sponsor, sample_account(0x74));
+        assert_eq!(parsed.name.as_ref(), "retail");
+        assert!(parse_fee_sponsor_program_id(&format!(" {literal}")).is_err());
+        assert!(parse_fee_sponsor_program_id(&sponsor_literal).is_err());
+    }
+
     #[test]
     fn i105_discriminant_hint_decodes_valid_literals_only() {
         let custom_account = custom_i105_from_seed(0x70, 42);
@@ -10926,7 +10972,8 @@ mod tests {
             .expect("canonical I105 authority");
 
         let mut builder =
-            TransactionBuilder::new("test-chain", &authority).expect("builder constructs");
+            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                .expect("builder constructs");
         let envelope = builder.sign(signing.as_bytes()).expect("transaction signs");
 
         let attachments = envelope
@@ -10945,10 +10992,11 @@ mod tests {
             .expect("canonical I105 authority");
 
         for chain_id in [" test-chain", "test-chain "] {
-            let err = match TransactionBuilder::new(chain_id, &authority) {
-                Ok(_) => panic!("padded chain_id must reject before parsing"),
-                Err(err) => err,
-            };
+            let err =
+                match TransactionBuilder::new(chain_id, &authority, authority_fee_payment_json()) {
+                    Ok(_) => panic!("padded chain_id must reject before parsing"),
+                    Err(err) => err,
+                };
             assert_eq!(
                 err.to_string(),
                 "ValueError: chain_id must not contain surrounding whitespace"
@@ -10956,7 +11004,11 @@ mod tests {
         }
 
         for padded_authority in [format!(" {authority}"), format!("{authority} ")] {
-            let err = match TransactionBuilder::new("test-chain", &padded_authority) {
+            let err = match TransactionBuilder::new(
+                "test-chain",
+                &padded_authority,
+                authority_fee_payment_json(),
+            ) {
                 Ok(_) => panic!("padded authority must reject before account parsing"),
                 Err(err) => err,
             };
@@ -13063,6 +13115,242 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn transaction_builder_signs_only_the_exact_quoted_payer_and_gas_bound() {
+        ensure_python();
+        let signing = SigningKey::from_bytes(&[0x31; 32]);
+        let public_key = PublicKey::from(parse_private_key(signing.as_bytes()).expect("private"));
+        let authority = AccountId::new(public_key)
+            .canonical_i105()
+            .expect("canonical I105 authority");
+        let intent = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":100}}"#;
+        let mut builder =
+            TransactionBuilder::new("test-chain", &authority, intent).expect("builder constructs");
+        builder.set_creation_time_ms(42).expect("creation time");
+        let draft = builder.payload_json().expect("payload JSON");
+
+        let envelope = builder
+            .sign_quoted_payload(&draft, intent, signing.as_bytes())
+            .expect("exact quote signs");
+        assert_eq!(envelope.authority, authority);
+
+        let mut substituted =
+            TransactionBuilder::new("test-chain", &authority, intent).expect("builder constructs");
+        substituted.set_creation_time_ms(42).expect("creation time");
+        let draft = substituted.payload_json().expect("payload JSON");
+        let changed_gas = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":101}}"#;
+        let error = match substituted.sign_quoted_payload(&draft, changed_gas, signing.as_bytes()) {
+            Ok(_) => panic!("quote must not substitute the executable gas bound"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("fee quote changed the selected payer, sponsor revision, or gas bound")
+        );
+    }
+
+    #[test]
+    fn transaction_builder_rejects_invalid_fee_payment_replacement() {
+        ensure_python();
+        let signing = SigningKey::from_bytes(&[0x32; 32]);
+        let public_key = PublicKey::from(parse_private_key(signing.as_bytes()).expect("private"));
+        let authority = AccountId::new(public_key)
+            .canonical_i105()
+            .expect("canonical I105 authority");
+        let mut builder =
+            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                .expect("builder constructs");
+
+        let error = builder
+            .set_fee_payment_json(
+                r#"{"payer":"sponsor","value":{"charge_limits":[],"gas_limit":null,"program_revision":0}}"#,
+            )
+            .expect_err("malformed sponsor intent must reject");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid fee payment intent JSON")
+        );
+    }
+
+    fn batch_test_instruction(message: &str) -> Instruction {
+        Instruction::new(
+            iroha_data_model::isi::Log::new(iroha_data_model::Level::INFO, message.into()).into(),
+        )
+    }
+
+    const BATCH_TEST_CONTRACT_ADDRESS: &str =
+        "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8";
+
+    #[test]
+    fn transaction_builder_preserves_mixed_batch_order_and_wire_tags() {
+        ensure_python();
+        let authority = canonical_i105_from_seed(0x41);
+        let mut builder = TransactionBuilder::new(
+            "test-chain",
+            &authority,
+            r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":1000}}"#,
+        )
+        .expect("builder constructs");
+        let first = batch_test_instruction("before");
+        let last = batch_test_instruction("after");
+        let code_hash = Hash::new(b"python-mixed-batch-code");
+        let mut arguments = vec![0xA5, 0x5A];
+
+        builder.add_instruction(&first).expect("first instruction");
+        builder
+            .add_contract_call(
+                BATCH_TEST_CONTRACT_ADDRESS,
+                &code_hash.to_string(),
+                "run",
+                Some(arguments.as_slice()),
+            )
+            .expect("contract call");
+        arguments.fill(0);
+        builder.add_instruction(&last).expect("last instruction");
+        builder.validate_executable().expect("valid mixed batch");
+
+        let model = builder.to_model_builder();
+        let executable = &model.payload().instructions;
+        let encoded = norito::codec::Encode::encode(executable);
+        assert_eq!(&encoded[..4], &4_u32.to_le_bytes());
+        let Executable::Batch(items) = executable else {
+            panic!("contract calls must select the batch executable")
+        };
+        assert!(matches!(items[0], ExecutableBatchItem::Instruction(_)));
+        let ExecutableBatchItem::ContractCall(call) = &items[1] else {
+            panic!("second item must remain the contract call")
+        };
+        assert_eq!(
+            call.arguments.as_ref().expect("arguments").as_bytes(),
+            &[0xA5, 0x5A],
+            "bridge must defensively copy argument bytes"
+        );
+        assert!(matches!(items[2], ExecutableBatchItem::Instruction(_)));
+        assert_eq!(
+            &norito::codec::Encode::encode(&items[0])[..4],
+            &0_u32.to_le_bytes()
+        );
+        assert_eq!(
+            &norito::codec::Encode::encode(&items[1])[..4],
+            &1_u32.to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn transaction_builder_keeps_legacy_instruction_encoding_unless_batch_is_selected() {
+        ensure_python();
+        let authority = canonical_i105_from_seed(0x42);
+        let mut legacy =
+            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                .expect("legacy builder constructs");
+        legacy
+            .add_instruction(&batch_test_instruction("legacy"))
+            .expect("instruction");
+        let legacy_model = legacy.to_model_builder();
+        let legacy_executable = &legacy_model.payload().instructions;
+        assert!(matches!(legacy_executable, Executable::Instructions(_)));
+        assert_eq!(
+            &norito::codec::Encode::encode(legacy_executable)[..4],
+            &0_u32.to_le_bytes()
+        );
+
+        let mut explicit =
+            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                .expect("batch builder constructs");
+        explicit.use_executable_batch().expect("select batch");
+        explicit
+            .add_instruction(&batch_test_instruction("explicit"))
+            .expect("instruction");
+        explicit.validate_executable().expect("non-empty batch");
+        let explicit_model = explicit.to_model_builder();
+        let explicit_executable = &explicit_model.payload().instructions;
+        assert!(matches!(explicit_executable, Executable::Batch(_)));
+        assert_eq!(
+            &norito::codec::Encode::encode(explicit_executable)[..4],
+            &4_u32.to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn transaction_builder_rejects_invalid_batch_shapes_and_contract_inputs() {
+        ensure_python();
+        let authority = canonical_i105_from_seed(0x43);
+        let code_hash = Hash::new(b"python-invalid-batch-code").to_string();
+
+        let mut empty =
+            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                .expect("builder constructs");
+        empty.use_executable_batch().expect("select batch");
+        assert!(
+            empty
+                .validate_executable()
+                .expect_err("empty batch must reject")
+                .to_string()
+                .contains("requires at least one item")
+        );
+
+        let mut without_gas =
+            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                .expect("builder constructs");
+        without_gas
+            .add_contract_call(BATCH_TEST_CONTRACT_ADDRESS, &code_hash, "run", None)
+            .expect("call input is valid");
+        assert!(
+            without_gas
+                .validate_executable()
+                .expect_err("missing gas limit must reject")
+                .to_string()
+                .contains("requires a transaction gas_limit")
+        );
+
+        let gas_intent = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":1000}}"#;
+        let mut invalid =
+            TransactionBuilder::new("test-chain", &authority, gas_intent).expect("builder");
+        assert!(
+            invalid
+                .add_contract_call("bad", &code_hash, "run", None)
+                .is_err()
+        );
+        assert!(
+            invalid
+                .add_contract_call(BATCH_TEST_CONTRACT_ADDRESS, "00", "run", None)
+                .is_err()
+        );
+        assert!(
+            invalid
+                .add_contract_call(BATCH_TEST_CONTRACT_ADDRESS, &code_hash, " ", None)
+                .is_err()
+        );
+        let oversized = vec![0_u8; MAX_CONTRACT_ARGUMENT_RECORD_BYTES + 1];
+        assert!(
+            invalid
+                .add_contract_call(
+                    BATCH_TEST_CONTRACT_ADDRESS,
+                    &code_hash,
+                    "run",
+                    Some(oversized.as_slice()),
+                )
+                .is_err()
+        );
+
+        let mut ivm =
+            TransactionBuilder::new("test-chain", &authority, gas_intent).expect("builder");
+        ivm.set_bytecode_hex("00").expect("bytecode");
+        assert!(
+            ivm.add_instruction(&batch_test_instruction("mixed"))
+                .is_err()
+        );
+
+        let mut items =
+            TransactionBuilder::new("test-chain", &authority, gas_intent).expect("builder");
+        items
+            .add_instruction(&batch_test_instruction("mixed"))
+            .expect("instruction");
+        assert!(items.set_bytecode_hex("00").is_err());
+    }
 }
 
 fn py_to_metadata(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<Metadata> {
@@ -13811,6 +14099,47 @@ impl Instruction {
         Ok(Instruction::new(instruction))
     }
 
+    /// Construct the atomic smart-contract deployment commit instruction.
+    #[classmethod]
+    #[pyo3(signature = (expected_deploy_nonce, contract_address, code_hash_hex, contract_alias, lease_expiry_ms=None, expected_previous_contract_address=None))]
+    fn commit_contract_deployment(
+        _cls: &Bound<'_, PyType>,
+        expected_deploy_nonce: u64,
+        contract_address: &str,
+        code_hash_hex: &str,
+        contract_alias: &str,
+        lease_expiry_ms: Option<u64>,
+        expected_previous_contract_address: Option<&str>,
+    ) -> PyResult<Self> {
+        let instruction = CommitContractDeployment {
+            expected_deploy_nonce,
+            contract_address: ContractAddress::from_str(contract_address).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "invalid contract_address `{contract_address}`: {error}"
+                ))
+            })?,
+            code_hash: Hash::from_str(code_hash_hex).map_err(|error| {
+                PyValueError::new_err(format!("invalid code_hash_hex `{code_hash_hex}`: {error}"))
+            })?,
+            contract_alias: ContractAlias::from_str(contract_alias).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "invalid contract_alias `{contract_alias}`: {error}"
+                ))
+            })?,
+            lease_expiry_ms,
+            expected_previous_contract_address: expected_previous_contract_address
+                .map(|value| {
+                    ContractAddress::from_str(value).map_err(|error| {
+                        PyValueError::new_err(format!(
+                            "invalid expected_previous_contract_address `{value}`: {error}"
+                        ))
+                    })
+                })
+                .transpose()?,
+        };
+        Ok(Self::new(instruction.into()))
+    }
+
     /// Construct the signed-transaction instruction for a Nexus lane lifecycle update.
     ///
     /// `status_json` must be an unmodified response from
@@ -13866,28 +14195,203 @@ impl Instruction {
         Ok(dict)
     }
 
+    /// Create a new fail-closed fee sponsor program.
     #[classmethod]
-    #[pyo3(signature = (sponsor, policy_name = "default"))]
-    fn upsert_fee_sponsor_policy(
+    #[pyo3(signature = (sponsor, program_name = "default"))]
+    fn create_fee_sponsor_program(
         _cls: &Bound<'_, PyType>,
         sponsor: &str,
-        policy_name: &str,
+        program_name: &str,
     ) -> PyResult<Self> {
         let sponsor: AccountId = parse_account_id(sponsor).map_err(|err| {
             PyValueError::new_err(format!("invalid fee sponsor account `{sponsor}`: {err}"))
         })?;
         ensure_ed25519_account(&sponsor)?;
-        let policy_name: Name = policy_name.parse().map_err(|err| {
-            PyValueError::new_err(format!("invalid fee sponsor policy `{policy_name}`: {err}"))
+        let program_name: Name = program_name.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid fee sponsor program `{program_name}`: {err}"
+            ))
         })?;
-        let policy = FeeSponsorPolicy {
-            id: FeeSponsorPolicyId::new(sponsor, policy_name),
-            enabled: true,
-            max_fee: None,
-            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
-        };
-        let instruction = iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy { policy };
-        Ok(Instruction::new(instruction.into()))
+        let program = FeeSponsorProgram::new(FeeSponsorProgramId::new(sponsor, program_name));
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::CreateFeeSponsorProgram { program }.into(),
+        ))
+    }
+
+    /// Stage an immutable fee sponsor program revision from canonical Norito JSON.
+    #[classmethod]
+    fn stage_fee_sponsor_program_revision(
+        _cls: &Bound<'_, PyType>,
+        revision_json: &str,
+    ) -> PyResult<Self> {
+        let revision =
+            json::from_str::<FeeSponsorProgramRevision>(revision_json).map_err(|err| {
+                PyValueError::new_err(format!("invalid fee sponsor program revision JSON: {err}"))
+            })?;
+        revision.validate().map_err(|err| {
+            PyValueError::new_err(format!("invalid fee sponsor program revision: {err}"))
+        })?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::StageFeeSponsorProgramRevision { revision }.into(),
+        ))
+    }
+
+    /// Schedule an exact staged fee sponsor program revision for activation.
+    #[classmethod]
+    fn activate_fee_sponsor_program_revision(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        revision: u64,
+        activate_at_height: u64,
+    ) -> PyResult<Self> {
+        if revision == 0 {
+            return Err(PyValueError::new_err(
+                "fee sponsor program revision must be non-zero",
+            ));
+        }
+        let program_id = parse_fee_sponsor_program_id(program_id)?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::ActivateFeeSponsorProgramRevision {
+                program_id,
+                revision,
+                activate_at_height,
+            }
+            .into(),
+        ))
+    }
+
+    /// Pause an active fee sponsor program.
+    #[classmethod]
+    fn pause_fee_sponsor_program(_cls: &Bound<'_, PyType>, program_id: &str) -> PyResult<Self> {
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::PauseFeeSponsorProgram {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+            }
+            .into(),
+        ))
+    }
+
+    /// Begin the fail-closed drain phase for a fee sponsor program.
+    #[classmethod]
+    fn begin_close_fee_sponsor_program(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+    ) -> PyResult<Self> {
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::BeginCloseFeeSponsorProgram {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+            }
+            .into(),
+        ))
+    }
+
+    /// Permanently close a fully drained fee sponsor program.
+    #[classmethod]
+    fn close_fee_sponsor_program(_cls: &Bound<'_, PyType>, program_id: &str) -> PyResult<Self> {
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::CloseFeeSponsorProgram {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+            }
+            .into(),
+        ))
+    }
+
+    /// Enroll one exact canonical account in a fee sponsor program.
+    #[classmethod]
+    fn enroll_fee_sponsor_beneficiary(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        beneficiary: &str,
+    ) -> PyResult<Self> {
+        let beneficiary = parse_account_id(beneficiary)?;
+        ensure_ed25519_account(&beneficiary)?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+                beneficiary,
+            }
+            .into(),
+        ))
+    }
+
+    /// Remove one exact canonical account from a fee sponsor program.
+    #[classmethod]
+    fn unenroll_fee_sponsor_beneficiary(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        beneficiary: &str,
+    ) -> PyResult<Self> {
+        let beneficiary = parse_account_id(beneficiary)?;
+        ensure_ed25519_account(&beneficiary)?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::UnenrollFeeSponsorBeneficiary {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+                beneficiary,
+            }
+            .into(),
+        ))
+    }
+
+    /// Allocate a positive asset amount to one program-isolated fee vault.
+    #[classmethod]
+    fn fund_fee_sponsor_program(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        asset_definition_id: &str,
+        amount: &str,
+    ) -> PyResult<Self> {
+        let amount = parse_asset_quantity(amount, "fee sponsor funding amount")?;
+        if amount.is_zero() {
+            return Err(PyValueError::new_err(
+                "fee sponsor funding amount must be positive",
+            ));
+        }
+        let asset_definition_id = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid fee sponsor asset definition `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::FundFeeSponsorProgram {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+                asset_definition_id,
+                amount,
+            }
+            .into(),
+        ))
+    }
+
+    /// Withdraw a positive asset amount from a paused or closing program vault.
+    #[classmethod]
+    fn withdraw_fee_sponsor_program(
+        _cls: &Bound<'_, PyType>,
+        program_id: &str,
+        asset_definition_id: &str,
+        amount: &str,
+        destination: &str,
+    ) -> PyResult<Self> {
+        let amount = parse_asset_quantity(amount, "fee sponsor withdrawal amount")?;
+        if amount.is_zero() {
+            return Err(PyValueError::new_err(
+                "fee sponsor withdrawal amount must be positive",
+            ));
+        }
+        let asset_definition_id = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid fee sponsor asset definition `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let destination = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        Ok(Instruction::new(
+            iroha_data_model::isi::nexus::WithdrawFeeSponsorProgram {
+                program_id: parse_fee_sponsor_program_id(program_id)?,
+                asset_definition_id,
+                amount,
+                destination,
+            }
+            .into(),
+        ))
     }
 
     #[classmethod]
@@ -15113,19 +15617,50 @@ impl Instruction {
 struct TransactionBuilder {
     chain_id: ChainId,
     authority: AccountId,
+    fee_payment: FeePaymentIntent,
     creation_time: Option<Duration>,
     ttl: Option<Duration>,
     nonce: Option<NonZeroU32>,
-    instructions: Vec<InstructionBox>,
+    executable_items: Vec<ExecutableBatchItem>,
+    explicit_batch: bool,
     metadata: Metadata,
     executable_override: Option<Executable>,
     attachments: Vec<ProofAttachment>,
 }
 
 impl TransactionBuilder {
+    fn validate_executable(&self) -> PyResult<()> {
+        if self.executable_override.is_some()
+            && (self.explicit_batch || !self.executable_items.is_empty())
+        {
+            return Err(PyValueError::new_err(
+                "raw IVM bytecode cannot be mixed with an executable batch",
+            ));
+        }
+        if self.explicit_batch && self.executable_items.is_empty() {
+            return Err(PyValueError::new_err(
+                "executable batch requires at least one item",
+            ));
+        }
+        if self
+            .executable_items
+            .iter()
+            .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
+            && self.fee_payment.gas_limit().is_none()
+        {
+            return Err(PyValueError::new_err(
+                "contract call executable requires a transaction gas_limit",
+            ));
+        }
+        Ok(())
+    }
+
     fn to_model_builder(&self) -> ModelTransactionBuilder {
-        let mut builder =
-            ModelTransactionBuilder::new(self.chain_id.clone(), self.authority.clone());
+        let mut builder = ModelTransactionBuilder::new(
+            self.chain_id.clone(),
+            self.authority.clone(),
+            self.fee_payment.clone(),
+        );
         if let Some(creation_time) = self.creation_time {
             builder.set_creation_time(creation_time);
         }
@@ -15138,8 +15673,15 @@ impl TransactionBuilder {
 
         if let Some(ref executable) = self.executable_override {
             builder = builder.with_executable(executable.clone());
-        } else if !self.instructions.is_empty() {
-            builder = builder.with_instructions(self.instructions.clone());
+        } else if self.explicit_batch {
+            builder = builder.with_executable_batch(self.executable_items.clone());
+        } else if !self.executable_items.is_empty() {
+            builder = builder.with_instructions(self.executable_items.iter().map(|item| {
+                let ExecutableBatchItem::Instruction(instruction) = item else {
+                    unreachable!("contract calls always select the executable batch form")
+                };
+                instruction.clone()
+            }));
         }
 
         builder = builder.with_metadata(self.metadata.clone());
@@ -15176,7 +15718,8 @@ impl TransactionBuilder {
     }
 
     fn clear_transaction_state(&mut self) {
-        self.instructions.clear();
+        self.executable_items.clear();
+        self.explicit_batch = false;
         self.executable_override = None;
         self.attachments.clear();
     }
@@ -15185,23 +15728,37 @@ impl TransactionBuilder {
 #[pymethods]
 impl TransactionBuilder {
     #[new]
-    fn new(chain_id: &str, authority: &str) -> PyResult<Self> {
+    fn new(chain_id: &str, authority: &str, fee_payment_json: &str) -> PyResult<Self> {
         require_non_blank_unpadded(chain_id, "chain_id")?;
         require_non_blank_unpadded(authority, "authority")?;
         let chain_id = parse_chain_id(chain_id)?;
         let authority = parse_account_id(authority)?;
         ensure_ed25519_account(&authority)?;
+        let fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
+        let creation_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| {
+                PyValueError::new_err(format!("system clock precedes UNIX epoch: {err}"))
+            })?;
         Ok(Self {
             chain_id,
             authority,
-            creation_time: None,
+            fee_payment,
+            creation_time: Some(creation_time),
             ttl: None,
             nonce: None,
-            instructions: Vec::new(),
+            executable_items: Vec::new(),
+            explicit_batch: false,
             metadata: Metadata::default(),
             executable_override: None,
             attachments: Vec::new(),
         })
+    }
+
+    /// Replace the exact signature-bound fee payment intent.
+    fn set_fee_payment_json(&mut self, fee_payment_json: &str) -> PyResult<()> {
+        self.fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
+        Ok(())
     }
 
     /// Set a deterministic creation timestamp (milliseconds since UNIX epoch).
@@ -15311,36 +15868,127 @@ impl TransactionBuilder {
 
     /// Add an instruction described by `norito::json` syntax.
     fn add_instruction_json(&mut self, instruction_json: &str) -> PyResult<()> {
+        if self.executable_override.is_some() {
+            return Err(PyValueError::new_err(
+                "raw IVM bytecode cannot be mixed with executable batch items",
+            ));
+        }
         let instruction = json::from_str::<InstructionBox>(instruction_json)
             .map_err(|err| PyValueError::new_err(format!("invalid instruction JSON: {err}")))?;
-        self.instructions.push(instruction);
+        self.executable_items
+            .push(ExecutableBatchItem::Instruction(instruction));
         Ok(())
     }
 
     /// Append a pre-built instruction.
-    fn add_instruction(&mut self, instruction: &Instruction) {
-        self.instructions.push(instruction.inner.clone());
+    fn add_instruction(&mut self, instruction: &Instruction) -> PyResult<()> {
+        if self.executable_override.is_some() {
+            return Err(PyValueError::new_err(
+                "raw IVM bytecode cannot be mixed with executable batch items",
+            ));
+        }
+        self.executable_items
+            .push(ExecutableBatchItem::Instruction(instruction.inner.clone()));
+        Ok(())
+    }
+
+    /// Select the ordered executable-batch representation explicitly.
+    ///
+    /// Finalization rejects the batch until at least one instruction or contract call is added.
+    fn use_executable_batch(&mut self) -> PyResult<()> {
+        if self.executable_override.is_some() {
+            return Err(PyValueError::new_err(
+                "raw IVM bytecode cannot be mixed with an executable batch",
+            ));
+        }
+        self.explicit_batch = true;
+        Ok(())
+    }
+
+    /// Append a deployed-contract call to the ordered executable batch.
+    #[pyo3(signature = (contract_address, expected_code_hash_hex, entrypoint, arguments=None))]
+    fn add_contract_call(
+        &mut self,
+        contract_address: &str,
+        expected_code_hash_hex: &str,
+        entrypoint: &str,
+        arguments: Option<&[u8]>,
+    ) -> PyResult<()> {
+        if self.executable_override.is_some() {
+            return Err(PyValueError::new_err(
+                "raw IVM bytecode cannot be mixed with executable batch items",
+            ));
+        }
+        require_non_blank_unpadded(contract_address, "contract_address")?;
+        require_non_blank_unpadded(expected_code_hash_hex, "expected_code_hash_hex")?;
+        require_non_blank_unpadded(entrypoint, "entrypoint")?;
+        let contract_address = ContractAddress::from_str(contract_address).map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid contract_address `{contract_address}`: {error}"
+            ))
+        })?;
+        let expected_code_hash = Hash::from_str(expected_code_hash_hex).map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid expected_code_hash_hex `{expected_code_hash_hex}`: {error}"
+            ))
+        })?;
+        let arguments = arguments
+            .map(|bytes| ContractArgumentRecord::try_new(bytes.to_vec()))
+            .transpose()
+            .map_err(|error| {
+                PyValueError::new_err(format!(
+                    "contract arguments exceed the {MAX_CONTRACT_ARGUMENT_RECORD_BYTES}-byte limit: {error}"
+                ))
+            })?;
+        self.executable_items
+            .push(ExecutableBatchItem::ContractCall(ContractInvocation {
+                contract_address,
+                expected_code_hash,
+                entrypoint: entrypoint.to_owned(),
+                arguments,
+            }));
+        self.explicit_batch = true;
+        Ok(())
     }
 
     /// Encode the canonical transaction payload bytes without signing.
-    fn encode_payload<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+    fn encode_payload<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        self.validate_executable()?;
         let payload_bytes = self.to_model_builder().encode_payload();
-        PyBytes::new(py, &payload_bytes)
+        Ok(PyBytes::new(py, &payload_bytes))
+    }
+
+    /// Return the exact unsigned payload submitted to `/v1/fees/quote`.
+    fn payload_json(&self) -> PyResult<String> {
+        self.validate_executable()?;
+        let payload = self
+            .to_model_builder()
+            .into_payload()
+            .map_err(|err| PyValueError::new_err(format!("invalid transaction payload: {err}")))?;
+        json::to_json(&payload)
+            .map_err(|err| PyValueError::new_err(format!("encode transaction payload JSON: {err}")))
     }
 
     /// Return the canonical Iroha transaction payload prehash bytes.
-    fn payload_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+    fn payload_hash<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        self.validate_executable()?;
         let payload_hash = self.to_model_builder().payload_hash_bytes();
-        PyBytes::new(py, &payload_hash)
+        Ok(PyBytes::new(py, &payload_hash))
     }
 
     /// Return the canonical Iroha transaction payload prehash as lowercase hex.
-    fn payload_hash_hex(&self) -> String {
-        hex_encode(self.to_model_builder().payload_hash_bytes())
+    fn payload_hash_hex(&self) -> PyResult<String> {
+        self.validate_executable()?;
+        Ok(hex_encode(self.to_model_builder().payload_hash_bytes()))
     }
 
     /// Override the executable with raw IVM bytecode (Norito-encoded hex string).
     fn set_bytecode_hex(&mut self, hex_payload: &str) -> PyResult<()> {
+        if self.explicit_batch || !self.executable_items.is_empty() {
+            return Err(PyValueError::new_err(
+                "raw IVM bytecode cannot be mixed with executable batch items",
+            ));
+        }
         let bytes = hex::decode(hex_payload)
             .map_err(|err| PyValueError::new_err(format!("invalid hex bytecode: {err}")))?;
         let bytecode = IvmBytecode::from_compiled(bytes);
@@ -15350,18 +15998,64 @@ impl TransactionBuilder {
 
     /// Sign the transaction, returning an envelope with Norito payloads and hash.
     fn sign(&mut self, private_key: &[u8]) -> PyResult<SignedTransactionEnvelope> {
+        self.validate_executable()?;
         let private_key = parse_private_key(private_key)?;
-        let signed = self.to_model_builder().sign(&private_key);
+        let signed = self
+            .to_model_builder()
+            .try_sign(&private_key)
+            .map_err(|err| PyValueError::new_err(format!("transaction signing failed: {err}")))?;
         let envelope = self.envelope_from_signed(&signed)?;
 
-        // Reset instructions for the next transaction while keeping metadata.
+        // Reset executable entries for the next transaction while keeping metadata.
         self.clear_transaction_state();
 
         Ok(envelope)
     }
 
+    /// Replace only fee maxima using a quote, then sign the exact quoted draft.
+    fn sign_quoted_payload(
+        &mut self,
+        draft_payload_json: &str,
+        quoted_fee_payment_json: &str,
+        private_key: &[u8],
+    ) -> PyResult<SignedTransactionEnvelope> {
+        self.validate_executable()?;
+        let mut draft =
+            json::from_str::<TransactionPayload>(draft_payload_json).map_err(|err| {
+                PyValueError::new_err(format!("invalid quoted transaction payload JSON: {err}"))
+            })?;
+        let expected = self
+            .to_model_builder()
+            .into_payload()
+            .map_err(|err| PyValueError::new_err(format!("invalid transaction payload: {err}")))?;
+        if draft != expected {
+            return Err(PyValueError::new_err(
+                "quoted transaction payload does not match this builder's exact draft",
+            ));
+        }
+        let quoted_fee_payment = parse_fee_payment_intent_json(quoted_fee_payment_json)?;
+        if !draft
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quoted_fee_payment)
+        {
+            return Err(PyValueError::new_err(
+                "fee quote changed the selected payer, sponsor revision, or gas bound",
+            ));
+        }
+        draft.fee_payment = quoted_fee_payment;
+        let private_key = parse_private_key(private_key)?;
+        let signed = ModelTransactionBuilder::from_payload(draft)
+            .map_err(|err| PyValueError::new_err(format!("invalid quoted payload: {err}")))?
+            .try_sign(&private_key)
+            .map_err(|err| PyValueError::new_err(format!("transaction signing failed: {err}")))?;
+        let envelope = self.envelope_from_signed(&signed)?;
+        self.clear_transaction_state();
+        Ok(envelope)
+    }
+
     /// Finalize the transaction using a wallet-provided external signature.
     fn build_with_signature(&mut self, signature: &[u8]) -> PyResult<SignedTransactionEnvelope> {
+        self.validate_executable()?;
         if signature.len() != 64 {
             return Err(PyValueError::new_err(format!(
                 "Ed25519 signature must be 64 bytes, got {}",

@@ -110,7 +110,7 @@ function buildRoutePromotion({
   const commands = [];
   const verifyUrl = host ? `https://${host}/.well-known/sorafs/manifest` : null;
   if (gatewayBinding?.json_path) {
-    let xtaskCmd = `cargo xtask soradns-verify-binding --binding ${gatewayBinding.json_path}`;
+    let xtaskCmd = `cargo run --locked -p xtask --bin xtask -- soradns-verify-binding --binding ${gatewayBinding.json_path}`;
     if (aliasLiteral) xtaskCmd += ` --alias ${aliasLiteral}`;
     if (cid) xtaskCmd += ` --content-cid ${cid}`;
     if (host) xtaskCmd += ` --hostname ${host}`;

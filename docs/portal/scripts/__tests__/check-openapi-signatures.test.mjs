@@ -1643,6 +1643,50 @@ test('checkOpenApiSignatures enforces allowed signer list', async () => {
   );
 });
 
+test('checkOpenApiSignatures rejects signed entries when no signer is provisioned', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-empty-allowlist-'));
+  const staticDir = join(tempRoot, 'static', 'openapi');
+  await mkdir(staticDir, {recursive: true});
+
+  const spec = Buffer.from('{"route":"/v1/peers"}', 'utf8');
+  const sha = sha256Hex(spec);
+  const signature = signPayload(spec);
+  await writeAllowedSigners(staticDir, []);
+  await writeAsset(join(staticDir, 'torii.json'), spec);
+  await writeJson(
+    join(staticDir, 'manifest.json'),
+    buildManifest({
+      path: 'torii.json',
+      payload: spec,
+      sha256: sha,
+      signature,
+    }),
+  );
+  await writeJson(join(staticDir, 'versions.json'), {
+    versions: ['current'],
+    generatedAt: new Date().toISOString(),
+    entries: [
+      buildVersionEntry({
+        label: 'current',
+        path: 'torii.json',
+        payload: spec,
+        sha256: sha,
+        manifestPath: 'manifest.json',
+        signature,
+      }),
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      checkOpenApiSignatures({
+        staticDir,
+        versionsFile: join(staticDir, 'versions.json'),
+      }),
+    /not allowed/i,
+  );
+});
+
 test('checkOpenApiSignatures rejects invalid signatures', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-invalid-'));
   const staticDir = join(tempRoot, 'static', 'openapi');

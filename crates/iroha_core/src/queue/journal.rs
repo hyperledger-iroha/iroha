@@ -533,9 +533,13 @@ mod tests {
             .parse()
             .expect("chain id");
         let (account_id, keypair) = gen_account_in(label);
-        let tx = TransactionBuilder::new(chain_id, account_id)
-            .with_instructions([instruction])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id,
+            account_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(keypair.private_key());
         let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
         QueuePlanJournalRecordV1::new(
             accepted.entrypoint().clone(),

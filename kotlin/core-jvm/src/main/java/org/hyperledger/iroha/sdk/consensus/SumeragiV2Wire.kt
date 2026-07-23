@@ -252,6 +252,7 @@ object SumeragiV2Wire {
     /** Prepare or Commit vote. */
     class Vote(
         @JvmField val round: ConsensusRound,
+        @JvmField val proposalRound: ConsensusRound,
         @JvmField val phase: GlobalPhase,
         @JvmField val subject: BlockSubject,
         @JvmField val executionCommitment: ExecutionCommitment,
@@ -264,6 +265,7 @@ object SumeragiV2Wire {
 
         override fun encode(): ByteArray = struct(
             round.encode(),
+            proposalRound.encode(),
             phase.encode(),
             subject.encode(),
             executionCommitment.encode(),
@@ -275,6 +277,7 @@ object SumeragiV2Wire {
             internal fun decode(bytes: ByteArray): Vote = decodeStruct(bytes) { reader ->
                 Vote(
                     reader.field("vote.round") { ConsensusRound.decode(it.remainingBytes()) },
+                    reader.field("vote.proposal_round") { ConsensusRound.decode(it.remainingBytes()) },
                     reader.field("vote.phase") { GlobalPhase.decode(it.remainingBytes()) },
                     reader.field("vote.subject") { BlockSubject.decode(it.remainingBytes()) },
                     reader.field("vote.execution_commitment") {
@@ -290,12 +293,14 @@ object SumeragiV2Wire {
     /** Stable reference to a quorum certificate. */
     class QuorumCertificateRef(
         @JvmField val round: ConsensusRound,
+        @JvmField val proposalRound: ConsensusRound,
         @JvmField val phase: GlobalPhase,
         @JvmField val subject: BlockSubject,
         @JvmField val executionCommitment: ExecutionCommitment,
     ) : WireValue() {
         override fun encode(): ByteArray = struct(
             round.encode(),
+            proposalRound.encode(),
             phase.encode(),
             subject.encode(),
             executionCommitment.encode(),
@@ -306,6 +311,9 @@ object SumeragiV2Wire {
                 decodeStruct(bytes) { reader ->
                     QuorumCertificateRef(
                         reader.field("qc_ref.round") { ConsensusRound.decode(it.remainingBytes()) },
+                        reader.field("qc_ref.proposal_round") {
+                            ConsensusRound.decode(it.remainingBytes())
+                        },
                         reader.field("qc_ref.phase") { GlobalPhase.decode(it.remainingBytes()) },
                         reader.field("qc_ref.subject") { BlockSubject.decode(it.remainingBytes()) },
                         reader.field("qc_ref.execution_commitment") {
@@ -319,6 +327,7 @@ object SumeragiV2Wire {
     /** Aggregate Prepare or Commit certificate. */
     class QuorumCertificate(
         @JvmField val round: ConsensusRound,
+        @JvmField val proposalRound: ConsensusRound,
         @JvmField val phase: GlobalPhase,
         @JvmField val subject: BlockSubject,
         @JvmField val executionCommitment: ExecutionCommitment,
@@ -336,6 +345,7 @@ object SumeragiV2Wire {
 
         override fun encode(): ByteArray = struct(
             round.encode(),
+            proposalRound.encode(),
             phase.encode(),
             subject.encode(),
             executionCommitment.encode(),
@@ -344,12 +354,15 @@ object SumeragiV2Wire {
         )
 
         fun reference(): QuorumCertificateRef =
-            QuorumCertificateRef(round, phase, subject, executionCommitment)
+            QuorumCertificateRef(round, proposalRound, phase, subject, executionCommitment)
 
         companion object {
             internal fun decode(bytes: ByteArray): QuorumCertificate = decodeStruct(bytes) { reader ->
                 QuorumCertificate(
                     reader.field("qc.round") { ConsensusRound.decode(it.remainingBytes()) },
+                    reader.field("qc.proposal_round") {
+                        ConsensusRound.decode(it.remainingBytes())
+                    },
                     reader.field("qc.phase") { GlobalPhase.decode(it.remainingBytes()) },
                     reader.field("qc.subject") { BlockSubject.decode(it.remainingBytes()) },
                     reader.field("qc.execution_commitment") {
@@ -1204,6 +1217,403 @@ object SumeragiV2Wire {
         }
     }
 
+    /** Partial dual-quorum state for one exact proposal round. */
+    class VoteQuorumStatus(
+        @JvmField val round: ConsensusRound,
+        @JvmField val proposalRound: ConsensusRound,
+        @JvmField val subject: BlockSubject,
+        @JvmField val executionCommitment: ExecutionCommitment,
+        @JvmField val signerCount: Long,
+        @JvmField val signedPower: Long,
+        @JvmField val minSigners: Long,
+        @JvmField val totalPower: Long,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(
+            round.encode(),
+            proposalRound.encode(),
+            subject.encode(),
+            executionCommitment.encode(),
+            u32(signerCount),
+            u64(signedPower),
+            u32(minSigners),
+            u64(totalPower),
+        )
+
+        companion object {
+            internal fun decode(bytes: ByteArray): VoteQuorumStatus = decodeStruct(bytes) { reader ->
+                VoteQuorumStatus(
+                    reader.field("status.liveness.vote.round") { ConsensusRound.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.vote.proposal_round") {
+                        ConsensusRound.decode(it.remainingBytes())
+                    },
+                    reader.field("status.liveness.vote.subject") { BlockSubject.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.vote.execution") { ExecutionCommitment.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.vote.signer_count") { it.u32Only("status.liveness.vote.signer_count") },
+                    reader.field("status.liveness.vote.signed_power") { it.u64Only("status.liveness.vote.signed_power") },
+                    reader.field("status.liveness.vote.min_signers") { it.u32Only("status.liveness.vote.min_signers") },
+                    reader.field("status.liveness.vote.total_power") { it.u64Only("status.liveness.vote.total_power") },
+                )
+            }
+        }
+    }
+
+    /** Partial timeout quorum state for one exact round. */
+    class TimeoutQuorumStatus(
+        @JvmField val round: ConsensusRound,
+        @JvmField val signerCount: Long,
+        @JvmField val signedPower: Long,
+        @JvmField val minSigners: Long,
+        @JvmField val totalPower: Long,
+        @JvmField val certificateFormed: Boolean,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(
+            round.encode(), u32(signerCount), u64(signedPower), u32(minSigners),
+            u64(totalPower), bool(certificateFormed),
+        )
+
+        companion object {
+            internal fun decode(bytes: ByteArray): TimeoutQuorumStatus = decodeStruct(bytes) { reader ->
+                TimeoutQuorumStatus(
+                    reader.field("status.liveness.timeout.round") { ConsensusRound.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.timeout.signer_count") { it.u32Only("status.liveness.timeout.signer_count") },
+                    reader.field("status.liveness.timeout.signed_power") { it.u64Only("status.liveness.timeout.signed_power") },
+                    reader.field("status.liveness.timeout.min_signers") { it.u32Only("status.liveness.timeout.min_signers") },
+                    reader.field("status.liveness.timeout.total_power") { it.u64Only("status.liveness.timeout.total_power") },
+                    reader.field("status.liveness.timeout.formed") { it.boolOnly("status.liveness.timeout.formed") },
+                )
+            }
+        }
+    }
+
+    /** Durable outbound protocol role retained for fair service. */
+    enum class OutboundIntentKind(@JvmField val discriminant: Long) {
+        PROPOSAL(0), PREPARE_VOTE(1), COMMIT_VOTE(2), PREPARE_QC(3), COMMIT_QC(4),
+        TIMEOUT_VOTE(5), TIMEOUT_CERTIFICATE(6),
+        ;
+
+        internal fun encode(): ByteArray = u32(discriminant)
+
+        companion object {
+            internal fun decode(bytes: ByteArray): OutboundIntentKind {
+                val tag = Reader(bytes).u32Only("outbound intent kind")
+                return entries.firstOrNull { it.discriminant == tag }
+                    ?: throw IllegalArgumentException("Unknown outbound intent kind: $tag")
+            }
+        }
+    }
+
+    /** Current delivery stage of a durable outbound intent. */
+    enum class OutboundIntentStage(@JvmField val discriminant: Long) {
+        PENDING_PERSISTENCE(0), PENDING_SIGNATURE(1), QUEUED(2), SENT(3),
+        ;
+
+        internal fun encode(): ByteArray = u32(discriminant)
+
+        companion object {
+            internal fun decode(bytes: ByteArray): OutboundIntentStage {
+                val tag = Reader(bytes).u32Only("outbound intent stage")
+                return entries.firstOrNull { it.discriminant == tag }
+                    ?: throw IllegalArgumentException("Unknown outbound intent stage: $tag")
+            }
+        }
+    }
+
+    /** Exact durable outbound intent visible to liveness diagnostics. */
+    class OutboundIntentStatus(
+        @JvmField val kind: OutboundIntentKind,
+        @JvmField val round: ConsensusRound,
+        @JvmField val proposalRound: ConsensusRound?,
+        @JvmField val subject: BlockSubject?,
+        @JvmField val executionCommitment: ExecutionCommitment?,
+        @JvmField val stage: OutboundIntentStage,
+    ) : WireValue() {
+        init {
+            val shapeIsValid = when (kind) {
+                OutboundIntentKind.PROPOSAL ->
+                    proposalRound != null && subject != null && executionCommitment == null
+                OutboundIntentKind.TIMEOUT_VOTE, OutboundIntentKind.TIMEOUT_CERTIFICATE ->
+                    proposalRound == null && subject == null && executionCommitment == null
+                else -> proposalRound != null && subject != null && executionCommitment != null
+            }
+            require(shapeIsValid) { "Invalid outbound intent shape for $kind" }
+            proposalRound?.let { origin ->
+                require(origin.contextId == round.contextId && origin.height == round.height) {
+                    "Outbound intent proposal round must share context and height"
+                }
+                require(origin.view <= round.view) {
+                    "Outbound intent proposal round cannot be in a later view"
+                }
+                if (kind == OutboundIntentKind.PROPOSAL ||
+                    kind == OutboundIntentKind.PREPARE_VOTE ||
+                    kind == OutboundIntentKind.PREPARE_QC
+                ) {
+                    require(origin == round) {
+                        "Prepare/proposal outbound intent origin must match its round"
+                    }
+                }
+            }
+        }
+
+        override fun encode(): ByteArray = struct(
+            kind.encode(), round.encode(), option(proposalRound?.encode()), option(subject?.encode()),
+            option(executionCommitment?.encode()), stage.encode(),
+        )
+
+        companion object {
+            internal fun decode(bytes: ByteArray): OutboundIntentStatus = decodeStruct(bytes) { reader ->
+                OutboundIntentStatus(
+                    reader.field("status.liveness.outbound.kind") { OutboundIntentKind.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.outbound.round") { ConsensusRound.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.outbound.proposal_round") {
+                        optionDecode(it, "status.liveness.outbound.proposal_round") {
+                            ConsensusRound.decode(it)
+                        }
+                    },
+                    reader.field("status.liveness.outbound.subject") {
+                        optionDecode(it, "status.liveness.outbound.subject") { BlockSubject.decode(it) }
+                    },
+                    reader.field("status.liveness.outbound.execution") {
+                        optionDecode(it, "status.liveness.outbound.execution") { ExecutionCommitment.decode(it) }
+                    },
+                    reader.field("status.liveness.outbound.stage") { OutboundIntentStage.decode(it.remainingBytes()) },
+                )
+            }
+        }
+    }
+
+    /** State of one terminating local-work stage. */
+    enum class LocalWorkStage(@JvmField val discriminant: Long) {
+        IDLE(0), QUEUED(1), RUNNING(2), COMPLETE(3),
+        ;
+
+        internal fun encode(): ByteArray = u32(discriminant)
+
+        companion object {
+            internal fun decode(bytes: ByteArray): LocalWorkStage {
+                val tag = Reader(bytes).u32Only("local work stage")
+                return entries.firstOrNull { it.discriminant == tag }
+                    ?: throw IllegalArgumentException("Unknown local work stage: $tag")
+            }
+        }
+    }
+
+    /** Local body, validation, application, and handoff pipeline. */
+    class WorkStatus(
+        @JvmField val candidate: LocalWorkStage,
+        @JvmField val bodyRecovery: LocalWorkStage,
+        @JvmField val bodyStore: LocalWorkStage,
+        @JvmField val validation: LocalWorkStage,
+        @JvmField val application: LocalWorkStage,
+        @JvmField val successorHeight: LocalWorkStage,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(
+            candidate.encode(), bodyRecovery.encode(), bodyStore.encode(), validation.encode(),
+            application.encode(), successorHeight.encode(),
+        )
+
+        companion object {
+            internal fun decode(bytes: ByteArray): WorkStatus = decodeStruct(bytes) { reader ->
+                WorkStatus(
+                    reader.field("status.liveness.work.candidate") { LocalWorkStage.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.work.body_recovery") { LocalWorkStage.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.work.body_store") { LocalWorkStage.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.work.validation") { LocalWorkStage.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.work.application") { LocalWorkStage.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.work.successor_height") { LocalWorkStage.decode(it.remainingBytes()) },
+                )
+            }
+        }
+    }
+
+    /** Identity of a bounded local progress queue. */
+    enum class QueueKind(@JvmField val discriminant: Long) {
+        INGRESS(0), DEFERRED_NORMAL(1), DEFERRED_PROGRESS(2), DEFERRED_COMPLETION(3),
+        RUNTIME_NORMAL(4), RUNTIME_PROGRESS(5), RUNTIME_COMPLETION(6), EFFECT_COMPLETION(7),
+        NETWORK_INGRESS(8), EFFECT_DISPATCH(9),
+        ;
+
+        internal fun encode(): ByteArray = u32(discriminant)
+
+        companion object {
+            internal fun decode(bytes: ByteArray): QueueKind {
+                val tag = Reader(bytes).u32Only("liveness queue kind")
+                return entries.firstOrNull { it.discriminant == tag }
+                    ?: throw IllegalArgumentException("Unknown liveness queue kind: $tag")
+            }
+        }
+    }
+
+    /** Occupancy and accumulated oldest-item service debt for one bounded queue. */
+    class QueueStatus(
+        @JvmField val queue: QueueKind,
+        @JvmField val depth: Long,
+        @JvmField val capacity: Long,
+        @JvmField val oldestAgeMs: Long?,
+        @JvmField val serviceDebt: Long,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(
+            queue.encode(), u32(depth), u32(capacity), option(oldestAgeMs?.let(::u64)),
+            u64(serviceDebt),
+        )
+
+        companion object {
+            internal fun decode(bytes: ByteArray): QueueStatus = decodeStruct(bytes) { reader ->
+                QueueStatus(
+                    reader.field("status.liveness.queue.kind") { QueueKind.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.queue.depth") { it.u32Only("status.liveness.queue.depth") },
+                    reader.field("status.liveness.queue.capacity") { it.u32Only("status.liveness.queue.capacity") },
+                    reader.field("status.liveness.queue.oldest_age") {
+                        optionDecode(it, "status.liveness.queue.oldest_age") { payload ->
+                            Reader(payload).u64Only("status.liveness.queue.oldest_age.value")
+                        }
+                    },
+                    reader.field("status.liveness.queue.service_debt") { it.u64Only("status.liveness.queue.service_debt") },
+                )
+            }
+        }
+    }
+
+    /** Diagnostic reducer transition; timeout churn does not reset height-level no-progress age. */
+    enum class ProgressTransition(@JvmField val discriminant: Long) {
+        PROPOSAL_ADMITTED(0), BODY_AVAILABLE(1), BODY_STORED(2), BODY_VALIDATED(3),
+        PREPARE_VOTE_ADMITTED(4), COMMIT_VOTE_ADMITTED(5), TIMEOUT_VOTE_ADMITTED(6),
+        PREPARE_QUORUM(7), LOCK_INSTALLED(8), COMMIT_QUORUM(9),
+        TIMEOUT_CERTIFICATE_INSTALLED(10), DECISION_PERSISTED(11), APPLIED(12),
+        SUCCESSOR_HEIGHT_ACTIVATED(13), RECOVERY_REPLAYED(14),
+        ;
+
+        internal fun encode(): ByteArray = u32(discriminant)
+
+        companion object {
+            internal fun decode(bytes: ByteArray): ProgressTransition {
+                val tag = Reader(bytes).u32Only("progress transition")
+                return entries.firstOrNull { it.discriminant == tag }
+                    ?: throw IllegalArgumentException("Unknown progress transition: $tag")
+            }
+        }
+    }
+
+    /** Last tracked reducer transition and its local age. */
+    class ProgressTransitionStatus(
+        @JvmField val generation: Long,
+        @JvmField val round: ConsensusRound,
+        @JvmField val transition: ProgressTransition,
+        @JvmField val ageMs: Long,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(
+            u64(generation), round.encode(), transition.encode(), u64(ageMs),
+        )
+
+        companion object {
+            internal fun decode(bytes: ByteArray): ProgressTransitionStatus = decodeStruct(bytes) { reader ->
+                ProgressTransitionStatus(
+                    reader.field("status.liveness.progress.generation") { it.u64Only("status.liveness.progress.generation") },
+                    reader.field("status.liveness.progress.round") { ConsensusRound.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.progress.transition") { ProgressTransition.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.progress.age") { it.u64Only("status.liveness.progress.age") },
+                )
+            }
+        }
+    }
+
+    /** Classified cause of an active no-progress interval. */
+    enum class LivenessBlocker(@JvmField val discriminant: Long) {
+        MISSING_PROPOSAL(0), BODY_UNAVAILABLE(1), PREPARE_QUORUM_MISSING(2),
+        COMMIT_QUORUM_MISSING(3), TIMEOUT_CERTIFICATE_MISSING(4),
+        SCHEDULER_STARVATION(5), APPLICATION_PENDING(6), LOCAL_CONTROL_PENDING(7),
+        ;
+
+        internal fun encode(): ByteArray = u32(discriminant)
+
+        companion object {
+            internal fun decode(bytes: ByteArray): LivenessBlocker {
+                val tag = Reader(bytes).u32Only("liveness blocker")
+                return entries.firstOrNull { it.discriminant == tag }
+                    ?: throw IllegalArgumentException("Unknown liveness blocker: $tag")
+            }
+        }
+    }
+
+    /** Closed reducer reason for safely ignoring an input. */
+    enum class IgnoreReason(@JvmField val discriminant: Long) {
+        WRONG_HEIGHT(0), WRONG_VIEW(1), STALE_GENERATION(2), BUSY(3), DUPLICATE(4),
+        NO_MATCHING_WORK(5), OBSERVER(6), VIEW_CLOSED(7), ALREADY_DECIDED(8),
+        RECOVERY_PENDING(9), IRRELEVANT_VIEW(10), UNSAFE_PROPOSAL(11),
+        ;
+
+        internal fun encode(): ByteArray = u32(discriminant)
+
+        companion object {
+            internal fun decode(bytes: ByteArray): IgnoreReason {
+                val tag = Reader(bytes).u32Only("liveness ignore reason")
+                return entries.firstOrNull { it.discriminant == tag }
+                    ?: throw IllegalArgumentException("Unknown liveness ignore reason: $tag")
+            }
+        }
+    }
+
+    /** Per-height counter for one input-ignore reason. */
+    class IgnoreCount(
+        @JvmField val reason: IgnoreReason,
+        @JvmField val count: Long,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(reason.encode(), u64(count))
+
+        companion object {
+            internal fun decode(bytes: ByteArray): IgnoreCount = decodeStruct(bytes) { reader ->
+                IgnoreCount(
+                    reader.field("status.liveness.ignore.reason") { IgnoreReason.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.ignore.count") { it.u64Only("status.liveness.ignore.count") },
+                )
+            }
+        }
+    }
+
+    /** Authoritative progress diagnostics for the active height. */
+    class LivenessStatus(
+        @JvmField val generation: Long,
+        @JvmField val prepareQuorums: List<VoteQuorumStatus>,
+        @JvmField val commitQuorums: List<VoteQuorumStatus>,
+        @JvmField val timeoutQuorums: List<TimeoutQuorumStatus>,
+        @JvmField val outboundIntents: List<OutboundIntentStatus>,
+        @JvmField val work: WorkStatus,
+        @JvmField val queues: List<QueueStatus>,
+        @JvmField val lastProgress: ProgressTransitionStatus?,
+        @JvmField val noProgressAgeMs: Long,
+        @JvmField val blocker: LivenessBlocker?,
+        @JvmField val ignoreCounts: List<IgnoreCount>,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(
+            u64(generation), vector(prepareQuorums) { it.encode() },
+            vector(commitQuorums) { it.encode() }, vector(timeoutQuorums) { it.encode() },
+            vector(outboundIntents) { it.encode() }, work.encode(),
+            vector(queues) { it.encode() }, option(lastProgress?.encode()),
+            u64(noProgressAgeMs), option(blocker?.encode()), vector(ignoreCounts) { it.encode() },
+        )
+
+        companion object {
+            internal fun decode(bytes: ByteArray): LivenessStatus = decodeStruct(bytes) { reader ->
+                LivenessStatus(
+                    reader.field("status.liveness.generation") { it.u64Only("status.liveness.generation") },
+                    reader.field("status.liveness.prepare") { vectorDecode(it, "status.liveness.prepare") { field -> VoteQuorumStatus.decode(field.remainingBytes()) } },
+                    reader.field("status.liveness.commit") { vectorDecode(it, "status.liveness.commit") { field -> VoteQuorumStatus.decode(field.remainingBytes()) } },
+                    reader.field("status.liveness.timeout") { vectorDecode(it, "status.liveness.timeout") { field -> TimeoutQuorumStatus.decode(field.remainingBytes()) } },
+                    reader.field("status.liveness.outbound") { vectorDecode(it, "status.liveness.outbound") { field -> OutboundIntentStatus.decode(field.remainingBytes()) } },
+                    reader.field("status.liveness.work") { WorkStatus.decode(it.remainingBytes()) },
+                    reader.field("status.liveness.queues") { vectorDecode(it, "status.liveness.queues") { field -> QueueStatus.decode(field.remainingBytes()) } },
+                    reader.field("status.liveness.last_progress") {
+                        optionDecode(it, "status.liveness.last_progress") { ProgressTransitionStatus.decode(it) }
+                    },
+                    reader.field("status.liveness.no_progress_age") { it.u64Only("status.liveness.no_progress_age") },
+                    reader.field("status.liveness.blocker") {
+                        optionDecode(it, "status.liveness.blocker") { LivenessBlocker.decode(it) }
+                    },
+                    reader.field("status.liveness.ignore_counts") { vectorDecode(it, "status.liveness.ignore_counts") { field -> IgnoreCount.decode(field.remainingBytes()) } },
+                )
+            }
+        }
+    }
+
     /** Compact, protocol-v2-only `/v1/sumeragi/status` payload. */
     class SumeragiV2Status(
         @JvmField val protocolVersion: Int,
@@ -1225,6 +1635,7 @@ object SumeragiV2Wire {
         @JvmField val lastCommittedSubject: BlockSubject?,
         @JvmField val heightContext: HeightContextStatus,
         @JvmField val lastCommitQc: CommitQcStatus?,
+        @JvmField val liveness: LivenessStatus,
     ) : WireValue() {
         init {
             require(protocolVersion == PROTOCOL_VERSION) {
@@ -1252,6 +1663,7 @@ object SumeragiV2Wire {
             option(lastCommittedSubject?.encode()),
             heightContext.encode(),
             option(lastCommitQc?.encode()),
+            liveness.encode(),
         )
 
         companion object {
@@ -1299,6 +1711,7 @@ object SumeragiV2Wire {
                         reader.field("status.last_commit_qc") {
                             optionDecode(it, "status.last_commit_qc") { CommitQcStatus.decode(it) }
                         },
+                        reader.field("status.liveness") { LivenessStatus.decode(it.remainingBytes()) },
                     )
                 }
                 require(decoded.encode().contentEquals(bytes)) {

@@ -775,7 +775,8 @@ impl PorCoordinator {
         manual
             .validate()
             .map_err(PorCoordinatorError::InvalidManualChallenge)?;
-        if manual.manifest_digest != base.manifest_digest || manual.provider_id != base.provider_id {
+        if manual.manifest_digest != base.manifest_digest || manual.provider_id != base.provider_id
+        {
             return Err(PorCoordinatorError::ManualChallengeTargetMismatch);
         }
         let mut challenge = base.clone();
@@ -5137,7 +5138,7 @@ mod tests {
                 provider_id,
                 stake: StakePointer {
                     pool_id: [0xAA; 32],
-                    stake_amount: 1,
+                    stake_amount: "1".parse().expect("canonical stake quantity"),
                 },
                 committed_capacity_gib: 128,
                 chunker_commitments: vec![ChunkerCommitmentV1 {

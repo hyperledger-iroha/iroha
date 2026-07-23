@@ -35,7 +35,12 @@ pub use norito_derive::{
 use crate::name::Name;
 
 /// Data model compatibility version for SDK and node handshakes.
-pub const DATA_MODEL_VERSION: u32 = 1;
+///
+/// Version 2 makes the signature-bound fee payment intent mandatory and
+/// replaces account/policy fee sponsorship with on-chain sponsor programs.
+/// Version 3 adds the flat ordered transaction/trigger executable batch that
+/// atomically interleaves native instructions and deployed-contract calls.
+pub const DATA_MODEL_VERSION: u32 = 3;
 
 #[macro_use]
 mod id_macros;
@@ -51,6 +56,8 @@ mod id_macros;
 pub mod account;
 /// Account domain model types and queries.
 pub mod alias;
+/// Declarative alias/SNS setup names, intents, plans, and diagnostics.
+pub mod alias_setup;
 /// Asset definitions, instances, and utilities.
 pub mod asset;
 pub use asset::{AssetDefinitionId, AssetId};
@@ -350,6 +357,7 @@ pub mod prelude {
         ChainId, Decode, Encode, HasMetadata, IdBox, Identifiable, Level, Registrable,
         ValidationFail,
         account::prelude::*,
+        alias_setup::*,
         asset::prelude::*,
         block::prelude::*,
         bridge::*,
@@ -370,11 +378,17 @@ pub mod prelude {
         nexus::{
             DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata,
             DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementScope,
-            DomainEndorsementSignature, LaneCatalog, LaneCatalogError, LaneConfig, LaneId,
-            LaneIdError, LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1,
-            LaneLifecyclePlan, LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEnvelope,
+            DomainEndorsementSignature, FeeDebitSource, FeeRejectionCode, FeeSponsorAssetBudget,
+            FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow,
+            FeeSponsorEligibility, FeeSponsorEnrollment, FeeSponsorEnrollmentKey,
+            FeeSponsorProgram, FeeSponsorProgramActivation, FeeSponsorProgramId,
+            FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
+            FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVault,
+            FeeSponsorVaultKey, LaneCatalog, LaneCatalogError, LaneConfig, LaneId, LaneIdError,
+            LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1, LaneLifecyclePlan,
+            LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEnvelope,
             LaneRelayEnvelopeRef, LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility,
-            LaneVisibilityParseError, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
+            LaneVisibilityParseError, VerifiedFeeSponsorVaultAllocation, VerifiedLaneRelayRecord,
         },
         nft::prelude::*,
         parameter::prelude::*,

@@ -1,7 +1,11 @@
 use std::process::{Command, Stdio};
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use iroha_data_model::{block::SignedBlock, isi::InstructionBox, transaction::Executable};
+use iroha_data_model::{
+    block::SignedBlock,
+    isi::InstructionBox,
+    transaction::{Executable, ExecutableBatchItem},
+};
 use iroha_primitives::const_vec::ConstVec;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::{
@@ -74,6 +78,17 @@ fn inspect_transactions(block: &SignedBlock) {
                 println!(
                     "tx#{tx_idx}: executable carries proved IVM bytecode (overlay_len={}, skipping instruction probe)",
                     proved.overlay.len()
+                );
+            }
+            Executable::Batch(items) => {
+                let instruction_count = items
+                    .iter()
+                    .filter(|item| matches!(item, ExecutableBatchItem::Instruction(_)))
+                    .count();
+                let contract_call_count = items.len().saturating_sub(instruction_count);
+                println!(
+                    "tx#{tx_idx}: executable carries mixed batch (items={}, instructions={instruction_count}, contract_calls={contract_call_count}; genesis rejects this shape)",
+                    items.len()
                 );
             }
         }

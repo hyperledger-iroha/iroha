@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
@@ -128,6 +128,31 @@ pub struct SettlementLeg {
     pub metadata: Metadata,
 }
 
+/// Selects the account that supplies source currency for an FX settlement.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", rename_all = "snake_case")
+)]
+pub enum FxCorridorSource {
+    /// Debit one governed account for every settlement using the policy.
+    FixedAccount(AccountId),
+    /// Debit the signed transaction authority that requested the settlement.
+    TransactionAuthority,
+}
+
+impl FxCorridorSource {
+    /// Resolve the account that supplies source currency for this settlement.
+    #[must_use]
+    pub fn resolve(&self, transaction_authority: &AccountId) -> AccountId {
+        match self {
+            Self::FixedAccount(account) => account.clone(),
+            Self::TransactionAuthority => transaction_authority.clone(),
+        }
+    }
+}
+
 /// Immutable routing and pricing policy for one native FX corridor.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -138,8 +163,8 @@ pub struct FxCorridorPolicy {
     pub revision: u64,
     /// Dataspace holding the source currency balance.
     pub source_dataspace: DataSpaceId,
-    /// Fixed account funding the source-currency leg.
-    pub source_account: AccountId,
+    /// Governs which account funds the source-currency leg.
+    pub source: FxCorridorSource,
     /// Source-currency asset definition.
     pub source_asset_definition_id: AssetDefinitionId,
     /// Fixed sink receiving the source currency.
@@ -150,6 +175,8 @@ pub struct FxCorridorPolicy {
     pub destination_reserve: AccountId,
     /// Destination-currency asset definition.
     pub destination_asset_definition_id: AssetDefinitionId,
+    /// Exact destination FI alias domains accepted for recipients.
+    pub allowed_destination_alias_domains: BTreeSet<crate::domain::DomainId>,
     /// Exact destination/source rate numerator.
     pub rate_numerator: u64,
     /// Exact destination/source rate denominator.
@@ -173,14 +200,18 @@ impl FxCorridorPolicy {
         if self.source_dataspace == self.destination_dataspace {
             return Some("FX corridor dataspaces must be distinct");
         }
-        if self.source_account == self.source_sink {
-            return Some("FX corridor source account and sink must be distinct");
+        if matches!(&self.source, FxCorridorSource::FixedAccount(account) if account == &self.source_sink)
+        {
+            return Some("FX corridor fixed source account and sink must be distinct");
         }
         if self.source_asset_definition_id == self.destination_asset_definition_id {
             return Some("FX corridor assets must be distinct");
         }
         if self.rate_numerator == 0 || self.rate_denominator == 0 {
             return Some("FX corridor rate terms must be non-zero");
+        }
+        if self.allowed_destination_alias_domains.is_empty() {
+            return Some("FX corridor destination alias domains must not be empty");
         }
         None
     }
@@ -848,12 +879,16 @@ mod tests {
             policy_id: "cbuae_aed_sbp_pkr".parse().expect("policy id"),
             revision: 1,
             source_dataspace: DataSpaceId::new(10),
-            source_account: account(ALICE_SIGNATORY, "cbuae"),
+            source: FxCorridorSource::FixedAccount(account(ALICE_SIGNATORY, "cbuae")),
             source_asset_definition_id: asset("cbuae", "aed"),
             source_sink: account(BOB_SIGNATORY, "cbuae"),
             destination_dataspace: DataSpaceId::new(12),
             destination_reserve: account(ALICE_SIGNATORY, "sbp"),
             destination_asset_definition_id: asset("sbp", "pkr"),
+            allowed_destination_alias_domains: BTreeSet::from([
+                DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+                DomainId::try_new("ubl", "sbp").expect("UBL domain"),
+            ]),
             rate_numerator: 76,
             rate_denominator: 1,
             enabled: true,
@@ -1016,9 +1051,22 @@ mod tests {
             policy: fx_policy(),
         };
         let encoded = norito::json::to_json(&policy).expect("serialize FX policy instruction");
+        assert!(encoded.contains("\"source\":{\"kind\":\"fixed_account\",\"value\":"));
+        assert!(
+            encoded.contains("\"allowed_destination_alias_domains\":[\"hbl.sbp\",\"ubl.sbp\"]")
+        );
         let decoded: SetFxCorridorPolicy =
             norito::json::from_str(&encoded).expect("deserialize FX policy instruction");
         assert_eq!(decoded, policy);
+
+        let mut authority_policy = fx_policy();
+        authority_policy.source = FxCorridorSource::TransactionAuthority;
+        let encoded = norito::json::to_json(&SetFxCorridorPolicy {
+            policy: authority_policy,
+        })
+        .expect("serialize authority-funded FX policy instruction");
+        assert!(encoded.contains("\"source\":{\"kind\":\"transaction_authority\",\"value\":null}"));
+        assert!(!encoded.contains("\"source_account\""));
 
         let settlement = fx_settlement_instruction();
         let encoded =
@@ -1038,7 +1086,7 @@ mod tests {
             destination_dataspace: policy.destination_dataspace,
             rate_numerator: policy.rate_numerator,
             rate_denominator: policy.rate_denominator,
-            source_account: policy.source_account,
+            source_account: policy.source.resolve(&account(ALICE_SIGNATORY, "cbuae")),
             source_sink: policy.source_sink,
             destination_reserve: policy.destination_reserve,
             recipient: account(BOB_SIGNATORY, "sbp"),
@@ -1101,7 +1149,7 @@ mod tests {
             destination_dataspace: policy.destination_dataspace,
             rate_numerator: policy.rate_numerator,
             rate_denominator: policy.rate_denominator,
-            source_account: policy.source_account,
+            source_account: policy.source.resolve(&account(ALICE_SIGNATORY, "cbuae")),
             source_sink: policy.source_sink,
             destination_reserve: policy.destination_reserve,
             recipient,

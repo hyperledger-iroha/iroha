@@ -7,35 +7,28 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc::{self, TryRecvError},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
-use eyre::{Result, WrapErr, bail, eyre};
+use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox::{self, start_network_async_or_skip};
 use iroha::{client::Client as IrohaClient, sns::SnsNamespacePath};
 use iroha_data_model::{
-    account::{AccountAddress, AccountId},
-    metadata::Metadata,
-    sns::{
-        DOMAIN_NAME_SUFFIX_ID, FreezeNameRequestV1, GovernanceHookV1, NameControllerV1,
-        NameRecordV1, NameSelectorV1, NameStatus, PaymentProofV1, RegisterNameRequestV1,
-        RenewNameRequestV1, TransferNameRequestV1,
-    },
+    account::AccountId,
+    alias_setup::{ALIAS_LEASE_YEAR_MS, AliasQuoteGuardV1, AliasTargetV1, ResolvedDomainV1},
+    asset::AssetDefinitionId,
+    domain::DomainId,
+    isi::alias_setup::RenewAliasLease,
+    nexus::DataSpaceId,
+    sns::{NameRecordV1, NameStatus},
 };
-use iroha_primitives::{
-    json::Json,
-    numeric::{Numeric, Quantity},
-    soradns::derive_gateway_hosts,
-};
-use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{ALICE_ID, BOB_ID};
+use iroha_primitives::{numeric::Quantity, soradns::derive_gateway_hosts};
+use iroha_test_network::{NetworkBuilder, domain_setup_instruction};
 use reqwest::{Client as HttpClient, Url};
 use tokio::time::{sleep, timeout};
 
 const METRIC_READY_RETRIES: usize = 60;
 const METRIC_RETRY_DELAY_MS: u64 = 250;
-const STATUS_READY_ATTEMPTS: usize = 60;
-const STATUS_RETRY_DELAY: Duration = Duration::from_millis(250);
 const SNS_CLIENT_CALL_TIMEOUT: Duration = Duration::from_secs(180);
 fn test_sns_lease_payment() -> Quantity {
     "0.5".parse().expect("valid test payment")
@@ -51,15 +44,12 @@ async fn sns_registrar_round_trip() -> Result<()> {
 
     let client = network.client();
     let label = unique_label("roundtrip");
-    let request = build_register_request(&label)?;
-    let response = register_request(&client, request.clone()).await?;
-    assert_eq!(
-        response.selector.normalized_label(),
-        request.selector.normalized_label()
-    );
+    let response = setup_domain(&client, &label).await?;
+    let literal = domain_literal(&label);
+    assert_eq!(response.selector.normalized_label(), literal);
     assert_same_owner_controller(
         &response.owner,
-        &request.owner,
+        &client.account,
         "register response owner should match request owner controller",
     );
     assert!(
@@ -67,69 +57,17 @@ async fn sns_registrar_round_trip() -> Result<()> {
         "new registrations must start in the Active state"
     );
 
-    let literal = request.selector.normalized_label().to_owned();
     let fetched = get_sns_name(&client, &literal).await?;
     assert_eq!(fetched.name_hash, response.name_hash);
     assert_same_owner_controller(
         &fetched.owner,
-        &request.owner,
+        &client.account,
         "fetched owner should preserve request owner controller",
     );
 
-    let policy = get_sns_policy(&client, request.selector.suffix_id).await?;
+    let policy = get_sns_policy(&client, response.selector.suffix_id).await?;
     assert_eq!(policy.suffix_key(), "domain");
 
-    Ok(())
-}
-
-/// Freeze/unfreeze flow publishes lifecycle transitions for guardians/council.
-#[tokio::test]
-async fn sns_freeze_unfreeze_lifecycle() -> Result<()> {
-    let Some(network) = start_sns_network(stringify!(sns_freeze_unfreeze_lifecycle)).await? else {
-        return Ok(());
-    };
-    network.ensure_blocks(1).await?;
-
-    let client = network.client();
-    let label = unique_label("freeze");
-    let literal = domain_literal(&label);
-    register_name(&client, &label).await?;
-
-    let freeze = FreezeNameRequestV1 {
-        reason: "compliance review".to_string(),
-        until_ms: now_millis() + 60_000,
-        guardian_ticket: Json::from("guardian-ticket"),
-    };
-    let freeze_until_ms = freeze.until_ms;
-    freeze_name(&client, &literal, freeze).await?;
-    let frozen = wait_for_status(&client, &literal, |status| {
-        matches!(status, NameStatus::Frozen(_))
-    })
-    .await?;
-    match frozen.status {
-        NameStatus::Frozen(state) => {
-            assert!(
-                state.reason.contains("compliance"),
-                "freeze reason should be recorded"
-            );
-            assert!(
-                state.until_ms >= freeze_until_ms,
-                "freeze expiration must propagate"
-            );
-        }
-        other => bail!("expected Frozen status, got {other:?}"),
-    }
-
-    let governance = stub_governance_hook();
-    unfreeze_name(&client, &literal, governance).await?;
-    let active = wait_for_status(&client, &literal, |status| {
-        matches!(status, NameStatus::Active)
-    })
-    .await?;
-    assert!(
-        matches!(active.status, NameStatus::Active),
-        "record should return to Active after unfreeze"
-    );
     Ok(())
 }
 
@@ -160,7 +98,7 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
 
     let label = unique_label("telemetry");
     let literal = domain_literal(&label);
-    register_name(&client, &label).await?;
+    setup_domain(&client, &label).await?;
 
     let mut observed_after = None;
     for _ in 0..METRIC_READY_RETRIES {
@@ -207,188 +145,83 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     Ok(())
 }
 
-/// Renewal extends expiry windows and transfers update ownership.
+/// Renewal uses an exact expiry CAS and rejects stale replay.
 #[tokio::test]
-async fn sns_renew_and_transfer_flow() -> Result<()> {
-    let Some(network) = start_sns_network(stringify!(sns_renew_and_transfer_flow)).await? else {
+async fn sns_renewal_uses_expiry_cas() -> Result<()> {
+    let Some(network) = start_sns_network(stringify!(sns_renewal_uses_expiry_cas)).await? else {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
 
     let client = network.client();
-    let label = unique_label("renew-transfer");
+    let label = unique_label("renew-cas");
     let literal = domain_literal(&label);
-    let record = register_name(&client, &label).await?;
+    let record = setup_domain(&client, &label).await?;
     let original_expiry = record.expires_at_ms;
-    let policy = get_sns_policy(&client, record.selector.suffix_id).await?;
-    let base_price = policy
-        .pricing
-        .iter()
-        .find(|tier| tier.tier_id == record.pricing_class)
-        .ok_or_else(|| {
-            eyre!(
-                "pricing class {} not found in suffix policy {}",
-                record.pricing_class,
-                record.selector.suffix_id
-            )
-        })?
-        .base_price
-        .amount
-        .clone();
-    let renew_term_years: u8 = 2;
-    let renew_amount = base_price
-        .try_mul_decimal(&Numeric::from(renew_term_years))
-        .map_err(|error| eyre!("renewal price overflow: {error}"))?;
+    let target_expiry = original_expiry
+        .checked_add(ALIAS_LEASE_YEAR_MS)
+        .ok_or_else(|| eyre!("test renewal expiry overflow"))?;
+    let domain = DomainId::parse_fully_qualified(&literal)?;
+    let renewal = RenewAliasLease::new(
+        AliasTargetV1::Domain(ResolvedDomainV1::new(domain, DataSpaceId::UNIVERSAL)),
+        original_expiry,
+        target_expiry,
+        AliasQuoteGuardV1 {
+            expected_policy_version: 1,
+            expected_payment_asset: AssetDefinitionId::parse_address_literal(
+                "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            )?,
+            max_amount: test_sns_lease_payment(),
+            valid_until_ms: u64::MAX,
+        },
+    );
+    submit_alias_instruction(&client, renewal.clone().into()).await?;
+    let renewed = get_sns_name(&client, &literal).await?;
+    assert_eq!(renewed.expires_at_ms, target_expiry);
+    assert_eq!(renewed.owner, record.owner);
 
-    let renew_request = RenewNameRequestV1 {
-        term_years: renew_term_years,
-        payment: stub_payment_proof_with_amount(&record.owner, renew_amount),
-    };
-    let renewed = renew_name(&client, &literal, renew_request).await?;
+    let stale = submit_alias_instruction(&client, renewal.into())
+        .await
+        .expect_err("stale expiry CAS replay must fail");
+    let stale_details = stale
+        .chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ");
     assert!(
-        renewed.expires_at_ms > original_expiry,
-        "renewal should extend expiry: before {original_expiry}, after {}",
-        renewed.expires_at_ms
-    );
-    assert_eq!(
-        renewed.owner, record.owner,
-        "renewal must not change ownership"
-    );
-
-    let transfer_request = TransferNameRequestV1 {
-        new_owner: BOB_ID.clone(),
-        governance: stub_governance_hook(),
-    };
-    let transferred = transfer_name(&client, &literal, transfer_request).await?;
-    assert_same_owner_controller(
-        &transferred.owner,
-        &BOB_ID,
-        "transfer should reassign ownership to Bob's controller",
-    );
-
-    let fetched = wait_for_record(&client, &literal, |record| {
-        record.owner.controller() == BOB_ID.controller()
-    })
-    .await?;
-    assert_same_owner_controller(
-        &fetched.owner,
-        &BOB_ID,
-        "persisted record should reflect Bob's controller after transfer",
-    );
-    assert!(
-        fetched.expires_at_ms >= renewed.expires_at_ms,
-        "transfer must not shorten the renewed expiry window"
+        stale_details.contains("alias.lease.expiry_conflict"),
+        "unexpected stale-CAS error: {stale_details}"
     );
 
     Ok(())
 }
 
-fn build_register_request(label: &str) -> Result<RegisterNameRequestV1> {
-    let selector = NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_literal(label))
-        .map_err(|err| eyre!("invalid selector: {err}"))?;
-    let owner = ALICE_ID.clone();
-    let controller_address = AccountAddress::from_account_id(&owner)
-        .map_err(|err| eyre!("failed to encode account address: {err}"))?;
-
-    Ok(RegisterNameRequestV1 {
-        selector,
-        owner: owner.clone(),
-        controllers: vec![NameControllerV1::account(&controller_address)],
-        term_years: 1,
-        pricing_class_hint: None,
-        payment: stub_payment_proof(&owner),
-        governance: None,
-        metadata: Metadata::default(),
-    })
-}
-
-fn stub_payment_proof(payer: &AccountId) -> PaymentProofV1 {
-    stub_payment_proof_with_amount(payer, test_sns_lease_payment())
-}
-
-fn stub_payment_proof_with_amount(payer: &AccountId, amount: Quantity) -> PaymentProofV1 {
-    PaymentProofV1 {
-        asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-        gross_amount: amount.clone(),
-        net_amount: amount,
-        settlement_tx: Json::from("mock-settlement"),
-        payer: payer.clone(),
-        signature: Json::from("mock-signature"),
-    }
-}
-
-async fn register_name(client: &IrohaClient, label: &str) -> Result<NameRecordV1> {
-    register_request(client, build_register_request(label)?).await
-}
-
-async fn register_request(
-    client: &IrohaClient,
-    request: RegisterNameRequestV1,
-) -> Result<NameRecordV1> {
+async fn setup_domain(client: &IrohaClient, label: &str) -> Result<NameRecordV1> {
+    let domain = DomainId::parse_fully_qualified(&domain_literal(label))?;
+    let instruction = domain_setup_instruction(&domain, &client.account)?;
     let client = client.clone();
-    run_sns_client_call("register SNS name", move || {
-        let response = client.sns().register(&request)?;
-        Ok(response.name_record)
+    run_sns_client_call("ensure SNS domain", move || {
+        client.submit_blocking(
+            instruction,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
+        Ok(())
     })
-    .await
+    .await?;
+    get_sns_name(&client, &domain.to_string()).await
 }
 
-async fn freeze_name(
+async fn submit_alias_instruction(
     client: &IrohaClient,
-    literal: &str,
-    request: FreezeNameRequestV1,
-) -> Result<NameRecordV1> {
+    instruction: iroha_data_model::isi::InstructionBox,
+) -> Result<()> {
     let client = client.clone();
-    let literal = literal.to_owned();
-    run_sns_client_call("freeze SNS name", move || {
-        client
-            .sns()
-            .freeze(SnsNamespacePath::Domain, &literal, &request)
-    })
-    .await
-}
-
-async fn unfreeze_name(
-    client: &IrohaClient,
-    literal: &str,
-    governance: GovernanceHookV1,
-) -> Result<NameRecordV1> {
-    let client = client.clone();
-    let literal = literal.to_owned();
-    run_sns_client_call("unfreeze SNS name", move || {
-        client
-            .sns()
-            .unfreeze(SnsNamespacePath::Domain, &literal, &governance)
-    })
-    .await
-}
-
-async fn renew_name(
-    client: &IrohaClient,
-    literal: &str,
-    request: RenewNameRequestV1,
-) -> Result<NameRecordV1> {
-    let client = client.clone();
-    let literal = literal.to_owned();
-    run_sns_client_call("renew SNS name", move || {
-        client
-            .sns()
-            .renew(SnsNamespacePath::Domain, &literal, &request)
-    })
-    .await
-}
-
-async fn transfer_name(
-    client: &IrohaClient,
-    literal: &str,
-    request: TransferNameRequestV1,
-) -> Result<NameRecordV1> {
-    let client = client.clone();
-    let literal = literal.to_owned();
-    run_sns_client_call("transfer SNS name", move || {
-        client
-            .sns()
-            .transfer(SnsNamespacePath::Domain, &literal, &request)
+    run_sns_client_call("submit alias lifecycle instruction", move || {
+        client.submit_blocking(
+            instruction,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
+        Ok(())
     })
     .await
 }
@@ -453,45 +286,6 @@ async fn start_sns_network(test_name: &str) -> Result<Option<sandbox::Serialized
     start_network_async_or_skip(NetworkBuilder::new(), test_name).await
 }
 
-async fn wait_for_status<F>(
-    client: &IrohaClient,
-    literal: &str,
-    predicate: F,
-) -> Result<NameRecordV1>
-where
-    F: Fn(&NameStatus) -> bool,
-{
-    wait_for_record(client, literal, |record| predicate(&record.status)).await
-}
-
-async fn wait_for_record<F>(
-    client: &IrohaClient,
-    literal: &str,
-    predicate: F,
-) -> Result<NameRecordV1>
-where
-    F: Fn(&NameRecordV1) -> bool,
-{
-    for _ in 0..STATUS_READY_ATTEMPTS {
-        let record = get_sns_name(client, literal).await?;
-        if predicate(&record) {
-            return Ok(record);
-        }
-        sleep(STATUS_RETRY_DELAY).await;
-    }
-    bail!("registration `{literal}` did not reach expected state");
-}
-
-fn stub_governance_hook() -> GovernanceHookV1 {
-    GovernanceHookV1 {
-        proposal_id: "governance-001".to_string(),
-        council_vote_hash: Json::from("council-hash"),
-        dao_vote_hash: Json::from("dao-hash"),
-        steward_ack: Json::from("steward-ack"),
-        guardian_clearance: Some(Json::from("guardian-clearance")),
-    }
-}
-
 fn unique_label(prefix: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     let next = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -529,13 +323,6 @@ async fn bounded_sns_client_call_returns_completed_result() -> Result<()> {
         run_sns_client_call("test immediate result", || Ok::<_, eyre::Report>(42_u8)).await?;
     assert_eq!(value, 42);
     Ok(())
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
 }
 
 fn assert_same_owner_controller(actual: &AccountId, expected: &AccountId, context: &str) {

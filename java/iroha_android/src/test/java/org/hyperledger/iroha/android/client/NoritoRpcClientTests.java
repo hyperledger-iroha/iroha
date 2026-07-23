@@ -298,7 +298,7 @@ public final class NoritoRpcClientTests {
         new RecordingHandler(200, "encoded".getBytes(StandardCharsets.UTF_8));
     try (SimpleHttpServer server = SimpleHttpServer.start("/rpc/codec", handler)) {
       final TransactionPayload payload =
-          TransactionPayload.builder()
+          TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
               .setChainId("00000001")
               .setAuthority(aliceAuthority)
               .setInstructionBytes(new byte[] {0x01, 0x02})

@@ -10,7 +10,7 @@ description: Threat analysis, mitigations, and residual risks for Sora Nexus dat
 
 _Last reviewed: 2026-01-19 — Next scheduled review: 2026-04-19_
 
-Maintenance cadence: Data Availability Working Group (<=90 days). Every revision must
+Maintenance cadence: Data Availability Working Group (at most 90 days). Every revision must
 appear in `status.md` with links to active mitigation tickets and simulation artefacts.
 
 ## Purpose and Scope

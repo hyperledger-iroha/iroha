@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 /** Request payload for Torii `/v1/multisig/propose`. */
@@ -12,7 +13,7 @@ data class MultisigProposeRequest @JvmOverloads constructor(
     val publicKeyHex: String? = null,
     val signatureB64: String? = null,
     val creationTimeMs: Long? = null,
-    val feeSponsor: String? = null,
+    val feePayment: FeePaymentIntent,
     val memo: String? = null,
     val validationFeePolicyVersion: Long? = null,
     val validationFeePolicyHash: String? = null,
@@ -31,7 +32,7 @@ data class MultisigProposeRequest @JvmOverloads constructor(
             publicKeyHex: String? = null,
             signatureB64: String? = null,
             creationTimeMs: Long? = null,
-            feeSponsor: String? = null,
+            feePayment: FeePaymentIntent,
             memo: String? = null,
             validationFeePolicyVersion: Long? = null,
             validationFeePolicyHash: String? = null,
@@ -45,7 +46,7 @@ data class MultisigProposeRequest @JvmOverloads constructor(
             publicKeyHex = publicKeyHex,
             signatureB64 = signatureB64,
             creationTimeMs = creationTimeMs,
-            feeSponsor = feeSponsor,
+            feePayment = feePayment,
             memo = memo,
             validationFeePolicyVersion = validationFeePolicyVersion,
             validationFeePolicyHash = validationFeePolicyHash,

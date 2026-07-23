@@ -9,6 +9,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         "register_asset_definition", // asset definition governance
         "grant_revoke_role_permission", // governance role bindings
         "set_parameter_next_mode", // governance parameter change
+        "mixed_executable_batch", // instruction + contract call ordering
     ]
 
     func testSignedTransactionFixturesRoundTrip() throws {
@@ -119,6 +120,28 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testMixedExecutableBatchFixturePreservesItemOrder() throws {
+        let loader = try NoritoRpcFixtureLoader()
+        let fixture = try loader.fixture(named: "mixed_executable_batch")
+        try assertFixtureIntegrity(loader: loader, name: fixture.entry.name)
+
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge native decoder not linked")
+        }
+        let signedBytes = try XCTUnwrap(Data(base64Encoded: fixture.entry.signedBase64))
+        let json = NoritoNativeBridge.shared.withChainDiscriminant(FixtureConstants.networkPrefix) {
+            NoritoNativeBridge.shared.decodeSignedTransaction(signedBytes)
+        }
+        let payload = try XCTUnwrap(json.flatMap { decodeSignedPayload(from: $0) })
+        let executable = try XCTUnwrap(payload["executable"] as? [String: Any])
+        let items = try XCTUnwrap(executable["Batch"] as? [[String: Any]])
+
+        XCTAssertEqual(items.count, 3)
+        XCTAssertNotNil(items[0]["Instruction"])
+        XCTAssertNotNil(items[1]["ContractCall"])
+        XCTAssertNotNil(items[2]["Instruction"])
     }
 
     private func assertFixtureIntegrity(loader: NoritoRpcFixtureLoader, name: String) throws {

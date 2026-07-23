@@ -1,5 +1,108 @@
 import Foundation
 
+/// Validation errors for mixed executable transaction authoring.
+public enum ExecutableBatchInputError: Error, LocalizedError, Equatable, Sendable {
+    case emptyBatch
+    case invalidInstructionWireName
+    case invalidInstructionFrame
+    case invalidContractAddress
+    case invalidExpectedCodeHashLength(Int)
+    case invalidExpectedCodeHashMarker
+    case invalidEntrypoint
+    case contractArgumentsTooLarge(Int)
+    case missingGasLimit
+    case zeroTimeToLive
+    case zeroNonce
+
+    public var errorDescription: String? {
+        switch self {
+        case .emptyBatch:
+            return "An executable batch must contain at least one item."
+        case .invalidInstructionWireName:
+            return "Instruction wire name must be exact non-empty text."
+        case .invalidInstructionFrame:
+            return "Instruction payload must contain a valid Norito frame."
+        case .invalidContractAddress:
+            return "Contract address must be a canonical lowercase V1 Bech32m literal."
+        case let .invalidExpectedCodeHashLength(length):
+            return "Expected contract code hash must be 32 bytes (received \(length))."
+        case .invalidExpectedCodeHashMarker:
+            return "Expected contract code hash must use Iroha's marked hash encoding."
+        case .invalidEntrypoint:
+            return "Contract entrypoint must be exact non-empty text without whitespace."
+        case let .contractArgumentsTooLarge(length):
+            return "Contract arguments exceed the 1048576-byte wire limit (received \(length))."
+        case .missingGasLimit:
+            return "A batch containing a contract call requires a signature-bound gas limit."
+        case .zeroTimeToLive:
+            return "Transaction time-to-live must be non-zero."
+        case .zeroNonce:
+            return "Transaction nonce must be non-zero."
+        }
+    }
+}
+
+/// Canonical dynamic instruction frame accepted by `InstructionBox`.
+public struct TransactionInstructionFrame: Equatable, Sendable {
+    public let wireName: String
+    public let framedPayload: Data
+
+    public init(wireName: String, framedPayload: Data) throws {
+        guard !wireName.isEmpty,
+              wireName == wireName.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            throw ExecutableBatchInputError.invalidInstructionWireName
+        }
+        guard noritoDecodeFrame(framedPayload) != nil else {
+            throw ExecutableBatchInputError.invalidInstructionFrame
+        }
+        self.wireName = wireName
+        self.framedPayload = framedPayload
+    }
+}
+
+/// Signature-bound invocation of one deployed contract revision.
+public struct TransactionContractInvocation: Equatable, Sendable {
+    public static let maximumArgumentsBytes = 1024 * 1024
+
+    public let contractAddress: String
+    public let expectedCodeHash: Data
+    public let entrypoint: String
+    public let arguments: Data?
+
+    public init(contractAddress: String,
+                expectedCodeHash: Data,
+                entrypoint: String,
+                arguments: Data? = nil) throws {
+        guard ContractAddressV1.isCanonical(contractAddress) else {
+            throw ExecutableBatchInputError.invalidContractAddress
+        }
+        guard expectedCodeHash.count == 32 else {
+            throw ExecutableBatchInputError.invalidExpectedCodeHashLength(expectedCodeHash.count)
+        }
+        guard let finalHashByte = expectedCodeHash.last, finalHashByte & 1 == 1 else {
+            throw ExecutableBatchInputError.invalidExpectedCodeHashMarker
+        }
+        guard !entrypoint.isEmpty,
+              entrypoint == entrypoint.trimmingCharacters(in: .whitespacesAndNewlines),
+              !entrypoint.contains(where: \.isWhitespace) else {
+            throw ExecutableBatchInputError.invalidEntrypoint
+        }
+        if let arguments, arguments.count > Self.maximumArgumentsBytes {
+            throw ExecutableBatchInputError.contractArgumentsTooLarge(arguments.count)
+        }
+        self.contractAddress = contractAddress
+        self.expectedCodeHash = expectedCodeHash
+        self.entrypoint = entrypoint
+        self.arguments = arguments
+    }
+}
+
+/// One ordered item in an atomic mixed executable batch.
+public enum TransactionBatchEntry: Equatable, Sendable {
+    case instruction(TransactionInstructionFrame)
+    case contractCall(TransactionContractInvocation)
+}
+
 public struct TransferRequest: Sendable {
     public let chainId: String
     public let authority: String
@@ -7,7 +110,7 @@ public struct TransferRequest: Sendable {
     public let quantity: String         // decimal string
     public let destination: String      // i105 account id
     public let description: String?
-    public let feeSponsor: String?
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
     public let nonce: UInt32?
 
@@ -17,7 +120,7 @@ public struct TransferRequest: Sendable {
                 quantity: String,
                 destination: String,
                 description: String?,
-                feeSponsor: String? = nil,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil) {
         self.chainId = chainId
@@ -26,56 +129,9 @@ public struct TransferRequest: Sendable {
         self.quantity = quantity
         self.destination = destination
         self.description = description
-        self.feeSponsor = feeSponsor
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
         self.nonce = nonce
-    }
-}
-
-public enum IrohaValidationFeeTransactionMetadataKey {
-    public static let policyVersion = "validation_fee_policy_version"
-    public static let policyHash = "validation_fee_policy_hash"
-    public static let instructionIndex = "validation_fee_instruction_index"
-    public static let transferEntryIndex = "validation_fee_transfer_entry_index"
-}
-
-public enum ValidationFeeTransferRequestError: Error, LocalizedError, Equatable {
-    case invalidPolicyVersion
-    case malformedPolicyHash(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .invalidPolicyVersion:
-            return "Validation fee policy version must be positive."
-        case let .malformedPolicyHash(value):
-            return "Validation fee policy hash must be exactly 64 lowercase or uppercase hex characters with no whitespace (received '\(value)')."
-        }
-    }
-}
-
-public struct ValidationFeeTransferRequest: Sendable {
-    public let principal: TransferRequest
-    public let feeAssetDefinitionId: String
-    public let feeQuantity: String
-    public let treasuryAccountId: String
-    public let policyVersion: UInt64
-    public let policyHashHex: String
-    public let transactionMetadata: [String: ToriiJSONValue]
-
-    public init(principal: TransferRequest,
-                feeAssetDefinitionId: String? = nil,
-                feeQuantity: String,
-                treasuryAccountId: String,
-                policyVersion: UInt64,
-                policyHashHex: String,
-                transactionMetadata: [String: ToriiJSONValue] = [:]) {
-        self.principal = principal
-        self.feeAssetDefinitionId = feeAssetDefinitionId ?? principal.assetDefinitionId
-        self.feeQuantity = feeQuantity
-        self.treasuryAccountId = treasuryAccountId
-        self.policyVersion = policyVersion
-        self.policyHashHex = policyHashHex
-        self.transactionMetadata = transactionMetadata
     }
 }
 
@@ -85,6 +141,7 @@ public struct MintRequest {
     public let assetDefinitionId: String
     public let quantity: String
     public let destination: String
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
     public let nonce: UInt32?
 
@@ -93,6 +150,7 @@ public struct MintRequest {
                 assetDefinitionId: String,
                 quantity: String,
                 destination: String,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil) {
         self.chainId = chainId
@@ -100,6 +158,7 @@ public struct MintRequest {
         self.assetDefinitionId = assetDefinitionId
         self.quantity = quantity
         self.destination = destination
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
         self.nonce = nonce
     }
@@ -111,6 +170,7 @@ public struct BurnRequest {
     public let assetDefinitionId: String
     public let quantity: String
     public let destination: String
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
     public let nonce: UInt32?
 
@@ -119,6 +179,7 @@ public struct BurnRequest {
                 assetDefinitionId: String,
                 quantity: String,
                 destination: String,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil) {
         self.chainId = chainId
@@ -126,6 +187,7 @@ public struct BurnRequest {
         self.assetDefinitionId = assetDefinitionId
         self.quantity = quantity
         self.destination = destination
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
         self.nonce = nonce
     }
@@ -175,6 +237,7 @@ public struct SetMetadataRequest {
     public let target: MetadataTarget
     public let key: String
     public let value: NoritoJSON
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
@@ -182,12 +245,14 @@ public struct SetMetadataRequest {
                 target: MetadataTarget,
                 key: String,
                 value: NoritoJSON,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
         self.target = target
         self.key = key
         self.value = value
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 
@@ -196,6 +261,7 @@ public struct SetMetadataRequest {
                 target: MetadataTarget,
                 key: String,
                 value: ToriiJSONValue,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) throws {
         let encoded = try NoritoJSON(value)
         self.init(chainId: chainId,
@@ -203,6 +269,7 @@ public struct SetMetadataRequest {
                   target: target,
                   key: key,
                   value: encoded,
+                  feePayment: feePayment,
                   ttlMs: ttlMs)
     }
 }
@@ -212,17 +279,20 @@ public struct RemoveMetadataRequest {
     public let authority: String
     public let target: MetadataTarget
     public let key: String
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
                 authority: String,
                 target: MetadataTarget,
                 key: String,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
         self.target = target
         self.key = key
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
@@ -232,17 +302,20 @@ public struct MultisigRegisterRequest {
     public let authority: String
     public let accountId: String
     public let spec: MultisigSpecPayload
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
                 authority: String,
                 accountId: String,
                 spec: MultisigSpecPayload,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
         self.accountId = accountId
         self.spec = spec
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
@@ -252,43 +325,52 @@ public struct ClaimIdentifierRequest {
     public let authority: String
     public let accountId: String
     public let receipt: ToriiIdentifierResolutionReceipt
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
                 authority: String,
                 accountId: String,
                 receipt: ToriiIdentifierResolutionReceipt,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
         self.accountId = accountId
         self.receipt = receipt
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
 
-public struct SetPrimaryAccountAliasRequest {
+/// Inputs for the atomic nonce- and alias-CAS guarded contract deployment instruction.
+public struct CommitContractDeploymentRequest {
     public let chainId: String
     public let authority: String
-    public let accountId: String
-    public let aliasDomain: String?
-    public let aliasDataspaceId: UInt64
-    public let alias: String
+    public let expectedDeployNonce: UInt64
+    public let contractAddress: String
+    public let codeHashHex: String
+    public let contractAlias: String
+    public let leaseExpiryMs: UInt64?
+    public let expectedPreviousContractAddress: String?
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
-                authority: String,
-                accountId: String,
-                aliasDomain: String? = nil,
-                aliasDataspaceId: UInt64,
-                alias: String,
+    public init(chainId: String, authority: String, expectedDeployNonce: UInt64,
+                contractAddress: String, codeHashHex: String, contractAlias: String,
+                leaseExpiryMs: UInt64? = nil,
+                expectedPreviousContractAddress: String? = nil,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
-        self.accountId = accountId
-        self.aliasDomain = aliasDomain
-        self.aliasDataspaceId = aliasDataspaceId
-        self.alias = alias
+        self.expectedDeployNonce = expectedDeployNonce
+        self.contractAddress = contractAddress
+        self.codeHashHex = codeHashHex
+        self.contractAlias = contractAlias
+        self.leaseExpiryMs = leaseExpiryMs
+        self.expectedPreviousContractAddress = expectedPreviousContractAddress
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
@@ -355,6 +437,7 @@ public struct RegisterZkAssetRequest {
     public let transferVerifyingKey: VerifyingKeyIdReference?
     public let unshieldVerifyingKey: VerifyingKeyIdReference?
     public let shieldVerifyingKey: VerifyingKeyIdReference?
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
@@ -366,6 +449,7 @@ public struct RegisterZkAssetRequest {
                 transferVerifyingKey: VerifyingKeyIdReference? = nil,
                 unshieldVerifyingKey: VerifyingKeyIdReference? = nil,
                 shieldVerifyingKey: VerifyingKeyIdReference? = nil,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
@@ -376,6 +460,7 @@ public struct RegisterZkAssetRequest {
         self.transferVerifyingKey = transferVerifyingKey
         self.unshieldVerifyingKey = unshieldVerifyingKey
         self.shieldVerifyingKey = shieldVerifyingKey
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
@@ -402,6 +487,7 @@ public struct ShieldRequest {
     public let amount: String
     public let noteCommitment: Data
     public let payload: ConfidentialEncryptedPayload
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
@@ -411,6 +497,7 @@ public struct ShieldRequest {
                 amount: String,
                 noteCommitment: Data,
                 payload: ConfidentialEncryptedPayload,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) throws {
         guard noteCommitment.count == 32 else {
             throw ShieldRequestError.invalidNoteCommitmentLength
@@ -428,6 +515,7 @@ public struct ShieldRequest {
         self.amount = canonicalAmount
         self.noteCommitment = noteCommitment
         self.payload = payload
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
@@ -463,6 +551,7 @@ public struct UnshieldRequest {
     public let inputs: [Data]
     public let proof: ProofAttachment
     public let rootHint: Data?
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
@@ -473,6 +562,7 @@ public struct UnshieldRequest {
                 inputs: [Data],
                 proof: ProofAttachment,
                 rootHint: Data? = nil,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) throws {
         guard !inputs.isEmpty else {
             throw UnshieldRequestError.inputsEmpty
@@ -501,6 +591,7 @@ public struct UnshieldRequest {
         self.inputs = inputs
         self.proof = proof
         self.rootHint = rootHint
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 
@@ -542,6 +633,7 @@ public struct ZkTransferRequest {
     public let outputs: [Data]
     public let proof: ProofAttachment
     public let rootHint: Data?
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
@@ -551,6 +643,7 @@ public struct ZkTransferRequest {
                 outputs: [Data],
                 proof: ProofAttachment,
                 rootHint: Data? = nil,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) throws {
         guard !inputs.isEmpty else {
             throw ZkTransferRequestError.inputsEmpty
@@ -580,6 +673,7 @@ public struct ZkTransferRequest {
         self.outputs = outputs
         self.proof = proof
         self.rootHint = rootHint
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 
@@ -627,6 +721,7 @@ public struct ProposeDeployContractRequest {
     public let abiVersion: String
     public let window: GovernanceWindow?
     public let mode: GovernanceVotingMode?
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
@@ -637,6 +732,7 @@ public struct ProposeDeployContractRequest {
                 abiVersion: String,
                 window: GovernanceWindow? = nil,
                 mode: GovernanceVotingMode? = nil,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
@@ -646,6 +742,7 @@ public struct ProposeDeployContractRequest {
         self.abiVersion = abiVersion
         self.window = window
         self.mode = mode
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
@@ -658,6 +755,7 @@ public struct CastPlainBallotRequest {
     public let amount: String
     public let durationBlocks: UInt64
     public let direction: BallotDirection
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
@@ -667,6 +765,7 @@ public struct CastPlainBallotRequest {
                 amount: String,
                 durationBlocks: UInt64,
                 direction: BallotDirection,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
@@ -675,6 +774,7 @@ public struct CastPlainBallotRequest {
         self.amount = amount
         self.durationBlocks = durationBlocks
         self.direction = direction
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
@@ -685,6 +785,7 @@ public struct CastZkBallotRequest {
     public let electionId: String
     public let proofB64: String
     public let publicInputs: NoritoJSON
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
@@ -692,12 +793,14 @@ public struct CastZkBallotRequest {
                 electionId: String,
                 proofB64: String,
                 publicInputs: NoritoJSON,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
         self.electionId = electionId
         self.proofB64 = proofB64
         self.publicInputs = publicInputs
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 
@@ -706,6 +809,7 @@ public struct CastZkBallotRequest {
                 electionId: String,
                 proofB64: String,
                 publicInputs: ToriiJSONValue,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) throws {
         let encoded = try NoritoJSON(publicInputs)
         self.init(chainId: chainId,
@@ -713,6 +817,7 @@ public struct CastZkBallotRequest {
                   electionId: electionId,
                   proofB64: proofB64,
                   publicInputs: encoded,
+                  feePayment: feePayment,
                   ttlMs: ttlMs)
     }
 }
@@ -723,6 +828,7 @@ public struct EnactReferendumRequest {
     public let referendumIdHex: String
     public let preimageHashHex: String
     public let window: GovernanceWindow
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
@@ -730,12 +836,14 @@ public struct EnactReferendumRequest {
                 referendumIdHex: String,
                 preimageHashHex: String,
                 window: GovernanceWindow,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
         self.referendumIdHex = referendumIdHex
         self.preimageHashHex = preimageHashHex
         self.window = window
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
@@ -745,17 +853,20 @@ public struct FinalizeReferendumRequest {
     public let authority: String
     public let referendumId: String
     public let proposalIdHex: String
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
                 authority: String,
                 referendumId: String,
                 proposalIdHex: String,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
         self.referendumId = referendumId
         self.proposalIdHex = proposalIdHex
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
@@ -767,6 +878,7 @@ public struct PersistCouncilRequest {
     public let members: [String]
     public let candidatesCount: UInt32
     public let derivedBy: CouncilDerivation
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(chainId: String,
@@ -775,6 +887,7 @@ public struct PersistCouncilRequest {
                 members: [String],
                 candidatesCount: UInt32,
                 derivedBy: CouncilDerivation,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
@@ -782,6 +895,7 @@ public struct PersistCouncilRequest {
         self.members = members
         self.candidatesCount = candidatesCount
         self.derivedBy = derivedBy
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
 }
@@ -1024,7 +1138,7 @@ public struct KagemushaTopUpShieldSnapshotBinding: Equatable, Sendable {
 /// construct it. Wallets persist this atomically with note secrets before
 /// signing or submitting the request.
 public struct KagemushaTopUpShieldPreparation: Equatable, Sendable {
-    public let unsigned: KagemushaRecursiveSpendTopUpUnsigned
+    public let unsigned: KagemushaRecursiveSpendTopUpUnsignedV4
     public let opening: KagemushaNoteOpening
     /// Exact post-top-up membership and dummy-zero paths retained in encrypted
     /// local state. This witness never enters the Torii top-up request.
@@ -1057,11 +1171,6 @@ public final class IrohaSDK: @unchecked Sendable {
 
     /// Provides the creation time (ms since epoch) used when signing transactions.
     public var creationTimeProvider: @Sendable () -> UInt64
-
-    // Instance-scoped to keep deterministic unit-test encoders isolated from other tests. The
-    // production path remains nil and always uses the validated native bridge.
-    var validationFeeTransferNativeEncoderForTests:
-        SwiftTransactionEncoder.ValidationFeeTransferNativeEncoder?
 
     public init(baseURL: URL,
                 session: URLSession = .shared,
@@ -1143,7 +1252,7 @@ public final class IrohaSDK: @unchecked Sendable {
         payer: String,
         operationId: Data,
         opening: KagemushaNoteOpening,
-        artifactBinding: KagemushaRecursiveSpendArtifactBinding,
+        artifactBinding: KagemushaRecursiveSpendArtifactBindingV4,
         expectedReadiness: KagemushaTopUpShieldReadinessExpectation
     ) async throws -> KagemushaTopUpShieldPreparation {
         guard let toriiRestClient else {
@@ -1158,93 +1267,101 @@ public final class IrohaSDK: @unchecked Sendable {
             throw KagemushaRecursiveSpendError.invalidField("assetId")
         }
         let assetDefinitionId = String(assetParts[0])
-        let readiness = try await toriiRestClient.getKagemushaReadiness(
-            assetDefinitionId: assetDefinitionId
-        )
-        guard readiness.ready,
-              readiness.blockers.isEmpty,
-              readiness.assetDefinitionId == assetDefinitionId,
-              readiness.assetDefinitionId == expectedReadiness.assetDefinitionID,
-              readiness.assetScale == amount.scale,
-              readiness.assetScale == expectedReadiness.assetScale,
-              readiness.evaluatedBlockHeight >= expectedReadiness.minimumEvaluatedBlockHeight,
-              let verifier = readiness.activeTopUpShieldVerifier,
-              expectedReadiness.verifier.matches(verifier),
-              let verifierCommitment = Data(hexString: verifier.commitment),
-              verifierCommitment.count == 32 else {
-            throw KagemushaRecursiveSpendError.invalidField("topUp.readiness")
-        }
-        let snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot(
-            asset: assetDefinitionId,
-            commitments: []
-        )
-        guard snapshot.frontierLen + 1
-                < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 else {
-            throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath.capacity")
-        }
-        let zeroPath = try snapshot.validatedNextZeroPath()
-        guard zeroPath.rootAtHeight == snapshot.root,
-              zeroPath.leafIndex == UInt64(snapshot.frontierLen) else {
-            throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath")
-        }
-        let unsigned = try KagemushaTopUpShieldBuildRequest(
-            chainID: chainId,
-            assetID: canonicalAssetId,
-            amount: amount,
-            payer: payer,
-            operationID: operationId,
-            opening: opening,
-            zeroPath: zeroPath,
-            shieldVerifierID: "\(verifier.id.backend):\(verifier.id.name)",
-            shieldVerifierCommitment: verifierCommitment,
-            artifactBinding: artifactBinding
-        ).buildUnsigned()
-        guard try zeroPath.root(
-            replacingLeafWith: unsigned.currentNote.noteCommitment
-        ) == unsigned.shieldEvidence.finalizedRoot,
-              unsigned.shieldEvidence.initialRoot == zeroPath.rootAtHeight,
-              unsigned.shieldEvidence.leafIndex == UInt32(zeroPath.leafIndex) else {
-            throw KagemushaRecursiveSpendError.invalidField("topUp.membershipWitness")
-        }
-        let dummyZeroPath = try zeroPath.nextZeroPathAfterInsertion(
-            commitment: unsigned.currentNote.noteCommitment,
-            expectedRoot: unsigned.shieldEvidence.finalizedRoot
-        )
-        let membershipWitness = try KagemushaNoteMembershipWitness(
-            leafIndex: UInt32(zeroPath.leafIndex),
-            inputPath: PrivacyConfidentialMerklePathWitnessV2(
-                siblings: zeroPath.siblings,
-                directions: zeroPath.directions,
-                root: unsigned.shieldEvidence.finalizedRoot
-            ),
-            dummyInputPath: PrivacyConfidentialMerklePathWitnessV2(path: dummyZeroPath)
-        )
-        let currentReadiness = try await toriiRestClient.getKagemushaReadiness(
-            assetDefinitionId: assetDefinitionId
-        )
-        guard currentReadiness.ready,
-              currentReadiness.blockers.isEmpty,
-              currentReadiness.assetDefinitionId == readiness.assetDefinitionId,
-              currentReadiness.assetScale == readiness.assetScale,
-              currentReadiness.evaluatedBlockHeight >= readiness.evaluatedBlockHeight,
-              let currentVerifier = currentReadiness.activeTopUpShieldVerifier,
-              expectedReadiness.verifier.matches(currentVerifier) else {
-            throw KagemushaRecursiveSpendError.invalidField("topUp.readiness.changed")
-        }
-        return KagemushaTopUpShieldPreparation(
-            unsigned: unsigned,
-            opening: opening,
-            membershipWitness: membershipWitness,
-            binding: KagemushaTopUpShieldSnapshotBinding(
-                assetDefinitionID: assetDefinitionId,
-                assetScale: amount.scale,
-                evaluatedBlockHeight: currentReadiness.evaluatedBlockHeight,
-                evaluatedBlockHash: currentReadiness.evaluatedBlockHashBytes,
-                verifier: expectedReadiness.verifier,
-                initialRoot: zeroPath.rootAtHeight,
-                leafIndex: UInt32(zeroPath.leafIndex)
+        for attempt in 0..<3 {
+            let readiness = try await toriiRestClient.getKagemushaReadiness(
+                assetDefinitionId: assetDefinitionId
             )
-        )
+            guard readiness.ready,
+                  readiness.blockers.isEmpty,
+                  readiness.assetDefinitionId == assetDefinitionId,
+                  readiness.assetDefinitionId == expectedReadiness.assetDefinitionID,
+                  readiness.assetScale == amount.scale,
+                  readiness.assetScale == expectedReadiness.assetScale,
+                  readiness.evaluatedBlockHeight >= expectedReadiness.minimumEvaluatedBlockHeight,
+                  let verifier = readiness.activeTopUpShieldVerifier,
+                  expectedReadiness.verifier.matches(verifier),
+                  let verifierCommitment = Data(hexString: verifier.commitment),
+                  verifierCommitment.count == 32 else {
+                throw KagemushaRecursiveSpendError.invalidField("topUp.readiness")
+            }
+            let snapshot: ToriiZkMerklePathResponse
+            do {
+                snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot(
+                    asset: assetDefinitionId,
+                    commitments: [],
+                    matching: readiness
+                )
+            } catch let error as ZkAssetMerklePathError {
+                let isSnapshotDrift: Bool
+                switch error {
+                case .invalidField("evaluated_block_height"),
+                     .invalidField("evaluated_block_hash"):
+                    isSnapshotDrift = true
+                default:
+                    isSnapshotDrift = false
+                }
+                guard isSnapshotDrift else { throw error }
+                if attempt < 2 { continue }
+                throw KagemushaRecursiveSpendError.invalidField("topUp.readiness.snapshotDrift")
+            }
+            guard snapshot.frontierLen + 1
+                    < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 else {
+                throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath.capacity")
+            }
+            let zeroPath = try snapshot.validatedNextZeroPath()
+            guard zeroPath.rootAtHeight == snapshot.root,
+                  zeroPath.leafIndex == UInt64(snapshot.frontierLen) else {
+                throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath")
+            }
+            let unsigned = try KagemushaTopUpShieldBuildRequestV4(
+                chainID: chainId,
+                assetID: canonicalAssetId,
+                amount: amount,
+                payer: payer,
+                operationID: operationId,
+                opening: opening,
+                leafIndex: UInt32(zeroPath.leafIndex),
+                zeroPath: PrivacyConfidentialMerklePathWitnessV2(path: zeroPath),
+                shieldVerifierID: "\(verifier.id.backend):\(verifier.id.name)",
+                shieldVerifierCommitment: verifierCommitment,
+                artifactBinding: artifactBinding
+            ).buildUnsigned()
+            guard try zeroPath.root(
+                replacingLeafWith: unsigned.currentNote.noteCommitment
+            ) == unsigned.shieldEvidence.finalizedRoot,
+                  unsigned.shieldEvidence.initialRoot == zeroPath.rootAtHeight,
+                  unsigned.shieldEvidence.leafIndex == UInt32(zeroPath.leafIndex) else {
+                throw KagemushaRecursiveSpendError.invalidField("topUp.membershipWitness")
+            }
+            let dummyZeroPath = try zeroPath.nextZeroPathAfterInsertion(
+                commitment: unsigned.currentNote.noteCommitment,
+                expectedRoot: unsigned.shieldEvidence.finalizedRoot
+            )
+            let membershipWitness = try KagemushaNoteMembershipWitness(
+                leafIndex: UInt32(zeroPath.leafIndex),
+                inputPath: PrivacyConfidentialMerklePathWitnessV2(
+                    siblings: zeroPath.siblings,
+                    directions: zeroPath.directions,
+                    root: unsigned.shieldEvidence.finalizedRoot
+                ),
+                dummyInputPath: PrivacyConfidentialMerklePathWitnessV2(path: dummyZeroPath)
+            )
+            return KagemushaTopUpShieldPreparation(
+                unsigned: unsigned,
+                opening: opening,
+                membershipWitness: membershipWitness,
+                binding: KagemushaTopUpShieldSnapshotBinding(
+                    assetDefinitionID: assetDefinitionId,
+                    assetScale: amount.scale,
+                    evaluatedBlockHeight: readiness.evaluatedBlockHeight,
+                    evaluatedBlockHash: readiness.evaluatedBlockHashBytes,
+                    verifier: expectedReadiness.verifier,
+                    initialRoot: zeroPath.rootAtHeight,
+                    leafIndex: UInt32(zeroPath.leafIndex)
+                )
+            )
+        }
+        throw KagemushaRecursiveSpendError.invalidField("topUp.readiness.snapshotDrift")
     }
 
     /// Generates a new signing key using `defaultSigningAlgorithm`.
@@ -1330,25 +1447,217 @@ public final class IrohaSDK: @unchecked Sendable {
                                                           creationTimeMs: creationTimeMs)
     }
 
-    /// Build a signed transfer transaction containing the principal transfer and
-    /// the aggregate validation-fee transfer in the same user-signed envelope.
-    public func buildSignedTransferWithValidationFee(request: ValidationFeeTransferRequest,
-                                                     keypair: Keypair) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeValidationFeeTransfer(request: request,
-                                                                       keypair: keypair,
-                                                                       creationTimeMs: creationTimeMs,
-                                                                       nativeEncoder: validationFeeTransferNativeEncoderForTests)
+    /// Build and sign one atomic ordered mix of native instructions and deployed-contract calls.
+    public func buildSignedExecutableBatch(
+        chainId: String,
+        authority: String,
+        entries: [TransactionBatchEntry],
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        nonce: UInt32? = nil,
+        signingKey: SigningKey
+    ) throws -> SignedTransactionEnvelope {
+        try SingleInstructionSwiftNoritoEncoder.encodeExecutableBatch(
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: makeCreationTimeMs(),
+            ttlMs: ttlMs,
+            nonce: nonce,
+            entries: entries,
+            feePayment: feePayment,
+            signingKey: signingKey
+        )
     }
 
-    /// Build a signed validation-fee transfer transaction using a `SigningKey`.
-    public func buildSignedTransferWithValidationFee(request: ValidationFeeTransferRequest,
-                                                     signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeValidationFeeTransfer(request: request,
-                                                                       signingKey: signingKey,
-                                                                       creationTimeMs: creationTimeMs,
-                                                                       nativeEncoder: validationFeeTransferNativeEncoderForTests)
+    /// Ed25519 convenience overload for an atomic mixed executable batch.
+    public func buildSignedExecutableBatch(
+        chainId: String,
+        authority: String,
+        entries: [TransactionBatchEntry],
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        nonce: UInt32? = nil,
+        keypair: Keypair
+    ) throws -> SignedTransactionEnvelope {
+        try buildSignedExecutableBatch(
+            chainId: chainId,
+            authority: authority,
+            entries: entries,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            nonce: nonce,
+            signingKey: SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        )
+    }
+
+    /// Verify the planner commitment and exact frames, then locally sign one
+    /// indivisible ordinary transaction containing the complete setup vector.
+    public func buildAliasSetupPlan(
+        _ request: AliasSetupPlanRequestV1,
+        plan: AliasTransactionPlanV1,
+        bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        signingKey: SigningKey,
+        frameCodec: (String, Data) throws -> DecodedEnsureAliasFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeEnsureAlias
+    ) throws -> SignedTransactionEnvelope {
+        try SingleInstructionSwiftNoritoEncoder.encodeAliasSetupPlan(
+            request: request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            creationTimeMs: makeCreationTimeMs(),
+            ttlMs: ttlMs,
+            feePayment: feePayment,
+            signingKey: signingKey,
+            decodeAndReencode: frameCodec
+        )
+    }
+
+    /// Ed25519 convenience overload for a verified atomic alias setup plan.
+    public func buildAliasSetupPlan(
+        _ request: AliasSetupPlanRequestV1,
+        plan: AliasTransactionPlanV1,
+        bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        keypair: Keypair,
+        frameCodec: (String, Data) throws -> DecodedEnsureAliasFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeEnsureAlias
+    ) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try buildAliasSetupPlan(
+            request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey,
+            frameCodec: frameCodec
+        )
+    }
+
+    /// Build, locally sign, and submit one verified alias setup transaction.
+    @available(iOS 15.0, macOS 12.0, *)
+    public func submitAliasSetupPlan(
+        _ request: AliasSetupPlanRequestV1,
+        plan: AliasTransactionPlanV1,
+        bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        signingKey: SigningKey,
+        frameCodec: (String, Data) throws -> DecodedEnsureAliasFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeEnsureAlias
+    ) async throws {
+        let envelope = try buildAliasSetupPlan(
+            request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey,
+            frameCodec: frameCodec
+        )
+        try await submit(envelope: envelope)
+    }
+
+    /// Verify a lease-renewal or auto-renew plan and locally sign its one exact
+    /// instruction. Exact auto-renew no-ops return `nil` without a transaction.
+    public func buildAliasLifecyclePlan(
+        _ request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        signingKey: SigningKey,
+        frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
+    ) throws -> SignedTransactionEnvelope? {
+        try SingleInstructionSwiftNoritoEncoder.encodeAliasLifecyclePlan(
+            request: request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            creationTimeMs: makeCreationTimeMs(),
+            ttlMs: ttlMs,
+            feePayment: feePayment,
+            signingKey: signingKey,
+            decodeAndReencode: frameCodec
+        )
+    }
+
+    /// Ed25519 convenience overload for a verified alias lifecycle plan.
+    public func buildAliasLifecyclePlan(
+        _ request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        keypair: Keypair,
+        frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
+    ) throws -> SignedTransactionEnvelope? {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try buildAliasLifecyclePlan(
+            request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey,
+            frameCodec: frameCodec
+        )
+    }
+
+    /// Build and submit one verified lifecycle transaction. Returns `false`
+    /// for an exact auto-renew no-op and never submits an empty transaction.
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func submitAliasLifecyclePlan(
+        _ request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        signingKey: SigningKey,
+        frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
+    ) async throws -> Bool {
+        guard let envelope = try buildAliasLifecyclePlan(
+            request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey,
+            frameCodec: frameCodec
+        ) else { return false }
+        try await submit(envelope: envelope)
+        return true
+    }
+
+    /// Ed25519 convenience overload for lifecycle-plan submission.
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func submitAliasLifecyclePlan(
+        _ request: AliasLifecyclePlanRequestV1,
+        plan: AliasLifecycleTransactionPlanV1,
+        bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64? = nil,
+        keypair: Keypair,
+        frameCodec: (String, Data) throws -> DecodedAliasLifecycleFrame =
+            NativeAliasNoritoRegistryCodec.shared.decodeAndReencodeLifecycle
+    ) async throws -> Bool {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try await submitAliasLifecyclePlan(
+            request,
+            plan: plan,
+            bodyEncoder: bodyEncoder,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey,
+            frameCodec: frameCodec
+        )
     }
 
     /// Build and submit a transfer transaction using the experimental Swift encoder.
@@ -1463,23 +1772,21 @@ public final class IrohaSDK: @unchecked Sendable {
                                                                  creationTimeMs: creationTimeMs)
     }
 
-    public func buildSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
-                                            keypair: Keypair) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+    public func buildCommitContractDeployment(request: CommitContractDeploymentRequest,
+                                              keypair: Keypair) throws -> SignedTransactionEnvelope {
+        try SwiftTransactionEncoder.encodeCommitContractDeployment(
             request: request,
-            keypair: keypair,
-            creationTimeMs: creationTimeMs
+            signingKey: .ed25519(privateKey: keypair.privateKeyBytes),
+            creationTimeMs: makeCreationTimeMs()
         )
     }
 
-    public func buildSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
-                                            signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+    public func buildCommitContractDeployment(request: CommitContractDeploymentRequest,
+                                              signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        try SwiftTransactionEncoder.encodeCommitContractDeployment(
             request: request,
             signingKey: signingKey,
-            creationTimeMs: creationTimeMs
+            creationTimeMs: makeCreationTimeMs()
         )
     }
 

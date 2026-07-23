@@ -124,9 +124,11 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 
 ## Transactions
 
-- `Executable`: either `Instructions(ConstVec<InstructionBox>)` or `Ivm(IvmBytecode)`. `IvmBytecode` serializes as base64 (transparent newtype over `Vec<u8>`).
+- `Executable`: `Instructions(ConstVec<InstructionBox>)`, `ContractCall(ContractInvocation)`, `Ivm(IvmBytecode)`, `IvmProved(IvmProved)`, or a flat ordered `Batch(ConstVec<ExecutableBatchItem>)`. The append-only mixed variant is introduced by `DATA_MODEL_VERSION = 3`: `Executable::Batch` uses tag `4`, while its item tags are `0` for `Instruction(InstructionBox)` and `1` for `ContractCall(ContractInvocation)`. Existing executable tags `0..=3` and their canonical bytes remain unchanged. Raw IVM bytecode and nested batches are excluded from batch items. `IvmBytecode` serializes as base64 (transparent newtype over `Vec<u8>`).
 - `TransactionBuilder`: constructs a transaction payload with `chain`, `authority`, `creation_time_ms`, optional `time_to_live_ms` and `nonce`, `metadata`, and an `Executable`.
-  - Helpers: `with_instructions`, `with_bytecode`, `with_executable`, `with_metadata`, `set_nonce`, `set_ttl`, `set_creation_time`, `sign`.
+  - Helpers: `with_instructions`, `with_executable_batch`, `with_bytecode`, `with_executable`, `with_metadata`, `set_nonce`, `set_ttl`, `set_creation_time`, `sign`.
+  - Admission rejects an empty mixed batch and schedules a valid one as a global live-state barrier. Its items execute in input order against one transaction view and commit or roll back as one atomic unit. A transaction batch containing a contract call requires one signature-bound gas limit shared by all of its explicit ISIs and calls; fees settle once for the transaction.
+- Trigger actions may also carry a mixed batch. One trigger invocation preserves the same ordered atomic semantics and shares one deterministic trigger gas budget across all items.
 - `SignedTransaction` (versioned with `iroha_version`): carries `TransactionSignature` and payload; provides hashing and signature verification.
 - Entrypoints and results:
   - `TransactionEntrypoint`: `External(SignedTransaction)` | `Time(TimeTriggerEntrypoint)`.

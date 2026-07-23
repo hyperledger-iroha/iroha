@@ -1645,6 +1645,8 @@ pub struct MetricsSnapshot {
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::numeric::Quantity;
+
     use super::*;
 
     #[test]
@@ -1772,7 +1774,7 @@ mod tests {
             ended_at_ms: 4_000,
             exit_class: iroha_data_model::soranet::vpn::VpnExitClassV1::Standard,
             meter_hash: [0x11; 32],
-            earned_fee_nanos: 0,
+            earned_fee: Quantity::zero(),
             highest_voucher_sequence: 0,
             client_voucher_hash: [0x22; 32],
         });

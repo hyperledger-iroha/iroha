@@ -468,14 +468,18 @@ pub struct MergeLaneExecution {
     pub entrypoint_hashes: Vec<Hash>,
     /// Exact entrypoints executed in descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
-    /// Canonical Norito encodings of the exact durable queue reservation keys,
-    /// aligned one-for-one with `entrypoints`.
+    /// Canonical framed Norito encodings of the exact durable queue reservation
+    /// keys, aligned one-for-one with `entrypoints`.
     ///
     /// The concrete reservation type belongs to `iroha_core`, so the data model
     /// retains its exact canonical bytes without introducing a dependency cycle.
+    /// Producers must use [`norito::to_bytes`]; headerless codec payloads are not
+    /// valid at this protocol boundary.
     pub reservation_keys: Vec<Vec<u8>>,
-    /// Canonical Norito encodings of the complete routing plans, aligned
+    /// Canonical framed Norito encodings of the complete routing plans, aligned
     /// one-for-one with `entrypoints` and `reservation_keys`.
+    /// Producers must use [`norito::to_bytes`]; headerless codec payloads are not
+    /// valid at this protocol boundary.
     pub routing_plans: Vec<Vec<u8>>,
     /// Producer-authenticated native-AMX receipts aligned one-for-one with
     /// `entrypoints` and routing plans (`Some` only for native-AMX plans).

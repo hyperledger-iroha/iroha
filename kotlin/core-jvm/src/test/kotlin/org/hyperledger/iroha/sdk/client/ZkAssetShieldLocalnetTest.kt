@@ -12,6 +12,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
+import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
+import org.hyperledger.iroha.sdk.core.model.FeeChargeLimit
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.instructions.ConfidentialEncryptedPayload
 import org.hyperledger.iroha.sdk.core.model.instructions.RegisterZkAssetInstruction
 import org.hyperledger.iroha.sdk.core.model.instructions.ShieldInstruction
@@ -26,7 +29,7 @@ private const val GAS_LIMIT = 1_000L
 
 /**
  * End-to-end integration test: register a ZK-capable asset and shield public funds into it through
- * the SDK production path (typed instruction -> [NativeSignerBridge] gas-bearing encoder ->
+ * the SDK production path (typed instruction -> [NativeSignerBridge] fee-bound encoder ->
  * [HttpClientTransport] submission -> on-chain commit), then assert the Shield anchored a new
  * shielded root readable via `POST /v1/zk/roots`.
  *
@@ -48,6 +51,10 @@ class ZkAssetShieldLocalnetTest {
         val clientToml = readSimpleToml(localnet.resolve("client.toml"))
         val gasAssetId = gasAssetId(localnet)
         val gasLimit = GAS_LIMIT
+        val feePayment = FeePaymentIntent.authority(
+            listOf(FeeChargeLimit(FeeChargeKind.PIPELINE_GAS, gasAssetId, gasLimit.toString())),
+            gasLimit,
+        )
 
         val chainId = clientToml.getValue("chain")
         val toriiUrl = clientToml.getValue("torii_url")
@@ -80,8 +87,7 @@ class ZkAssetShieldLocalnetTest {
             ttlMs = null,
             instruction = registerInstruction,
             privateKey = privateKey,
-            gasAssetId = gasAssetId,
-            gasLimit = gasLimit,
+            feePayment = feePayment,
         )
         val registerStatus = submitVersionedTransaction(executor, toriiUrl, registerTx.versionedSignedTransaction)
         assertTrue(registerStatus in 200..299, "RegisterZkAsset submission rejected with HTTP $registerStatus")
@@ -101,8 +107,7 @@ class ZkAssetShieldLocalnetTest {
             ttlMs = null,
             instruction = shieldInstruction,
             privateKey = privateKey,
-            gasAssetId = gasAssetId,
-            gasLimit = gasLimit,
+            feePayment = feePayment,
         )
         val shieldStatus = submitUntilAccepted(executor, toriiUrl, shieldTx.versionedSignedTransaction)
         assertTrue(shieldStatus in 200..299, "Shield was not accepted (last HTTP $shieldStatus); RegisterZkAsset may not have committed")

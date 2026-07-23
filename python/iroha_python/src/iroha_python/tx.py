@@ -9,10 +9,12 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from .crypto import (
+    ContractCall,
     Ed25519KeyPair,
     Instruction,
     SignedTransactionEnvelope,
     TransactionBuilder,
+    TransactionExecutableEntry,
     _normalize_lane_privacy_attachment,
     build_signed_transaction,
 )
@@ -24,8 +26,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .repo import RepoCashLeg, RepoCollateralLeg, RepoGovernance
 
 __all__ = [
+    "ContractCall",
     "TransactionConfig",
     "TransactionDraft",
+    "TransactionExecutableEntry",
+    "authority_fee_payment",
+    "sponsor_fee_payment",
 ]
 
 
@@ -89,6 +95,7 @@ class TransactionConfig:
 
     chain_id: str
     authority: str
+    fee_payment: Mapping[str, Any]
     creation_time_ms: Optional[int] = None
     ttl_ms: Optional[int] = None
     nonce: Optional[int] = None
@@ -201,6 +208,103 @@ def _normalize_mapping_payload(payload: Mapping[str, Any], context: str) -> Dict
     return normalized
 
 
+def _fee_charge_limits(charge_limits: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    if isinstance(charge_limits, (str, bytes, bytearray, memoryview)):
+        raise TypeError("charge_limits must be a sequence of mappings")
+    normalized: List[Dict[str, Any]] = []
+    previous_kind = -1
+    for index, raw in enumerate(charge_limits):
+        if not isinstance(raw, Mapping):
+            raise TypeError(f"charge_limits[{index}] must be a mapping")
+        kind_literal = raw.get("kind")
+        kind = 0 if kind_literal == "nexus" else 1 if kind_literal == "pipeline_gas" else -1
+        if kind < 0:
+            raise ValueError(
+                f"charge_limits[{index}].kind must be nexus or pipeline_gas"
+            )
+        if kind <= previous_kind:
+            raise ValueError(
+                "charge_limits must be unique and ordered nexus before pipeline_gas"
+            )
+        previous_kind = kind
+        asset_definition_id = _require_exact_non_empty_string(
+            raw.get("asset_definition_id"),
+            f"charge_limits[{index}].asset_definition_id",
+        )
+        max_amount = _normalize_positive_quantity(
+            raw.get("max_amount"),
+            f"charge_limits[{index}].max_amount",
+        )
+        normalized.append(
+            {
+                "kind": {
+                    "kind": "nexus" if kind == 0 else "pipeline_gas",
+                    "value": None,
+                },
+                "asset_definition_id": asset_definition_id,
+                "max_amount": max_amount,
+            }
+        )
+    return normalized
+
+
+def _fee_gas_limit(gas_limit: Optional[int]) -> Optional[int]:
+    if gas_limit is None:
+        return None
+    if isinstance(gas_limit, bool) or not isinstance(gas_limit, int) or gas_limit <= 0:
+        raise ValueError("gas_limit must be a positive integer when provided")
+    if gas_limit > (1 << 64) - 1:
+        raise ValueError("gas_limit exceeds u64")
+    return gas_limit
+
+
+def authority_fee_payment(
+    *,
+    charge_limits: Sequence[Mapping[str, Any]],
+    gas_limit: Optional[int] = None,
+) -> Mapping[str, Any]:
+    """Build an exact authority-paid ``FeePaymentIntent`` mapping."""
+
+    return {
+        "payer": "authority",
+        "value": {
+            "charge_limits": _fee_charge_limits(charge_limits),
+            "gas_limit": _fee_gas_limit(gas_limit),
+        },
+    }
+
+
+def sponsor_fee_payment(
+    program_id: str,
+    program_revision: int,
+    *,
+    charge_limits: Sequence[Mapping[str, Any]],
+    gas_limit: Optional[int] = None,
+) -> Mapping[str, Any]:
+    """Build a sponsor-paid intent bound to one immutable program revision."""
+
+    literal = _require_exact_non_empty_string(program_id, "program_id")
+    sponsor, separator, name = literal.partition("/")
+    if separator != "/" or not sponsor or not name or "/" in name:
+        raise ValueError("program_id must use the exact sponsor/program form")
+    if (
+        isinstance(program_revision, bool)
+        or not isinstance(program_revision, int)
+        or program_revision <= 0
+        or program_revision > (1 << 64) - 1
+    ):
+        raise ValueError("program_revision must be a positive u64 integer")
+    return {
+        "payer": "sponsor",
+        "value": {
+            "program_id": {"sponsor": sponsor, "name": name},
+            "program_revision": program_revision,
+            "charge_limits": _fee_charge_limits(charge_limits),
+            "gas_limit": _fee_gas_limit(gas_limit),
+        },
+    }
+
+
 def _normalize_rwa_quantity_fields(
     payload: Mapping[str, Any],
     context: str,
@@ -237,18 +341,23 @@ def _normalize_rwa_quantity_fields(
 
 
 class TransactionDraft:
-    """Collect instructions and sign transactions with ergonomic helpers."""
+    """Collect ordered executable entries and sign transactions with ergonomic helpers."""
 
     def __init__(self, config: TransactionConfig):
         self._config = TransactionConfig(
             chain_id=_require_exact_non_empty_string(config.chain_id, "chain_id"),
             authority=_require_exact_non_empty_string(config.authority, "authority"),
+            fee_payment=_normalize_mapping_payload(
+                config.fee_payment,
+                "fee_payment",
+            ),
             creation_time_ms=config.creation_time_ms,
             ttl_ms=config.ttl_ms,
             nonce=config.nonce,
             metadata=config.metadata,
         )
-        self._instructions: List[Instruction] = []
+        self._entries: List[TransactionExecutableEntry] = []
+        self._explicit_batch = False
         self._lane_privacy_attachments: List[Mapping[str, Any]] = []
 
     @property
@@ -261,18 +370,24 @@ class TransactionDraft:
     def instructions(self) -> Iterable[Instruction]:
         """Iterator over appended instructions."""
 
-        return tuple(self._instructions)
+        return tuple(entry for entry in self._entries if not isinstance(entry, ContractCall))
+
+    @property
+    def entries(self) -> Iterable[TransactionExecutableEntry]:
+        """Return the ordered instruction and contract-call entries."""
+
+        return tuple(self._entries)
 
     def __iter__(self):
-        return iter(self._instructions)
+        return iter(self.instructions)
 
     def __len__(self) -> int:
-        return len(self._instructions)
+        return len(self._entries)
 
     def add_instruction(self, instruction: Instruction) -> Instruction:
         """Append an existing :class:`Instruction` to the draft."""
 
-        self._instructions.append(instruction)
+        self._entries.append(instruction)
         return instruction
 
     def extend_instructions(self, instructions: Iterable[Instruction]) -> None:
@@ -281,10 +396,58 @@ class TransactionDraft:
         for instruction in instructions:
             self.add_instruction(instruction)
 
-    def clear_instructions(self) -> None:
-        """Remove all instructions from the draft."""
+    def use_executable_batch(self) -> TransactionDraft:
+        """Select batch encoding explicitly, including for instruction-only batches."""
 
-        self._instructions.clear()
+        self._explicit_batch = True
+        return self
+
+    def add_contract_call(
+        self,
+        contract_address: str,
+        expected_code_hash_hex: str,
+        entrypoint: str,
+        arguments: Optional[bytes | bytearray | memoryview] = None,
+    ) -> ContractCall:
+        """Append a deployed-contract invocation at the current ordered batch position."""
+
+        call = ContractCall(
+            contract_address=contract_address,
+            expected_code_hash_hex=expected_code_hash_hex,
+            entrypoint=entrypoint,
+            arguments=arguments,
+        )
+        self._entries.append(call)
+        self._explicit_batch = True
+        return call
+
+    def commit_contract_deployment(
+        self,
+        *,
+        expected_deploy_nonce: int,
+        contract_address: str,
+        code_hash_hex: str,
+        contract_alias: str,
+        lease_expiry_ms: Optional[int] = None,
+        expected_previous_contract_address: Optional[str] = None,
+    ) -> Instruction:
+        """Append the atomic nonce- and alias-CAS guarded deployment instruction."""
+
+        instruction = Instruction.commit_contract_deployment(
+            expected_deploy_nonce,
+            contract_address,
+            code_hash_hex,
+            contract_alias,
+            lease_expiry_ms,
+            expected_previous_contract_address,
+        )
+        return self.add_instruction(instruction)
+
+    def clear_instructions(self) -> None:
+        """Remove all executable entries from the draft."""
+
+        self._entries.clear()
+        self._explicit_batch = False
         self._lane_privacy_attachments.clear()
 
     def add_lane_privacy_merkle_proof(
@@ -1171,6 +1334,7 @@ class TransactionDraft:
         private_key: bytes,
         *,
         instructions: Optional[Iterable[Instruction]] = None,
+        entries: Optional[Iterable[TransactionExecutableEntry]] = None,
         creation_time_ms: Optional[int] = None,
         ttl_ms: Optional[int] = None,
         nonce: Optional[int] = None,
@@ -1180,7 +1344,22 @@ class TransactionDraft:
     ) -> SignedTransactionEnvelope:
         """Sign the draft with ``private_key`` and return a :class:`SignedTransactionEnvelope`."""
 
-        payload_instructions = list(instructions or self._instructions)
+        if instructions is not None and entries is not None:
+            raise ValueError("instructions and entries are mutually exclusive")
+        payload_instructions: Optional[List[Instruction]]
+        payload_entries: Optional[List[TransactionExecutableEntry]]
+        if entries is not None:
+            payload_instructions = None
+            payload_entries = list(entries)
+        elif instructions is not None:
+            payload_instructions = list(instructions)
+            payload_entries = None
+        elif self._explicit_batch:
+            payload_instructions = None
+            payload_entries = list(self._entries)
+        else:
+            payload_instructions = list(self.instructions)
+            payload_entries = None
         effective_chain = (
             _require_exact_non_empty_string(chain_id, "chain_id")
             if chain_id is not None
@@ -1203,7 +1382,9 @@ class TransactionDraft:
             effective_chain,
             effective_authority,
             private_key,
+            fee_payment=self._config.fee_payment,
             instructions=payload_instructions,
+            entries=payload_entries,
             creation_time_ms=effective_creation,
             ttl_ms=effective_ttl,
             nonce=effective_nonce,
@@ -1247,6 +1428,44 @@ class TransactionDraft:
         status = client.submit_transaction_envelope(envelope)
         return envelope, status
 
+    def quote_and_sign(
+        self,
+        client: "ToriiClient",
+        private_key: bytes,
+    ) -> tuple[SignedTransactionEnvelope, Mapping[str, Any]]:
+        """Quote and sign one exact unsigned payload without rebuilding it.
+
+        The draft fixes the payer (including an exact sponsor program revision)
+        and executable gas bound. Torii may return updated charge maxima; the
+        native signer rejects payer, revision, or gas substitution.
+        """
+
+        builder = self.to_builder()
+        draft_payload_json = builder.payload_json()
+        draft_payload = json.loads(draft_payload_json)
+        from iroha_torii_client.client import ToriiCanonicalRequestAuth
+
+        keypair = Ed25519KeyPair.from_private_key(private_key)
+        authority = draft_payload.get("authority")
+        if not isinstance(authority, str) or not authority:
+            raise RuntimeError("exact transaction draft is missing its canonical authority")
+        quote = client.quote_fees(
+            draft_payload,
+            canonical_auth=ToriiCanonicalRequestAuth(
+                account_id=authority,
+                signer=keypair.sign,
+            ),
+        )
+        intent = quote.get("intent")
+        if not isinstance(intent, Mapping):
+            raise RuntimeError("fee quote response is missing an intent object")
+        envelope = builder.sign_quoted_payload(
+            draft_payload_json,
+            json.dumps(intent, separators=(",", ":")),
+            private_key,
+        )
+        return envelope, quote
+
     def sign_hex_and_submit(
         self,
         client: "ToriiClient",
@@ -1267,7 +1486,11 @@ class TransactionDraft:
     def to_builder(self) -> TransactionBuilder:
         """Return a :class:`TransactionBuilder` populated with the draft state."""
 
-        builder = TransactionBuilder(self._config.chain_id, self._config.authority)
+        builder = TransactionBuilder(
+            self._config.chain_id,
+            self._config.authority,
+            json.dumps(self._config.fee_payment, separators=(",", ":")),
+        )
         builder.set_creation_time_ms(_ensure_creation_time_ms(self._config))
         if self._config.ttl_ms is not None:
             builder.set_ttl_ms(int(self._config.ttl_ms))
@@ -1275,8 +1498,29 @@ class TransactionDraft:
             builder.set_nonce(int(self._config.nonce))
         if self._config.metadata is not None:
             builder.set_metadata(self._config.metadata)
-        for instruction in self._instructions:
-            builder.add_instruction(instruction)
+        if self._explicit_batch:
+            builder.use_executable_batch()
+        for entry in self._entries:
+            if isinstance(entry, ContractCall):
+                builder.add_contract_call(
+                    entry.contract_address,
+                    entry.expected_code_hash_hex,
+                    entry.entrypoint,
+                    entry.arguments,
+                )
+            else:
+                builder.add_instruction(entry)
+        for entry in self._lane_privacy_attachments:
+            normalized = _normalize_lane_privacy_attachment(entry)
+            builder.add_lane_privacy_merkle_attachment(
+                normalized["commitment_id"],
+                normalized["leaf"],
+                normalized["leaf_index"],
+                normalized["audit_path"],
+                normalized["proof_backend"],
+                normalized["proof_bytes"],
+                normalized["verifying_key_name"],
+            )
         return builder
 
     # ------------------------------------------------------------------
@@ -1304,10 +1548,27 @@ class TransactionDraft:
         manifest: dict[str, Any] = {
             "chain_id": self._config.chain_id,
             "authority": self._config.authority,
-            "instructions": [
-                json.loads(instruction.to_json()) for instruction in self._instructions
-            ],
         }
+        if self._explicit_batch:
+            manifest["entries"] = [
+                {
+                    "ContractCall": {
+                        "contract_address": entry.contract_address,
+                        "expected_code_hash": entry.expected_code_hash_hex,
+                        "entrypoint": entry.entrypoint,
+                        "arguments": None
+                        if entry.arguments is None
+                        else list(entry.arguments),
+                    }
+                }
+                if isinstance(entry, ContractCall)
+                else {"Instruction": json.loads(entry.to_json())}
+                for entry in self._entries
+            ]
+        else:
+            manifest["instructions"] = [
+                json.loads(instruction.to_json()) for instruction in self.instructions
+            ]
 
         if include_metadata and self._config.metadata is not None:
             manifest["metadata"] = _normalize_metadata(self._config.metadata)

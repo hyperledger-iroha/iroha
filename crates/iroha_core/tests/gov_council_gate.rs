@@ -442,11 +442,11 @@ fn seed_snapshot_proposal(
     let mut stx = block.transaction();
     stx.world.citizens_mut().insert(
         ALICE_ID.clone(),
-        iroha_core::state::CitizenshipRecord::new(ALICE_ID.clone(), 20_000, 1),
+        iroha_core::state::CitizenshipRecord::new(ALICE_ID.clone(), Quantity::from(20_000_u64), 1),
     );
     stx.world.citizens_mut().insert(
         BOB_ID.clone(),
-        iroha_core::state::CitizenshipRecord::new(BOB_ID.clone(), 20_000, 1),
+        iroha_core::state::CitizenshipRecord::new(BOB_ID.clone(), Quantity::from(20_000_u64), 1),
     );
     let referendum = iroha_core::state::GovernanceReferendumRecord {
         h_start: 1,

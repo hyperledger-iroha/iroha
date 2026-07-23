@@ -45,7 +45,10 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
         AssetDefinition::numeric(__asset_definition_id.clone())
             .with_name(__asset_definition_id.name().to_string())
     });
-    client.submit_blocking(create_asset)?;
+    client.submit_blocking(
+        create_asset,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     //When
     let quantity = Quantity::from(200_u32);
@@ -71,7 +74,11 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
             &mint_not_existed_asset
         };
         let instructions: Vec<InstructionBox> = vec![mint_asset.clone().into()];
-        let transaction = client.build_transaction(instructions, Metadata::default());
+        let transaction = client.build_transaction(
+            instructions,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        );
         let _ = client.submit_transaction_blocking(&transaction);
     }
 
@@ -380,10 +387,10 @@ async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
         let submit_client = tick_clients[next_tick_client % tick_clients.len()].clone();
         next_tick_client = next_tick_client.wrapping_add(1);
         let submitted = tokio::task::spawn_blocking(move || {
-            submit_client.submit(Log::new(
-                Level::INFO,
-                "sealed reveal height tick".to_owned(),
-            ))
+            submit_client.submit(
+                Log::new(Level::INFO, "sealed reveal height tick".to_owned()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
         })
         .await?;
         match submitted {
@@ -406,9 +413,13 @@ fn sealed_entrypoints_for_instructions(
     reveal_after_height: u64,
     reveal_deadline_height: u64,
 ) -> (Hash, TransactionEntrypoint, TransactionEntrypoint) {
-    let inner_tx = TransactionBuilder::new(client.chain.clone(), client.account.clone())
-        .with_instructions(instructions)
-        .sign(client.key_pair.private_key());
+    let inner_tx = TransactionBuilder::new(
+        client.chain.clone(),
+        client.account.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .sign(client.key_pair.private_key());
     let commitment_hash = compute_sealed_transaction_commitment(
         &client.chain,
         &inner_tx,
@@ -510,13 +521,17 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
     let reveal_after_height = starting_height + 2;
     let reveal_deadline_height = starting_height + 100;
     let marker = "sealed_reveal_marker".parse::<Name>()?;
-    let inner_tx = TransactionBuilder::new(client.chain.clone(), client.account.clone())
-        .with_instructions([SetKeyValue::account(
-            client.account.clone(),
-            marker,
-            Json::new("revealed"),
-        )])
-        .sign(client.key_pair.private_key());
+    let inner_tx = TransactionBuilder::new(
+        client.chain.clone(),
+        client.account.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([SetKeyValue::account(
+        client.account.clone(),
+        marker,
+        Json::new("revealed"),
+    )])
+    .sign(client.key_pair.private_key());
     let salt = [0xC3; 32];
     let commitment_hash = compute_sealed_transaction_commitment(
         &client.chain,
@@ -615,10 +630,13 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         "sealeddupmint".parse()?,
     );
     let asset_id = AssetId::new(asset_definition_id.clone(), client.account.clone());
-    client.submit_blocking(Register::asset_definition(
-        AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_definition_id.name().to_string()),
-    ))?;
+    client.submit_blocking(
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        ),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
 
     let starting_height = client.get_status()?.blocks;
     let reveal_after_height = starting_height + 3;

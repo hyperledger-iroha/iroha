@@ -1,6 +1,10 @@
 /// <reference types="node" />
 
+import type { BrowserFeePayment } from "./transaction-codec.js";
+
 export * from "./kotodama-compiler.js";
+export * from "./transaction-codec.js";
+export * from "./smart-contract-deployment.js";
 
 export type JsonValue =
   | null
@@ -9,6 +13,144 @@ export type JsonValue =
   | string
   | JsonValue[]
   | { [key: string]: JsonValue };
+
+export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 21;
+export const KAGEMUSHA_MANIFEST_VERSION: 4;
+export const KAGEMUSHA_MAX_HOPS: 8;
+export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES: 524288;
+export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES: 50331648;
+
+export interface KagemushaNoritoRequestV4 {
+  readonly version: 4;
+  readonly operationId: string;
+  readonly norito: Uint8Array;
+}
+
+export interface KagemushaReadinessBlocker {
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface KagemushaVerifierId {
+  readonly backend: "halo2/ipa";
+  readonly name: string;
+}
+
+export interface KagemushaActiveVerifier {
+  readonly id: KagemushaVerifierId;
+  readonly version: number;
+  readonly circuit_id: string;
+  readonly commitment: string;
+  readonly public_inputs_schema_hash: string;
+  readonly max_proof_bytes: number;
+  readonly activation_height: number;
+  readonly withdrawal_height: number | null;
+}
+
+export interface KagemushaAuthenticatedArtifactSetV4 {
+  readonly generation: string;
+  readonly manifest_sha256: string;
+  readonly release_policy_sha256: string;
+  readonly release_attestation_sha256: string;
+  readonly activation_height: number;
+  readonly withdrawal_height: number;
+  readonly max_proof_bytes: number;
+  readonly asset_scale: number;
+}
+
+export interface KagemushaReadinessV4 {
+  readonly required_bridge_abi_version: 21;
+  readonly max_hops: 8;
+  readonly asset_definition_id: string;
+  readonly asset_scale: number | null;
+  readonly evaluated_block_height: number;
+  readonly evaluated_block_hash: string;
+  readonly active_transfer_verifier: KagemushaActiveVerifier | null;
+  readonly active_topup_shield_verifier: KagemushaActiveVerifier | null;
+  readonly active_unshield_verifier: KagemushaActiveVerifier | null;
+  readonly active_recursive_step_eq_verifier: KagemushaActiveVerifier | null;
+  readonly active_recursive_step_ep_verifier: KagemushaActiveVerifier | null;
+  readonly artifact_set: KagemushaAuthenticatedArtifactSetV4 | null;
+  readonly proof_backend_available: boolean;
+  readonly recursive_lineage_supported: boolean;
+  readonly ready: boolean;
+  readonly blockers: readonly KagemushaReadinessBlocker[];
+}
+
+export type KagemushaOperationKind = Readonly<{
+  kind: "top_up" | "redeem";
+  value: null;
+}>;
+
+export interface KagemushaOperationReference {
+  readonly operation_id: string;
+  readonly kind: KagemushaOperationKind;
+  readonly state: Readonly<{ state: "pending"; value: null }>;
+  readonly transaction_hash: string;
+  readonly status_uri: string;
+  readonly submitted_at_ms: number;
+}
+
+export type KagemushaOperationStatus =
+  | Readonly<{
+      state: "pending";
+      value: Readonly<{
+        operation_id: string;
+        kind: KagemushaOperationKind;
+        transaction_hash: string;
+        submitted_at_ms: number;
+      }>;
+    }>
+  | Readonly<{
+      state: "applied";
+      value: Readonly<{
+        operation_id: string;
+        result: Readonly<{
+          kind: "top_up" | "redeem";
+          result: Readonly<Record<string, JsonValue>>;
+        }>;
+      }>;
+    }>
+  | Readonly<{
+      state: "rejected";
+      value: Readonly<{
+        operation_id: string;
+        kind: KagemushaOperationKind;
+        transaction_hash: string;
+        error: Readonly<{
+          code: string;
+          message: string;
+          details?: Readonly<Record<string, JsonValue>>;
+        }>;
+      }>;
+    }>;
+
+export function normalizeKagemushaAssetSelector(value: string, context?: string): string;
+export function normalizeKagemushaOperationId(value: string, context?: string): string;
+export function normalizeKagemushaTopUpRequestV4(
+  value: KagemushaNoritoRequestV4,
+  context?: string,
+): KagemushaNoritoRequestV4;
+export function normalizeKagemushaRedeemRequestV4(
+  value: KagemushaNoritoRequestV4,
+  context?: string,
+): KagemushaNoritoRequestV4;
+export function normalizeKagemushaReadinessV4(
+  payload: Record<string, unknown>,
+  requestedAssetSelector: string,
+): KagemushaReadinessV4;
+export function normalizeKagemushaOperationReference(
+  payload: Record<string, unknown>,
+  expected: {
+    expectedOperationId: string;
+    expectedKind: "top_up" | "redeem";
+    location: string | null;
+  },
+): KagemushaOperationReference;
+export function normalizeKagemushaOperationStatus(
+  payload: Record<string, unknown>,
+  expectedOperationId: string,
+): KagemushaOperationStatus;
 
 export type CryptoAlgorithm =
   | "ed25519"
@@ -533,7 +675,7 @@ export type MultisigProposeInstructionInput =
 export interface MultisigProposeRequest extends MultisigAccountSelector {
   signerAccountId: string;
   instructions: MultisigProposeInstructionInput[];
-  feeSponsor?: string | null;
+  feePayment: NoritoFeePaymentIntent;
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
@@ -549,7 +691,7 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id?: string;
-  fee_sponsor?: string | null;
+  fee_payment?: NoritoFeePaymentIntent;
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
@@ -565,7 +707,7 @@ export interface MultisigProposePayload {
   multisig_account_alias?: string;
   signer_account_id: string;
   instructions: string[];
-  fee_sponsor?: string;
+  fee_payment: NoritoFeePaymentIntent;
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
@@ -583,9 +725,7 @@ export interface MultisigContractCallProposeRequest
   contractAlias?: string;
   entrypoint: string;
   payload?: JsonValue;
-  gasAssetId?: string | null;
-  feeSponsor?: string | null;
-  gasLimit?: number | string | bigint | null;
+  feePayment: NoritoFeePaymentIntent;
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
@@ -599,9 +739,7 @@ export interface MultisigContractCallProposeRequest
   signer_account_id?: string;
   contract_address?: string;
   contract_alias?: string;
-  gas_asset_id?: string | null;
-  fee_sponsor?: string | null;
-  gas_limit?: number | string | bigint | null;
+  fee_payment?: NoritoFeePaymentIntent;
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
@@ -620,9 +758,7 @@ export interface MultisigContractCallProposePayload {
   contract_alias?: string;
   entrypoint: string;
   payload: JsonValue;
-  gas_asset_id?: string;
-  fee_sponsor?: string;
-  gas_limit?: number;
+  fee_payment: NoritoFeePaymentIntent;
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
@@ -634,7 +770,7 @@ export interface MultisigContractCallApproveRequest
   signerAccountId: string;
   proposalId?: string | null;
   instructionsHash?: string | null;
-  feeSponsor?: string | null;
+  feePayment: NoritoFeePaymentIntent;
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
@@ -648,7 +784,7 @@ export interface MultisigContractCallApproveRequest
   signer_account_id?: string;
   proposal_id?: string | null;
   instructions_hash?: string | null;
-  fee_sponsor?: string | null;
+  fee_payment?: NoritoFeePaymentIntent;
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
@@ -665,7 +801,7 @@ export interface MultisigContractCallApprovePayload {
   signer_account_id: string;
   proposal_id?: string;
   instructions_hash?: string;
-  fee_sponsor?: string;
+  fee_payment: NoritoFeePaymentIntent;
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
@@ -769,16 +905,20 @@ export interface IsoBridgeAmount {
 export const SCCP_DOMAIN_SORA: 0;
 export const SCCP_DOMAIN_ETH: 1;
 export const SCCP_DOMAIN_BSC: 2;
+export const SCCP_DOMAIN_SOLANA: 3;
 export const SCCP_DOMAIN_TRON: 5;
+export type SccpDomain = 0 | 1 | 2 | 3 | 5;
 export const SCCP_CODEC_CANONICAL_TEXT: 1;
 export const SCCP_CODEC_EVM_ADDRESS20: 2;
 export const SCCP_CODEC_TRON_ADDRESS21: 5;
-export type SccpCodecTag = 1 | 2 | 5;
+export const SCCP_CODEC_SOLANA_PUBKEY32: 6;
+export type SccpCodecTag = 1 | 2 | 5 | 6;
 export const SCCP_CODEC_KEYS: Readonly<Record<SccpCodecTag, string>>;
 export type SccpPayloadKind = "transfer";
 export const SCCP_PAYLOAD_KINDS: readonly SccpPayloadKind[];
-export type SccpNetworkProfile = "sora-taira" | "ethereum-mainnet" | "ethereum-sepolia" | "bsc-mainnet" | "bsc-testnet" | "tron-mainnet" | "tron-nile" | "tron-shasta";
-export interface SccpNetworkDescriptor { readonly profile: SccpNetworkProfile; readonly tag: number; readonly domain: number; readonly sora: boolean; }
+export const SCCP_SOLANA_TESTNET_GENESIS_HASH: "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY";
+export type SccpNetworkProfile = "sora-taira" | "ethereum-mainnet" | "ethereum-sepolia" | "bsc-mainnet" | "bsc-testnet" | "tron-mainnet" | "tron-nile" | "tron-shasta" | "solana-testnet";
+export interface SccpNetworkDescriptor { readonly profile: SccpNetworkProfile; readonly tag: number; readonly domain: SccpDomain; readonly sora: boolean; readonly genesisHash?: string; }
 export const SCCP_NETWORK_PROFILES: Readonly<Record<SccpNetworkProfile, SccpNetworkDescriptor>>;
 export function normalizeSccpCodecValue(codec: SccpCodecTag, value: string | BinaryLike): Uint8Array;
 export function sccpSourceEventDigest(laneHash: string | BinaryLike, messageId: string | BinaryLike, payloadHash: string | BinaryLike): string;
@@ -814,10 +954,65 @@ export interface SccpResourceLimits {
   readonly max_bn254_pairing_checks_per_transaction: number;
   readonly max_bn254_pairing_checks_per_block: number;
 }
-export interface SccpCapabilities { readonly version: 1; readonly registry_revision: string; readonly registry_path: "/v1/sccp/registry"; readonly message_bundle_path: "/v1/sccp/proofs/message/{message_id}"; readonly proof_request_path: "/v1/sccp/proof-requests/{message_id}"; readonly recent_messages_path: "/v1/sccp/messages/recent"; readonly registry_limits: SccpRegistryLimits; readonly resource_limits: SccpResourceLimits; readonly proof_submit_path: "/v1/bridge/proofs/submit" | null; readonly native_message_submit_path: "/v1/bridge/messages" | null; }
-export type SccpNetworkWireName = "sora_taira" | "ethereum_mainnet" | "ethereum_sepolia" | "bsc_mainnet" | "bsc_testnet" | "tron_mainnet" | "tron_nile" | "tron_shasta";
+export interface SccpCapabilities { readonly version: 1; readonly registry_revision: string; readonly registry_path: "/v1/sccp/registry"; readonly message_bundle_path: "/v1/sccp/proofs/message/{message_id}"; readonly proof_request_path: "/v1/sccp/proof-requests/{message_id}"; readonly recent_messages_path: "/v1/sccp/messages/recent"; readonly sora_outbound_material_path: "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"; readonly registry_limits: SccpRegistryLimits; readonly resource_limits: SccpResourceLimits; readonly proof_submit_path: "/v1/bridge/proofs/submit" | null; readonly native_message_submit_path: "/v1/bridge/messages" | null; }
+export type SccpNetworkWireName = "sora_taira" | "ethereum_mainnet" | "ethereum_sepolia" | "bsc_mainnet" | "bsc_testnet" | "tron_mainnet" | "tron_nile" | "tron_shasta" | "solana_testnet";
 export interface SccpNetworkV1 { readonly network: SccpNetworkWireName; readonly profile: null; }
 export interface SccpLaneIdV1 { readonly source: SccpNetworkV1; readonly target: SccpNetworkV1; }
+export interface SccpTransferPayloadV1 {
+  readonly version: 1;
+  readonly source_domain: SccpDomain;
+  readonly dest_domain: SccpDomain;
+  readonly nonce: string;
+  readonly route_revision: number;
+  readonly asset_home_domain: SccpDomain;
+  readonly asset_id_codec: SccpCodecTag;
+  readonly asset_id: string;
+  readonly amount: string;
+  readonly sender_codec: SccpCodecTag;
+  readonly sender: string;
+  readonly recipient_codec: SccpCodecTag;
+  readonly recipient: string;
+  readonly route_id_codec: SccpCodecTag;
+  readonly route_id: string;
+}
+export interface SccpPayloadV1 { readonly Transfer: SccpTransferPayloadV1; }
+export interface SccpOutboundMessageContextV1 {
+  readonly lane: SccpLaneIdV1;
+  readonly destination_binding_hash: string;
+  readonly route_configuration_hash: string;
+}
+export interface SccpHubCommitmentV1 {
+  readonly version: 1;
+  readonly kind: "Transfer";
+  readonly context: SccpOutboundMessageContextV1;
+  readonly message_id: string;
+  readonly payload_hash: string;
+}
+export interface SccpMerkleStepV1 {
+  readonly sibling_hash: string;
+  readonly sibling_is_left: boolean;
+}
+export interface SccpMerkleProofV1 { readonly steps: readonly SccpMerkleStepV1[]; }
+export interface TairaSccpMessageBundleV1 {
+  readonly version: 1;
+  readonly commitment_root: string;
+  readonly commitment: SccpHubCommitmentV1;
+  readonly merkle_proof: SccpMerkleProofV1;
+  readonly payload: SccpPayloadV1;
+  readonly finality_proof: string;
+}
+export function canonicalSccpTransferPayloadBytes(payload: SccpTransferPayloadV1): Uint8Array;
+export function canonicalSccpPayloadBytes(payload: SccpPayloadV1): Uint8Array;
+export function sccpLaneIdHash(lane: SccpLaneIdV1): string;
+export function sccpMessageId(lane: SccpLaneIdV1, payload: SccpPayloadV1): string;
+export function sccpPayloadHash(payloadBytes: BinaryLike): string;
+export function sccpHubCommitmentFromPayload(context: SccpOutboundMessageContextV1, payload: SccpPayloadV1): Readonly<SccpHubCommitmentV1>;
+export function canonicalSccpHubCommitmentBytes(commitment: SccpHubCommitmentV1): Uint8Array;
+export function sccpCommitmentLeafHash(commitment: SccpHubCommitmentV1): string;
+export function canonicalSccpMerkleProofBytes(proof: SccpMerkleProofV1): Uint8Array;
+export function sccpMerkleRootFromCommitment(commitment: SccpHubCommitmentV1, proof: SccpMerkleProofV1): string;
+export function canonicalTairaSccpMessageBundleBytes(bundle: TairaSccpMessageBundleV1): Uint8Array;
+export function canonicalSccpMessagePublicInputsBytes(input: SccpMessagePublicInputsV1): Uint8Array;
 export interface SccpBn254G1PointV1 { readonly x: string; readonly y: string; }
 export interface SccpBn254G2PointV1 { readonly x_c0: string; readonly x_c1: string; readonly y_c0: string; readonly y_c1: string; }
 export interface SccpGroth16Bn254IcV1 {
@@ -867,6 +1062,39 @@ export interface SccpOutboundProofPolicyV1 {
   readonly semantic_profile: SccpSemanticProofProfileV1;
   readonly sora_finality_anchor: SccpSoraFinalityAnchorV1;
 }
+export type SccpSoraOutboundExecutionSemanticsV1 = "ivm_proved_record_sccp_message_v1";
+export interface SccpPortableVerifyingKeyRefV1 {
+  readonly backend: string;
+  readonly name: string;
+  readonly version: number;
+  readonly commitment: string;
+}
+export interface SccpSoraOutboundExecutionPolicyV1 {
+  readonly version: 1;
+  readonly semantics: SccpSoraOutboundExecutionSemanticsV1;
+  readonly contract_artifact_sha256: string;
+  readonly vk_ref: SccpPortableVerifyingKeyRefV1;
+  readonly gas_limit: number;
+}
+export interface SccpSoraOutboundMaterialV1 {
+  readonly version: 1;
+  readonly registry_revision: string;
+  readonly route_key: SccpRouteKeyV1;
+  readonly route_configuration_hash: string;
+  readonly destination_binding_hash: string;
+  readonly settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+  readonly policy: SccpSoraOutboundExecutionPolicyV1;
+  readonly contract_artifact_b64: string;
+  readonly contract_code_hash: string;
+  readonly verifying_key_version: number;
+}
+export interface SccpSoraOutboundMaterialExpectations {
+  readonly sourceProfile?: Exclude<SccpNetworkProfile, "sora-taira">;
+  readonly routeId?: string;
+  readonly assetKey?: string;
+  readonly revision?: number;
+  readonly registryRevision?: string;
+}
 export interface SccpDestinationDeploymentFieldsV1 {
   readonly token_address: string;
   readonly token_code_hash: string;
@@ -881,18 +1109,59 @@ export interface SccpDestinationDeploymentFieldsV1 {
 }
 export interface SccpEvmDestinationDeploymentV1 extends SccpDestinationDeploymentFieldsV1 {}
 export interface SccpTronDestinationDeploymentV1 extends SccpDestinationDeploymentFieldsV1 {}
+export interface SccpSolanaDestinationDeploymentV1 {
+  readonly token_mint_address: string;
+  readonly route_program_id: string;
+  readonly route_program_data_address: string;
+  readonly route_program_data_slot: number;
+  readonly route_state_account: string;
+  readonly route_program_code_hash: string;
+  readonly native_verifier_program_id: string;
+  readonly native_verifier_program_data_address: string;
+  readonly native_verifier_program_data_slot: number;
+  readonly native_verifier_material_account: string;
+  readonly native_verifier_program_code_hash: string;
+  readonly native_verifier_config_hash: string;
+  readonly verifying_key: SccpGroth16Bn254VerifyingKeyV1;
+  readonly verifier_key_hash: string;
+  readonly outbound_proof_policy: SccpOutboundProofPolicyV1;
+  readonly taira_to_token_multiplier: 1;
+}
 export type SccpDestinationDeploymentV1 =
   | Readonly<{ family: "evm"; deployment: SccpEvmDestinationDeploymentV1 }>
-  | Readonly<{ family: "tron"; deployment: SccpTronDestinationDeploymentV1 }>;
+  | Readonly<{ family: "tron"; deployment: SccpTronDestinationDeploymentV1 }>
+  | Readonly<{ family: "solana"; deployment: SccpSolanaDestinationDeploymentV1 }>;
 export interface SccpSourceEmitterIdentityV1 {
   readonly address: string;
   readonly runtime_code_hash: string;
   readonly route_config_hash: string;
 }
+export interface SccpSolanaSourceEmitterIdentityV1 {
+  readonly program_id: string;
+  readonly program_data_address: string;
+  readonly program_data_slot: number;
+  readonly state_account: string;
+  readonly program_code_hash: string;
+  readonly route_config_hash: string;
+}
 export type SccpSourceEmitterV1 =
   | Readonly<{ emitter: "evm"; identity: SccpSourceEmitterIdentityV1 }>
-  | Readonly<{ emitter: "tron"; identity: SccpSourceEmitterIdentityV1 }>;
+  | Readonly<{ emitter: "tron"; identity: SccpSourceEmitterIdentityV1 }>
+  | Readonly<{ emitter: "solana"; identity: SccpSolanaSourceEmitterIdentityV1 }>;
 export interface SccpSourceIdentityV1 { readonly lane: SccpLaneIdV1; readonly emitter: SccpSourceEmitterV1; }
+export interface SccpSolanaDestinationHashesV1 {
+  readonly destination_binding_hash: string;
+  readonly deployment_config_hash: string;
+  readonly route_configuration_hash: string;
+}
+export interface SccpSolanaSourceIdentityHashesV1 {
+  readonly source_emitter_identity_hash: string;
+  readonly source_identity_hash: string;
+}
+export function deriveSccpSolanaDestinationHashesV1(deployment: SccpSolanaDestinationDeploymentV1, sourceProgramId: string, routeRevision?: number): Readonly<SccpSolanaDestinationHashesV1>;
+/** Derive the one-way native-verifier material config before its config-addressed PDA is created. */
+export function deriveSccpSolanaNativeVerifierConfigHashV1(deployment: SccpSolanaDestinationDeploymentV1, sourceProgramId: string, routeRevision?: number): string;
+export function deriveSccpSolanaSourceIdentityHashesV1(identity: SccpSourceIdentityV1): Readonly<SccpSolanaSourceIdentityHashesV1>;
 export type SccpRouteActivationKindV1 = "staged" | "bidirectional" | "inbound_only" | "paused" | "retired";
 export interface SccpRouteActivationV1 { readonly activation: SccpRouteActivationKindV1; readonly direction: null; }
 export interface SccpInboundFinalityCutoffV1 {
@@ -909,9 +1178,14 @@ export interface SccpGovernedRouteV1 {
   readonly inbound_finality_cutoff: SccpInboundFinalityCutoffV1 | null;
   readonly source_identity: SccpSourceIdentityV1;
   readonly destination: SccpDestinationDeploymentV1;
+  readonly sora_outbound_execution_policy: SccpSoraOutboundExecutionPolicyV1;
   readonly settlement: SccpSoraSettlementV1;
 }
-export type SccpNativeProofBackendV1 = "ethereum_beacon_v1" | "bsc_parlia_v1" | "tron_dpos_v1";
+export type SccpNativeProofBackendV1 =
+  | "ethereum_beacon_v1"
+  | "bsc_parlia_v1"
+  | "tron_dpos_v1"
+  | "solana_agave_v1";
 export interface SccpNativeTrustAnchorV1 {
   readonly backend: Readonly<{ backend: SccpNativeProofBackendV1; protocol: null }>;
   readonly anchor_hash: string;
@@ -927,28 +1201,30 @@ export interface SccpRegistry { readonly version: 1; readonly lanes: readonly Sc
 export interface SccpCanonicalTextValueV1 { readonly CanonicalText: Readonly<{ value: string }>; }
 export interface SccpEvmAddressValueV1 { readonly EvmAddress20: Readonly<{ bytes: string }>; }
 export interface SccpTronAddressValueV1 { readonly TronAddress21: Readonly<{ bytes: string }>; }
+export interface SccpSolanaPubkeyValueV1 { readonly SolanaPubkey32: Readonly<{ bytes: string }>; }
 export interface SccpTransferProjectionV1 {
   readonly version: 1;
   readonly source_domain: 0;
-  readonly dest_domain: 1 | 2 | 5;
-  readonly nonce: number;
+  readonly dest_domain: 1 | 2 | 3 | 5;
+  readonly nonce: string;
   readonly route_revision: number;
   readonly asset_home_domain: 0;
   readonly asset_id: SccpCanonicalTextValueV1;
-  readonly amount: number;
+  readonly amount: string;
   readonly sender: SccpCanonicalTextValueV1;
-  readonly recipient: SccpEvmAddressValueV1 | SccpTronAddressValueV1;
+  readonly recipient: SccpEvmAddressValueV1 | SccpTronAddressValueV1 | SccpSolanaPubkeyValueV1;
   readonly route_id: SccpCanonicalTextValueV1;
 }
 export interface SccpPayloadProjectionV1 { readonly Transfer: SccpTransferProjectionV1; }
-export interface SccpRecentMessage { readonly height: number; readonly commitment_index: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
+export interface SccpRecentMessage { readonly height: number; readonly commitment_index: number; readonly message_id_hex: string; readonly kind: "transfer"; readonly source_profile: "sora-taira"; readonly target_profile: Exclude<SccpNetworkProfile, "sora-taira">; readonly destination_binding_hash: string; readonly route_configuration_hash: string; readonly target_domain: 1 | 2 | 3 | 5; readonly asset_id: string | null; readonly route_id: string | null; readonly recipient: string | null; readonly amount: string; readonly payload_projection: SccpPayloadProjectionV1; readonly links: Readonly<{ bundle_path: string; proof_request_path: string }>; }
 export interface SccpRecentCursor { readonly from: number; readonly after_index: number; }
 export interface SccpRecentMessages { readonly items: readonly SccpRecentMessage[]; readonly next: SccpRecentCursor | null; }
 export interface SccpMessageBundle { readonly version: 1; readonly commitment_root: string; readonly commitment: Readonly<Record<string, unknown>>; readonly merkle_proof: Readonly<Record<string, unknown>>; readonly payload: Readonly<{ Transfer: Readonly<Record<string, unknown>> }>; readonly finality_proof: string; }
-export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 5; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
+export interface SccpMessagePublicInputsV1 { readonly version: 1; readonly message_id: string; readonly payload_hash: string; readonly target_domain: 1 | 2 | 3 | 5; readonly commitment_root: string; readonly finality_height: string; readonly finality_block_hash: string; }
 export type SccpDestinationProofBackendV1 =
   | Readonly<{ backend: "evm_groth16_bn254_v1"; family: null }>
-  | Readonly<{ backend: "tron_groth16_bn254_v1"; family: null }>;
+  | Readonly<{ backend: "tron_groth16_bn254_v1"; family: null }>
+  | Readonly<{ backend: "solana_groth16_bn254_v1"; family: null }>;
 export interface SccpProofRequest {
   readonly version: 1;
   readonly backend: SccpDestinationProofBackendV1;
@@ -972,15 +1248,18 @@ export type SccpDetachedSigningState =
   | Readonly<{ signature_b64: string; transaction_payload_b64: string; creation_time_ms: number }>;
 export type SccpBridgeProofSubmitPayload = Readonly<{
   authority: string;
+  fee_payment: NoritoFeePaymentIntent;
   destination_proof_b64: string;
 }> & SccpDetachedSigningState;
 export type SccpBridgeMessageSubmitPayload = Readonly<{
   authority: string;
+  fee_payment: NoritoFeePaymentIntent;
   native_proof_b64: string;
 }> & SccpDetachedSigningState;
 export interface SccpBridgeSubmitResponse { readonly submitted: boolean; readonly payload_kind: SccpPayloadKind; readonly message_id_hex: string; readonly backend: string; readonly counterparty_domain: number; readonly counterparty_chain: SccpNetworkProfile; readonly route_configuration_hash_hex: string; readonly range_start_height: number; readonly range_end_height: number; readonly creation_time_ms: number; readonly tx_hash_hex: string | null; readonly transaction_payload_b64: string | null; readonly signing_message_b64: string | null; }
 export interface SccpBridgeResponseExpectations { readonly submitted?: boolean; readonly creation_time_ms?: number; }
 export function normalizeSccpCapabilities(value: unknown): SccpCapabilities;
+export function normalizeSccpSoraOutboundMaterial(value: unknown, expectations?: SccpSoraOutboundMaterialExpectations): SccpSoraOutboundMaterialV1;
 export function normalizeSccpRegistry(value: unknown): SccpRegistry;
 export function normalizeSccpRouteGovernanceAction(value: SccpRouteGovernanceActionInput): Readonly<SccpRouteGovernanceActionInput>;
 export function normalizeSccpRecentMessages(value: unknown): SccpRecentMessages;
@@ -2965,7 +3244,7 @@ export function blake2b256(
   },
 ): Uint8Array;
 
-export const IVM_PROGRAM_HEADER_LENGTH: 17;
+export const IVM_PROGRAM_HEADER_LENGTH: 49;
 export const IVM_ARTIFACT_MAX_BYTES: 4194304;
 
 /** Compute ledger/Core body identity and full-artifact SHA-256 identity. */
@@ -3018,6 +3297,7 @@ export interface ContractEventStreamOptions {
 }
 
 export interface CanonicalRequestAuth {
+  /** Exact canonical I105 account or canonical ASCII account alias. */
   accountId: string;
   privateKey:
     | Buffer
@@ -3034,6 +3314,67 @@ export interface PermissionedIterableOptions {
 }
 
 export type ToriiCountMode = "bounded" | "exact";
+
+export interface ToriiBrowserCountedListOptions {
+  limit?: NumericLike;
+  offset?: NumericLike;
+  countMode?: ToriiCountMode;
+  count_mode?: ToriiCountMode;
+  signal?: AbortSignal;
+}
+
+export type ToriiBrowserAccountPermissionsListOptions =
+  ToriiBrowserCountedListOptions;
+
+export interface ToriiBrowserAccountHistoryListOptions
+  extends ToriiBrowserCountedListOptions {
+  assetId?: string;
+  asset_id?: string;
+}
+
+export interface ToriiBrowserContractActivityListOptions
+  extends ToriiBrowserCountedListOptions {
+  authority?: string;
+  contractAddress?: string;
+  contract_address?: string;
+  contractAlias?: string;
+  contract_alias?: string;
+  contractEntrypoint?: string;
+  contract_entrypoint?: string;
+  sinceTimestampMs?: NumericLike;
+  since_timestamp_ms?: NumericLike;
+  untilTimestampMs?: NumericLike;
+  until_timestamp_ms?: NumericLike;
+  resultOk?: boolean;
+  result_ok?: boolean;
+}
+
+export interface ToriiBrowserContractEventListOptions
+  extends ToriiBrowserCountedListOptions {
+  authority?: string;
+  contractAddress?: string;
+  contract_address?: string;
+  contractAlias?: string;
+  contract_alias?: string;
+  module?: string;
+  eventKind?: string;
+  event_kind?: string;
+  participant?: string;
+  assetId?: string;
+  asset_id?: string;
+  provenance?: "emitted" | "derived";
+  sinceTimestampMs?: NumericLike;
+  since_timestamp_ms?: NumericLike;
+  untilTimestampMs?: NumericLike;
+  until_timestamp_ms?: NumericLike;
+  resultOk?: boolean;
+  result_ok?: boolean;
+}
+
+export interface ToriiBrowserContractEventStreamOptions
+  extends Omit<ToriiBrowserContractEventListOptions, keyof ToriiBrowserCountedListOptions> {
+  signal?: AbortSignal;
+}
 
 export interface IterableListOptions extends PermissionedIterableOptions {
   limit?: NumericLike;
@@ -3250,6 +3591,35 @@ export interface ToriiIterableListResponse<T = unknown> {
   total: number;
 }
 
+/** Exact wire shape returned by Torii app-list routes. */
+export interface ToriiBrowserCountedListResponse<T = unknown> {
+  items: ReadonlyArray<T>;
+  /** Present only when `count_mode` is `exact`. */
+  total?: number;
+  has_more: boolean;
+  count_mode: ToriiCountMode;
+}
+
+export type ToriiBrowserAccountPermissionsListResponse<
+  T = ToriiAccountPermissionItem,
+> = ToriiBrowserCountedListResponse<T>;
+
+export interface ToriiBrowserAccountHistoryListResponse<
+  T = ToriiAccountHistoryItem,
+> extends ToriiBrowserCountedListResponse<T> {
+  indexed_height: number;
+  indexed_block_hash: string | null;
+  query_source: "account_history_index";
+}
+
+export type ToriiBrowserContractActivityListResponse<
+  T = ToriiContractActivityItem,
+> = ToriiBrowserCountedListResponse<T>;
+
+export type ToriiBrowserContractEventListResponse<
+  T = ToriiContractEventItem,
+> = ToriiBrowserCountedListResponse<T>;
+
 export interface AliasResolutionDto {
   alias: string;
   account_id: string;
@@ -3260,6 +3630,11 @@ export interface AliasResolutionDto {
 export interface CanonicalRequestOptions {
   signal?: AbortSignal;
   canonicalAuth?: CanonicalRequestAuth;
+}
+
+export interface RequiredCanonicalRequestOptions {
+  signal?: AbortSignal;
+  canonicalAuth: CanonicalRequestAuth;
 }
 
 export interface AliasLookupByAccountItem {
@@ -3289,11 +3664,123 @@ export interface RetailRecipientLookupRequest {
 
 export interface RetailRecipientLookupResponse {
   resolved: boolean;
-  account_id?: string;
-  alias_fqn?: string;
-  fi_id?: string;
+  account_id: string;
+  alias_fqn: string;
+  fi_id: "hbl.sbp" | "ubl.sbp";
   full_name?: string;
 }
+
+export interface RetailRecipientRouteResponse {
+  account_id: string;
+  alias_fqn: string;
+  fi_id: "hbl.sbp" | "ubl.sbp";
+}
+
+export interface FeeSponsorProgramId {
+  sponsor: string;
+  name: string;
+}
+
+export type FeeSponsorProgramLifecycleState =
+  | "staged"
+  | "paused"
+  | "active"
+  | "closing"
+  | "closed";
+
+export interface FeeSponsorProgram {
+  id: FeeSponsorProgramId;
+  lifecycle: { state: FeeSponsorProgramLifecycleState; value: null };
+  active_revision?: number | null;
+  staged_revision?: number | null;
+  scheduled_activation?: {
+    revision: number;
+    activate_at_height: number;
+  } | null;
+}
+
+export interface NoritoFeeChargeKind {
+  kind: "nexus" | "pipeline_gas";
+  value: null;
+}
+
+export interface NoritoFeeChargeLimit {
+  kind: NoritoFeeChargeKind;
+  asset_definition_id: string;
+  max_amount: string;
+}
+
+export type NoritoFeePaymentIntent =
+  | {
+      payer: "authority";
+      value: {
+        charge_limits: ReadonlyArray<NoritoFeeChargeLimit>;
+        gas_limit?: number | null;
+      };
+    }
+  | {
+      payer: "sponsor";
+      value: {
+        program_id: FeeSponsorProgramId;
+        program_revision: number;
+        charge_limits: ReadonlyArray<NoritoFeeChargeLimit>;
+        gas_limit?: number | null;
+      };
+    };
+
+export type FeeDebitSource =
+  | { kind: "account"; value: string }
+  | { kind: "sponsor_program"; value: FeeSponsorProgramId };
+
+export interface FeeQuoteResponse {
+  intent: NoritoFeePaymentIntent;
+  observation: {
+    ledger_time_ms: number;
+    next_block_height: number;
+    route_dataspace_id?: number | null;
+  };
+  components: ReadonlyArray<{
+    kind: NoritoFeeChargeKind;
+    asset_definition_id: string;
+    max_amount: string;
+  }>;
+  capacities: ReadonlyArray<{
+    asset_definition_id: string;
+    vault_balance: string;
+    reserve_floor: string;
+    block_remaining: string;
+    program_epoch_remaining: string;
+    beneficiary_epoch_remaining: string;
+  }>;
+  decision: {
+    status: "accepted";
+    value: {
+      debit_source: FeeDebitSource;
+      program_revision?: number | null;
+    };
+  };
+}
+
+export type FeeRejectionCode =
+  | "invalid_fee_intent"
+  | "program_not_found"
+  | "revision_not_found"
+  | "revision_not_active"
+  | "program_not_active"
+  | "beneficiary_not_eligible"
+  | "operation_not_allowed"
+  | "operation_denied"
+  | "invalid_gas_limit"
+  | "fee_asset_not_covered"
+  | "signed_limit_exceeded"
+  | "program_transaction_limit_exceeded"
+  | "program_block_budget_exhausted"
+  | "program_epoch_budget_exhausted"
+  | "beneficiary_epoch_budget_exhausted"
+  | "vault_insufficient"
+  | "authority_payer_insufficient"
+  | "relay_capacity_unavailable"
+  | "invalid_program_configuration";
 
 export type IdentifierBfvInteger = number | bigint;
 
@@ -3601,6 +4088,26 @@ export interface ToriiAccountTransactionItem {
   asset_id?: string | string[];
 }
 
+export interface ToriiAccountHistoryItem {
+  id: string;
+  source: string;
+  type: string;
+  timestamp_ms?: number;
+  status: string;
+  result_ok?: boolean;
+  direction: string;
+  account_id: string;
+  counterparty_account_id?: string;
+  asset_id?: string;
+  asset_definition_id?: string;
+  amount?: string;
+  tx_hash?: string;
+  operation_id?: string;
+  expires_at_ms?: number;
+  finalized_at_ms?: number;
+  requesting_fi_id?: string;
+}
+
 export interface ToriiContractActivityItem {
   authority?: string;
   timestamp_ms?: number;
@@ -3610,15 +4117,13 @@ export interface ToriiContractActivityItem {
   contract_alias?: string;
   contract_entrypoint?: string;
   contract_payload?: JsonValue;
-  gas_asset_id?: string;
-  fee_sponsor?: string;
-  gas_limit?: number;
+  fee_payment?: NoritoFeePaymentIntent;
 }
 
 export interface ToriiContractEventItem {
   event_id: string;
   schema_version: number;
-  provenance: string;
+  provenance: "emitted" | "derived";
   authority?: string;
   timestamp_ms?: number;
   tx_hash_hex: string;
@@ -3633,9 +4138,7 @@ export interface ToriiContractEventItem {
   asset_ids?: ReadonlyArray<string>;
   numeric_fields?: JsonValue;
   payload?: JsonValue;
-  gas_asset_id?: string;
-  fee_sponsor?: string;
-  gas_limit?: number;
+  fee_payment?: NoritoFeePaymentIntent;
 }
 
 export interface ToriiProverReport {
@@ -3922,7 +4425,7 @@ export interface ToriiVpnProfile {
   feeAssetId: string;
   escrowAccountId: string;
   operatorAccountId: string;
-  leaseFeeNanos: number;
+  leaseFee: string;
   settlementGraceSecs: number;
   flowLabelBits: number;
   paddingBudgetMs: number;
@@ -3947,7 +4450,7 @@ export interface ToriiVpnQuote {
   feeAssetId: string;
   escrowAccountId: string;
   operatorAccountId: string;
-  leaseFeeNanos: number;
+  leaseFee: string;
   routePushes: ReadonlyArray<string>;
   excludedRoutes: ReadonlyArray<string>;
   dnsServers: ReadonlyArray<string>;
@@ -3977,7 +4480,7 @@ export interface ToriiVpnSession {
   feeAssetId: string;
   escrowAccountId: string;
   operatorAccountId: string;
-  leaseFeeNanos: number;
+  leaseFee: string;
   flowLabelBits: number;
   paddingBudgetMs: number;
   relayTlsSpkiSha256Hex: string | null;
@@ -4010,12 +4513,17 @@ export interface ToriiVpnReceipt {
   feeAssetId: string;
   escrowAccountId: string;
   operatorAccountId: string;
-  leaseFeeNanos: number;
-  earnedFeeNanos: number;
-  refundedFeeNanos: number;
+  leaseFee: string;
+  earnedFee: string;
+  refundedFee: string;
   leaseIdHex: string;
   settleLeaseInstruction: ToriiVpnTxInstruction | null;
   txInstructions: ReadonlyArray<ToriiVpnTxInstruction>;
+}
+
+export interface ToriiVpnReceiptListResponse {
+  items: ReadonlyArray<ToriiVpnReceipt>;
+  total: number;
 }
 
 export type SnsNameStatus =
@@ -4086,54 +4594,6 @@ export interface SnsSuffixPolicy {
   metadata: Record<string, unknown>;
 }
 
-export interface SnsGovernanceHook {
-  proposal_id: string;
-  council_vote_hash: string;
-  dao_vote_hash: string;
-  steward_ack: string;
-  guardian_clearance?: string | null;
-}
-
-export interface SnsPaymentProof {
-  asset_id: string;
-  gross_amount: string;
-  net_amount?: string;
-  settlement_tx: unknown;
-  payer: string;
-  signature: unknown;
-}
-
-export interface SnsRegisterNameRequest {
-  selector: {
-    version?: number;
-    suffix_id: number;
-    label: string;
-  };
-  owner: string;
-  controllers?: ReadonlyArray<SnsNameController>;
-  term_years?: number;
-  pricing_class_hint?: number;
-  payment: SnsPaymentProof;
-  governance?: SnsGovernanceHook | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface SnsRenewNameRequest {
-  term_years: number;
-  payment: SnsPaymentProof;
-}
-
-export interface SnsTransferNameRequest {
-  new_owner: string;
-  governance: SnsGovernanceHook;
-}
-
-export interface SnsFreezeNameRequest {
-  reason: string;
-  until_ms: number;
-  guardian_ticket: unknown;
-}
-
 export interface SnsNameRecord {
   selector: SnsNameSelector;
   nameHash: string;
@@ -4156,10 +4616,6 @@ export interface SnsAuction {
   floorPrice: SnsTokenValue;
   highestCommitment: string | null;
   settlementTx: unknown;
-}
-
-export interface SnsRegisterNameResponse {
-  nameRecord: SnsNameRecord;
 }
 
 export interface ToriiPipelineTransactionEvent {
@@ -4212,21 +4668,19 @@ export type ToriiPipelineEvent =
   | ToriiPipelineWitnessEvent;
 
 export interface ToriiPipelineTransactionStatusStatus {
-  kind: string;
-  content: unknown;
-  [key: string]: unknown;
-}
-
-export interface ToriiPipelineTransactionStatusContent {
-  hash: string;
-  status: ToriiPipelineTransactionStatusStatus;
-  [key: string]: unknown;
+  kind: "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired";
+  block_height?: number | null;
+  rejection_reason?: unknown | null;
 }
 
 export interface ToriiPipelineTransactionStatus {
-  kind: string;
-  content: ToriiPipelineTransactionStatusContent;
-  [key: string]: unknown;
+  hash: string;
+  status: ToriiPipelineTransactionStatusStatus;
+  summary?: string;
+  diagnostics?: ReadonlyArray<Record<string, unknown>>;
+  trigger_completions?: ReadonlyArray<Record<string, unknown>>;
+  scope: "local" | "auto" | "global";
+  resolved_from: "cache" | "queue" | "state";
 }
 
 export interface ToriiProofEventBase {
@@ -4273,6 +4727,13 @@ export interface ToriiSseEvent<T = ToriiEventPayload> {
   raw: string | null;
 }
 
+export interface ToriiContractEventStreamErrorPayload {
+  code: string;
+  message: string;
+  dropped_messages: number | null;
+  replay_available: boolean;
+}
+
 export interface ToriiWebSocketEvent<T = unknown> {
   event: string | null;
   data: T | string;
@@ -4285,9 +4746,10 @@ export interface AccountPermissionsListOptions {
   signal?: AbortSignal;
 }
 
+/** An effective permission, including grants inherited from assigned roles. */
 export interface ToriiAccountPermissionItem {
   name: string;
-  payload: unknown;
+  payload: JsonValue;
 }
 
 export class ConnectRetryPolicy {
@@ -5224,15 +5686,20 @@ type ToriiRuntimeNamespaceExport =
   | "verifyIdentifierResolutionReceipt";
 
 type NoritoRuntimeNamespaceExport =
-    "noritoDecodeInstruction"
+    "noritoDecodeBlockProofs"
+  | "noritoDecodeInstruction"
   | "noritoDecodePrivacyProofEnvelope"
   | "noritoEncodeInstruction"
+  | "noritoEncodeInstructionBoxArchive"
+  | "noritoEncodeContractManifestSignaturePayload"
   | "noritoEncodeMultisigContractCallApproveRequest"
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
   | "noritoEncodePrivacyProofEnvelope"
   | "noritoEncodeTransactionPayloadBatch"
-  | "validateNoritoFrame";
+  | "validateNoritoFrame"
+  | "verifyBlockMerkleProof"
+  | "verifyBlockProofs";
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
@@ -6713,13 +7180,7 @@ export interface ToriiPipelinePreflight {
     per_byte_fee: unknown;
     per_instruction_fee: unknown;
     per_gas_unit_fee: unknown;
-    sponsorship_enabled: boolean;
-    sponsor_max_fee: unknown;
-    sponsor_verified_balance_safety_floor: unknown;
-    canonical_sponsor_account_id: string | null;
-    fee_receipts_activation_height: number;
-    external_settlement_enabled: boolean;
-    burn_from_unix_timestamp_ms: number;
+    sponsor_vault_custody_account_id: string;
     settlement_mode: string;
     successful_claim_fee_exempt_authorities: string[];
   };
@@ -6802,6 +7263,7 @@ export interface ToriiNodeCurveCapabilities {
 
 export type ToriiSccpCapabilities = SccpCapabilities;
 export type ToriiSccpRegistry = SccpRegistry;
+export type ToriiSccpSoraOutboundMaterial = SccpSoraOutboundMaterialV1;
 export type ToriiSccpRecentMessages = SccpRecentMessages;
 export type ToriiBridgeProofSubmitPayload = SccpBridgeProofSubmitPayload;
 export type ToriiBridgeMessageSubmitPayload = SccpBridgeMessageSubmitPayload;
@@ -7041,6 +7503,7 @@ export interface ToriiSumeragiV2ExecutionCommitment {
 
 export interface ToriiSumeragiV2QcReference {
   round: ToriiSumeragiV2Round;
+  proposal_round: ToriiSumeragiV2Round;
   phase: ToriiSumeragiV2GlobalPhase;
   subject: ToriiSumeragiV2BlockSubject;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment;
@@ -7083,6 +7546,166 @@ export interface ToriiSumeragiV2CommitQcStatus {
   min_signers: number;
   signed_power: number;
   total_power: number;
+}
+
+export interface ToriiSumeragiV2VoteQuorumStatus {
+  round: ToriiSumeragiV2Round;
+  proposal_round: ToriiSumeragiV2Round;
+  subject: ToriiSumeragiV2BlockSubject;
+  execution_commitment: ToriiSumeragiV2ExecutionCommitment;
+  signer_count: number;
+  signed_power: number;
+  min_signers: number;
+  total_power: number;
+}
+
+export interface ToriiSumeragiV2TimeoutQuorumStatus {
+  round: ToriiSumeragiV2Round;
+  signer_count: number;
+  signed_power: number;
+  min_signers: number;
+  total_power: number;
+  certificate_formed: boolean;
+}
+
+export type ToriiSumeragiV2OutboundIntentKind = Readonly<{
+  kind:
+    | "proposal"
+    | "prepare_vote"
+    | "commit_vote"
+    | "timeout_vote"
+    | "prepare_qc"
+    | "commit_qc"
+    | "timeout_certificate";
+  details: null;
+}>;
+
+export type ToriiSumeragiV2OutboundIntentStage = Readonly<{
+  stage: "pending_persistence" | "pending_signature" | "queued" | "sent";
+  details: null;
+}>;
+
+export interface ToriiSumeragiV2OutboundIntentStatus {
+  kind: ToriiSumeragiV2OutboundIntentKind;
+  round: ToriiSumeragiV2Round;
+  proposal_round: ToriiSumeragiV2Round | null;
+  subject: ToriiSumeragiV2BlockSubject | null;
+  execution_commitment: ToriiSumeragiV2ExecutionCommitment | null;
+  stage: ToriiSumeragiV2OutboundIntentStage;
+}
+
+export type ToriiSumeragiV2LocalWorkStage = Readonly<{
+  stage: "idle" | "queued" | "running" | "complete";
+  details: null;
+}>;
+
+export interface ToriiSumeragiV2WorkStatus {
+  candidate: ToriiSumeragiV2LocalWorkStage;
+  body_recovery: ToriiSumeragiV2LocalWorkStage;
+  body_store: ToriiSumeragiV2LocalWorkStage;
+  validation: ToriiSumeragiV2LocalWorkStage;
+  application: ToriiSumeragiV2LocalWorkStage;
+  successor_height: ToriiSumeragiV2LocalWorkStage;
+}
+
+export type ToriiSumeragiV2QueueKind = Readonly<{
+  queue:
+    | "ingress"
+    | "deferred_normal"
+    | "deferred_progress"
+    | "deferred_completion"
+    | "runtime_normal"
+    | "runtime_progress"
+    | "runtime_completion"
+    | "effect_completion"
+    | "network_ingress"
+    | "effect_dispatch";
+  details: null;
+}>;
+
+export interface ToriiSumeragiV2QueueLivenessStatus {
+  queue: ToriiSumeragiV2QueueKind;
+  depth: number;
+  capacity: number;
+  oldest_age_ms: number | null;
+  /** Accumulated eligible dispatches skipped by this queue's oldest item. */
+  service_debt: number;
+}
+
+export type ToriiSumeragiV2ProgressTransition = Readonly<{
+  transition:
+    | "proposal_admitted"
+    | "body_available"
+    | "body_stored"
+    | "body_validated"
+    | "prepare_vote_admitted"
+    | "commit_vote_admitted"
+    | "timeout_vote_admitted"
+    | "prepare_quorum"
+    | "lock_installed"
+    | "commit_quorum"
+    | "timeout_certificate_installed"
+    | "decision_persisted"
+    | "applied"
+    | "successor_height_activated"
+    | "recovery_replayed";
+  details: null;
+}>;
+
+export interface ToriiSumeragiV2ProgressTransitionStatus {
+  generation: number;
+  round: ToriiSumeragiV2Round;
+  transition: ToriiSumeragiV2ProgressTransition;
+  age_ms: number;
+}
+
+export type ToriiSumeragiV2LivenessBlocker = Readonly<{
+  blocker:
+    | "missing_proposal"
+    | "body_unavailable"
+    | "prepare_quorum_missing"
+    | "commit_quorum_missing"
+    | "timeout_certificate_missing"
+    | "scheduler_starvation"
+    | "application_pending"
+    | "local_control_pending";
+  details: null;
+}>;
+
+export type ToriiSumeragiV2IgnoreReason = Readonly<{
+  reason:
+    | "wrong_height"
+    | "wrong_view"
+    | "stale_generation"
+    | "busy"
+    | "duplicate"
+    | "no_matching_work"
+    | "observer"
+    | "view_closed"
+    | "already_decided"
+    | "recovery_pending"
+    | "irrelevant_view"
+    | "unsafe_proposal";
+  details: null;
+}>;
+
+export interface ToriiSumeragiV2IgnoreCount {
+  reason: ToriiSumeragiV2IgnoreReason;
+  count: number;
+}
+
+export interface ToriiSumeragiV2LivenessStatus {
+  generation: number;
+  prepare_quorums: ReadonlyArray<ToriiSumeragiV2VoteQuorumStatus>;
+  commit_quorums: ReadonlyArray<ToriiSumeragiV2VoteQuorumStatus>;
+  timeout_quorums: ReadonlyArray<ToriiSumeragiV2TimeoutQuorumStatus>;
+  outbound_intents: ReadonlyArray<ToriiSumeragiV2OutboundIntentStatus>;
+  work: ToriiSumeragiV2WorkStatus;
+  queues: ReadonlyArray<ToriiSumeragiV2QueueLivenessStatus>;
+  last_progress: ToriiSumeragiV2ProgressTransitionStatus | null;
+  no_progress_age_ms: number;
+  blocker: ToriiSumeragiV2LivenessBlocker | null;
+  ignore_counts: ReadonlyArray<ToriiSumeragiV2IgnoreCount>;
 }
 
 export interface ToriiSumeragiV2AdapterQueueStatus {
@@ -7219,6 +7842,7 @@ export interface ToriiSumeragiStatus {
   last_committed_subject: ToriiSumeragiV2BlockSubject | null;
   height_context: ToriiSumeragiV2HeightContextStatus;
   last_commit_qc: ToriiSumeragiV2CommitQcStatus | null;
+  liveness: ToriiSumeragiV2LivenessStatus;
   safety_halt: ToriiSumeragiSafetyHaltStatus;
   lane_settlement_commitments: ReadonlyArray<ToriiLaneSettlementCommitment>;
   lane_relay_envelopes: ReadonlyArray<ToriiLaneRelayEnvelope>;
@@ -7732,6 +8356,8 @@ export interface RegisterDomainInput {
   chainId: string;
   authority: string;
   domainId: string;
+  /** Required signature-bound fee payer, maxima, and gas bound. */
+  feePayment: BrowserFeePayment;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -7749,12 +8375,75 @@ export interface TransactionAssemblyInput {
   chainId: string;
   authority: string;
   instructions: Array<object | string>;
+  /** Required signature-bound fee payer, maxima, and gas bound. */
+  feePayment: BrowserFeePayment;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
   privateKeyAlgorithm?: string | null;
+}
+
+export type ExecutableBatchEntry =
+  | {
+      kind: "instruction";
+      instruction: object | string;
+    }
+  | {
+      kind: "contractCall";
+      contractAddress: string;
+      /** Exact marked 32-byte Iroha code hash. */
+      expectedCodeHash: Buffer | ArrayBuffer | ArrayBufferView | string;
+      entrypoint: string;
+      /** Canonical schema-bound argument-record bytes; maximum 1 MiB. */
+      arguments?: Buffer | ArrayBuffer | ArrayBufferView | null;
+    };
+
+export interface ExecutableBatchTransactionAssemblyInput {
+  chainId: string;
+  authority: string;
+  entries: ExecutableBatchEntry[];
+  /** Must include `gasLimit` when any entry is a contract call. */
+  feePayment: BrowserFeePayment;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: string | null;
+}
+
+export type ExecutableBatchTransactionPayloadDraftInput = Omit<
+  ExecutableBatchTransactionAssemblyInput,
+  "privateKey" | "privateKeyAlgorithm"
+>;
+
+/** Exact unsigned payload whose non-fee fields are fixed before quoting. */
+export type TransactionPayloadDraftInput = Omit<
+  TransactionAssemblyInput,
+  "privateKey" | "privateKeyAlgorithm"
+>;
+
+/** Native and JSON projections of one exact unsigned quote draft. */
+export interface TransactionPayloadDraftResult {
+  payload: Record<string, unknown>;
+  payloadJson: string;
+  payloadBytes: Buffer;
+  payloadHash: Buffer;
+}
+
+/** Input for applying a returned quote to the exact draft and signing it. */
+export interface QuotedTransactionPayloadSigningInput {
+  payload: Record<string, unknown> | TransactionPayloadDraftResult;
+  quotedFeePayment: BrowserFeePayment | Record<string, unknown> | string;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: string | null;
+}
+
+/** Required signature-bound fee intent shared by all transaction builders. */
+export interface FeePaymentRequired {
+  feePayment: BrowserFeePayment;
 }
 
 export type SccpRouteGovernanceActionKind =
@@ -7821,10 +8510,13 @@ export interface ApplySccpRouteGovernanceTransactionInput
   action: SccpRouteGovernanceActionInput;
 }
 
-export interface RegisterSnsNameTransactionInput {
+export interface IvmProvedTransactionAssemblyInput {
   chainId: string;
   authority: string;
-  request: object;
+  proved: object | string;
+  attachment: object | string;
+  /** Required signature-bound fee payer, maxima, and gas bound. */
+  feePayment: BrowserFeePayment;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -7833,28 +8525,11 @@ export interface RegisterSnsNameTransactionInput {
   privateKeyAlgorithm?: string | null;
 }
 
-export interface RegisterSnsNameViaConsensusInput
-  extends RegisterSnsNameTransactionInput {
-  client?: ToriiClient;
-  toriiUrl?: string;
-  waitForCommit?: boolean;
-  pollIntervalMs?: number;
-  timeoutMs?: number;
-  scope?: "local" | "auto" | "global" | string | null;
-}
-
-export interface RegisterSnsNameViaConsensusResult {
-  hash: string;
-  submittedHash: string | null;
-  submission: unknown;
-  status?: unknown;
-}
-
-export interface IvmProvedTransactionAssemblyInput {
+export interface RegisterMultisigTransactionInput extends FeePaymentRequired {
   chainId: string;
   authority: string;
-  proved: object | string;
-  attachment: object | string;
+  accountId: string;
+  spec: MultisigSpecLike;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8036,9 +8711,7 @@ type IvmProvedContractCallCore = IvmProvedContractCallInputBase &
   > &
   IvmRequiredAliasPair<"vkRef", "vk_ref", IvmVerifyingKeyRef> &
   IvmContractTarget &
-  IvmRequiredAliasPair<"gasLimit", "gas_limit", NumericLike> &
-  IvmOptionalAliasPair<"gasAssetId", "gas_asset_id", string | null> &
-  IvmOptionalAliasPair<"feeSponsor", "fee_sponsor", string | null> &
+  IvmRequiredAliasPair<"feePayment", "fee_payment", BrowserFeePayment> &
   IvmOptionalAliasPair<
     "requiredOverlayTransfer",
     "required_overlay_transfer",
@@ -9216,8 +9889,7 @@ export interface ContractOperationReceipt {
   entrypoint_hash_hex: string | null;
   gas_limit: number | null;
   gas_used: number | null;
-  gas_asset_id: string | null;
-  fee_sponsor: string | null;
+  fee_payment: NoritoFeePaymentIntent | null;
   payload_digest_hex: string;
 }
 
@@ -9270,12 +9942,8 @@ export interface ContractCallRequest {
   creation_time_ms?: NumericLike | null;
   transactionTtlMs?: NumericLike | null;
   transaction_ttl_ms?: NumericLike | null;
-  gasAssetId?: string | null;
-  gas_asset_id?: string | null;
-  feeSponsor?: string | null;
-  fee_sponsor?: string | null;
-  gasLimit: NumericLike;
-  gas_limit?: NumericLike;
+  feePayment: NoritoFeePaymentIntent;
+  fee_payment?: NoritoFeePaymentIntent;
 }
 
 export interface ContractCallResponse {
@@ -9305,10 +9973,6 @@ export interface ContractCallSimulateRequest {
   contract_alias?: string;
   entrypoint?: string | null;
   payload?: JsonValue;
-  gasAssetId?: string | null;
-  gas_asset_id?: string | null;
-  feeSponsor?: string | null;
-  fee_sponsor?: string | null;
   gasLimit: NumericLike;
   gas_limit?: NumericLike;
 }
@@ -9957,7 +10621,6 @@ export interface SorafsPinRegisterRequest {
   private_key: string;
   manifest_payload: string;
   submitted_epoch: NumericLike;
-  gas_asset_id?: string | null;
   alias?: SorafsPinRegisterAliasInput | null;
   successor_of_hex?: string | null;
   signal?: AbortSignal;
@@ -10526,6 +11189,35 @@ export interface RegisterSmartContractCodeInstructionInput {
 export interface RegisterSmartContractBytesInstructionInput {
   codeHash: HashLike;
   code: ArrayBufferView | ArrayBuffer | Buffer | string;
+}
+
+export type SmartContractUnsigned64 = number | bigint | string;
+
+export interface UploadSmartContractCodeChunkInstructionInput {
+  codeHash: HashLike;
+  totalSize: SmartContractUnsigned64;
+  chunkIndex: number;
+  chunkCount: number;
+  chunk: ArrayBufferView | ArrayBuffer | Buffer | string;
+}
+
+export interface FinalizeSmartContractCodeUploadInstructionInput {
+  codeHash: HashLike;
+  totalSize: SmartContractUnsigned64;
+  chunkCount: number;
+}
+
+export interface CancelSmartContractCodeUploadInstructionInput {
+  codeHash: HashLike;
+}
+
+export interface CommitContractDeploymentInstructionInput {
+  expectedDeployNonce: SmartContractUnsigned64;
+  contractAddress: string;
+  codeHash: HashLike;
+  contractAlias: string;
+  leaseExpiryMs?: SmartContractUnsigned64 | null;
+  expectedPreviousContractAddress?: string | null;
 }
 
 export interface RemoveSmartContractBytesInstructionInput {
@@ -11109,14 +11801,229 @@ export interface ToriiBrowserClientOptions {
   };
 }
 
+export interface ToriiBrowserRequestOptions {
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
+  successStatuses?: ReadonlyArray<number>;
+}
+
+export interface ToriiLedgerHeadersOptions {
+  from?: number | string | bigint;
+  limit?: number | string | bigint;
+  signal?: AbortSignal;
+}
+
+export interface ToriiBlockMerkleProof {
+  readonly leaf_index: number;
+  readonly audit_path: ReadonlyArray<string | null>;
+}
+
+export interface ToriiBlockReceiptProof {
+  readonly leaf: string;
+  readonly proof: ToriiBlockMerkleProof;
+}
+
+export interface ToriiBlockProofTransferSmtWitness {
+  readonly root_before: string;
+  readonly root_after: string;
+  readonly path_bits: ReadonlyArray<number>;
+  readonly siblings: ReadonlyArray<string>;
+}
+
+export interface ToriiBlockProofTransferDeltaTranscript {
+  readonly from_account: string;
+  readonly to_account: string;
+  readonly asset_definition: string;
+  readonly amount: string;
+  readonly from_balance_before: string;
+  readonly from_balance_after: string;
+  readonly to_balance_before: string;
+  readonly to_balance_after: string;
+  readonly from_smt_witness: ToriiBlockProofTransferSmtWitness;
+  readonly to_smt_witness: ToriiBlockProofTransferSmtWitness;
+}
+
+export interface ToriiBlockProofTransferTranscript {
+  readonly batch_hash: string;
+  readonly deltas: ReadonlyArray<ToriiBlockProofTransferDeltaTranscript>;
+  readonly authority_digest: string;
+  readonly poseidon_preimage_digest: string | null;
+}
+
+export interface ToriiBlockProofs {
+  readonly block_height: string;
+  readonly entry_hash: string;
+  readonly entry_root: string;
+  readonly entry_proof: ToriiBlockReceiptProof;
+  readonly result_root: string | null;
+  readonly result_proof: ToriiBlockReceiptProof | null;
+  readonly fastpq_transcripts: Readonly<
+    Record<string, ReadonlyArray<ToriiBlockProofTransferTranscript>>
+  >;
+}
+
+export interface ToriiBlockProofVerification {
+  readonly valid: boolean;
+  readonly entry_hash_matches: boolean;
+  readonly entry_proof_valid: boolean;
+  readonly result_pair_consistent: boolean;
+  readonly result_proof_valid: boolean | null;
+}
+
+export interface ToriiBrowserTransactionStatusOptions
+  extends ToriiBrowserRequestOptions {
+  scope?: "local" | "auto" | "global";
+}
+
+export interface ToriiBrowserTransactionStatusPollOptions
+  extends ToriiBrowserRequestOptions {
+  scope?: "global";
+  intervalMs?: number;
+  timeoutMs?: number;
+  maxAttempts?: number;
+}
+
+export interface ToriiBrowserSubmitTransactionAndWaitOptions
+  extends ToriiBrowserTransactionStatusPollOptions {
+  hashHex?: string;
+}
+
+export interface ToriiBrowserNodeCapabilities {
+  abi_version: number;
+  data_model_version: number;
+  signed_transaction_schema_hash_hex: string;
+  crypto?: Record<string, unknown>;
+  query?: Record<string, unknown>;
+}
+
+export interface ToriiBrowserContractDeploymentStateRequest {
+  authority: string;
+  contract_alias: string;
+}
+
+export interface ToriiBrowserContractDeploymentStateResponse {
+  authority: string;
+  contract_alias: string;
+  deploy_nonce: string;
+  dataspace_alias: string;
+  dataspace_id: string;
+  previous_contract_address: string | null;
+  observed_block_height: string;
+  observed_block_hash: string;
+  ledger_time_ms: string;
+  chain_discriminant: string;
+}
+
+export interface CanonicalJsonRequestSignerInput {
+  message: Buffer;
+  messageBase64: string;
+  method: string;
+  path: string;
+  query?: string | URLSearchParams;
+  body: string;
+  timestampMs: number;
+  nonce: string;
+}
+
+export type CanonicalJsonRequestSignature =
+  | Buffer
+  | Uint8Array
+  | ArrayBuffer
+  | ArrayBufferView
+  | string;
+
+export interface ToriiBrowserContractDeploymentStateOptions
+  extends ToriiBrowserRequestOptions {
+  authAccountId?: string;
+  sign?: (
+    input: CanonicalJsonRequestSignerInput,
+  ) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
+  timestampMs?: number;
+  nonce?: string;
+}
+
+export interface ToriiBrowserCanonicalRequestOptions
+  extends ToriiBrowserRequestOptions {
+  authAccountId: string;
+  sign: (
+    input: CanonicalJsonRequestSignerInput,
+  ) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
+  timestampMs?: number;
+  nonce?: string;
+}
+
 export declare class ToriiBrowserHttpError extends Error {
   readonly response: Response;
   readonly status: number;
   readonly bodyText: string;
 }
 
+/** Terminal non-replayable loss reported by, or inferred for, a live Torii stream. */
+export declare class ToriiBrowserStreamGapError extends Error {
+  readonly code: string;
+  readonly droppedMessages: number | null;
+  readonly replayAvailable: boolean;
+  readonly payload: ToriiContractEventStreamErrorPayload | null;
+  constructor(
+    message: string,
+    options?: {
+      code?: string;
+      droppedMessages?: number | null;
+      replayAvailable?: boolean;
+      payload?: ToriiContractEventStreamErrorPayload | null;
+    },
+  );
+}
+
 export declare class ToriiBrowserClient {
   constructor(baseUrl: string | URL, options?: ToriiBrowserClientOptions);
+  submitTransaction(
+    signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<unknown | null>;
+  getTransactionStatus(
+    hashHex: string,
+    options?: ToriiBrowserTransactionStatusOptions,
+  ): Promise<ToriiPipelineTransactionStatus | null>;
+  waitForTransactionStatus(
+    hashHex: string,
+    options?: ToriiBrowserTransactionStatusPollOptions,
+  ): Promise<ToriiPipelineTransactionStatus>;
+  submitTransactionAndWait(
+    signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+    options: ToriiBrowserSubmitTransactionAndWaitOptions,
+  ): Promise<ToriiPipelineTransactionStatus>;
+  getNodeCapabilities(
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<ToriiBrowserNodeCapabilities>;
+  getContractDeploymentState(
+    request: ToriiBrowserContractDeploymentStateRequest,
+    options?: ToriiBrowserContractDeploymentStateOptions,
+  ): Promise<ToriiBrowserContractDeploymentStateResponse>;
+  resolveContractAlias(
+    contractAlias: string,
+    options: ToriiBrowserCanonicalRequestOptions,
+  ): Promise<unknown>;
+  getAccount(
+    accountId: string,
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<unknown>;
+  getKagemushaReadinessV4(
+    assetDefinitionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaReadinessV4>;
+  submitKagemushaTopUpV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  submitKagemushaRedeemV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  getKagemushaOperationStatus(
+    operationId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationStatus>;
   listExplorerAccounts(options?: Record<string, unknown>): Promise<unknown>;
   getExplorerAccount(
     accountId: string,
@@ -11136,6 +12043,15 @@ export declare class ToriiBrowserClient {
     accountId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
+  /** List effective direct and role-inherited permissions for an account. */
+  listAccountPermissions<T = ToriiAccountPermissionItem>(
+    accountId: string,
+    options?: ToriiBrowserAccountPermissionsListOptions,
+  ): Promise<ToriiBrowserAccountPermissionsListResponse<T>>;
+  listAccountHistory<T = ToriiAccountHistoryItem>(
+    accountId: string,
+    options?: ToriiBrowserAccountHistoryListOptions,
+  ): Promise<ToriiBrowserAccountHistoryListResponse<T>>;
   queryAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
     options?: TransactionQueryOptions,
@@ -11146,6 +12062,15 @@ export declare class ToriiBrowserClient {
   queryVisibleTransactions<T = ToriiAccountTransactionItem>(
     options?: TransactionQueryOptions,
   ): Promise<ToriiIterableListResponse<T>>;
+  listContractActivity<T = ToriiContractActivityItem>(
+    options?: ToriiBrowserContractActivityListOptions,
+  ): Promise<ToriiBrowserContractActivityListResponse<T>>;
+  listContractEvents<T = ToriiContractEventItem>(
+    options?: ToriiBrowserContractEventListOptions,
+  ): Promise<ToriiBrowserContractEventListResponse<T>>;
+  streamContractEvents<T = ToriiContractEventItem>(
+    options?: ToriiBrowserContractEventStreamOptions,
+  ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;
   listAssetHolders(
     assetDefinitionId: string,
     options?: Record<string, unknown>,
@@ -11189,6 +12114,20 @@ export declare class ToriiBrowserClient {
     identifier: string | number | bigint,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
+  listLedgerHeaders(options?: ToriiLedgerHeadersOptions): Promise<unknown>;
+  getLedgerStateRoot(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
+  getLedgerStateProof(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
+  getLedgerBlockProof(
+    height: number | string | bigint,
+    entryHash: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiBlockProofs>;
   getExplorerMetrics(options?: Record<string, unknown>): Promise<unknown>;
   getExplorerHealth(options?: Record<string, unknown>): Promise<unknown>;
   listExplorerTransactions(options?: Record<string, unknown>): Promise<unknown>;
@@ -11215,15 +12154,15 @@ export declare class ToriiBrowserClient {
   ): Promise<unknown>;
   getMultisigSpec(
     selector: MultisigAccountSelector,
-    options?: Record<string, unknown>,
+    options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<MultisigSpecResponse>;
   queryMultisigProposals(
     selector: MultisigProposalsQueryRequest,
-    options?: Record<string, unknown>,
+    options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<MultisigProposalsQueryResponse>;
   resolveMultisigProposal(
     request: MultisigProposalsResolveRequest,
-    options?: Record<string, unknown>,
+    options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<MultisigProposalResolveResponse>;
   submitMultisigPropose(
     request: Record<string, unknown>,
@@ -11236,7 +12175,8 @@ export declare class ToriiBrowserClient {
   submitMultisigContractCallApprove(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
+  ): Promise<unknown>;
+  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
   getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
   getKaigiRelay(
@@ -11252,6 +12192,22 @@ export declare class ToriiBrowserClient {
 
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
+  getKagemushaReadinessV4(
+    assetDefinitionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaReadinessV4>;
+  submitKagemushaTopUpV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  submitKagemushaRedeemV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  getKagemushaOperationStatus(
+    operationId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationStatus>;
   listAccounts<T = ToriiAccountListItem>(
     options?: IterableListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
@@ -11483,6 +12439,18 @@ export declare class ToriiClient {
     request: RetailRecipientLookupRequest,
     options?: CanonicalRequestOptions,
   ): Promise<RetailRecipientLookupResponse>;
+  routeRetailRecipient(
+    accountId: string,
+    options?: CanonicalRequestOptions,
+  ): Promise<RetailRecipientRouteResponse>;
+  findFeeSponsorProgramById(
+    programId: string,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<FeeSponsorProgram | null>;
+  quoteFees(
+    payload: Record<string, unknown> | TransactionPayloadDraftResult,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<FeeQuoteResponse>;
   listIdentifierPolicies(options?: {
     signal?: AbortSignal;
   }): Promise<IdentifierPolicyListResponse>;
@@ -11808,6 +12776,15 @@ export declare class ToriiClient {
   getSccpRegistry(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSccpRegistry>;
+  getSccpSoraOutboundMaterial(
+    route: {
+      sourceProfile: Exclude<SccpNetworkProfile, "sora-taira">;
+      routeId: string;
+      assetKey: string;
+      revision: number;
+    },
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiSccpSoraOutboundMaterial>;
   getSccpMessageBundle(
     messageId: string,
     options?: { format?: "json"; signal?: AbortSignal },
@@ -11924,7 +12901,7 @@ export declare class ToriiClient {
   ): Promise<ToriiVpnSession | null>;
   deleteVpnSession(
     sessionId: string,
-    options?: {
+    options: {
       signal?: AbortSignal;
       canonicalAuth: CanonicalRequestAuth;
     },
@@ -11943,37 +12920,13 @@ export declare class ToriiClient {
   listVpnReceipts(options: {
     signal?: AbortSignal;
     canonicalAuth: CanonicalRequestAuth;
-  }): Promise<ReadonlyArray<ToriiVpnReceipt>>;
+  }): Promise<ToriiVpnReceiptListResponse>;
   getSnsPolicy(
     suffixId: number,
     options?: { signal?: AbortSignal },
   ): Promise<SnsSuffixPolicy>;
   getSnsRegistration(
     selector: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<SnsNameRecord>;
-  registerSnsName(
-    request: SnsRegisterNameRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<SnsRegisterNameResponse>;
-  renewSnsRegistration(
-    selector: string,
-    request: SnsRenewNameRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<SnsNameRecord>;
-  transferSnsRegistration(
-    selector: string,
-    request: SnsTransferNameRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<SnsNameRecord>;
-  freezeSnsRegistration(
-    selector: string,
-    request: SnsFreezeNameRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<SnsNameRecord>;
-  unfreezeSnsRegistration(
-    selector: string,
-    request: SnsGovernanceHook,
     options?: { signal?: AbortSignal },
   ): Promise<SnsNameRecord>;
   getGovernanceProposal(
@@ -12346,26 +13299,26 @@ export declare class ToriiClient {
   ): Promise<MultisigContractCallResponse>;
   getMultisigSpec(
     request: MultisigAccountSelector,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<MultisigSpecResponse>;
   queryMultisigProposals(
     request: MultisigProposalsQueryRequest,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<MultisigProposalsQueryResponse>;
   resolveMultisigProposal(
     request: MultisigProposalsResolveRequest,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<MultisigProposalResolveResponse>;
   getContractManifest(
     codeHashHex: string,
   ): Promise<ContractManifestRecord | null>;
   getContractCodeBytes(
     codeHashHex: string,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ContractCodeBytesRecord | null>;
   getGovernanceContract(
     contractAddress: string,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ToriiGovernanceContractResponse>;
   listTriggers(options?: TriggerListOptions): Promise<ToriiTriggerListPage>;
   iterateTriggers(
@@ -12683,6 +13636,25 @@ export function sm2FixtureFromSeed(
 ): Sm2Fixture;
 
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
+export function noritoDecodeBlockProofs(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+): ToriiBlockProofs;
+export function verifyBlockMerkleProof(
+  leaf: string | ArrayBufferView | ArrayBuffer | Buffer,
+  proof: ToriiBlockMerkleProof,
+  root: string | ArrayBufferView | ArrayBuffer | Buffer,
+): boolean;
+export function verifyBlockProofs(
+  proofs: ToriiBlockProofs,
+): ToriiBlockProofVerification;
+/** Encode a canonical compact `InstructionBox` archive for a transaction. */
+export function noritoEncodeInstructionBoxArchive(
+  instruction: object | string | ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+/** Encode the exact current Rust manifest-provenance signing frame. */
+export function noritoEncodeContractManifestSignaturePayload(
+  manifest: Record<string, unknown>,
+): Buffer;
 export function noritoEncodeTransactionPayloadBatch(
   payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
 ): Buffer;
@@ -12722,8 +13694,8 @@ export interface MultisigProposeNoritoRequest {
   signatureB64?: string | null;
   creation_time_ms?: number | string | bigint | null;
   creationTimeMs?: number | string | bigint | null;
-  fee_sponsor?: string | null;
-  feeSponsor?: string | null;
+  fee_payment?: NoritoFeePaymentIntent;
+  feePayment?: NoritoFeePaymentIntent;
   memo?: string | null;
   validation_fee_policy_version?: string | null;
   validation_fee_policy_hash?: string | null;
@@ -12876,8 +13848,50 @@ export function resignSignedTransaction(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
+/** Convert the ergonomic fee intent into the native signer's exact Norito JSON. */
+export function feePaymentIntentToNoritoJson(
+  feePayment: BrowserFeePayment,
+): string;
+
 export function buildTransaction(
   input: TransactionAssemblyInput,
+): SignedTransactionResult;
+
+export function buildExecutableBatchTransaction(
+  input: ExecutableBatchTransactionAssemblyInput,
+): SignedTransactionResult;
+
+export function buildTransactionPayload(
+  input: TransactionPayloadDraftInput,
+): TransactionPayloadDraftResult;
+
+export function buildExecutableBatchTransactionPayload(
+  input: ExecutableBatchTransactionPayloadDraftInput,
+): TransactionPayloadDraftResult;
+
+export function signQuotedTransactionPayload(
+  input: QuotedTransactionPayloadSigningInput,
+): SignedTransactionResult;
+
+export function quoteAndSignTransaction(
+  client: ToriiClient,
+  input: TransactionPayloadDraftInput & {
+    privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+    privateKeyAlgorithm?: string | null;
+  },
+  options?: {
+    canonicalAuth?: CanonicalRequestAuth;
+    signal?: AbortSignal;
+  },
+): Promise<
+  SignedTransactionResult & {
+    draft: TransactionPayloadDraftResult;
+    quote: FeeQuoteResponse;
+  }
+>;
+
+export function buildRegisterDomainTransaction(
+  input: RegisterDomainInput,
 ): SignedTransactionResult;
 
 export function buildApplySccpRouteGovernanceInstruction(
@@ -12889,7 +13903,7 @@ export function buildApplySccpRouteGovernanceInstruction(
 };
 
 export function buildApplySccpRouteGovernanceTransaction(
-  input: ApplySccpRouteGovernanceTransactionInput,
+  input: ApplySccpRouteGovernanceTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 
 /**
@@ -12956,72 +13970,75 @@ export function submitValidationFeeIvmProvedContractCall(
 ): Promise<IvmProvedContractCallResult>;
 
 export function buildMintAssetTransaction(
-  input: MintAssetInput,
+  input: MintAssetInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Build and sign a transaction containing a single `Burn::Asset` instruction.
  * Throws if the quantity is non-positive or the asset identifier is empty.
  */
 export function buildBurnAssetTransaction(
-  input: BurnAssetInput,
+  input: BurnAssetInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Build and sign a transaction containing a single `Burn::TriggerRepetitions`
  * instruction. Throws when repetitions are not positive integers.
  */
 export function buildBurnTriggerTransaction(
-  input: BurnTriggerInput,
+  input: BurnTriggerInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildMintTriggerTransaction(
-  input: MintTriggerInput,
+  input: MintTriggerInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildTransferAssetTransaction(
-  input: TransferAssetInput,
+  input: TransferAssetInput & FeePaymentRequired,
+): SignedTransactionResult;
+export function buildRegisterMultisigTransaction(
+  input: RegisterMultisigTransactionInput,
 ): SignedTransactionResult;
 export function buildTransferAssetDefinitionTransaction(
-  input: TransferAssetDefinitionInput,
+  input: TransferAssetDefinitionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildTransferDomainTransaction(
-  input: TransferDomainInput,
+  input: TransferDomainInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildTransferNftTransaction(
-  input: TransferNftInput,
+  input: TransferNftInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterRwaTransaction(
-  input: RegisterRwaInput,
+  input: RegisterRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildTransferRwaTransaction(
-  input: TransferRwaInput,
+  input: TransferRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildMergeRwasTransaction(
-  input: MergeRwasInput,
+  input: MergeRwasInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRedeemRwaTransaction(
-  input: RedeemRwaInput,
+  input: RedeemRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildFreezeRwaTransaction(
-  input: FreezeRwaInput,
+  input: FreezeRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildUnfreezeRwaTransaction(
-  input: UnfreezeRwaInput,
+  input: UnfreezeRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildHoldRwaTransaction(
-  input: HoldRwaInput,
+  input: HoldRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildReleaseRwaTransaction(
-  input: ReleaseRwaInput,
+  input: ReleaseRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildForceTransferRwaTransaction(
-  input: ForceTransferRwaInput,
+  input: ForceTransferRwaInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildSetRwaControlsTransaction(
-  input: SetRwaControlsInput,
+  input: SetRwaControlsInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildSetRwaKeyValueTransaction(
-  input: SetRwaKeyValueInput,
+  input: SetRwaKeyValueInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRemoveRwaKeyValueTransaction(
-  input: RemoveRwaKeyValueInput,
+  input: RemoveRwaKeyValueInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Compose a mint followed by one or more transfers. Provide either `transfer`
@@ -13029,21 +14046,21 @@ export function buildRemoveRwaKeyValueTransaction(
  * destination asset identifier.
  */
 export function buildMintAndTransferTransaction(
-  input: MintAndTransferInput,
+  input: MintAndTransferInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Register a domain and optionally perform follow-up mints in the same
  * transaction. Accepts either a single `mint` or an array of `mints`.
  */
 export function buildRegisterDomainAndMintTransaction(
-  input: RegisterDomainAndMintInput,
+  input: RegisterDomainAndMintInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Register an account and enqueue one or more asset transfers. Each transfer
  * must specify its source asset identifier; the helper enforces this at runtime.
  */
 export function buildRegisterAccountAndTransferTransaction(
-  input: RegisterAccountAndTransferInput,
+  input: RegisterAccountAndTransferInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Register an asset definition and optionally mint initial supply. When both
@@ -13051,7 +14068,7 @@ export function buildRegisterAccountAndTransferTransaction(
  * the canonical asset-holding id derived from `assetDefinitionId + accountId`.
  */
 export function buildRegisterAssetDefinitionAndMintTransaction(
-  input: RegisterAssetDefinitionAndMintInput,
+  input: RegisterAssetDefinitionAndMintInput & FeePaymentRequired,
 ): SignedTransactionResult;
 /**
  * Register an asset definition, mint supply, and optionally fan-out transfers.
@@ -13059,7 +14076,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction(
  * destination identifier.
  */
 export function buildRegisterAssetDefinitionMintAndTransferTransaction(
-  input: RegisterAssetDefinitionMintAndTransferInput,
+  input: RegisterAssetDefinitionMintAndTransferInput & FeePaymentRequired,
 ): SignedTransactionResult;
 
 export interface TimeTriggerActionOptions {
@@ -13086,7 +14103,7 @@ export function buildPrecommitTriggerAction(
 ): string;
 
 export function buildCreateKaigiTransaction(
-  input: CreateKaigiTransactionInput,
+  input: CreateKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildPrivateKaigiFeeSpend(
   input: PrivateKaigiFeeSpendInput,
@@ -13129,90 +14146,86 @@ export function buildPrivateCreateKaigiTransaction(
   input: PrivateCreateKaigiTransactionInput,
 ): PrivateKaigiEntrypointResult;
 export function buildJoinKaigiTransaction(
-  input: JoinKaigiTransactionInput,
+  input: JoinKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildPrivateJoinKaigiTransaction(
   input: PrivateJoinKaigiTransactionInput,
 ): PrivateKaigiEntrypointResult;
 export function buildLeaveKaigiTransaction(
-  input: LeaveKaigiTransactionInput,
+  input: LeaveKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildEndKaigiTransaction(
-  input: EndKaigiTransactionInput,
+  input: EndKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildPrivateEndKaigiTransaction(
   input: PrivateEndKaigiTransactionInput,
 ): PrivateKaigiEntrypointResult;
 export function buildRecordKaigiUsageTransaction(
-  input: RecordKaigiUsageTransactionInput,
+  input: RecordKaigiUsageTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildSetKaigiRelayManifestTransaction(
-  input: SetKaigiRelayManifestTransactionInput,
+  input: SetKaigiRelayManifestTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterKaigiRelayTransaction(
-  input: RegisterKaigiRelayTransactionInput,
+  input: RegisterKaigiRelayTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterSmartContractCodeTransaction(
-  input: RegisterSmartContractCodeTransactionInput,
+  input: RegisterSmartContractCodeTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterSmartContractBytesTransaction(
-  input: RegisterSmartContractBytesTransactionInput,
+  input: RegisterSmartContractBytesTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRemoveSmartContractBytesTransaction(
-  input: RemoveSmartContractBytesTransactionInput,
+  input: RemoveSmartContractBytesTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildProposeDeployContractTransaction(
-  input: ProposeDeployContractTransactionInput,
+  input: ProposeDeployContractTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildProposeSccpRouteGovernanceTransaction(
-  input: ProposeSccpRouteGovernanceTransactionInput,
+  input: ProposeSccpRouteGovernanceTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildCastZkBallotTransaction(
-  input: CastZkBallotTransactionInput,
+  input: CastZkBallotTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildCastPlainBallotTransaction(
-  input: CastPlainBallotTransactionInput,
+  input: CastPlainBallotTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildEnactReferendumTransaction(
-  input: EnactReferendumTransactionInput,
+  input: EnactReferendumTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildFinalizeReferendumTransaction(
-  input: FinalizeReferendumTransactionInput,
+  input: FinalizeReferendumTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildPersistCouncilForEpochTransaction(
-  input: PersistCouncilForEpochTransactionInput,
+  input: PersistCouncilForEpochTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterZkAssetTransaction(
-  input: RegisterZkAssetTransactionInput,
+  input: RegisterZkAssetTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildScheduleConfidentialPolicyTransitionTransaction(
-  input: ScheduleConfidentialPolicyTransitionTransactionInput,
+  input: ScheduleConfidentialPolicyTransitionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildCancelConfidentialPolicyTransitionTransaction(
-  input: CancelConfidentialPolicyTransitionTransactionInput,
+  input: CancelConfidentialPolicyTransitionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildShieldTransaction(
-  input: ShieldTransactionInput,
+  input: ShieldTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildZkTransferTransaction(
-  input: ZkTransferTransactionInput,
+  input: ZkTransferTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildUnshieldTransaction(
-  input: UnshieldTransactionInput,
+  input: UnshieldTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildCreateElectionTransaction(
-  input: CreateElectionTransactionInput,
+  input: CreateElectionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildSubmitBallotTransaction(
-  input: SubmitBallotTransactionInput,
+  input: SubmitBallotTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildFinalizeElectionTransaction(
-  input: FinalizeElectionTransactionInput,
+  input: FinalizeElectionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildRegisterSnsNameTransaction(
-  input: RegisterSnsNameTransactionInput,
-): SignedTransactionResult;
-
 export function submitSignedTransaction(
   client: ToriiClient,
   signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
@@ -13224,10 +14237,6 @@ export function submitSignedTransaction(
     scope?: "local" | "auto" | "global" | string | null;
   },
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
-
-export function registerSnsNameViaConsensus(
-  input: RegisterSnsNameViaConsensusInput,
-): Promise<RegisterSnsNameViaConsensusResult>;
 
 export function submitTransactionEntrypoint(
   client: ToriiClient,
@@ -14123,6 +15132,22 @@ export function buildRegisterSmartContractBytesInstruction(
   input: RegisterSmartContractBytesInstructionInput,
 ): object;
 
+export function buildUploadSmartContractCodeChunkInstruction(
+  input: UploadSmartContractCodeChunkInstructionInput,
+): object;
+
+export function buildFinalizeSmartContractCodeUploadInstruction(
+  input: FinalizeSmartContractCodeUploadInstructionInput,
+): object;
+
+export function buildCancelSmartContractCodeUploadInstruction(
+  input: CancelSmartContractCodeUploadInstructionInput,
+): object;
+
+export function buildCommitContractDeploymentInstruction(
+  input: CommitContractDeploymentInstructionInput,
+): object;
+
 export function buildRemoveSmartContractBytesInstruction(
   input: RemoveSmartContractBytesInstructionInput,
 ): object;
@@ -14499,3 +15524,5 @@ export const NumericV1: {
 
 export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
+export * from "./ivm-artifact-admission-wasm.js";
+export * from "./smart-contract-deployment.js";

@@ -1831,7 +1831,10 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     // environments may not ship repo instructions; skip gracefully if the binary rejects them.
     let repo_instruction_box: InstructionBox = RepoInstructionBox::from(repo_instruction).into();
     let client = network.client();
-    if let Err(err) = client.submit::<InstructionBox>(repo_instruction_box) {
+    if let Err(err) = client.submit::<InstructionBox>(
+        repo_instruction_box,
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         eprintln!("Skipping repo i105 literal coverage: {err}");
         return Ok(());
     }

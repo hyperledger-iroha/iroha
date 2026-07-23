@@ -1,261 +1,100 @@
 ---
-id: registrar-api
-title: Sora Name Service Registrar API & Governance Hooks
-sidebar_label: Registrar API
-description: Torii REST surfaces, Norito DTOs, and governance artifacts for ledger-backed SNS names (SN-2b).
+title: Safe Alias and SNS Provisioning
+sidebar_label: Alias setup API
+description: Plan an exact alias dependency graph, sign it locally, and submit it atomically.
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registrar_api.md` and now serves as the
-canonical portal copy. The source file remains for translation workflows.
-:::
+# Safe Alias and SNS Provisioning
 
-# SNS Registrar API & Governance Hooks (SN-2b)
+Alias provisioning uses one declarative plan and one ordinary signed
+transaction. Torii does not expose an operator apply endpoint and never accepts
+a private key or client-generated payment proof.
 
-**Status:** Drafted 2026-03-24 -- under Nexus Core review  
-**Roadmap link:** SN-2b “Registrar API & governance hooks”  
-**Prerequisites:** Schema definitions in [`registry-schema.md`](./registry-schema.md)
+## Canonical names
 
-This note specifies the Torii endpoints, request/response DTOs, and governance
-artifacts required to operate the Sora Name Service (SNS) registrar. It is the
-authoritative contract for SDKs, wallets, and automation that need to
-register, renew, or manage ledger-backed SNS names.
+`merchant@banka.paynet` is a domain-qualified alias; `merchant@paynet` is a
+dataspace-root alias. Resolved names bind canonical text to the expected
+numeric dataspace ID. Static catalog and active SNS mappings must agree;
+conflicts return `alias.catalog.mapping_conflict` and execution revalidates the
+pair.
 
-## 1. Transport & Authentication
+## Operator workflow
 
-| Requirement | Detail |
-|-------------|--------|
-| Protocols | REST under `/v1/sns/*`. JSON payloads use Norito-JSON (`application/json`). |
-| Auth | `Authorization: Bearer` tokens or mTLS certificates issued per namespace steward. Governance-sensitive endpoints (freeze/unfreeze, governed transfers) require `scope=sns.admin`. |
-| Rate limits | Registrars share the `torii.preauth_scheme_limits` buckets with JSON callers plus per-suffix burst caps: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
-| Telemetry | Torii exposes `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` for the registrar handlers (filter on `scheme="norito_rpc"`); the API also increments `sns_registrar_status_total{result, suffix_id}`. |
+Send a canonically authenticated `AliasSetupPlanRequestV1` to
+`POST /v1/aliases/setup/plan`. The request contains version `1` and the full
+vector of `EnsureAlias` instructions. Dependencies are ordered dataspace,
+domain, then account alias and are never split.
 
-## 2. DTO Overview
-
-Fields reference the canonical structs defined in [`registry-schema.md`](./registry-schema.md). All
-payloads embed `NameSelectorV1`; the selector's `suffix_id` must use one of the fixed namespace ids:
-
-- `0x1001` for `account-alias`
-- `0x1002` for `domain`
-- `0x1003` for `dataspace`
-
-```text
-Struct RegisterNameRequestV1 {
-    selector: NameSelectorV1,
-    owner: AccountId,
-    controllers: Vec<NameControllerV1>,
-    term_years: u8,                     // 1..=max_term_years
-    pricing_class_hint: Option<u8>,     // steward-advertised tier id
-    payment: PaymentProofV1,
-    governance: GovernanceHookV1,
-    metadata: Metadata,
-}
-
-Struct RegisterNameResponseV1 {
-    name_record: NameRecordV1,
-    registry_event: RegistryEventV1,
-    revenue_accrual: RevenueAccrualEventV1,
-}
-
-Struct PaymentProofV1 {
-    asset_id: AssetId,
-    gross_amount: TokenValue,
-    net_amount: TokenValue,
-    settlement_tx: Hash,
-    payer: AccountId,
-    signature: Signature,               // steward/treasury cosign
-}
-
-Struct GovernanceHookV1 {
-    proposal_id: String,
-    council_vote_hash: Hash,
-    dao_vote_hash: Hash,
-    steward_ack: Signature,
-    guardian_clearance: Option<Signature>,
-}
-
-Struct RenewNameRequestV1 {
-    selector: NameSelectorV1,
-    term_years: u8,
-    payment: PaymentProofV1,
-}
-
-Struct TransferNameRequestV1 {
-    selector: NameSelectorV1,
-    new_owner: AccountId,
-    governance: GovernanceHookV1,
-}
-
-Struct UpdateControllersRequestV1 {
-    selector: NameSelectorV1,
-    controllers: Vec<NameControllerV1>,
-}
-
-Struct FreezeNameRequestV1 {
-    selector: NameSelectorV1,
-    reason: String,
-    until: Timestamp,
-    guardian_ticket: Signature,
-}
-
-```
-
-## 3. REST Endpoints
-
-| Endpoint | Method | Payload | Description |
-|----------|--------|---------|-------------|
-| `/v1/sns/names` | POST | `RegisterNameRequestV1` | Register or reopen a ledger-backed name. Validates the namespace selector, payment proof, and embedded governance hook. |
-| `/v1/sns/names/{namespace}/{literal}` | GET | — | Return the current `NameRecordV1` and effective lifecycle state for the canonical literal. |
-| `/v1/sns/names/{namespace}/{literal}/renew` | POST | `RenewNameRequestV1` | Extend term. Enforces grace/redemption windows from policy. |
-| `/v1/sns/names/{namespace}/{literal}/transfer` | POST | `TransferNameRequestV1` | Transfer ownership once governance approvals attach. |
-| `/v1/sns/names/{namespace}/{literal}/controllers` | POST | `UpdateControllersRequestV1` | Replace controller set; validates signed account addresses. |
-| `/v1/sns/names/{namespace}/{literal}/freeze` | POST | `FreezeNameRequestV1` | Guardian/council freeze. Requires guardian ticket and reference to governance docket. |
-| `/v1/sns/names/{namespace}/{literal}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze after remediation; ensures council override recorded. |
-| `/v1/sns/policies/{suffix_id}` | GET | — | Fetch current `SuffixPolicyV1` (cacheable). |
-
-**Path encoding:** `{namespace}` must be one of `account-alias`, `domain`, or
-`dataspace`. `{literal}` is the lowercase canonical label for that namespace:
-the full alias string for `account-alias`, the domain literal for `domain`, and
-the dataspace alias for `dataspace`.
-
-**Error model:** all endpoints return Norito JSON with `code`, `message`, `details`. Codes include `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
-
-### 3.1 CLI helpers (N0 manual registrar requirement)
-
-Closed-beta stewards can now exercise the registrar via the CLI without hand-crafting JSON:
+The response binds its authority/lease payer, chain and block anchor, resolved
+intents, `NoOp`/`Repair`/`Create` dispositions, exact create quotes, cap guards,
+asset totals, framed Norito instructions, deadline, diagnostics, and canonical
+plan hash. Drift returns a structured `409` with no executable partial plan.
+Every plan, including a pure no-op or repair plan, expires no more than 60
+seconds after its committed anchor; an earlier create-quote deadline shortens
+that lifetime. It never extends it.
+An earlier parent-lease expiry is reported as the non-blocking
+`alias.plan.parent_lease_expires_first` warning. A canonical unsigned payload
+that already exceeds Torii's configured transaction limit receives the
+blocking `alias.plan.transaction_oversized` diagnostic; clients refuse it and
+the graph is never silently split.
 
 ```bash
-iroha sns register \
-  --label makoto \
-  --suffix-id 0x1002 \
-  --term-years 2 \
-  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
-  --payment-gross 240 \
-  --payment-settlement '"settlement-tx-hash"' \
-  --payment-signature '"steward-signature"'
+iroha --config client.toml app alias setup plan \
+  --intent-file setup.json --plan-file setup.plan.json
+
+iroha --config client.toml app alias setup apply \
+  --plan-file setup.plan.json
 ```
 
-- `--owner` defaults to the CLI config account; repeat `--controller` to attach additional controller accounts (default `[owner]`).
-- Inline payment flags map directly to `PaymentProofV1`; pass `--payment-json PATH` when you already have a structured receipt. Metadata (`--metadata-json`) and governance hooks (`--governance-json`) follow the same pattern.
+The CLI verifies the plan hash and every exact instruction frame, signs one
+normal transaction locally, and submits it through the existing transaction
+endpoint. Intent and plan files contain no secrets.
 
-Read-only helpers round out rehearsals:
+Classification precedes quote validation. Exact state is a free no-op; missing
+derived state is repaired without a lease charge; an absent resource is
+created and charged exactly once; ownership, binding, controller, metadata,
+primary-role, lifecycle, or mapping drift is rejected. Replaying setup never
+renews a lease.
+
+## Onboarding and readiness
+
+Sponsored account onboarding is the only server-signing exception and is
+enabled by the presence of `[torii.account_onboarding]`. The signer comes from a
+runtime-only key file. API tokens arrive in headers or token files while peer
+configuration contains only BLAKE3 digests.
+
+`GET /v1/accounts/onboarding/readiness` returns an authenticated, sorted,
+secret-free setup report. `irohad --config peer.toml --check-config` validates
+static configuration and available genesis without binding sockets. Missing
+join/bootstrap state may report `Pending`; known state drift reports `Blocked`
+without panicking the node.
+
+## Resolution visibility
+
+Public-dataspace aliases resolve unsigned. Restricted dataspaces require
+canonical request authentication (`401` when missing or invalid) and an exact
+Alias or applicable Domain/Dataspace resolve capability (`403` before lookup
+when absent). Authorized missing aliases return `404`. Index and by-account
+responses filter invisible entries before calculating totals or cursors.
+
+Lease renewal and native auto-renew configuration are also read-only planning
+flows. `POST /v1/aliases/lease/renew/plan` revalidates the absolute-expiry CAS
+and exact guarded quote; `POST /v1/aliases/auto-renew/plan` revalidates the
+owner, revision, ranges, policy version, and payment asset. Clients verify the
+canonical plan hash and exact Norito frame, then locally sign one ordinary
+transaction:
 
 ```bash
-iroha sns registration --selector makoto.domain
-iroha sns policy --suffix-id 0x1002
+iroha --config client.toml app alias lease renew plan --intent-file renew.json --plan-file renew-plan.json
+iroha --config client.toml app alias lease renew apply --plan-file renew-plan.json
+iroha --config client.toml app alias auto-renew plan --intent-file auto.json --plan-file auto-plan.json
+iroha --config client.toml app alias auto-renew apply --plan-file auto-plan.json
+iroha --config client.toml app alias doctor --token-file onboarding.token
 ```
 
-See `crates/iroha_cli/src/commands/sns.rs` for the implementation; the commands reuse the Norito DTOs described in this document so CLI output matches Torii responses byte-for-byte.
+## Removed APIs
 
-Additional helpers cover renewals, transfers, and guardian actions:
-
-```bash
-# Renew an expiring name
-iroha sns renew \
-  --selector makoto.domain \
-  --term-years 1 \
-  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
-  --payment-gross 120 \
-  --payment-settlement '"renewal-settlement"' \
-  --payment-signature '"steward-signature"'
-
-# Transfer ownership once governance approves
-iroha sns transfer \
-  --selector makoto.domain \
-  --new-owner <i105-account-id> \
-  --governance-json /path/to/hook.json
-
-# Freeze/unfreeze flows
-iroha sns freeze \
-  --selector makoto.domain \
-  --reason "guardian investigation" \
-  --until-ms 1750000000000 \
-  --guardian-ticket '{"sig":"guardian"}'
-
-iroha sns unfreeze \
-  --selector makoto.domain \
-  --governance-json /path/to/unfreeze_hook.json
-```
-
-`--governance-json` must contain a valid `GovernanceHookV1` record (proposal
-id, vote hashes, steward/guardian signatures). The CLI normalises the legacy
-`label.suffix` selector into `/v1/sns/names/domain/{literal}/{renew,transfer,freeze}`
-so operators can rehearse the same ledger-backed flows SDKs call.
-
-## 4. Governance Hooks & Evidence
-
-Every mutating call must attach evidence suitable for replay:
-
-| Action | Required governance data |
-|--------|-------------------------|
-| Standard register/renew | Payment proof referencing a settlement instruction; no council vote needed unless tier requires steward approval. |
-| Premium tier register / guarded reopen | `GovernanceHookV1` referencing proposal id + steward acknowledgement. |
-| Transfer | Council vote hash + DAO signal hash; guardian clearance when transfer triggered by dispute resolution. |
-| Freeze/Unfreeze | Guardian ticket signature plus council override (unfreeze). |
-
-Torii verifies proofs by checking:
-
-1. Proposal id exists in governance ledger (`/v1/governance/proposals/{id}`) and status is `Approved`.
-2. Hashes match the recorded vote artifacts.
-3. Steward/guardian signatures reference the expected public keys from `SuffixPolicyV1`.
-
-Failed checks return `sns_err_governance_missing`.
-
-## 5. Workflow Examples
-
-### 6.1 Standard Registration
-
-1. Client queries `/v1/sns/policies/{suffix_id}` to fetch pricing, grace, and available tiers.
-2. Client builds `RegisterNameRequestV1`:
-   - `selector.suffix_id` set to the fixed namespace id.
-   - `selector.label` set to the lowercase canonical literal inside that namespace.
-   - `term_years` within policy bounds.
-   - `payment` referencing the treasury/steward splitter transfer.
-3. Torii validates:
-   - Label normalisation + reserved list.
-   - Term/gross price vs `PriceTierV1`.
-   - Payment proof amount >= computed price + fees.
-4. On success Torii:
-   - Persists `NameRecordV1`.
-   - Emits `RegistryEventV1::NameRegistered`.
-   - Emits `RevenueAccrualEventV1`.
-   - Returns the new record + events.
-
-### 6.2 Renewal During Grace
-
-Grace renewals include the standard request plus penalty detection:
-
-- Torii checks `now` vs `grace_expires_at` and adds surcharge tables from `SuffixPolicyV1`.
-- Payment proof must cover surcharge. Failure => `sns_err_payment_mismatch`.
-- `RegistryEventV1::NameRenewed` records the new `expires_at`.
-
-### 6.3 Guardian Freeze & Council Override
-
-1. Guardian submits `FreezeNameRequestV1` with ticket referencing incident id.
-2. Torii moves record to `NameStatus::Frozen`, emits `NameFrozen`.
-3. After remediation, council issues override; operator sends DELETE `/v1/sns/names/{namespace}/{literal}/freeze` with `GovernanceHookV1`.
-4. Torii validates override, emits `NameUnfrozen`.
-
-## 6. Validation & Error Codes
-
-| Code | Description | HTTP |
-|------|-------------|------|
-| `sns_err_reserved` | Label is reserved or blocked. | 409 |
-| `sns_err_policy_violation` | Term, tier, or controller set violates policy. | 422 |
-| `sns_err_payment_mismatch` | Payment proof value or asset mismatch. | 402 |
-| `sns_err_governance_missing` | Required governance artifacts absent/invalid. | 403 |
-| `sns_err_state_conflict` | Operation not allowed in current lifecycle state. | 409 |
-
-All codes surface via `X-Iroha-Error-Code` and structured Norito JSON/NRPC envelopes.
-
-## 7. Implementation Notes
-
-- Torii stores pending auctions under `NameRecordV1.auction` and rejects direct registration attempts while `PendingAuction`.
-- Payment proofs reuse Norito ledger receipts; treasury services provide helper APIs (`/v1/finance/sns/payments`).
-- SDKs should wrap these endpoints with strongly typed helpers so wallets can present clear error reasons (`ERR_SNS_RESERVED`, etc.).
-
-## 9. Next Steps
-
-- Wire the Torii handlers to the actual registry contract once SN-3 auctions land.
-- Publish SDK-specific guides (Rust/JS/Swift) referencing this API.
-- Extend [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) with cross-links to the governance hook evidence fields.
+There are no direct SNS mutation routes, key-bearing renew/auto-renew bodies,
+split acquire/bind setup calls, or multisig-specific onboarding endpoint. SNS
+record and policy inspection remain read-only; raw domain registration is for
+genesis/internal bootstrap only.

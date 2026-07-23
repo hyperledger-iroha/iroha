@@ -8,20 +8,31 @@ namespace Hyperledger.Iroha.Transactions;
 
 public sealed class TransactionBuilder
 {
-    private readonly List<TransactionInstruction> instructions = [];
-    private readonly Dictionary<string, JsonNode?> metadata = new(StringComparer.Ordinal);
+    private static readonly HashSet<string> RetiredFeeMetadataKeys =
+        new(["fee_sponsor", "gas_asset_id", "gas_limit"], StringComparer.Ordinal);
 
-    public TransactionBuilder(string chainId, string authorityAccountId)
+    private readonly List<TransactionBatchEntry> executableEntries = [];
+    private readonly Dictionary<string, JsonNode?> metadata = new(StringComparer.Ordinal);
+    private FeePaymentIntent feePayment;
+    private bool forceExecutableBatch;
+
+    public TransactionBuilder(
+        string chainId,
+        string authorityAccountId,
+        FeePaymentIntent feePayment)
     {
         ChainId = RequireExactNonBlank(chainId, nameof(chainId));
         AuthorityAccountId = TransactionEncodingContext.CanonicalizeAccountId(
             authorityAccountId,
             nameof(authorityAccountId));
+        this.feePayment = feePayment ?? throw new ArgumentNullException(nameof(feePayment));
     }
 
     public string ChainId { get; }
 
     public string AuthorityAccountId { get; }
+
+    public FeePaymentIntent FeePayment => feePayment;
 
     public ulong? CreationTimeMilliseconds { get; private set; }
 
@@ -29,14 +40,40 @@ public sealed class TransactionBuilder
 
     public uint? Nonce { get; private set; }
 
-    public IReadOnlyList<TransactionInstruction> Instructions => instructions.ToArray();
+    public IReadOnlyList<TransactionInstruction> Instructions => executableEntries
+        .OfType<TransactionBatchEntry.InstructionEntry>()
+        .Select(static entry => entry.Value)
+        .ToArray();
+
+    public IReadOnlyList<TransactionBatchEntry> ExecutableEntries => executableEntries.ToArray();
 
     public IReadOnlyDictionary<string, JsonNode?> Metadata => SnapshotMetadata(metadata);
 
     public TransactionBuilder AddInstruction(TransactionInstruction instruction)
     {
         ArgumentNullException.ThrowIfNull(instruction);
-        instructions.Add(instruction);
+        executableEntries.Add(TransactionBatchEntry.Instruction(instruction));
+        return this;
+    }
+
+    public TransactionBuilder AddContractCall(TransactionContractInvocation invocation)
+    {
+        ArgumentNullException.ThrowIfNull(invocation);
+        executableEntries.Add(TransactionBatchEntry.ContractCall(invocation));
+        return this;
+    }
+
+    public TransactionBuilder WithExecutableBatch(IEnumerable<TransactionBatchEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        var replacement = entries.ToArray();
+        if (replacement.Length == 0 || replacement.Any(static entry => entry is null))
+        {
+            throw new ArgumentException("Executable batches must contain at least one non-null item.", nameof(entries));
+        }
+        executableEntries.Clear();
+        executableEntries.AddRange(replacement);
+        forceExecutableBatch = true;
         return this;
     }
 
@@ -219,7 +256,9 @@ public sealed class TransactionBuilder
 
     public TransactionBuilder SetMetadata(string key, JsonNode? value)
     {
-        metadata[RequireExactNonBlank(key, nameof(key))] = value?.DeepClone();
+        var normalizedKey = RequireExactNonBlank(key, nameof(key));
+        RejectRetiredFeeMetadata(normalizedKey, nameof(key));
+        metadata[normalizedKey] = value?.DeepClone();
         return this;
     }
 
@@ -229,7 +268,9 @@ public sealed class TransactionBuilder
         var replacement = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
         foreach (var (key, value) in values)
         {
-            replacement[RequireExactNonBlank(key, nameof(values))] = value?.DeepClone();
+            var normalizedKey = RequireExactNonBlank(key, nameof(values));
+            RejectRetiredFeeMetadata(normalizedKey, nameof(values));
+            replacement[normalizedKey] = value?.DeepClone();
         }
 
         metadata.Clear();
@@ -255,14 +296,16 @@ public sealed class TransactionBuilder
 
     public SignedTransactionEnvelope BuildSigned(ReadOnlySpan<byte> privateKeySeed)
     {
-        if (instructions.Count == 0)
+        if (executableEntries.Count == 0)
         {
-            throw new InvalidOperationException("Transactions must contain at least one instruction.");
+            throw new InvalidOperationException("Transactions must contain at least one executable item.");
         }
+        ValidateExecutableFeeIntent();
 
         var context = new TransactionEncodingContext(AuthorityAccountId);
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
 
+        EnsureCreationTimeMilliseconds();
         var transactionPayload = BuildPayloadBytes(context);
         var payloadHash = IrohaHash.Hash(transactionPayload);
         var signature = Ed25519Signer.Sign(payloadHash, privateKeySeed);
@@ -288,11 +331,124 @@ public sealed class TransactionBuilder
         payload.WriteField(context.EncodeChainId(ChainId));
         payload.WriteField(context.EncodeAccountId(AuthorityAccountId));
         payload.WriteField(context.EncodeUInt64(CreationTimeMilliseconds ?? (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
-        payload.WriteField(context.EncodeInstructionsExecutable(instructions));
+        var contractCallPresent = executableEntries.Any(static entry => entry is TransactionBatchEntry.ContractCallEntry);
+        payload.WriteField(forceExecutableBatch || contractCallPresent
+            ? context.EncodeExecutableBatch(executableEntries)
+            : context.EncodeInstructionsExecutable(Instructions));
         payload.WriteField(context.EncodeOption(TimeToLiveMilliseconds, context.EncodeUInt64));
         payload.WriteField(context.EncodeOption(Nonce, context.EncodeUInt32));
+        payload.WriteField(context.EncodeFeePaymentIntent(feePayment));
         payload.WriteField(metadata.Count == 0 ? context.EncodeEmptyMetadata() : context.EncodeMetadata(metadata));
         return payload.ToArray();
+    }
+
+    /// <summary>
+    /// Builds the exact unsigned JSON payload used for fee quoting and freezes its creation time.
+    /// </summary>
+    public UnsignedTransactionPayload BuildUnsignedPayload()
+    {
+        if (executableEntries.Count == 0)
+        {
+            throw new InvalidOperationException("Transactions must contain at least one executable item.");
+        }
+        ValidateExecutableFeeIntent();
+
+        EnsureCreationTimeMilliseconds();
+        var contractCallPresent = executableEntries.Any(static entry => entry is TransactionBatchEntry.ContractCallEntry);
+        JsonObject executable;
+        if (forceExecutableBatch || contractCallPresent)
+        {
+            executable = new JsonObject
+            {
+                ["Batch"] = new JsonArray(executableEntries.Select(EncodeBatchEntryJson).ToArray()),
+            };
+        }
+        else
+        {
+            executable = new JsonObject
+            {
+                ["Instructions"] = new JsonArray(
+                    Instructions
+                        .Select(instruction => JsonValue.Create(
+                            instruction.EncodeInstructionBoxBase64(AuthorityAccountId)))
+                        .Cast<JsonNode?>()
+                        .ToArray()),
+            };
+        }
+        return new UnsignedTransactionPayload(
+            ChainId,
+            AuthorityAccountId,
+            CreationTimeMilliseconds!.Value,
+            executable,
+            TimeToLiveMilliseconds,
+            Nonce,
+            feePayment,
+            Metadata);
+    }
+
+    /// <summary>
+    /// Replaces only the signed fee maxima with a quote that preserves the selected payer,
+    /// exact sponsor revision, and gas bound.
+    /// </summary>
+    public TransactionBuilder ApplyFeeQuote(FeePaymentIntent quotedFeePayment)
+    {
+        ArgumentNullException.ThrowIfNull(quotedFeePayment);
+        if (!feePayment.HasSamePayerAndGasBound(quotedFeePayment))
+        {
+            throw new InvalidOperationException(
+                "Fee quote changed the selected payer, sponsor revision, or gas bound.");
+        }
+        feePayment = quotedFeePayment;
+        return this;
+    }
+
+    private void EnsureCreationTimeMilliseconds()
+    {
+        CreationTimeMilliseconds ??= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    }
+
+    private JsonNode? EncodeBatchEntryJson(TransactionBatchEntry entry)
+    {
+        return entry switch
+        {
+            TransactionBatchEntry.InstructionEntry instruction => new JsonObject
+            {
+                ["Instruction"] = instruction.Value.EncodeInstructionBoxBase64(AuthorityAccountId),
+            },
+            TransactionBatchEntry.ContractCallEntry call => new JsonObject
+            {
+                ["ContractCall"] = new JsonObject
+                {
+                    ["contract_address"] = call.Invocation.ContractAddress,
+                    ["expected_code_hash"] = call.Invocation.ExpectedCodeHashLiteral,
+                    ["entrypoint"] = call.Invocation.Entrypoint,
+                    ["arguments"] = call.Invocation.Arguments is { } arguments
+                        ? new JsonArray(arguments.Select(static value => (JsonNode?)JsonValue.Create(value)).ToArray())
+                        : null,
+                },
+            },
+            _ => throw new InvalidOperationException("Unknown executable batch entry."),
+        };
+    }
+
+    private void ValidateExecutableFeeIntent()
+    {
+        if (executableEntries.Any(static entry => entry is TransactionBatchEntry.ContractCallEntry)
+            && feePayment.GasLimit is null)
+        {
+            throw new InvalidOperationException(
+                "Executable batches containing contract calls require a signature-bound gas limit.");
+        }
+    }
+
+    private static void RejectRetiredFeeMetadata(string key, string paramName)
+    {
+        if (RetiredFeeMetadataKeys.Contains(key))
+        {
+            throw new ArgumentException(
+                $"Metadata key `{key}` is retired; use the required fee payment intent.",
+                paramName);
+        }
     }
 
     private static string RequireExactNonBlank(string? value, string paramName)

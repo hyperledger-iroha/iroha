@@ -261,6 +261,7 @@ const GC_STORAGE_MANIFEST_IDENTITY_DOMAIN_V1: &[u8] =
 const GC_STORAGE_MANIFEST_SET_DOMAIN_V1: &[u8] = b"sorafs.node.gc.manifest_set.identity.v1";
 const GC_STORAGE_CHUNK_REFCOUNTS_DOMAIN_V1: &[u8] = b"sorafs.node.gc.chunk_refcounts.identity.v1";
 const LOCAL_RUNTIME_SNAPSHOT_TMP_EXT: &str = "tmp";
+static LOCAL_CHECKPOINT_WRITE_LOCK: Mutex<()> = Mutex::new(());
 const EVIDENCE_VIEWER_AUDIT_CYCLE_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.moderation.evidence_viewer_audit.cycle_id.v1";
 const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
@@ -283,13 +284,7 @@ use capacity::{
     ReplicationRelease,
 };
 use config::{GcConfig, OrderbookAdmissionPolicy, RepairConfig, StorageConfig};
-<<<<<<< HEAD
-use iroha_crypto::{
-    Hash,
-    numeric::{Numeric, RoundingMode},
-};
-=======
->>>>>>> origin/optimizations
+use iroha_crypto::numeric::{Numeric, Quantity, RoundingMode};
 use iroha_data_model::{
     da::ingest::DaStripeLayout,
     sorafs::{
@@ -928,6 +923,11 @@ fn write_local_checkpoint_atomic_with_mode_and_parent_sync(
     _private: bool,
     parent_sync: fn(&Path) -> io::Result<()>,
 ) -> Result<(), LocalCheckpointWriteError> {
+    let _writer_guard = LOCAL_CHECKPOINT_WRITE_LOCK.lock().map_err(|_| {
+        LocalCheckpointWriteError::precommit(io::Error::other(
+            "local checkpoint writer lock is poisoned",
+        ))
+    })?;
     let path = absolute_local_checkpoint_path(path)?;
     let path = path.as_path();
     reject_unsafe_checkpoint_ancestors(path)?;
@@ -3776,16 +3776,14 @@ pub enum ReconciliationError {
     Validation(#[from] ReconciliationValidationError),
 }
 
-<<<<<<< HEAD
-/// Project an exact XOR quantity onto the legacy micro-XOR metrics axis.
+/// Project an exact decimal quantity onto a legacy micro-unit metrics axis.
 ///
 /// Metrics cannot carry the bounded 512-bit decimal representation used by
 /// settlement state. Fractional micro-XOR is therefore rounded toward zero and
 /// values outside the metrics counter domain are saturated. This helper must
 /// not be used for state, wire payloads, signatures, or digest preimages.
-fn xor_quantity_to_metric_micro_saturating(amount: &XorQuantity) -> u128 {
+fn quantity_to_metric_micro_saturating(amount: &Quantity) -> u128 {
     amount
-        .as_quantity()
         .try_mul_decimal(&Numeric::from(1_000_000_u64))
         .and_then(|scaled| {
             scaled.as_numeric().try_decimal_div_round(
@@ -3797,7 +3795,36 @@ fn xor_quantity_to_metric_micro_saturating(amount: &XorQuantity) -> u128 {
         .ok()
         .and_then(|scaled| scaled.try_mantissa_u128())
         .unwrap_or(u128::MAX)
-=======
+}
+
+fn xor_quantity_to_metric_micro_saturating(amount: &XorQuantity) -> u128 {
+    quantity_to_metric_micro_saturating(amount.as_quantity())
+}
+
+fn quantity_divergence_bps_saturating(feed: &Quantity, reference: &Quantity) -> u64 {
+    if reference.is_zero() {
+        return u64::MAX;
+    }
+    let difference = if feed >= reference {
+        feed.checked_sub(reference)
+    } else {
+        reference.checked_sub(feed)
+    };
+    difference
+        .and_then(|difference| {
+            difference.as_numeric().try_decimal_mul_div_round(
+                &Numeric::from(10_000_u64),
+                reference.as_numeric(),
+                0,
+                RoundingMode::TowardZero,
+            )
+        })
+        .ok()
+        .and_then(|value| value.try_mantissa_u128())
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(u64::MAX)
+}
+
 impl PdpTerminalHandoff for NodeHandle {
     fn archive(
         &self,
@@ -3855,7 +3882,6 @@ fn pdp_handoff_receipt(
     hasher.update(&idempotency_key);
     hasher.update(&payload_digest);
     *hasher.finalize().as_bytes()
->>>>>>> origin/optimizations
 }
 
 impl NodeHandle {
@@ -4417,8 +4443,8 @@ impl NodeHandle {
         self.deal_engine.clone()
     }
 
-<<<<<<< HEAD
-    /// Deposit exact XOR-denominated provider bond collateral.
+    /// Deposit provider collateral without an external funding sequence in tests.
+    #[cfg(test)]
     pub fn deposit_provider_bond(
         &self,
         provider_id: ProviderId,
@@ -4427,7 +4453,10 @@ impl NodeHandle {
         self.mutate_deal_engine_durably(|engine| {
             engine
                 .deposit_provider_bond(provider_id, amount)
-=======
+                .map(|snapshot| (snapshot, true))
+        })
+    }
+
     /// Admit one exact-canonical threshold-governed pricing manifest durably.
     ///
     /// The configured external policy supplies all trust roots. The submitted
@@ -4664,19 +4693,18 @@ impl NodeHandle {
     pub fn fund_provider_bond_sequenced(
         &self,
         provider_id: ProviderId,
-        amount_nano: u128,
+        amount: XorQuantity,
         funding_sequence: u64,
     ) -> Result<ProviderSnapshot, DealEngineError> {
         self.mutate_deal_engine_durably(|engine| {
             engine
-                .deposit_provider_bond_sequenced(provider_id, amount_nano, funding_sequence)
->>>>>>> origin/optimizations
+                .deposit_provider_bond_sequenced(provider_id, amount, funding_sequence)
                 .map(|snapshot| (snapshot, true))
         })
     }
 
-<<<<<<< HEAD
-    /// Deposit an exact XOR-denominated client credit balance.
+    /// Deposit client credit without an external funding sequence in tests.
+    #[cfg(test)]
     pub fn deposit_client_credit(
         &self,
         client_id: ClientId,
@@ -4685,7 +4713,10 @@ impl NodeHandle {
         self.mutate_deal_engine_durably(|engine| {
             engine
                 .deposit_client_credit(client_id, amount)
-=======
+                .map(|snapshot| (snapshot, true))
+        })
+    }
+
     /// Apply an authenticated operator client-credit funding request at the exact next sequence.
     ///
     /// External callers must authenticate a configured operator before invoking this trusted
@@ -4693,13 +4724,12 @@ impl NodeHandle {
     pub fn fund_client_credit_sequenced(
         &self,
         client_id: ClientId,
-        amount_nano: u128,
+        amount: XorQuantity,
         funding_sequence: u64,
     ) -> Result<ClientSnapshot, DealEngineError> {
         self.mutate_deal_engine_durably(|engine| {
             engine
-                .deposit_client_credit_sequenced(client_id, amount_nano, funding_sequence)
->>>>>>> origin/optimizations
+                .deposit_client_credit_sequenced(client_id, amount, funding_sequence)
                 .map(|snapshot| (snapshot, true))
         })
     }
@@ -10212,7 +10242,13 @@ impl NodeHandle {
         let maximum_sequence_elements = retention
             .state_entry_limit()
             .saturating_mul(2)
-            .saturating_add(retention.event_history_limit());
+            .saturating_add(retention.event_history_limit())
+            // Checkpoints contain bounded byte blobs whose element count is
+            // independent of the number of retained domain records. The
+            // archive's already-enforced byte length is a strict upper bound
+            // for those sequences; domain restore validation still enforces
+            // the configured state and event limits.
+            .max(bytes.len());
         let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV1>(
             &bytes,
             retention.checkpoint_max_bytes(),
@@ -11854,7 +11890,8 @@ impl NodeHandle {
             retention.checkpoint_max_bytes(),
             retention
                 .state_entry_limit()
-                .max(retention.event_history_limit()),
+                .max(retention.event_history_limit())
+                .max(bytes.len()),
         )
         .map_err(|err| NodeInitError::checkpoint("moderation ballot", path, err))?;
         let (ballot_count, event_count) = self
@@ -12174,19 +12211,17 @@ impl NodeHandle {
         governed: &GovernedHedgingReferencePriceDecisionV1,
     ) {
         let cluster = self.config.alias().map_or("local", String::as_str);
-        let reference = governed.decision.xor_usd_micros;
+        let reference = &governed.decision.xor_usd_price;
         let metrics = global_or_default();
-        metrics.set_sorafs_hedging_reference_price_micro_usd(cluster, reference);
+        metrics.set_sorafs_hedging_reference_price_micro_usd(
+            cluster,
+            u64::try_from(quantity_to_metric_micro_saturating(reference)).unwrap_or(u64::MAX),
+        );
         for feed in &governed.decision.feeds {
-            let difference = feed.xor_usd_micros.abs_diff(reference);
-            let divergence = u128::from(difference)
-                .saturating_mul(10_000)
-                .checked_div(u128::from(reference))
-                .unwrap_or(u128::MAX);
             metrics.set_sorafs_hedging_feed_divergence_bps(
                 cluster,
                 &feed.source,
-                u64::try_from(divergence).unwrap_or(u64::MAX),
+                quantity_divergence_bps_saturating(&feed.xor_usd_price, reference),
             );
         }
     }
@@ -12866,7 +12901,15 @@ impl NodeHandle {
             },
         )?;
         let provider_hex = hex::encode(outcome.record.provider_id.as_bytes());
-        global_sorafs_node_otel().record_deal_settlement(&provider_hex, "cancelled", 0, 0, 0, 0);
+        let zero = Quantity::zero();
+        global_sorafs_node_otel().record_deal_settlement(
+            &provider_hex,
+            "cancelled",
+            &zero,
+            &zero,
+            &zero,
+            &zero,
+        );
         if let Err(err) = self.flush_governance_outbox() {
             global_sorafs_node_otel().record_settlement_publish(&provider_hex, "pending");
             iroha_logger::warn!(
@@ -15693,9 +15736,7 @@ impl NodeHandle {
 
         Ok(Some(AppealFinanceReconciliationSummaryV1 {
             rollup_snapshot_hash,
-            rollup_count: u32::try_from(entries.len()).map_err(|_| {
-                ReconciliationError::AppealFinance("rollup count exceeds u32".to_string())
-            })?,
+            rollup_count: u32::try_from(entries.len()).unwrap_or(u32::MAX),
             source_report_count,
             case_count,
             total_treasury_xor,
@@ -16729,7 +16770,6 @@ mod tests {
     use iroha_data_model::{
         metadata::Metadata,
         name::Name,
-        prelude::Quantity,
         sorafs::{
             capacity::{CapacityDeclarationRecord, ProviderId},
             deal::{
@@ -16781,7 +16821,7 @@ mod tests {
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
             ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1,
         },
-        deal::{DealSettlementStatusV1, DealSettlementV1, XorQuantity},
+        deal::{DealSettlementStatusV1, DealSettlementV1},
         derive_orderbook_order_id_v1, order_cancel_signature_digest_v1,
         order_request_signature_digest_v1,
         provider_advert::SignatureAlgorithm,
@@ -16807,7 +16847,6 @@ mod tests {
         sample_verdict as por_sample_verdict,
     };
 
-<<<<<<< HEAD
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
@@ -16816,41 +16855,8 @@ mod tests {
         value.parse().expect("canonical quantity")
     }
 
-    #[test]
-    fn reserve_metric_projection_is_explicitly_lossy_and_saturating() {
-        assert_eq!(
-            xor_quantity_to_metric_micro_saturating(&xor("0.0000009")),
-            0,
-            "fractional micro-XOR is rounded toward zero only at the metrics boundary"
-        );
-        assert_eq!(
-            xor_quantity_to_metric_micro_saturating(&xor("0.0000019")),
-            1
-        );
-        assert_eq!(
-            xor_quantity_to_metric_micro_saturating(&xor(
-                "340282366920938463463374607431768211456"
-            )),
-            u128::MAX,
-            "values wider than the metrics counter saturate"
-        );
-        assert!(
-            "-0.000001".parse::<XorQuantity>().is_err(),
-            "negative accounting quantities must be rejected"
-        );
-        assert!(
-            "0.0000000001".parse::<XorQuantity>().is_err(),
-            "XOR quantities beyond the scale-nine contract must be rejected"
-        );
-        let outside_numeric_domain = format!("1{}", "0".repeat(200));
-        assert!(
-            outside_numeric_domain.parse::<XorQuantity>().is_err(),
-            "quantities outside the bounded decimal domain must be rejected"
-        );
-=======
     fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
         ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
->>>>>>> origin/optimizations
     }
 
     fn subsequent_por_challenge(base: &PorChallengeV1, seconds: u64) -> PorChallengeV1 {
@@ -16978,6 +16984,41 @@ mod tests {
             },
             notes: None,
         }
+    }
+
+    #[test]
+    fn exact_quantity_metric_projection_is_explicit_and_saturating() {
+        assert_eq!(
+            quantity_to_metric_micro_saturating(&quantity("0.000001999")),
+            1
+        );
+        assert_eq!(
+            xor_quantity_to_metric_micro_saturating(&xor("0.0000001")),
+            0
+        );
+        assert_eq!(
+            quantity_to_metric_micro_saturating(&quantity(
+                "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+            )),
+            u128::MAX
+        );
+    }
+
+    #[test]
+    fn exact_quantity_metric_divergence_rounds_toward_zero() {
+        let reference = quantity("2");
+        assert_eq!(
+            quantity_divergence_bps_saturating(&quantity("2.1"), &reference),
+            500
+        );
+        assert_eq!(
+            quantity_divergence_bps_saturating(&quantity("1.8"), &reference),
+            1_000
+        );
+        assert_eq!(
+            quantity_divergence_bps_saturating(&quantity("1"), &Quantity::zero()),
+            u64::MAX
+        );
     }
 
     #[test]
@@ -19680,7 +19721,11 @@ mod tests {
                 now_unix,
             )
             .expect("match settlement bid");
-        handle.orderbook_snapshot(now_unix).settlement_channels[0].clone()
+        handle
+            .orderbook_snapshot(now_unix)
+            .expect("settlement snapshot remains valid")
+            .settlement_channels[0]
+            .clone()
     }
 
     fn simulate_orderbook_receipt_crash_after_domain_commit(
@@ -20560,7 +20605,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         let encoded = norito::to_bytes(&receipt).expect("encode receipt intent");
         {
@@ -20577,6 +20625,7 @@ mod tests {
         assert!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20587,6 +20636,7 @@ mod tests {
         assert!(
             restored
                 .orderbook_snapshot(now + 10)
+                .expect("restored snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20608,7 +20658,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         let expected = norito::to_bytes(&receipt).expect("encode expected receipt");
         simulate_orderbook_receipt_crash_after_domain_commit(&handle, receipt.clone(), now + 10);
@@ -20616,6 +20669,7 @@ mod tests {
         assert_eq!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .len(),
             1
@@ -20625,7 +20679,10 @@ mod tests {
         let restored = NodeHandle::new(cfg.clone());
         assert_eq!(restored.pending_governance_publication_count(), 1);
         assert_eq!(
-            restored.orderbook_snapshot(now + 10).settlement_receipts,
+            restored
+                .orderbook_snapshot(now + 10)
+                .expect("restored snapshot remains valid")
+                .settlement_receipts,
             vec![receipt]
         );
         let publisher = Arc::new(RecordingPublisher::default());
@@ -20641,6 +20698,7 @@ mod tests {
         assert_eq!(
             acknowledged
                 .orderbook_snapshot(now + 10)
+                .expect("acknowledged snapshot remains valid")
                 .settlement_receipts
                 .len(),
             1
@@ -20658,7 +20716,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         handle
             .submit_orderbook_receipt(receipt.clone(), now + 10)
@@ -20684,7 +20745,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         receipt.channel_id = [0xEF; 32];
         receipt = sign_orderbook_receipt(receipt, 0x7F);
@@ -20713,6 +20777,7 @@ mod tests {
         assert!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20730,7 +20795,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         let receipt_bytes = norito::to_bytes(&receipt).expect("encode receipt intent");
         let issuance = proof_token_issuance_fixture();
@@ -20790,7 +20858,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         handle
             .submit_orderbook_receipt(receipt, now + 10)
@@ -20809,6 +20880,7 @@ mod tests {
         assert_eq!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .len(),
             1
@@ -20827,7 +20899,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         simulate_orderbook_receipt_crash_after_domain_commit(&handle, receipt.clone(), now + 10);
 
@@ -20898,7 +20973,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
 
         let err = handle
@@ -20909,6 +20987,7 @@ mod tests {
         assert!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20928,7 +21007,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let committed = fs::read(&checkpoint_path).expect("read committed auxiliary checkpoint");
@@ -20942,6 +21024,7 @@ mod tests {
         assert!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20957,6 +21040,7 @@ mod tests {
         assert!(
             restored
                 .orderbook_snapshot(now + 10)
+                .expect("restored snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20975,7 +21059,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         receipt.channel_id = [0xEE; 32];
         receipt = sign_orderbook_receipt(receipt, 0x7E);
@@ -21042,6 +21129,7 @@ mod tests {
         assert!(
             restored
                 .orderbook_snapshot(now + 10)
+                .expect("restored snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -23338,17 +23426,10 @@ mod tests {
         let client_id = ClientId::new([0xCC; 32]);
 
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider_id, xor("3"))
             .expect("deposit provider bond");
         handle
             .deposit_client_credit(client_id, xor("1"))
-=======
-            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
-            .expect("deposit provider bond");
-        handle
-            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit client credit");
 
         let terms = DealTerms {
@@ -23422,17 +23503,10 @@ mod tests {
         assert_eq!(ledger.deal_id, *record.deal_id.as_bytes());
         assert_eq!(ledger.provider_id, *provider_id.as_bytes());
         assert_eq!(ledger.client_id, *client_id.as_bytes());
-<<<<<<< HEAD
         assert_eq!(ledger.provider_accrual, xor("0.85"));
         assert_eq!(ledger.client_liability, xor("0.85"));
         assert_eq!(ledger.bond_locked, xor("2.4"));
         assert_eq!(ledger.bond_slashed, XorQuantity::zero());
-=======
-        assert_eq!(ledger.provider_accrual_nano, 850_000_000);
-        assert_eq!(ledger.client_liability_nano, 850_000_000);
-        assert_eq!(ledger.bond_locked_nano, 2_400_000_000);
-        assert_eq!(ledger.bond_slashed_nano, 0);
->>>>>>> origin/optimizations
         assert_eq!(ledger.captured_at, activation_epoch + 7);
 
         let snapshot = handle.deal_snapshot(record.deal_id).expect("snapshot");
@@ -23458,13 +23532,13 @@ mod tests {
         let source = NodeHandle::new(cfg.clone());
 
         source
-            .fund_provider_bond_sequenced(provider_id, 1_000, 1)
+            .fund_provider_bond_sequenced(provider_id, xor("0.000001"), 1)
             .expect("persist first provider funding sequence");
         source
-            .fund_client_credit_sequenced(client_id, 500, 1)
+            .fund_client_credit_sequenced(client_id, xor("0.0000005"), 1)
             .expect("persist first client funding sequence");
         assert!(matches!(
-            source.fund_provider_bond_sequenced(provider_id, 10, 1),
+            source.fund_provider_bond_sequenced(provider_id, xor("0.00000001"), 1),
             Err(DealEngineError::FundingSequenceMismatch {
                 expected: 2,
                 found: 1,
@@ -23472,7 +23546,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            source.fund_client_credit_sequenced(client_id, 10, 3),
+            source.fund_client_credit_sequenced(client_id, xor("0.00000001"), 3),
             Err(DealEngineError::FundingSequenceMismatch {
                 expected: 2,
                 found: 3,
@@ -23490,11 +23564,11 @@ mod tests {
                     start_epoch: activation_epoch,
                     end_epoch: activation_epoch + 10,
                     terms: DealTerms {
-                        storage_price_nano_per_gib_month: 100,
-                        egress_price_nano_per_gib: 10,
+                        storage_price_per_gib_month: quantity("0.0000001"),
+                        egress_price_per_gib: quantity("0.00000001"),
                         settlement_window_epochs: 5,
                         micropayment_probability_bps: 1,
-                        micropayment_payout_nano: 1,
+                        micropayment_payout: quantity("0.000000001"),
                     },
                     metadata: Metadata::default(),
                 },
@@ -23529,19 +23603,19 @@ mod tests {
         assert!(
             matches!(deal.status, DealStatus::Cancelled(epoch) if epoch == activation_epoch + 5)
         );
-        assert_eq!(deal.locked_bond_nano, 0);
+        assert_eq!(deal.locked_bond, XorQuantity::zero());
         let provider = restored
             .deal_engine()
             .provider_snapshot(provider_id)
             .expect("provider restored");
         assert_eq!(provider.funding_sequence, 1);
-        assert_eq!(provider.bond_available_nano, 1_000);
+        assert_eq!(provider.bond_available, xor("0.000001"));
         let client = restored
             .deal_engine()
             .client_snapshot(client_id)
             .expect("client restored");
         assert_eq!(client.funding_sequence, 1);
-        assert_eq!(client.credit_balance_nano, 500);
+        assert_eq!(client.credit_balance, xor("0.0000005"));
 
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
@@ -23552,7 +23626,7 @@ mod tests {
         assert_eq!(restored.pending_governance_publication_count(), 0);
 
         restored
-            .fund_provider_bond_sequenced(provider_id, 10, 2)
+            .fund_provider_bond_sequenced(provider_id, xor("0.00000001"), 2)
             .expect("next sequence accepted after restart");
         assert!(matches!(
             restored.cancel_deal(
@@ -23577,17 +23651,10 @@ mod tests {
         let activation_epoch = 1_700_000_000;
         let source = NodeHandle::new(cfg.clone());
         source
-<<<<<<< HEAD
             .deposit_provider_bond(provider_id, xor("3"))
             .expect("persist provider bond");
         source
             .deposit_client_credit(client_id, xor("1"))
-=======
-            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
-            .expect("persist provider bond");
-        source
-            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
->>>>>>> origin/optimizations
             .expect("persist client credit");
         let record = source
             .open_deal(
@@ -23673,17 +23740,10 @@ mod tests {
         let client_id = ClientId::new([0xBC; 32]);
 
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider_id, xor("3"))
             .expect("deposit provider bond");
         handle
             .deposit_client_credit(client_id, xor("1"))
-=======
-            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
-            .expect("deposit provider bond");
-        handle
-            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit client credit");
 
         let terms = DealTerms {
@@ -25377,30 +25437,18 @@ mod tests {
         let client_id = ClientId::new([0x20; 32]);
 
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider_id, xor("1"))
             .expect("deposit provider bond");
         handle
             .deposit_client_credit(client_id, xor("1"))
-=======
-            .fund_provider_bond_sequenced(provider_id, 1_000_000_000, 1)
-            .expect("deposit provider bond");
-        handle
-            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit client credit");
 
         let terms = DealTerms {
             storage_price_per_gib_month: quantity("0.1"),
             egress_price_per_gib: quantity("0.025"),
             settlement_window_epochs: 5,
-<<<<<<< HEAD
-            micropayment_probability_bps: 0,
-            micropayment_payout: Quantity::zero(),
-=======
-            micropayment_probability_bps: 1,
-            micropayment_payout_nano: 1,
->>>>>>> origin/optimizations
+            micropayment_probability_bps: 10_000,
+            micropayment_payout: quantity("0.001"),
         };
 
         let activation_epoch = 1_680_000_000;
@@ -25486,17 +25534,10 @@ mod tests {
         let client_id = ClientId::new([0xEF; 32]);
 
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider_id, xor("3"))
             .expect("deposit provider bond");
         handle
             .deposit_client_credit(client_id, xor("1"))
-=======
-            .fund_provider_bond_sequenced(provider_id, 3_000_000_000, 1)
-            .expect("deposit provider bond");
-        handle
-            .fund_client_credit_sequenced(client_id, 1_000_000_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit client credit");
 
         let terms = DealTerms {
@@ -25658,11 +25699,7 @@ mod tests {
         let provider = ProviderId::new(challenge.provider_id);
 
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider, xor("0.00001"))
-=======
-            .fund_provider_bond_sequenced(provider, 10_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit provider bond");
 
         let mut verdict = por_sample_verdict(&challenge, [0; 32]);
@@ -25696,10 +25733,7 @@ mod tests {
         let slash = second.slash.expect("slash recommendation expected");
         assert_eq!(slash.provider_id, provider);
         assert_eq!(slash.manifest_digest, challenge.manifest_digest);
-        assert_eq!(
-            slash.penalty,
-            XorQuantity::try_from_micro(5_000).expect("valid XOR quantity")
-        );
+        assert_eq!(slash.penalty, xor("0.000005"));
         assert_eq!(second.consecutive_failures, 0);
     }
 
@@ -25717,11 +25751,7 @@ mod tests {
         let challenge = por_sample_challenge();
         let provider = ProviderId::new(challenge.provider_id);
         handle
-<<<<<<< HEAD
             .deposit_provider_bond(provider, xor("0.000002"))
-=======
-            .fund_provider_bond_sequenced(provider, 2_000, 1)
->>>>>>> origin/optimizations
             .expect("deposit provider bond");
 
         let mut verdict = por_sample_verdict(&challenge, [0; 32]);
@@ -28948,13 +28978,7 @@ mod tests {
                 .expect("XOR quantity has exact legacy micro representation"),
             120_000_000
         );
-        assert_eq!(
-            credit_line
-                .accrued_interest
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-            29_589
-        );
+        assert_eq!(credit_line.accrued_interest, xor("0.029589041"));
         assert_eq!(credit_line.lifecycle_event_sequence, 0);
         let snapshot = handle.reserve_credit_line_snapshot(1_800_000_250);
         assert_eq!(snapshot.generated_at_unix, 1_800_000_250);

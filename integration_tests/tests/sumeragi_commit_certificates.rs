@@ -151,7 +151,10 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
     let result: Result<()> = async {
         let client = network.client();
         let baseline = client.get_status()?.blocks_non_empty;
-        client.submit_blocking(Log::new(Level::INFO, "commit cert quorum".to_string()))?;
+        client.submit_blocking(
+            Log::new(Level::INFO, "commit cert quorum".to_string()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         let status =
             wait_for_non_empty_blocks(&client, baseline.saturating_add(1), COMMIT_CERT_TIMEOUT)
                 .await?
@@ -224,7 +227,10 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
 
         let client = submit_peer.client();
         let baseline = client.get_status()?.blocks_non_empty;
-        client.submit_blocking(Log::new(Level::INFO, "block sync commit cert".to_string()))?;
+        client.submit_blocking(
+            Log::new(Level::INFO, "block sync commit cert".to_string()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         let status =
             wait_for_non_empty_blocks(&client, baseline.saturating_add(1), COMMIT_CERT_TIMEOUT)
                 .await?
@@ -302,7 +308,10 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
 
         let client = submit_peer.client();
         let baseline = client.get_status()?.blocks_non_empty;
-        client.submit(Log::new(Level::INFO, "npos stake quorum".to_string()))?;
+        client.submit(
+            Log::new(Level::INFO, "npos stake quorum".to_string()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let blocked = wait_for_non_empty_blocks(&client, baseline + 1, STAKE_QUORUM_WAIT).await?;
         ensure!(
@@ -334,10 +343,10 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
             .ok_or_else(|| eyre!("expected at least 1 peer"))?;
         let client = network.client();
         let baseline = client.get_status()?.blocks_non_empty;
-        client.submit_blocking(Log::new(
-            Level::INFO,
-            "npos stake quorum restored".to_string(),
-        ))?;
+        client.submit_blocking(
+            Log::new(Level::INFO, "npos stake quorum restored".to_string()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         let status =
             wait_for_non_empty_blocks(&client, baseline.saturating_add(1), COMMIT_CERT_TIMEOUT)
                 .await?

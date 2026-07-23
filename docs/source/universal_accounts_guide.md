@@ -4,6 +4,11 @@
 
 # Universal Account Guide
 
+> **Localization safety:** localized copies of this guide are generated from
+> this English source. A copy whose `source_hash` is stale is reference material
+> only and must not be used as an onboarding runbook until regenerated and
+> reviewed.
+
 This guide distils the UAID (Universal Account ID) rollout requirements from
 the Nexus roadmap and packages them into an operator + SDK focused walkthrough.
 It covers UAID derivation, portfolio/manifest inspection, regulator templates,
@@ -24,14 +29,19 @@ publish` run (roadmap reference: `roadmap.md:2209`).
 - Space Directory maintains a `World::uaid_dataspaces` map that ties each UAID
   to the dataspace accounts referenced by active manifests. Torii reuses that
   map for the `/portfolio` and `/uaids/*` APIs.
-- `POST /v1/accounts/onboard` publishes a default Space Directory manifest for
-  the universal dataspace when none exists, so the UAID is immediately bound.
-  The request must include an explicit canonical `uaid` plus either
-  `account_id` or `public_key_hex`; Torii no longer derives a UAID from mutable
-  alias or account material. Raw identity metadata is rejected. Submit
-  `identity_commitment_hex` when off-chain identity evidence needs an audit
-  commitment on the account.
-  Onboarding authorities must hold `CanPublishSpaceDirectoryManifest{dataspace=0}`.
+- Sponsored alias onboarding is a two-step, token-authenticated flow.
+  `POST /v1/accounts/onboard/plan` accepts the typed account/alias intent and
+  returns a stateless plan receipt without mutating state. The caller then sends
+  that receipt to `POST /v1/accounts/onboard`; Torii revalidates it and uses the
+  configured onboarding signer to submit one atomic transaction containing
+  `EnsureAlias::Account` plus only the explicitly allowed ancillary onboarding
+  instructions. The credential token is supplied in an authentication header
+  from a protected token file, never in the URL, command line, plan, or HTTP
+  body; private keys never cross HTTP. An exact repeat returns `Unchanged`,
+  repairable derived state is repaired without reacquiring the lease, and drift
+  returns a structured 409. This is the sole server-signing exception; operator
+  setup plans are verified, signed locally, and submitted through the ordinary
+  transaction endpoint.
 - All SDKs expose helpers for canonicalising UAID literals (e.g.,
   `UaidLiteral` in the Android SDK). The helpers accept raw 64-hex digests
   (LSB=1) or `uaid:<hex>` literals and re-use the same Norito codecs so the
@@ -98,8 +108,10 @@ Universal-account rollout does not change the canonical account identity model:
   registration path.
 - Domain ownership, alias permissions, and other domain-scoped behaviors live
   in their own state and APIs rather than on the account identity itself.
-- Public account lookup follows that split: alias queries stay public, while
-  canonical account identity remains a pure `AccountId`.
+- Canonical account identity remains a pure `AccountId`. Alias read visibility
+  is derived from dataspace/lane policy: public-dataspace aliases may resolve
+  unsigned, while restricted dataspaces require canonical request
+  authentication and applicable resolve permission.
 
 Implementation rule for operators, SDKs, and tests: start from the canonical
 `AccountId`, then add alias leases, dataspace/domain permissions, and any

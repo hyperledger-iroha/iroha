@@ -82,10 +82,11 @@ enum NoritoBridgeLoader {
         "connect_norito_free",
         "connect_norito_encode_transfer_signed_transaction",
         "connect_norito_encode_transfer_instruction_box",
-        "connect_norito_encode_validation_fee_transfer_signed_transaction",
         "connect_norito_detached_transaction_scaffold_inspect_v1",
         "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
-        "connect_norito_canonical_json_blake3_v1"
+        "connect_norito_canonical_json_blake3_v1",
+        "connect_norito_encode_account_onboarding_plan_body_v1",
+        "connect_norito_alias_instruction_round_trip_v1"
     ]
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
@@ -96,7 +97,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 19
+        return 21
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -543,6 +544,11 @@ struct NativeAccountAddressRenderResult {
     let i105: String
 }
 
+struct NativeAliasInstructionRoundTripResult {
+    let framedPayload: Data
+    let typedJSON: Data
+}
+
 enum NativeBridgeError: Error, Equatable {
     case nullPointer
     case utf8
@@ -568,8 +574,8 @@ enum NativeBridgeError: Error, Equatable {
     case offlineCommitment
     case offlineBlinding
     case kagemushaProve
-    case kagemushaRecursiveSpendV2Unavailable
-    case kagemushaRecursiveSpendV2Artifact
+    case kagemushaRecursiveSpendV4Unavailable
+    case kagemushaRecursiveSpendV4Artifact
     case invalidKagemushaVerifierOutput
     case unsupportedAlgorithm
     case metadataTarget
@@ -578,8 +584,11 @@ enum NativeBridgeError: Error, Equatable {
     case governance
     case hex
     case accountList
+    case feePayment
     case multisigSpec
     case identifierReceipt
+    case accountOnboardingBody
+    case aliasInstruction
     case verifyingKeyId
     case zkAssetMode
     case secpParse
@@ -624,6 +633,7 @@ enum NativeBridgeError: Error, Equatable {
         case -28: return .governance
         case -29: return .hex
         case -30: return .accountList
+        case -34: return .feePayment
         case -300: return .offlineReceiver
         case -301: return .offlineAsset
         case -303: return .offlineNonce
@@ -631,10 +641,12 @@ enum NativeBridgeError: Error, Equatable {
         case -305: return .offlineCommitment
         case -306: return .offlineBlinding
         case -311: return .kagemushaProve
-        case -314: return .kagemushaRecursiveSpendV2Unavailable
-        case -315: return .kagemushaRecursiveSpendV2Artifact
+        case -316: return .kagemushaRecursiveSpendV4Unavailable
+        case -317: return .kagemushaRecursiveSpendV4Artifact
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
+        case -408: return .accountOnboardingBody
+        case -409: return .aliasInstruction
         case -403: return .verifyingKeyId
         case -404: return .zkAssetMode
         case -501: return .detachedTransactionScaffold
@@ -816,23 +828,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-    private typealias EncodeTransferWithFeeSponsorFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UInt32,
-        UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
@@ -851,24 +846,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
-        UInt8,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-    private typealias EncodeTransferWithFeeSponsorWithAlgFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UInt32,
-        UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -884,33 +861,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
     ) -> Int32
-    private typealias EncodeValidationFeeTransferFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UInt32,
-        UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-
     private typealias EncodeMintFn = @convention(c) (
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
@@ -922,6 +872,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
@@ -940,6 +891,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
@@ -956,6 +908,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
@@ -980,6 +933,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
@@ -997,6 +951,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -1021,6 +976,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UInt8,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1043,6 +999,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UInt8,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
@@ -1060,6 +1017,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
@@ -1080,6 +1038,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1095,6 +1054,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
@@ -1113,6 +1073,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1127,6 +1088,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt8,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -1144,6 +1106,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1158,6 +1121,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt8,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -1179,6 +1143,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1193,6 +1158,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt8,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
@@ -1211,6 +1177,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1225,6 +1192,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt8,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -1245,6 +1213,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64, UInt64, UInt8,
         UInt8, UInt8,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1262,6 +1231,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UInt64, UInt64, UInt8,
         UInt8, UInt8,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -1281,6 +1251,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt8,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1298,6 +1269,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt8,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
@@ -1312,6 +1284,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt8,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -1329,6 +1302,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1344,6 +1319,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UInt64,
         UInt64,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
@@ -1361,6 +1337,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt64,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
@@ -1376,6 +1353,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1389,6 +1367,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt8,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -1407,6 +1386,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt8,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -1421,6 +1401,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt32,
         UInt8,
+        UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
@@ -1943,6 +1924,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias EncodeAccountOnboardingPlanBodyFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AliasInstructionRoundTripFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias CanonicalJSONBlake3Fn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
@@ -1992,11 +1983,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var bridgeHandle: UnsafeMutableRawPointer? = nil
     private var loadedBridgeAbiVersion: UInt32? = nil
     private var encodeTransferFn: EncodeTransferFn? = nil
-    private var encodeTransferWithFeeSponsorFn: EncodeTransferWithFeeSponsorFn? = nil
     private var encodeTransferWithAlgFn: EncodeTransferWithAlgFn? = nil
-    private var encodeTransferWithFeeSponsorWithAlgFn: EncodeTransferWithFeeSponsorWithAlgFn? = nil
     private var encodeTransferInstructionBoxFn: EncodeTransferInstructionBoxFn? = nil
-    private var encodeValidationFeeTransferFn: EncodeValidationFeeTransferFn? = nil
     private var encodeMintFn: EncodeMintFn? = nil
     private var encodeMintWithAlgFn: EncodeMintWithAlgFn? = nil
     private var encodeShieldFn: EncodeShieldFn? = nil
@@ -2113,6 +2101,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var blake3HashFn: Blake3HashFn? = nil
     private var detachedTransactionInspectFn: DetachedTransactionInspectFn? = nil
     private var detachedTransactionFinalizeEd25519Fn: DetachedTransactionFinalizeEd25519Fn? = nil
+    private var encodeAccountOnboardingPlanBodyFn: EncodeAccountOnboardingPlanBodyFn? = nil
+    private var aliasInstructionRoundTripFn: AliasInstructionRoundTripFn? = nil
     private var canonicalJSONBlake3Fn: CanonicalJSONBlake3Fn? = nil
     private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
     private var privacyProofRequestFn: PrivacyProofRequestFn? = nil
@@ -2238,6 +2228,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let blake3HashFn: Any? = nil
     private let detachedTransactionInspectFn: Any? = nil
     private let detachedTransactionFinalizeEd25519Fn: Any? = nil
+    private let encodeAccountOnboardingPlanBodyFn: Any? = nil
+    private let aliasInstructionRoundTripFn: Any? = nil
     private let canonicalJSONBlake3Fn: Any? = nil
     private let privacyCapabilitiesFn: Any? = nil
     private let privacyProofRequestFn: Any? = nil
@@ -2301,26 +2293,28 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         self.loadedBridgeAbiVersion = abiVersion
 
-        self.encodeTransferFn = connect_norito_encode_transfer_signed_transaction
-        self.encodeTransferWithFeeSponsorFn = connect_norito_encode_transfer_signed_transaction_with_fee_sponsor
-        self.encodeTransferWithAlgFn = connect_norito_encode_transfer_signed_transaction_alg
-        self.encodeTransferWithFeeSponsorWithAlgFn =
-            connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg
         let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
         self.bridgeHandle = Self.bridgeHandleForStaticFallback(
             currentHandle: self.bridgeHandle,
             processHandle: staticHandle
         )
-        if let encodeValidationFeeSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_validation_fee_transfer_signed_transaction") }) {
-            self.encodeValidationFeeTransferFn = unsafeBitCast(
-                encodeValidationFeeSymbol,
-                to: EncodeValidationFeeTransferFn.self
-            )
-        } else {
-            self.encodeValidationFeeTransferFn = nil
-        }
-        self.encodeMintFn = connect_norito_encode_mint_signed_transaction
-        self.encodeMintWithAlgFn = connect_norito_encode_mint_signed_transaction_alg
+        // Swift 6.2 can fail to produce a diagnostic while coercing these large
+        // imported C signatures directly to @convention(c) optionals. Resolve
+        // the statically linked symbols through the process handle instead;
+        // this is the same typed binding path used for a dynamically loaded
+        // bridge and keeps the ABI contract identical.
+        self.encodeTransferFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_encode_transfer_signed_transaction") }
+            .map { unsafeBitCast($0, to: EncodeTransferFn.self) }
+        self.encodeTransferWithAlgFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_encode_transfer_signed_transaction_alg") }
+            .map { unsafeBitCast($0, to: EncodeTransferWithAlgFn.self) }
+        self.encodeMintFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_encode_mint_signed_transaction") }
+            .map { unsafeBitCast($0, to: EncodeMintFn.self) }
+        self.encodeMintWithAlgFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_encode_mint_signed_transaction_alg") }
+            .map { unsafeBitCast($0, to: EncodeMintWithAlgFn.self) }
         if let instructionBoxSymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_encode_transfer_instruction_box")
         }) {
@@ -2332,10 +2326,27 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeTransferInstructionBoxFn = nil
         }
         loadPrivacySymbols(from: staticHandle)
-        self.detachedTransactionInspectFn = connect_norito_detached_transaction_scaffold_inspect_v1
-        self.detachedTransactionFinalizeEd25519Fn =
-            connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
-        self.canonicalJSONBlake3Fn = connect_norito_canonical_json_blake3_v1
+        self.detachedTransactionInspectFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_detached_transaction_scaffold_inspect_v1") }
+            .map { unsafeBitCast($0, to: DetachedTransactionInspectFn.self) }
+        self.detachedTransactionFinalizeEd25519Fn = staticHandle
+            .flatMap {
+                dlsym($0, "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1")
+            }
+            .map { unsafeBitCast($0, to: DetachedTransactionFinalizeEd25519Fn.self) }
+        self.encodeAccountOnboardingPlanBodyFn = staticHandle
+            .flatMap {
+                dlsym($0, "connect_norito_encode_account_onboarding_plan_body_v1")
+            }
+            .map { unsafeBitCast($0, to: EncodeAccountOnboardingPlanBodyFn.self) }
+        self.aliasInstructionRoundTripFn = staticHandle
+            .flatMap {
+                dlsym($0, "connect_norito_alias_instruction_round_trip_v1")
+            }
+            .map { unsafeBitCast($0, to: AliasInstructionRoundTripFn.self) }
+        self.canonicalJSONBlake3Fn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_canonical_json_blake3_v1") }
+            .map { unsafeBitCast($0, to: CanonicalJSONBlake3Fn.self) }
         self.freeFn = connect_norito_free
         self.setChainDiscriminantFn = connect_norito_set_chain_discriminant
         self.bridgeStatus = .valid(path: "static", identifier: NoritoBridgeLoader.currentIdentifier())
@@ -2454,15 +2465,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 canonicalJSONSymbol,
                 to: CanonicalJSONBlake3Fn.self
             )
+            self.encodeAccountOnboardingPlanBodyFn = dlsym(
+                handle,
+                "connect_norito_encode_account_onboarding_plan_body_v1"
+            ).map { unsafeBitCast($0, to: EncodeAccountOnboardingPlanBodyFn.self) }
+            self.aliasInstructionRoundTripFn = dlsym(
+                handle,
+                "connect_norito_alias_instruction_round_trip_v1"
+            ).map { unsafeBitCast($0, to: AliasInstructionRoundTripFn.self) }
             loadPrivacySymbols(from: handle)
-            if let encodeFeeSponsorSymbol = dlsym(handle, "connect_norito_encode_transfer_signed_transaction_with_fee_sponsor") {
-                self.encodeTransferWithFeeSponsorFn = unsafeBitCast(
-                    encodeFeeSponsorSymbol,
-                    to: EncodeTransferWithFeeSponsorFn.self
-                )
-            } else {
-                self.encodeTransferWithFeeSponsorFn = nil
-            }
             if let chainSymbol = dlsym(handle, "connect_norito_set_chain_discriminant") {
                 self.setChainDiscriminantFn = unsafeBitCast(chainSymbol, to: SetChainDiscriminantFn.self)
             } else {
@@ -2473,14 +2484,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.encodeTransferWithAlgFn = nil
             }
-            if let encodeFeeSponsorAlgSymbol = dlsym(handle, "connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg") {
-                self.encodeTransferWithFeeSponsorWithAlgFn = unsafeBitCast(
-                    encodeFeeSponsorAlgSymbol,
-                    to: EncodeTransferWithFeeSponsorWithAlgFn.self
-                )
-            } else {
-                self.encodeTransferWithFeeSponsorWithAlgFn = nil
-            }
             if let encodeInstructionBoxSymbol = dlsym(handle, "connect_norito_encode_transfer_instruction_box") {
                 self.encodeTransferInstructionBoxFn = unsafeBitCast(
                     encodeInstructionBoxSymbol,
@@ -2488,14 +2491,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 )
             } else {
                 self.encodeTransferInstructionBoxFn = nil
-            }
-            if let encodeValidationFeeSymbol = dlsym(handle, "connect_norito_encode_validation_fee_transfer_signed_transaction") {
-                self.encodeValidationFeeTransferFn = unsafeBitCast(
-                    encodeValidationFeeSymbol,
-                    to: EncodeValidationFeeTransferFn.self
-                )
-            } else {
-                self.encodeValidationFeeTransferFn = nil
             }
             if let mintSymbol = dlsym(handle, "connect_norito_encode_mint_signed_transaction") {
                 self.encodeMintFn = unsafeBitCast(mintSymbol, to: EncodeMintFn.self)
@@ -3071,11 +3066,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             }
         } else {
             self.encodeTransferFn = nil
-            self.encodeTransferWithFeeSponsorFn = nil
             self.encodeTransferWithAlgFn = nil
-            self.encodeTransferWithFeeSponsorWithAlgFn = nil
             self.encodeTransferInstructionBoxFn = nil
-            self.encodeValidationFeeTransferFn = nil
             self.encodeMintFn = nil
             self.encodeMintWithAlgFn = nil
             self.encodeShieldFn = nil
@@ -3141,6 +3133,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.blake3HashFn = nil
             self.detachedTransactionInspectFn = nil
             self.detachedTransactionFinalizeEd25519Fn = nil
+            self.encodeAccountOnboardingPlanBodyFn = nil
+            self.aliasInstructionRoundTripFn = nil
             self.canonicalJSONBlake3Fn = nil
             self.privacyCapabilitiesFn = nil
             self.privacyProofRequestFn = nil
@@ -3485,12 +3479,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 19 exposes the complete first-release Kagemusha surface.
+    /// Whether ABI 21 exposes the complete selector-free V4 Kagemusha surface.
     public var isKagemushaRecursiveSpendBridgeAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return loadedBridgeAbiVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
-            && hasKagemushaRecursiveSpendV2Symbols(
+            && hasKagemushaRecursiveSpendV4Symbols(
                 KagemushaRecursiveSpend.requiredNativeSymbols + ["connect_norito_free"]
             )
         #else
@@ -4060,6 +4054,100 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    /// Encode the exact sponsored-onboarding plan body as bare canonical Norito.
+    func encodeAccountOnboardingPlanBody(
+        _ body: ToriiAccountOnboardingPlanBody
+    ) throws -> Data {
+        #if canImport(Darwin)
+        guard let encodeAccountOnboardingPlanBodyFn, let freeFn else {
+            throw NativeBridgeError.bridgeUnavailable
+        }
+        let encoder = JSONEncoder()
+        let json = try encoder.encode(body)
+        guard !json.isEmpty, json.count <= Self.detachedTransactionNativeMaximumBytes else {
+            throw NativeBridgeError.accountOnboardingBody
+        }
+        var outputPointer: UnsafeMutablePointer<UInt8>? = nil
+        var outputLength: CUnsignedLong = 0
+        let status = json.withUnsafeBytes { buffer -> Int32 in
+            encodeAccountOnboardingPlanBodyFn(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(buffer.count),
+                &outputPointer,
+                &outputLength
+            )
+        }
+        defer {
+            if let outputPointer { freeFn(outputPointer) }
+        }
+        try throwOnStatus(status)
+        guard outputLength > 0,
+              outputLength <= CUnsignedLong(Self.detachedTransactionNativeMaximumBytes),
+              outputPointer != nil else {
+            throw NativeBridgeError.accountOnboardingBody
+        }
+        return Data(bytes: outputPointer!, count: Int(outputLength))
+        #else
+        throw NativeBridgeError.bridgeUnavailable
+        #endif
+    }
+
+    /// Registry-decode and canonically re-encode one exact alias instruction frame.
+    func roundTripAliasInstruction(
+        wireId: String,
+        framedPayload: Data
+    ) throws -> NativeAliasInstructionRoundTripResult {
+        #if canImport(Darwin)
+        guard let aliasInstructionRoundTripFn, let freeFn else {
+            throw NativeBridgeError.bridgeUnavailable
+        }
+        let wireIdBytes = Data(wireId.utf8)
+        guard !wireIdBytes.isEmpty,
+              wireIdBytes.count <= 256,
+              !framedPayload.isEmpty,
+              framedPayload.count <= Self.detachedTransactionNativeMaximumBytes else {
+            throw NativeBridgeError.aliasInstruction
+        }
+        var outputFramePointer: UnsafeMutablePointer<UInt8>? = nil
+        var outputFrameLength: CUnsignedLong = 0
+        var outputJSONPointer: UnsafeMutablePointer<UInt8>? = nil
+        var outputJSONLength: CUnsignedLong = 0
+        let status = wireIdBytes.withUnsafeBytes { wireIdBuffer -> Int32 in
+            framedPayload.withUnsafeBytes { framedPayloadBuffer -> Int32 in
+                aliasInstructionRoundTripFn(
+                    wireIdBuffer.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(wireIdBuffer.count),
+                    framedPayloadBuffer.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(framedPayloadBuffer.count),
+                    &outputFramePointer,
+                    &outputFrameLength,
+                    &outputJSONPointer,
+                    &outputJSONLength
+                )
+            }
+        }
+        defer {
+            if let outputFramePointer { freeFn(outputFramePointer) }
+            if let outputJSONPointer { freeFn(outputJSONPointer) }
+        }
+        try throwOnStatus(status)
+        guard outputFrameLength > 0,
+              outputFrameLength <= CUnsignedLong(Self.detachedTransactionNativeMaximumBytes),
+              let outputFramePointer,
+              outputJSONLength > 0,
+              outputJSONLength <= CUnsignedLong(Self.detachedTransactionNativeMaximumBytes),
+              let outputJSONPointer else {
+            throw NativeBridgeError.aliasInstruction
+        }
+        return NativeAliasInstructionRoundTripResult(
+            framedPayload: Data(bytes: outputFramePointer, count: Int(outputFrameLength)),
+            typedJSON: Data(bytes: outputJSONPointer, count: Int(outputJSONLength))
+        )
+        #else
+        throw NativeBridgeError.bridgeUnavailable
+        #endif
+    }
+
     /// Strictly canonicalize JSON and compute BLAKE3 over those exact bytes.
     public func canonicalizeJSONBlake3(_ json: Data) throws -> CanonicalJSONBlake3Result {
         #if canImport(Darwin)
@@ -4113,14 +4201,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         assetDefinitionId: String,
         quantity: String,
         destination: String,
-        feeSponsor: String? = nil,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
         let canonicalQuantity = try KotodamaNumericV1Codec
             .decodeQuantityJSON(quantity).canonicalString
-        let normalizedFeeSponsor = try feeSponsor.map {
-            try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
+        guard !feePaymentJSON.isEmpty else {
+            throw NativeBridgeError.feePayment
         }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
@@ -4128,22 +4216,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let nonceValue = nonce ?? 0
         let nonceFlag: UInt8 = nonce == nil ? 0 : 1
-        let requiresFeeSponsorBridge = normalizedFeeSponsor != nil
         let useAlg = algorithm != .ed25519
-        if useAlg {
-            guard requiresFeeSponsorBridge
-                ? encodeTransferWithFeeSponsorWithAlgFn != nil
-                : encodeTransferWithAlgFn != nil
-            else {
-                return nil
-            }
-        } else {
-            guard requiresFeeSponsorBridge
-                ? encodeTransferWithFeeSponsorFn != nil
-                : encodeTransferFn != nil
-            else {
-                return nil
-            }
+        guard useAlg ? encodeTransferWithAlgFn != nil : encodeTransferFn != nil else {
+            return nil
         }
 
         var signedPtr: UnsafeMutablePointer<UInt8>? = nil
@@ -4158,37 +4233,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 assetDefinitionId.withCString { assetPtr in
                     canonicalQuantity.withCString { quantityPtr in
                         destination.withCString { destinationPtr in
-                            let encodeTransferCall: (UnsafePointer<CChar>?, UInt) -> Int32 = { [self] feeSponsorPtr, feeSponsorLen in
+                            let encodeTransferCall: (UnsafePointer<UInt8>?, UInt) -> Int32 = { [self] feePaymentPtr, feePaymentLen in
                                 privateKey.withUnsafeBytes { keyBuffer -> Int32 in
                                     hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
-                                        guard let hashPtr = hashBuffer.baseAddress else {
-                                            return -1
+                                        guard let feePaymentPtr,
+                                              feePaymentLen > 0,
+                                              let hashPtr = hashBuffer.baseAddress else {
+                                            return -34
                                         }
                                         return self.withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                            if useAlg,
-                                               let feeSponsorPtr,
-                                               let encodeTransferWithFeeSponsorWithAlgFn = self.encodeTransferWithFeeSponsorWithAlgFn
-                                            {
-                                                return encodeTransferWithFeeSponsorWithAlgFn(
-                                                    chainPtr, UInt(chainId.utf8.count),
-                                                    authorityPtr, UInt(authority.utf8.count),
-                                                    creationTimeMs,
-                                                    ttlValue,
-                                                    ttlFlag,
-                                                    nonceValue,
-                                                    nonceFlag,
-                                                    assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                    quantityPtr, UInt(canonicalQuantity.utf8.count),
-                                                    destinationPtr, UInt(destination.utf8.count),
-                                                    feeSponsorPtr, feeSponsorLen,
-                                                    keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
-                                                    algorithmRaw,
-                                                    signedPtrPtr,
-                                                    signedLenPtr,
-                                                    hashPtr,
-                                                    hashLength
-                                                )
-                                            } else if useAlg, let encodeTransferWithAlgFn = self.encodeTransferWithAlgFn {
+                                            if useAlg, let encodeTransferWithAlgFn = self.encodeTransferWithAlgFn {
                                                 return encodeTransferWithAlgFn(
                                                     chainPtr, UInt(chainId.utf8.count),
                                                     authorityPtr, UInt(authority.utf8.count),
@@ -4200,29 +4254,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     assetPtr, UInt(assetDefinitionId.utf8.count),
                                                     quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                     destinationPtr, UInt(destination.utf8.count),
+                                                    feePaymentPtr, feePaymentLen,
                                                     keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                     algorithmRaw,
-                                                    signedPtrPtr,
-                                                    signedLenPtr,
-                                                    hashPtr,
-                                                    hashLength
-                                                )
-                                            } else if let feeSponsorPtr,
-                                                      let encodeTransferWithFeeSponsorFn = self.encodeTransferWithFeeSponsorFn
-                                            {
-                                                return encodeTransferWithFeeSponsorFn(
-                                                    chainPtr, UInt(chainId.utf8.count),
-                                                    authorityPtr, UInt(authority.utf8.count),
-                                                    creationTimeMs,
-                                                    ttlValue,
-                                                    ttlFlag,
-                                                    nonceValue,
-                                                    nonceFlag,
-                                                    assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                    quantityPtr, UInt(canonicalQuantity.utf8.count),
-                                                    destinationPtr, UInt(destination.utf8.count),
-                                                    feeSponsorPtr, feeSponsorLen,
-                                                    keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                     signedPtrPtr,
                                                     signedLenPtr,
                                                     hashPtr,
@@ -4240,6 +4274,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     assetPtr, UInt(assetDefinitionId.utf8.count),
                                                     quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                     destinationPtr, UInt(destination.utf8.count),
+                                                    feePaymentPtr, feePaymentLen,
                                                     keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                     signedPtrPtr,
                                                     signedLenPtr,
@@ -4253,12 +4288,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     }
                                 }
                             }
-                            if let normalizedFeeSponsor {
-                                return normalizedFeeSponsor.withCString { feeSponsorPtr in
-                                    encodeTransferCall(feeSponsorPtr, UInt(normalizedFeeSponsor.utf8.count))
-                                }
+                            return feePaymentJSON.withUnsafeBytes { feePaymentBuffer in
+                                encodeTransferCall(
+                                    feePaymentBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                    UInt(feePaymentJSON.count)
+                                )
                             }
-                            return encodeTransferCall(nil, 0)
                         }
                     }
                 }
@@ -4338,123 +4373,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    func encodeValidationFeeTransfer(
-        chainId: String,
-        authority: String,
-        creationTimeMs: UInt64,
-        ttlMs: UInt64?,
-        nonce: UInt32? = nil,
-        principalAssetDefinitionId: String,
-        principalQuantity: String,
-        destination: String,
-        feeAssetDefinitionId: String,
-        feeQuantity: String,
-        treasury: String,
-        policyVersion: UInt64,
-        policyHashHex: String,
-        feeInstructionIndex: UInt64,
-        feeSponsor: String? = nil,
-        memo: String? = nil,
-        transactionMetadataJSON: Data,
-        privateKey: Data
-    ) throws -> NativeSignedTransaction? {
-        let canonicalPrincipalQuantity = try KotodamaNumericV1Codec
-            .decodeQuantityJSON(principalQuantity).canonicalString
-        let canonicalFeeQuantity = try KotodamaNumericV1Codec
-            .decodeQuantityJSON(feeQuantity).canonicalString
-        let normalizedFeeSponsor = try feeSponsor.map {
-            try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
-        }
-        #if canImport(Darwin)
-        guard let freeFn, let encodeValidationFeeTransferFn else { return nil }
-        let ttlValue = ttlMs ?? 0
-        let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
-        let nonceValue = nonce ?? 0
-        let nonceFlag: UInt8 = nonce == nil ? 0 : 1
-
-        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
-        var signedLen: UInt = 0
-        var hashBytes = [UInt8](repeating: 0, count: 32)
-        let hashLength = UInt(hashBytes.count)
-
-        let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
-            authority.withCString { authorityPtr in
-                principalAssetDefinitionId.withCString { principalAssetPtr in
-                    canonicalPrincipalQuantity.withCString { principalQuantityPtr in
-                        destination.withCString { destinationPtr in
-                            feeAssetDefinitionId.withCString { feeAssetPtr in
-                                canonicalFeeQuantity.withCString { feeQuantityPtr in
-                                    treasury.withCString { treasuryPtr in
-                                        policyHashHex.withCString { policyHashPtr in
-                                            withOptionalCString(normalizedFeeSponsor) { feeSponsorPtr, feeSponsorLen in
-                                                withOptionalCString(memo) { memoPtr, memoLen in
-                                                    withOptionalCStringData(transactionMetadataJSON.isEmpty ? nil : transactionMetadataJSON) { metadataPtr, metadataLen in
-                                                        privateKey.withUnsafeBytes { keyBuffer -> Int32 in
-                                                            hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
-                                                                guard let hashPtr = hashBuffer.baseAddress else {
-                                                                    return -1
-                                                                }
-                                                                return self.withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                                                    encodeValidationFeeTransferFn(
-                                                                        chainPtr, UInt(chainId.utf8.count),
-                                                                        authorityPtr, UInt(authority.utf8.count),
-                                                                        creationTimeMs,
-                                                                        ttlValue,
-                                                                        ttlFlag,
-                                                                        nonceValue,
-                                                                        nonceFlag,
-                                                                        principalAssetPtr, UInt(principalAssetDefinitionId.utf8.count),
-                                                                        principalQuantityPtr, UInt(canonicalPrincipalQuantity.utf8.count),
-                                                                        destinationPtr, UInt(destination.utf8.count),
-                                                                        feeAssetPtr, UInt(feeAssetDefinitionId.utf8.count),
-                                                                        feeQuantityPtr, UInt(canonicalFeeQuantity.utf8.count),
-                                                                        treasuryPtr, UInt(treasury.utf8.count),
-                                                                        policyVersion,
-                                                                        policyHashPtr, UInt(policyHashHex.utf8.count),
-                                                                        feeInstructionIndex,
-                                                                        feeSponsorPtr, feeSponsorLen,
-                                                                        memoPtr, memoLen,
-                                                                        metadataPtr, metadataLen,
-                                                                        keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
-                                                                        signedPtrPtr,
-                                                                        signedLenPtr,
-                                                                        hashPtr,
-                                                                        hashLength
-                                                                    )
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        }
-
-        if status != 0 {
-            if let signedPtr { freeFn(signedPtr) }
-            try throwOnStatus(status)
-            return nil
-        }
-        guard let signedPtr else { return nil }
-
-        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
-        freeFn(signedPtr)
-        let hashData = Data(hashBytes)
-        return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
-        #else
-        return nil
-        #endif
-    }
-
     func encodeRegisterZkAsset(
         chainId: String,
         authority: String,
@@ -4467,11 +4385,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         transferVerifyingKey: String?,
         unshieldVerifyingKey: String?,
         shieldVerifyingKey: String?,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let allowShieldFlag: UInt8 = allowShield ? 1 : 0
@@ -4518,6 +4440,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     unshieldFlag,
                                                     shieldPtr, shieldLen,
                                                     shieldFlag,
+                                                    feePaymentPtr, UInt(feePaymentJSON.count),
                                                     keyBase, UInt(privateKey.count),
                                                     algorithmRaw,
                                                     signedPtrPtr,
@@ -4542,6 +4465,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     unshieldFlag,
                                                     shieldPtr, shieldLen,
                                                     shieldFlag,
+                                                    feePaymentPtr, UInt(feePaymentJSON.count),
                                                     keyBase, UInt(privateKey.count),
                                                     signedPtrPtr,
                                                     signedLenPtr,
@@ -4589,13 +4513,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         assetDefinitionId: String,
         quantity: String,
         destination: String,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         let canonicalQuantity = try KotodamaNumericV1Codec
             .decodeQuantityJSON(quantity).canonicalString
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let nonceValue = nonce ?? 0
@@ -4633,6 +4561,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 assetPtr, UInt(assetDefinitionId.utf8.count),
                                                 quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                 destinationPtr, UInt(destination.utf8.count),
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                 algorithmRaw,
                                                 signedPtrPtr,
@@ -4652,6 +4581,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 assetPtr, UInt(assetDefinitionId.utf8.count),
                                                 quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                 destinationPtr, UInt(destination.utf8.count),
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                 signedPtrPtr,
                                                 signedLenPtr,
@@ -4699,11 +4629,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         payloadEphemeral: Data,
         payloadNonce: Data,
         payloadCiphertext: Data,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         guard noteCommitment.count == 32,
               payloadEphemeral.count == 32,
               payloadNonce.count == 24 else {
@@ -4753,6 +4687,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                                 ephBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadEphemeral.count),
                                                                 nonceBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadNonce.count),
                                                                 cipherBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadCiphertext.count),
+                                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                                 keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                                 algorithmRaw,
                                                                 signedPtrPtr,
@@ -4774,6 +4709,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                                 ephBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadEphemeral.count),
                                                                 nonceBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadNonce.count),
                                                                 cipherBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadCiphertext.count),
+                                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                                 keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                                 signedPtrPtr,
                                                                 signedLenPtr,
@@ -4824,11 +4760,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         inputs: Data,
         proofJSON: Data,
         rootHint: Data?,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         guard !inputs.isEmpty, !proofJSON.isEmpty else { return nil }
         let useAlg = algorithm != .ed25519 && encodeUnshieldWithAlgFn != nil
         guard useAlg || encodeUnshieldFn != nil else { return nil }
@@ -4878,6 +4818,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                             inputBase, UInt(inputs.count),
                                                             proofBase, UInt(proofJSON.count),
                                                             rootPtr, rootLen,
+                                                            feePaymentPtr, UInt(feePaymentJSON.count),
                                                             keyBase, UInt(privateKey.count),
                                                             algorithmRaw,
                                                             signedPtrPtr,
@@ -4898,6 +4839,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                             inputBase, UInt(inputs.count),
                                                             proofBase, UInt(proofJSON.count),
                                                             rootPtr, rootLen,
+                                                            feePaymentPtr, UInt(feePaymentJSON.count),
                                                             keyBase, UInt(privateKey.count),
                                                             signedPtrPtr,
                                                             signedLenPtr,
@@ -4946,11 +4888,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         outputs: Data,
         proofJSON: Data,
         rootHint: Data?,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         guard !inputs.isEmpty, !outputs.isEmpty, !proofJSON.isEmpty else { return nil }
         let useAlg = algorithm != .ed25519 && encodeZkTransferWithAlgFn != nil
         guard useAlg || encodeZkTransferFn != nil else { return nil }
@@ -5001,6 +4947,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                         outputBase, UInt(outputs.count),
                                                         proofBase, UInt(proofJSON.count),
                                                         rootPtr, rootLen,
+                                                        feePaymentPtr, UInt(feePaymentJSON.count),
                                                         keyBase, UInt(privateKey.count),
                                                         algorithmRaw,
                                                         signedPtrPtr,
@@ -5020,6 +4967,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                         outputBase, UInt(outputs.count),
                                                         proofBase, UInt(proofJSON.count),
                                                         rootPtr, rootLen,
+                                                        feePaymentPtr, UInt(feePaymentJSON.count),
                                                         keyBase, UInt(privateKey.count),
                                                         signedPtrPtr,
                                                         signedLenPtr,
@@ -5064,11 +5012,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         ttlMs: UInt64?,
         accountId: String,
         specJSON: Data,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let useAlg = algorithm != .ed25519 && encodeMultisigRegisterWithAlgFn != nil
         guard useAlg || encodeMultisigRegisterFn != nil else { return nil }
 
@@ -5109,6 +5061,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             ttlFlag,
                                             specPtr, specLen,
                                             accountPtr, accountLen,
+                                            feePaymentPtr, UInt(feePaymentJSON.count),
                                             keyPtr, keyLen,
                                             algorithmRaw,
                                             signedPtrPtr,
@@ -5125,6 +5078,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             ttlFlag,
                                             specPtr, specLen,
                                             accountPtr, accountLen,
+                                            feePaymentPtr, UInt(feePaymentJSON.count),
                                             keyPtr, keyLen,
                                             signedPtrPtr,
                                             signedLenPtr,
@@ -5166,11 +5120,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         ttlMs: UInt64?,
         accountId: String,
         receiptJSON: Data,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let useAlg = algorithm != .ed25519 && encodeClaimIdentifierWithAlgFn != nil
         guard useAlg || encodeClaimIdentifierFn != nil else { return nil }
 
@@ -5208,6 +5166,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 ttlFlag,
                                                 accountPtr, UInt(accountId.utf8.count),
                                                 receiptPtr, UInt(receiptJSON.count),
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 keyPtr, UInt(privateKey.count),
                                                 algorithmRaw,
                                                 signedPtrPtr,
@@ -5224,6 +5183,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 ttlFlag,
                                                 accountPtr, UInt(accountId.utf8.count),
                                                 receiptPtr, UInt(receiptJSON.count),
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 keyPtr, UInt(privateKey.count),
                                                 signedPtrPtr,
                                                 signedLenPtr,
@@ -5267,13 +5227,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         assetDefinitionId: String,
         quantity: String,
         destination: String,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         let canonicalQuantity = try KotodamaNumericV1Codec
             .decodeQuantityJSON(quantity).canonicalString
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let nonceValue = nonce ?? 0
@@ -5311,6 +5275,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 assetPtr, UInt(assetDefinitionId.utf8.count),
                                                 quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                 destinationPtr, UInt(destination.utf8.count),
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                 algorithmRaw,
                                                 signedPtrPtr,
@@ -5330,6 +5295,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 assetPtr, UInt(assetDefinitionId.utf8.count),
                                                 quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                 destinationPtr, UInt(destination.utf8.count),
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                 signedPtrPtr,
                                                 signedLenPtr,
@@ -5374,11 +5340,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         objectId: String,
         key: String,
         valueJson: Data,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let useAlg = algorithm != .ed25519 && encodeSetKeyValueWithAlgFn != nil
@@ -5419,6 +5389,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 objectPtr, UInt(objectId.utf8.count),
                                                 keyCStrPtr, UInt(key.utf8.count),
                                                 valuePtr, UInt(valueJson.count),
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 privateKeyPtr, UInt(privateKey.count),
                                                 algorithmRaw,
                                                 signedPtrPtr,
@@ -5437,6 +5408,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 objectPtr, UInt(objectId.utf8.count),
                                                 keyCStrPtr, UInt(key.utf8.count),
                                                 valuePtr, UInt(valueJson.count),
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 privateKeyPtr, UInt(privateKey.count),
                                                 signedPtrPtr,
                                                 signedLenPtr,
@@ -5480,11 +5452,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         targetKind: UInt8,
         objectId: String,
         key: String,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let useAlg = algorithm != .ed25519 && encodeRemoveKeyValueWithAlgFn != nil
@@ -5520,6 +5496,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             targetKind,
                                             objectPtr, UInt(objectId.utf8.count),
                                             keyPtr, UInt(key.utf8.count),
+                                            feePaymentPtr, UInt(feePaymentJSON.count),
                                             keyPtrBytes, UInt(privateKey.count),
                                             algorithmRaw,
                                             signedPtrPtr,
@@ -5537,6 +5514,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             targetKind,
                                             objectPtr, UInt(objectId.utf8.count),
                                             keyPtr, UInt(key.utf8.count),
+                                            feePaymentPtr, UInt(feePaymentJSON.count),
                                             keyPtrBytes, UInt(privateKey.count),
                                             signedPtrPtr,
                                             signedLenPtr,
@@ -5582,11 +5560,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         abiVersion: String,
         window: (UInt64, UInt64)?,
         modeCode: UInt8?,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let useAlg = algorithm != .ed25519 && encodeGovernanceProposeDeployWithAlgFn != nil
@@ -5634,6 +5616,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                         windowFlag,
                                                         modeCode ?? 0,
                                                         modeFlag,
+                                                        feePaymentPtr, UInt(feePaymentJSON.count),
                                                         keyPtr, UInt(privateKey.count),
                                                         algorithmRaw,
                                                         signedPtrPtr,
@@ -5657,6 +5640,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                         windowFlag,
                                                         modeCode ?? 0,
                                                         modeFlag,
+                                                        feePaymentPtr, UInt(feePaymentJSON.count),
                                                         keyPtr, UInt(privateKey.count),
                                                         signedPtrPtr,
                                                         signedLenPtr,
@@ -5703,11 +5687,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         amount: String,
         durationBlocks: UInt64,
         direction: UInt8,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let useAlg = algorithm != .ed25519 && encodeGovernanceCastPlainBallotWithAlgFn != nil
@@ -5746,6 +5734,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 amountPtr, UInt(amount.utf8.count),
                                                 durationBlocks,
                                                 direction,
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 keyPtr, UInt(privateKey.count),
                                                 algorithmRaw,
                                                 signedPtrPtr,
@@ -5765,6 +5754,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 amountPtr, UInt(amount.utf8.count),
                                                 durationBlocks,
                                                 direction,
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 keyPtr, UInt(privateKey.count),
                                                 signedPtrPtr,
                                                 signedLenPtr,
@@ -5808,11 +5798,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         electionId: String,
         proofB64: String,
         publicInputs: Data,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let useAlg = algorithm != .ed25519 && encodeGovernanceCastZkBallotWithAlgFn != nil
@@ -5822,6 +5816,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         var signedLen: UInt = 0
         var hashBytes = [UInt8](repeating: 0, count: 32)
         let hashLength = UInt(hashBytes.count)
+        let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
             chainId.withCString { chainPtr in
@@ -5851,7 +5846,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 electionPtr, UInt(electionId.utf8.count),
                                                 proofPtr, UInt(proofB64.utf8.count),
                                                 inputsPtr, UInt(publicInputs.count),
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 keyPtr, UInt(privateKey.count),
+                                                algorithmRaw,
                                                 signedPtrPtr,
                                                 signedLenPtr,
                                                 hashPtr,
@@ -5867,6 +5864,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 electionPtr, UInt(electionId.utf8.count),
                                                 proofPtr, UInt(proofB64.utf8.count),
                                                 inputsPtr, UInt(publicInputs.count),
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
                                                 keyPtr, UInt(privateKey.count),
                                                 signedPtrPtr,
                                                 signedLenPtr,
@@ -5911,11 +5909,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         preimageHashHex: String,
         windowLower: UInt64,
         windowUpper: UInt64,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let useAlg = algorithm != .ed25519 && encodeGovernanceEnactReferendumWithAlgFn != nil
@@ -5952,6 +5954,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             preimagePtr, UInt(preimageHashHex.utf8.count),
                                             windowLower,
                                             windowUpper,
+                                            feePaymentPtr, UInt(feePaymentJSON.count),
                                             keyPtr, UInt(privateKey.count),
                                             algorithmRaw,
                                             signedPtrPtr,
@@ -5970,6 +5973,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             preimagePtr, UInt(preimageHashHex.utf8.count),
                                             windowLower,
                                             windowUpper,
+                                            feePaymentPtr, UInt(feePaymentJSON.count),
                                             keyPtr, UInt(privateKey.count),
                                             signedPtrPtr,
                                             signedLenPtr,
@@ -6011,11 +6015,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         ttlMs: UInt64?,
         referendumId: String,
         proposalIdHex: String,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let useAlg = algorithm != .ed25519 && encodeGovernanceFinalizeReferendumWithAlgFn != nil
@@ -6050,6 +6058,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             ttlFlag,
                                             referendumPtr, UInt(referendumId.utf8.count),
                                             proposalPtr, UInt(proposalIdHex.utf8.count),
+                                            feePaymentPtr, UInt(feePaymentJSON.count),
                                             keyPtr, UInt(privateKey.count),
                                             algorithmRaw,
                                             signedPtrPtr,
@@ -6066,6 +6075,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             ttlFlag,
                                             referendumPtr, UInt(referendumId.utf8.count),
                                             proposalPtr, UInt(proposalIdHex.utf8.count),
+                                            feePaymentPtr, UInt(feePaymentJSON.count),
                                             keyPtr, UInt(privateKey.count),
                                             signedPtrPtr,
                                             signedLenPtr,
@@ -6109,11 +6119,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         candidatesCount: UInt32,
         derivedBy: UInt8,
         membersJson: Data,
+        feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let useAlg = algorithm != .ed25519 && encodeGovernancePersistCouncilWithAlgFn != nil
@@ -6152,6 +6166,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         candidatesCount,
                                         derivedBy,
                                         membersPtr, UInt(membersJson.count),
+                                        feePaymentPtr, UInt(feePaymentJSON.count),
                                         keyPtr, UInt(privateKey.count),
                                         algorithmRaw,
                                         signedPtrPtr,
@@ -6170,6 +6185,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         candidatesCount,
                                         derivedBy,
                                         membersPtr, UInt(membersJson.count),
+                                        feePaymentPtr, UInt(feePaymentJSON.count),
                                         keyPtr, UInt(privateKey.count),
                                         signedPtrPtr,
                                         signedLenPtr,

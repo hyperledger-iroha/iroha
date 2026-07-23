@@ -40,7 +40,7 @@ use iroha_data_model::{
     },
     prelude::*,
 };
-use iroha_primitives::time::TimeSource;
+use iroha_primitives::{Quantity, time::TimeSource};
 use iroha_test_samples::ALICE_ID;
 use ivm::{
     IVM, IVMHost, PointerType, ProgramMetadata, VMError,
@@ -253,8 +253,8 @@ fn abi_asset_handle_from_model(handle: &iroha_data_model::nexus::AssetHandle) ->
             origin_dsid: handle.subject.origin_dsid,
         },
         budget: HandleBudget {
-            remaining: handle.budget.remaining,
-            per_use: handle.budget.per_use,
+            remaining: handle.budget.remaining.clone(),
+            per_use: handle.budget.per_use.clone(),
         },
         handle_era: handle.handle_era,
         sub_nonce: handle.sub_nonce,
@@ -418,8 +418,8 @@ fn core_host_handles_axt_flow() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 500,
-            per_use: Some(300),
+            remaining: Quantity::from(500_u64),
+            per_use: Some(Quantity::from(300_u64)),
         },
         handle_era: 1,
         sub_nonce: 42,
@@ -440,7 +440,7 @@ fn core_host_handles_axt_flow() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "200".into(),
+            amount: Some(Quantity::from(200_u64)),
         },
     };
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
@@ -602,8 +602,8 @@ fn axt_policy_reject_exposes_context() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 10,
-            per_use: Some(10),
+            remaining: Quantity::from(10_u64),
+            per_use: Some(Quantity::from(10_u64)),
         },
         handle_era: 1,
         sub_nonce: 1,
@@ -625,7 +625,7 @@ fn axt_policy_reject_exposes_context() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: authority.to_string(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
@@ -704,8 +704,8 @@ fn axt_handle_allows_configured_clock_skew_window() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 50,
-            per_use: Some(50),
+            remaining: Quantity::from(50_u64),
+            per_use: Some(Quantity::from(50_u64)),
         },
         handle_era: 1,
         sub_nonce: 1,
@@ -726,7 +726,7 @@ fn axt_handle_allows_configured_clock_skew_window() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
-            amount: "25".into(),
+            amount: Some(Quantity::from(25_u64)),
         },
     };
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
@@ -784,8 +784,8 @@ fn axt_handle_rejects_clock_skew_above_config() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 50,
-            per_use: Some(50),
+            remaining: Quantity::from(50_u64),
+            per_use: Some(Quantity::from(50_u64)),
         },
         handle_era: 1,
         sub_nonce: 1,
@@ -806,7 +806,7 @@ fn axt_handle_rejects_clock_skew_above_config() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
-            amount: "25".into(),
+            amount: Some(Quantity::from(25_u64)),
         },
     };
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
@@ -932,8 +932,8 @@ fn axt_replay_ledger_persists_through_kura_replay() {
                     origin_dsid: Some(dsid),
                 },
                 budget: ModelHandleBudget {
-                    remaining: 50,
-                    per_use: Some(50),
+                    remaining: Quantity::from(50_u64),
+                    per_use: Some(Quantity::from(50_u64)),
                 },
                 handle_era: 2,
                 sub_nonce: 5,
@@ -953,11 +953,11 @@ fn axt_replay_ledger_persists_through_kura_replay() {
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-                    amount: "10".into(),
+                    amount: Some(Quantity::from(10_u64)),
                 },
             },
             proof: None,
-            amount: 10,
+            amount: Some(Quantity::from(10_u64)),
             amount_commitment: None,
         }],
         commit_height: Some(1),
@@ -1067,7 +1067,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "5".into(),
+            amount: Some(Quantity::from(5_u64)),
         },
     };
     let replay_handle = AssetHandle {
@@ -1077,8 +1077,8 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             origin_dsid: envelope.handles[0].handle.subject.origin_dsid,
         },
         budget: HandleBudget {
-            remaining: envelope.handles[0].handle.budget.remaining,
-            per_use: envelope.handles[0].handle.budget.per_use,
+            remaining: envelope.handles[0].handle.budget.remaining.clone(),
+            per_use: envelope.handles[0].handle.budget.per_use.clone(),
         },
         handle_era: envelope.handles[0].handle.handle_era,
         sub_nonce: envelope.handles[0].handle.sub_nonce,
@@ -1157,8 +1157,8 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
                 origin_dsid: Some(dsid),
             },
             budget: ModelHandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -1193,11 +1193,11 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
                         kind: "transfer".into(),
                         from: authority.to_string(),
                         to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
-                        amount: "5".into(),
+                        amount: Some(Quantity::from(5_u64)),
                     },
                 },
                 proof: None,
-                amount: 5,
+                amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
             commit_height: Some(1),
@@ -1250,8 +1250,8 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 10,
-            per_use: Some(10),
+            remaining: Quantity::from(10_u64),
+            per_use: Some(Quantity::from(10_u64)),
         },
         handle_era: 1,
         sub_nonce: 1,
@@ -1272,7 +1272,7 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
-            amount: "5".into(),
+            amount: Some(Quantity::from(5_u64)),
         },
     };
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
@@ -1338,8 +1338,8 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
                 origin_dsid: Some(dsid),
             },
             budget: ModelHandleBudget {
-                remaining: 5,
-                per_use: Some(5),
+                remaining: Quantity::from(5_u64),
+                per_use: Some(Quantity::from(5_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -1370,11 +1370,11 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
                         kind: "transfer".into(),
                         from: authority.to_string(),
                         to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
-                        amount: "5".into(),
+                        amount: Some(Quantity::from(5_u64)),
                     },
                 },
                 proof: None,
-                amount: 5,
+                amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
             commit_height: Some(1),
@@ -1430,8 +1430,8 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
             origin_dsid: Some(dsid),
         },
         budget: iroha_data_model::nexus::HandleBudget {
-            remaining: 50,
-            per_use: Some(50),
+            remaining: Quantity::from(50_u64),
+            per_use: Some(Quantity::from(50_u64)),
         },
         handle_era: 1,
         sub_nonce: 3,
@@ -1504,11 +1504,11 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
                         kind: "transfer".into(),
                         from: authority.to_string(),
                         to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-                        amount: "5".into(),
+                        amount: Some(Quantity::from(5_u64)),
                     },
                 },
                 proof: None,
-                amount: 5,
+                amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
             commit_height: Some(1),
@@ -1546,7 +1546,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "5".into(),
+            amount: Some(Quantity::from(5_u64)),
         },
     };
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &model_handle);
@@ -1728,8 +1728,8 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
                 origin_dsid: Some(dsid),
             },
             budget: ModelHandleBudget {
-                remaining: 50,
-                per_use: Some(50),
+                remaining: Quantity::from(50_u64),
+                per_use: Some(Quantity::from(50_u64)),
             },
             handle_era: 2,
             sub_nonce: 5,
@@ -1749,11 +1749,11 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-                amount: "10".into(),
+                amount: Some(Quantity::from(10_u64)),
             },
         },
         proof: None,
-        amount: 10,
+        amount: Some(Quantity::from(10_u64)),
         amount_commitment: None,
     };
 
@@ -1822,7 +1822,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "5".into(),
+            amount: Some(Quantity::from(5_u64)),
         },
     };
     let replayed_handle = abi_asset_handle_from_model(&handle_fragment.handle);
@@ -1921,8 +1921,8 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
                 origin_dsid: Some(dsid),
             },
             budget: ModelHandleBudget {
-                remaining: 50,
-                per_use: Some(50),
+                remaining: Quantity::from(50_u64),
+                per_use: Some(Quantity::from(50_u64)),
             },
             handle_era: 2,
             sub_nonce: 5,
@@ -1942,11 +1942,11 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-                amount: "10".into(),
+                amount: Some(Quantity::from(10_u64)),
             },
         },
         proof: None,
-        amount: 10,
+        amount: Some(Quantity::from(10_u64)),
         amount_commitment: None,
     };
 
@@ -2060,7 +2060,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "10".into(),
+            amount: Some(Quantity::from(10_u64)),
         },
     };
     let replayed_handle = abi_asset_handle_from_model(&handle_fragment.handle);
@@ -2160,8 +2160,8 @@ fn axt_replay_entries_expire_after_retention_window() {
                 origin_dsid: Some(dsid),
             },
             budget: ModelHandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -2210,8 +2210,8 @@ fn axt_replay_entries_expire_after_retention_window() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 10,
-            per_use: Some(10),
+            remaining: Quantity::from(10_u64),
+            per_use: Some(Quantity::from(10_u64)),
         },
         handle_era: 1,
         sub_nonce: 1,
@@ -2231,7 +2231,7 @@ fn axt_replay_entries_expire_after_retention_window() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "5".into(),
+            amount: Some(Quantity::from(5_u64)),
         },
     };
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
@@ -2307,8 +2307,8 @@ fn axt_commit_enforces_amx_budget() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 10,
-            per_use: Some(10),
+            remaining: Quantity::from(10_u64),
+            per_use: Some(Quantity::from(10_u64)),
         },
         handle_era: 1,
         sub_nonce: 1,
@@ -2329,7 +2329,7 @@ fn axt_commit_enforces_amx_budget() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "5".into(),
+            amount: Some(Quantity::from(5_u64)),
         },
     };
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
@@ -2431,7 +2431,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
             origin_dsid: Some(ds_a),
         },
         budget: HandleBudget {
-            remaining: 10,
+            remaining: Quantity::from(10_u64),
             per_use: None,
         },
         handle_era: 1,
@@ -2465,7 +2465,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let intent_b = RemoteSpendIntent {
@@ -2474,7 +2474,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
 
@@ -2714,7 +2714,7 @@ fn core_host_policy_rejects_handle() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 10,
+            remaining: Quantity::from(10_u64),
             per_use: None,
         },
         handle_era: 1,
@@ -2736,7 +2736,7 @@ fn core_host_policy_rejects_handle() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
@@ -2784,7 +2784,7 @@ fn use_handle_with_snapshot(
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "10".into(),
+            amount: Some(Quantity::from(10_u64)),
         },
     };
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
@@ -2821,8 +2821,8 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 500,
-            per_use: Some(500),
+            remaining: Quantity::from(500_u64),
+            per_use: Some(Quantity::from(500_u64)),
         },
         handle_era: 3,
         sub_nonce: 2,
@@ -2998,7 +2998,7 @@ fn use_handle_with_state_policy(
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "5".into(),
+            amount: Some(Quantity::from(5_u64)),
         },
     };
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
@@ -3078,8 +3078,8 @@ fn core_host_from_state_enforces_space_directory_policy() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 50,
-            per_use: Some(50),
+            remaining: Quantity::from(50_u64),
+            per_use: Some(Quantity::from(50_u64)),
         },
         handle_era: manifest_record
             .lifecycle
@@ -3213,8 +3213,8 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 25,
-            per_use: Some(25),
+            remaining: Quantity::from(25_u64),
+            per_use: Some(Quantity::from(25_u64)),
         },
         handle_era: 1,
         sub_nonce: 1,
@@ -3367,8 +3367,8 @@ fn core_host_exports_axt_envelopes_to_state_block() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 50,
-            per_use: Some(50),
+            remaining: Quantity::from(50_u64),
+            per_use: Some(Quantity::from(50_u64)),
         },
         handle_era: 1,
         sub_nonce: 1,
@@ -3389,7 +3389,7 @@ fn core_host_exports_axt_envelopes_to_state_block() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "5".into(),
+            amount: Some(Quantity::from(5_u64)),
         },
     };
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
@@ -3424,7 +3424,10 @@ fn core_host_exports_axt_envelopes_to_state_block() {
     assert_eq!(record.touches.len(), 1);
     assert_eq!(record.proofs.len(), 1);
     assert_eq!(record.handles.len(), 1);
-    assert_eq!(record.handles[0].intent.op.amount, "5");
+    assert_eq!(
+        record.handles[0].intent.op.amount,
+        Some(Quantity::from(5_u64))
+    );
 
     let drained = block.drain_axt_envelopes();
     assert_eq!(drained.len(), 1);
@@ -3612,8 +3615,8 @@ fn core_host_records_multi_dataspace_envelope() {
             origin_dsid: Some(dsid_a),
         },
         budget: HandleBudget {
-            remaining: 80,
-            per_use: Some(80),
+            remaining: Quantity::from(80_u64),
+            per_use: Some(Quantity::from(80_u64)),
         },
         handle_era: 1,
         sub_nonce: 3,
@@ -3634,8 +3637,8 @@ fn core_host_records_multi_dataspace_envelope() {
             origin_dsid: Some(dsid_b),
         },
         budget: HandleBudget {
-            remaining: 60,
-            per_use: Some(60),
+            remaining: Quantity::from(60_u64),
+            per_use: Some(Quantity::from(60_u64)),
         },
         handle_era: 1,
         sub_nonce: 4,
@@ -3656,7 +3659,7 @@ fn core_host_records_multi_dataspace_envelope() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "10".into(),
+            amount: Some(Quantity::from(10_u64)),
         },
     };
     let intent_b = RemoteSpendIntent {
@@ -3665,7 +3668,7 @@ fn core_host_records_multi_dataspace_envelope() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_VENDOR_ACCOUNT_LITERAL.into(),
-            amount: "15".into(),
+            amount: Some(Quantity::from(15_u64)),
         },
     };
 
@@ -3815,8 +3818,8 @@ fn axt_sub_nonce_floor_persists_across_restart() {
                     origin_dsid: Some(dsid),
                 },
                 budget: ModelHandleBudget {
-                    remaining: 50,
-                    per_use: Some(50),
+                    remaining: Quantity::from(50_u64),
+                    per_use: Some(Quantity::from(50_u64)),
                 },
                 handle_era: 2,
                 sub_nonce: 5,
@@ -3836,11 +3839,11 @@ fn axt_sub_nonce_floor_persists_across_restart() {
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-                    amount: "10".into(),
+                    amount: Some(Quantity::from(10_u64)),
                 },
             },
             proof: None,
-            amount: 10,
+            amount: Some(Quantity::from(10_u64)),
             amount_commitment: None,
         }],
         commit_height: Some(1),
@@ -3891,8 +3894,8 @@ fn axt_sub_nonce_floor_persists_across_restart() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 50,
-            per_use: Some(50),
+            remaining: Quantity::from(50_u64),
+            per_use: Some(Quantity::from(50_u64)),
         },
         handle_era: 2,
         sub_nonce: 5,
@@ -3913,7 +3916,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
             kind: "transfer".into(),
             from: authority.to_string(),
             to: FIXTURE_MERCHANT_ACCOUNT_LITERAL.into(),
-            amount: "5".into(),
+            amount: Some(Quantity::from(5_u64)),
         },
     };
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &stale_handle);

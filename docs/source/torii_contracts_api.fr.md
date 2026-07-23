@@ -10,82 +10,50 @@ translation_last_reviewed: null
 
 > Translation status note (2026-07-12): the canonical English source has changed. This stale English-language mirror is retained only as localization input and must not be treated as synchronized.
 
-# Torii Contracts API (Bytecode Deploy & Fetch)
+# Torii Contracts API (Artifact Reads and Invocation)
 
-This document describes the app-facing HTTP endpoints for deploying self-describing contract bytecode and fetching the stored manifest/bytecode. These endpoints are thin wrappers around on-chain transactions and read-only queries; consensus semantics remain on-chain.
+Torii exposes registered contract artifacts and invocation endpoints. Contract
+deployment is not a server-side HTTP operation: private keys remain with the
+client, and the client submits locally signed consensus transactions through
+the standard transaction pipeline.
 
 ## Endpoints
 
 - GET `/v1/contracts/code/{code_hash}`
-  - Fetches the on-chain `ContractManifest` by its content-addressed `code_hash`.
-  - Path param: `code_hash` — 32‑byte hex string.
-  - Response body: `ContractCodeRecordDto` (JSON) with `manifest` populated.
-
-- POST `/v1/contracts/deploy`
-  - Accepts base64 `.to` bytecode with authority, private key, and a stable `contract_alias`; verifies the embedded `CNTR` contract interface, computes the domain-separated `code_hash` over the complete artifact including the fixed IVM execution header, computes `abi_hash` from the enforced ABI policy declared by the verified header, derives a fresh immutable `contract_address`, and binds the alias in the requested dataspace (`universal` by default).
-  - Request body: `DeployContractDto`; response body: `DeployContractBundleReceiptDto` with exactly one `contracts[]` receipt entry.
-  - Submits a single transaction that registers the manifest, stores the bytecode, activates the fresh address-backed instance, and binds the alias.
-  - Reusing an existing `contract_alias` performs an in-place `kaizen`/`改善`: `contracts[0]` reports the new `contract_address`, the previous address, and `kaizen = true`.
-  - Body size is limited by the `max_contract_code_bytes` custom parameter (default 16 MiB); raise the cap before uploading larger programs.
-  - Telemetry: increments `torii_contract_errors_total{endpoint="deploy"}` on handler errors and `torii_contract_throttled_total{endpoint="deploy"}` when the limiter fires.
-
+  - Fetches the canonical on-chain `ContractManifest` by its content-addressed
+    `code_hash`.
 - GET `/v1/contracts/code-bytes/{code_hash}`
-  - Fetches stored code bytes for a given `code_hash`.
-  - Response body: `{ code_b64 }`.
+  - Fetches the registered bytecode as `{ "code_b64": "…" }`.
+- POST `/v1/contracts/aliases/resolve`
+  - Resolves an active contract alias using canonical account-signed request
+    headers and returns the exact consensus binding and contract subject.
+- POST `/v1/contracts/call` and POST `/v1/contracts/view`
+  - Invoke or read an already registered contract by canonical address or active
+    alias.
 
-## Schemas
+The retired `/v1/contracts/deploy`, `/v1/contracts/deploy-bundle`, and
+`/v1/contracts/deploy-bundles/{bundle_digest}` routes are not part of the
+first-release API.
 
-### DeployContractDto
+## Locally signed deployment
 
-Upload compiled bytecode and let Torii derive the manifest and hashes.
+A deployment client must:
 
-```jsonc
-{
-  "authority":   "<i105-account-id>", // AccountId (string form)
-  "private_key": "ed25519:0123…",    // ExposedPrivateKey (bare or prefixed multihash hex)
-  "code_b64":    "Base64Payload==",
-  "contract_alias": "router::universal",
-  "lease_expiry_ms": null
-}
-```
+1. Verify the self-describing `.to` artifact locally and retain its exact
+   `code_hash`, manifest, and ABI hash.
+2. Submit bounded `UploadSmartContractCodeChunk` instructions followed by
+   `FinalizeSmartContractCodeUpload`.
+3. Sign the verified manifest locally and submit `RegisterSmartContractCode`.
+4. Read the authority's exact `contract_deploy_nonce` and the current signed
+   alias binding.
+5. Derive the canonical address from `(chain_discriminant, authority, nonce,
+   dataspace)` and submit one `CommitContractDeployment` containing the
+   expected nonce and expected previous alias target.
 
-Notes:
-- `code_b64` must decode to a valid self-describing IVM `1.1` contract artifact with `abi_version == 1` and an embedded `CNTR` section.
-- `contract_alias` is required and is the stable public lifecycle handle. The dataspace is derived from its alias suffix.
-- `lease_expiry_ms` is optional. When omitted or `null`, the alias binding is permanent.
-- The handler recomputes the manifest internally; callers do not provide one on this shortcut.
-- The decoded bytecode length must not exceed `max_contract_code_bytes`; exceeding the limit triggers an `InvariantViolation` (`code bytes exceed cap`) during transaction admission.
-
-### DeployContractBundleReceiptDto
-
-```jsonc
-{
-  "ok": true,
-  "bundle_name": "single-contract-deploy",
-  "bundle_digest": "0123…cdef",
-  "chain_fingerprint": "chain@0123…cdef",
-  "dry_run": false,
-  "completed_stages": ["plan", "deploy"],
-  "failure_point": null,
-  "contracts": [
-    {
-      "name": "router::universal",
-      "contract_alias": "router::universal",
-      "contract_address": "tairac1…",
-      "previous_contract_address": null,
-      "kaizen": false,
-      "dataspace": "universal",
-      "deploy_nonce": 0,
-      "tx_hash_hex": "0123…cdef",
-      "code_hash_hex": "0123…cdef",
-      "abi_hash_hex": "89ab…7654",
-      "status": "submitted"
-    }
-  ],
-  "hajimari_calls": [],
-  "assertions": []
-}
-```
+`CommitContractDeployment` validates the nonce, derived address, registered
+artifact, and alias compare-and-swap in one consensus transition. Rotation
+clears and deactivates the previous address and binds the new one atomically.
+Generic account metadata writes cannot modify the reserved deployment nonce.
 
 ### Type encodings (JSON)
 
@@ -133,12 +101,6 @@ optional `code_bytes` field is omitted by this endpoint.
 
 All DTOs derive both `JsonSerialize` and `NoritoSerialize`. Clients may submit either plain JSON or Norito-backed JSON. When emitting Norito via Kotodama tests or automation, use `norito::json::json!` with the same field names and encodings shown above so the `NoritoJson<T>` extractor can decode the payload deterministically.
 
-### Rate limiting & telemetry
-
-- `torii.deploy_rate_per_origin_per_sec` and `torii.deploy_burst_per_origin` configure the token bucket shared by `/v1/contracts/deploy`. Defaults: 4 req/s with a burst of 8 per origin token (`X-API-Token`, remote IP, endpoint tuple).
-- Requests rejected by the limiter increment `torii_contract_throttled_total{endpoint}` where `endpoint` is `deploy`.
-- Any handler error (invalid body, permission missing, queue failure) increments `torii_contract_errors_total{endpoint}`. Track alongside queue metrics for alerting.
-
 ## Examples
 
 Fetch a manifest by hash:
@@ -147,34 +109,17 @@ Fetch a manifest by hash:
 curl -s http://127.0.0.1:8080/v1/contracts/code/<32-byte-hex> | jq .
 ```
 
-Deploy code and then fetch code bytes:
+Fetch the registered code bytes:
 
 ```bash
-curl -s -X POST \
-  -H 'Content-Type: application/json' \
-  -d '{
-        "authority": "<i105-account-id>",
-        "private_key": "ed25519:…",
-        "code_b64": "…",
-        "contract_alias": "router::universal"
-      }' \
-  http://127.0.0.1:8080/v1/contracts/deploy | jq .
-
 curl -s http://127.0.0.1:8080/v1/contracts/code-bytes/<32-byte-hex> | jq .
 ```
 
-Redeploy the same alias and get the fresh immutable address:
+Resolve the currently active alias using the canonical account-signature
+headers produced by an SDK client:
 
 ```bash
-curl -s -X POST \
-  -H 'Content-Type: application/json' \
-  -d '{
-        "authority": "<i105-account-id>",
-        "private_key": "ed25519:…",
-        "code_b64": "…",
-        "contract_alias": "router::universal"
-      }' \
-  http://127.0.0.1:8080/v1/contracts/deploy | jq .
+iroha contract alias resolve router::universal
 ```
 
 ### Computing `abi_hash` for manifests
@@ -190,12 +135,17 @@ The command prints a 32‑byte hex digest. Embed this value in `manifest.abi_has
 
 ## Security and governance
 
-- **Canonical V1 security note:** Manifest and bytecode registration, activation,
-  deactivation, and bytecode removal require the signing authority to hold
-  `CanRegisterSmartContractCode`. Torii account self-registration does not grant
-  this lifecycle authority.
-- Alias-backed public deployment is the only supported app-facing activation
-  flow. `ContractAddress` remains immutable per deployment, while
-  `ContractAlias` is the stable public handle. Governance-controlled namespace
-  binding remains an internal/governance concern, not a public contracts API.
+- Manifest registration, bytecode registration, activation, deactivation, and
+  bytecode removal require the signing authority to hold
+  `CanRegisterSmartContractCode`. The sole first-release bootstrap exception is
+  an absent transaction authority whose transaction begins with the exact
+  ordered `Register<Account>(self)`,
+  `Grant<CanRegisterSmartContractCode>(self)`, then native upload (or manifest
+  registration when matching code is already stored) prefix.
+  Both executor paths reject that self-grant for a pre-existing account and
+  reject changed destinations, permission payloads, or instruction order.
+- `ContractAddress` remains immutable per deployment, while `ContractAlias` is
+  the stable public handle. Deployment and rotation use locally signed native
+  instructions; governance-controlled namespace binding remains a consensus
+  concern, not a server-signing contracts API.
 - GET is read-only and content‑addressed by `code_hash`. Nodes may still apply access controls consistent with their governance policies.

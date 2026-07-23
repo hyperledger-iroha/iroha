@@ -1,70 +1,62 @@
 ---
 id: payment-settlement-plan
-title: SNS Payment & Settlement Plan
-sidebar_label: Payment & settlement plan
-description: Playbook for routing SNS registrar revenue, reconciling steward/treasury splits, and producing evidence bundles.
+title: Native Alias Charges and Reconciliation
+sidebar_label: Charges & reconciliation
+description: Consensus-native lease charging and audit evidence without client payment proofs or mutation services.
 ---
 
 > Canonical source: [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md).
 
-Roadmap task **SN-5 — Payment & Settlement Service** introduces a deterministic
-payment layer for the Sora Name Service. Every registration, renewal, or refund
-must emit a structured Norito payload so treasury, stewards, and governance can
-replay the financial flows without spreadsheets. This page distills the spec
-for portal audiences.
+# Native Alias Charges and Reconciliation
 
-## Revenue model
+Alias acquisition and renewal are charged inside the ordinary signed
+transaction that performs the lifecycle operation. The former SN-5 design for
+a separate settlement service is retired: there is no
+`/v1/sns/settlements` mutation API, client-created `PaymentBundleV1`,
+uploaded payment proof, or `iroha app sns settlement` command.
 
-- Base fee (`gross_fee`) derives from the registrar pricing matrix.  
-- Treasury receives `gross_fee × 0.70`, stewards receive the remainder minus
-  referral bonuses (capped at 10 %).  
-- Optional holdbacks allow governance to pause steward payouts during disputes.  
-- Settlement bundles expose a `ledger_projection` block with the concrete
-  `Transfer` ISIs so automation can post XOR movements straight into Torii.
+## Deterministic charging
 
-## Services & automation
+The read-only alias planner classifies live state before quoting:
 
-| Component | Purpose | Evidence |
-|-----------|---------|----------|
-| `sns_settlementd` | Applies policy, signs bundles, surfaces `/v1/sns/settlements`. | JSON bundle + hash. |
-| Settlement queue & writer | Idempotent queue + ledger submitter driven by `iroha_cli app sns settlement ledger`. | Bundle hash ↔ tx hash manifest. |
-| Reconciliation job | Daily diff + monthly statement under `docs/source/sns/reports/`. | Markdown + JSON digest. |
-| Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |
+- exact existing state is a zero-charge `NoOp`;
+- missing derived state is a zero-charge `Repair`;
+- an absent lease-bearing resource is `Create` and receives an exact quote;
+- drift is `Conflict` and produces no executable plan.
 
-CI helpers mirror these flows:
+For acquisition, `AliasQuoteGuardV1` commits the expected policy version,
+payment asset, maximum amount, and deadline. Consensus recomputes the quote at
+execution and debits the transaction authority, which is the lease payer, by
+the exact calculated amount rather than the cap. Renewal uses the same guard
+plus expected-current-expiry compare-and-set semantics.
 
-```bash
-# Quote & ledger projection
-iroha_cli app sns settlement quote --selector makoto.sora --term-years 1 --pricing hot-tier-a
+No client-supplied receipt or off-chain settlement assertion can authorize a
+lease. Native execution and the committed world state are authoritative.
 
-# Emit transfers for automation/pipeline
-iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05/makoto.sora.json
+## Reconciliation evidence
 
-# Produce a reconciliation statement
-iroha_cli app sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
-```
+Treasury and governance reporting should derive evidence from canonical
+ledger data:
 
-## Observability & reporting
+1. canonical alias plan hash, chain id, block anchor, and expiry;
+2. transaction hash, authority, ordered framed instructions, and final status;
+3. resource disposition, policy version, payment asset, and exact native
+   charge;
+4. resulting lease, owner, binding, capability, and auto-renew revision.
 
-- Dashboards: `dashboards/grafana/sns_payment_settlement.json` for treasury vs
-  steward totals, referral payouts, queue depth, and refund latency.
-- Alerts: `dashboards/alerts/sns_payment_settlement_rules.yml` monitors pending
-  age, reconciliation failures, and ledger drift.
-- Statements: daily digests (`settlement_YYYYMMDD.{json,md}`) roll into monthly
-  reports (`settlement_YYYYMM.md`) which are uploaded both to Git and the
-  governance object store (`s3://sora-governance/sns/settlements/<period>/`).
-- Governance packets bundle dashboards, CLI logs, and approvals before council
-  sign-off.
+Read-only reporting may aggregate these records into statements and revenue
+reports. Such reports are audit projections; replaying or uploading one never
+moves funds or changes alias state.
 
-## Rollout checklist
+## Corrections and refunds
 
-1. Prototype quote + ledger helpers and capture a staging bundle.
-2. Launch `sns_settlementd` with queue + writer, wire dashboards, and exercise
-   alert tests (`promtool test rules ...`).
-3. Deliver refund helper plus monthly statement template; mirror artefacts into
-   `docs/portal/docs/sns/reports/`.
-4. Run a partner rehearsal (full month of settlements) and capture the
-   governance vote marking SN-5 as complete.
+Alias provisioning exposes no special refund or settlement mutation route.
+Any financial correction must be an explicitly authorized ordinary ledger
+transaction under the applicable governance policy. Revenue splitting, if
+enabled by policy, must be deterministic native execution using canonical
+integer/Norito representations; an external service must not replace or
+reinterpret the consensus charge.
 
-Refer back to the source document for the exact schema definitions, open
-questions, and future amendments.
+Keep plan and report files secret-free. API credentials belong in headers or
+permission-restricted token files, and signing keys remain in runtime-only
+client configuration.

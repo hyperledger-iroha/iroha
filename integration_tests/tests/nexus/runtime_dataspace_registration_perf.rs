@@ -622,7 +622,11 @@ async fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpac
         required_permission.clone(),
         client.account.clone(),
     ));
-    let grant_tx = client.build_transaction([grant_instruction], Metadata::default());
+    let grant_tx = client.build_transaction(
+        [grant_instruction],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
     submit_and_wait_for_tx_approval(
         client,
         grant_tx,

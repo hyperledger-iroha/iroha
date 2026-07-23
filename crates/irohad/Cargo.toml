@@ -119,6 +119,7 @@ blake3 = { workspace = true }
 
 [dev-dependencies]
 iroha_core = { workspace = true, features = ["iroha-core-tests"] }
+iroha_p2p = { workspace = true, features = ["test-fixtures"] }
 serial_test = "3.5.0"
 tempfile = { workspace = true }
 path-absolutize = { workspace = true }

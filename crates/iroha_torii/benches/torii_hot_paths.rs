@@ -182,14 +182,6 @@ fn contract_activity_metadata(index: usize) -> Metadata {
             "input_is_base": input_is_base
         })),
     );
-    metadata.insert(
-        "gas_asset_id".parse().expect("metadata key"),
-        Json::new("xor#universal"),
-    );
-    metadata.insert(
-        "gas_limit".parse().expect("metadata key"),
-        Json::new(100_000_u64),
-    );
     metadata
 }
 
@@ -204,12 +196,15 @@ fn contract_activity_accepted_transaction(
     };
     let key_pair = query_load_contract_authority_key_pair(authority_index);
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut metadata = contract_activity_metadata(index);
-    metadata.insert(
-        "fee_sponsor".parse().expect("metadata key"),
-        Json::new(authority.to_string()),
+    let metadata = contract_activity_metadata(index);
+    let mut builder = TransactionBuilder::new(
+        chain_id.clone(),
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(
+            Vec::new(),
+            core::num::NonZeroU64::new(100_000),
+        ),
     );
-    let mut builder = TransactionBuilder::new(chain_id.clone(), authority);
     builder.set_creation_time(Duration::from_millis(
         CONTRACT_ACTIVITY_BASE_TIMESTAMP_MS + index as u64,
     ));
@@ -1137,9 +1132,13 @@ fn bench_transaction_admission(c: &mut Criterion) {
             || {
                 let index = counter.fetch_add(1, Ordering::Relaxed);
                 let instruction = Log::new(Level::INFO, format!("torii-hot-path-bench-{index}"));
-                TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
-                    .with_instructions([InstructionBox::from(instruction)])
-                    .sign(tx_key_pair.private_key())
+                TransactionBuilder::new(
+                    chain_id.as_ref().clone(),
+                    tx_authority.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([InstructionBox::from(instruction)])
+                .sign(tx_key_pair.private_key())
             },
             |tx| {
                 let accepted = accept_transaction_for_ingress_for_bench(
@@ -1186,9 +1185,13 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
                 let index = counter.fetch_add(1, Ordering::Relaxed);
                 let instruction =
                     Log::new(Level::INFO, format!("torii-hot-path-enqueue-bench-{index}"));
-                let tx = TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
-                    .with_instructions([InstructionBox::from(instruction)])
-                    .sign(tx_key_pair.private_key());
+                let tx = TransactionBuilder::new(
+                    chain_id.as_ref().clone(),
+                    tx_authority.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([InstructionBox::from(instruction)])
+                .sign(tx_key_pair.private_key());
                 let (events, _) = tokio::sync::broadcast::channel(queue_capacity.get());
                 let queue = Arc::new(Queue::from_config(queue_cfg, events));
                 (queue, tx)
@@ -1239,9 +1242,13 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
             Level::INFO,
             format!("torii-hot-path-sustained-enqueue-bench-{index}"),
         );
-        TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
-            .with_instructions([InstructionBox::from(instruction)])
-            .sign(tx_key_pair.private_key())
+        TransactionBuilder::new(
+            chain_id.as_ref().clone(),
+            tx_authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(instruction)])
+        .sign(tx_key_pair.private_key())
     };
 
     let mut group = c.benchmark_group("torii_transaction_enqueue_sustained_pressure");

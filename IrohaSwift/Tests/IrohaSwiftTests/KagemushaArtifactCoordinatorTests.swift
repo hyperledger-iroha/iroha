@@ -38,11 +38,17 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         XCTAssertEqual(leases.count, allStreams.count)
         XCTAssertEqual(world.sessionCount, 1)
         XCTAssertEqual(world.installCount, 1)
-        XCTAssertEqual(streamCalls.value, 6)
+        XCTAssertEqual(
+            streamCalls.value,
+            KagemushaRecursiveSpendArtifactCoordinator.requiredArtifactCount
+        )
         for lease in leases {
             XCTAssertEqual(lease.binding, binding)
             XCTAssertEqual(lease.manifestSHA256, manifest.sha256)
-            XCTAssertEqual(lease.artifactSHA256s.count, 6)
+            XCTAssertEqual(
+                lease.artifactSHA256s.count,
+                KagemushaRecursiveSpendArtifactCoordinator.requiredArtifactCount
+            )
             let installedBinding = try lease.withInstalledArtifactSet(\.binding)
             XCTAssertEqual(installedBinding, binding)
         }
@@ -57,6 +63,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
                 corrupt[corrupt.startIndex] ^= 0xff
                 let corruptBytes = corrupt
                 streams[0] = try KagemushaRecursiveSpendArtifactStream(
+                    role: streams[0].role,
                     expectedSHA256: Data(SHA256.hash(data: original)),
                     byteCount: UInt64(original.count)
                 ) { consume in
@@ -70,6 +77,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
             mutate: { streams, bytes in
                 let original = bytes[0]
                 streams[0] = try KagemushaRecursiveSpendArtifactStream(
+                    role: streams[0].role,
                     expectedSHA256: Data(SHA256.hash(data: original)),
                     byteCount: UInt64(original.count + 1)
                 ) { consume in
@@ -83,6 +91,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
             mutate: { streams, bytes in
                 let original = bytes[0]
                 streams[0] = try KagemushaRecursiveSpendArtifactStream(
+                    role: streams[0].role,
                     expectedSHA256: Data(SHA256.hash(data: original)),
                     byteCount: UInt64(original.count)
                 ) { consume in
@@ -101,6 +110,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         var streams = try makeStreams(seed: 0x12)
         let original = bytes[0]
         streams[0] = try KagemushaRecursiveSpendArtifactStream(
+            role: streams[0].role,
             expectedSHA256: Data(SHA256.hash(data: original)),
             byteCount: UInt64(original.count)
         ) { consume in
@@ -160,6 +170,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         var streams = try makeStreams(seed: 0x14)
         let original = bytes[0]
         streams[0] = try KagemushaRecursiveSpendArtifactStream(
+            role: streams[0].role,
             expectedSHA256: Data(SHA256.hash(data: original)),
             byteCount: UInt64(original.count)
         ) { consume in
@@ -202,6 +213,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         var streamsB = try makeStreams(seed: 0x22)
         let interrupted = bytesB[2]
         streamsB[2] = try KagemushaRecursiveSpendArtifactStream(
+            role: streamsB[2].role,
             expectedSHA256: Data(SHA256.hash(data: interrupted)),
             byteCount: UInt64(interrupted.count)
         ) { consume in
@@ -247,6 +259,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         var streams = try makeStreams(seed: 0x25)
         let interrupted = bytes[0]
         streams[0] = try KagemushaRecursiveSpendArtifactStream(
+            role: streams[0].role,
             expectedSHA256: Data(SHA256.hash(data: interrupted)),
             byteCount: UInt64(interrupted.count)
         ) { _ in
@@ -463,15 +476,22 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         let binding = try makeBinding(0x61, manifest: manifest)
         let streams = try makeStreams(seed: 0x61)
 
-        XCTAssertThrowsError(try coordinator.acquire(
-            manifest: manifest,
-            binding: binding,
-            artifacts: Array(streams.dropLast())
-        )) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveSpendError,
-                .invalidField("artifactSet.count")
-            )
+        let invalidCounts = [
+            Array(streams.prefix(7)),
+            streams + [streams[0]],
+            streams + [streams[0], streams[1]],
+        ]
+        for invalidInventory in invalidCounts {
+            XCTAssertThrowsError(try coordinator.acquire(
+                manifest: manifest,
+                binding: binding,
+                artifacts: invalidInventory
+            )) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendError,
+                    .invalidField("artifactSet.count")
+                )
+            }
         }
 
         var duplicate = streams
@@ -486,6 +506,39 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
                 .invalidField("artifactSet.duplicate")
             )
         }
+
+        var duplicateRole = streams
+        let secondBytes = makeArtifactBytes(seed: 0x61)[1]
+        duplicateRole[1] = try KagemushaRecursiveSpendArtifactStream(
+            role: streams[0].role,
+            expectedSHA256: Data(SHA256.hash(data: secondBytes)),
+            byteCount: UInt64(secondBytes.count)
+        ) { consume in
+            try consume(0, secondBytes)
+        }
+        XCTAssertThrowsError(try coordinator.acquire(
+            manifest: manifest,
+            binding: binding,
+            artifacts: duplicateRole
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendError,
+                .invalidField("artifactSet.roleOrder")
+            )
+        }
+
+        var reordered = streams
+        reordered.swapAt(0, 1)
+        XCTAssertThrowsError(try coordinator.acquire(
+            manifest: manifest,
+            binding: binding,
+            artifacts: reordered
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendError,
+                .invalidField("artifactSet.roleOrder")
+            )
+        }
         XCTAssertEqual(world.sessionCount, 0)
     }
 
@@ -493,7 +546,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         let world = FakeArtifactWorld()
         let coordinator = makeCoordinator(world: world)
         let manifest = try makeManifest(0x62)
-        let wrongBinding = try KagemushaRecursiveSpendArtifactBinding(
+        let wrongBinding = try KagemushaRecursiveSpendArtifactBindingV4(
             generation: "different-generation",
             manifestSHA256: manifest.sha256
         )
@@ -555,6 +608,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         let digest = Data(repeating: 0xA5, count: 32)
         for invalidDigest in [Data(), Data(repeating: 0, count: 32)] {
             XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactStream(
+                role: .stepEqParamsIpa,
                 expectedSHA256: invalidDigest,
                 byteCount: 1
             ) { _ in })
@@ -565,6 +619,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
             UInt64.max,
         ] {
             XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactStream(
+                role: .stepEqParamsIpa,
                 expectedSHA256: digest,
                 byteCount: invalidCount
             ) { _ in }) { error in
@@ -590,6 +645,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         var changed = try makeStreams(seed: 0x71)
         let bytes = makeArtifactBytes(seed: 0x71)[0]
         changed[0] = try KagemushaRecursiveSpendArtifactStream(
+            role: changed[0].role,
             expectedSHA256: Data(SHA256.hash(data: bytes)),
             byteCount: UInt64(bytes.count + 1)
         ) { consume in
@@ -674,17 +730,17 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
     ) throws -> KagemushaRecursiveSpendArtifactManifestArchive {
         var payload = CompactNoritoWriter()
         payload.writeField(CompactNorito.encodeString(
-            KagemushaRecursiveSpend.artifactManifestSchema
+            KagemushaRecursiveSpend.artifactManifestSchemaV4
         ))
-        payload.writeField(littleEndian(KagemushaRecursiveSpend.artifactManifestVersion))
+        payload.writeField(littleEndian(KagemushaRecursiveSpend.artifactManifestVersionV4))
         payload.writeField(littleEndian(
             KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
         ))
         payload.writeField(CompactNorito.encodeString(
-            KagemushaRecursiveSpend.pastaCycleBackend
+            KagemushaRecursiveSpend.pastaCycleBackendV4
         ))
         payload.writeField(CompactNorito.encodeString(
-            KagemushaRecursiveSpend.pastaCycleTranscript
+            KagemushaRecursiveSpend.pastaCycleTranscriptV4
         ))
         payload.writeField(CompactNorito.encodeString("coordinator-test-\(seed)"))
         // The fake native driver does not inspect the remaining authenticated
@@ -709,8 +765,8 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
     private func makeBinding(
         _ seed: UInt8,
         manifest: KagemushaRecursiveSpendArtifactManifestArchive
-    ) throws -> KagemushaRecursiveSpendArtifactBinding {
-        try KagemushaRecursiveSpendArtifactBinding(
+    ) throws -> KagemushaRecursiveSpendArtifactBindingV4 {
+        try KagemushaRecursiveSpendArtifactBindingV4(
             generation: "coordinator-test-\(seed)",
             manifestSHA256: manifest.sha256
         )
@@ -726,8 +782,12 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         seed: UInt8,
         onStream: (@Sendable () -> Void)? = nil
     ) throws -> [KagemushaRecursiveSpendArtifactStream] {
-        try makeArtifactBytes(seed: seed).map { bytes in
+        try zip(
+            KagemushaRecursiveSpendArtifactRoleV4.allCases,
+            makeArtifactBytes(seed: seed)
+        ).map { role, bytes in
             try KagemushaRecursiveSpendArtifactStream(
+                role: role,
                 expectedSHA256: Data(SHA256.hash(data: bytes)),
                 byteCount: UInt64(bytes.count)
             ) { consume in
@@ -770,19 +830,19 @@ private final class FakeArtifactWorld: @unchecked Sendable {
     private var cancels = 0
     private var uninstalls = 0
     private var rejectedInstalls = 0
-    private var nextInstalledSet: KagemushaRecursiveSpendInstalledArtifactSet?
+    private var nextInstalledSet: KagemushaRecursiveSpendInstalledArtifactSetV4?
 
     var sessionCount: Int { synchronized { sessions.count } }
     var installCount: Int { synchronized { installs } }
     var cancelCount: Int { synchronized { cancels } }
     var uninstallCount: Int { synchronized { uninstalls } }
-    var activeBinding: KagemushaRecursiveSpendArtifactBinding? {
+    var activeBinding: KagemushaRecursiveSpendArtifactBindingV4? {
         synchronized { active?.binding }
     }
 
     func makeSession(
         manifest: KagemushaRecursiveSpendArtifactManifestArchive,
-        binding: KagemushaRecursiveSpendArtifactBinding
+        binding: KagemushaRecursiveSpendArtifactBindingV4
     ) -> any KagemushaRecursiveSpendArtifactInstallSessionDriver {
         let session = FakeArtifactSession(
             manifest: manifest,
@@ -820,11 +880,11 @@ private final class FakeArtifactWorld: @unchecked Sendable {
     }
 
     func substituteNextInstalledSet(
-        binding: KagemushaRecursiveSpendArtifactBinding,
+        binding: KagemushaRecursiveSpendArtifactBindingV4,
         manifest: KagemushaRecursiveSpendArtifactManifestArchive
     ) {
         lock.lock()
-        nextInstalledSet = try? KagemushaRecursiveSpendInstalledArtifactSet(
+        nextInstalledSet = try? KagemushaRecursiveSpendInstalledArtifactSetV4(
             binding: binding,
             manifest: manifest
         )
@@ -832,15 +892,15 @@ private final class FakeArtifactWorld: @unchecked Sendable {
     }
 
     func takeInstalledSet(
-        fallbackBinding: KagemushaRecursiveSpendArtifactBinding,
+        fallbackBinding: KagemushaRecursiveSpendArtifactBindingV4,
         fallbackManifest: KagemushaRecursiveSpendArtifactManifestArchive
-    ) throws -> KagemushaRecursiveSpendInstalledArtifactSet {
+    ) throws -> KagemushaRecursiveSpendInstalledArtifactSetV4 {
         lock.lock()
         let replacement = nextInstalledSet
         nextInstalledSet = nil
         lock.unlock()
         if let replacement { return replacement }
-        return try KagemushaRecursiveSpendInstalledArtifactSet(
+        return try KagemushaRecursiveSpendInstalledArtifactSetV4(
             binding: fallbackBinding,
             manifest: fallbackManifest
         )
@@ -866,13 +926,13 @@ private final class FakeArtifactWorld: @unchecked Sendable {
     }
 
     func isManifestInstalled(
-        _ binding: KagemushaRecursiveSpendArtifactBinding
+        _ binding: KagemushaRecursiveSpendArtifactBindingV4
     ) -> Bool {
         synchronized { active?.binding == binding }
     }
 
     func uninstallManifest(
-        _ binding: KagemushaRecursiveSpendArtifactBinding
+        _ binding: KagemushaRecursiveSpendArtifactBindingV4
     ) {
         lock.lock()
         if active?.binding == binding {
@@ -894,7 +954,7 @@ private final class FakeArtifactWorld: @unchecked Sendable {
 private final class DigestScopedStatusSession:
     KagemushaRecursiveSpendArtifactInstallSessionDriver {
     let manifest: KagemushaRecursiveSpendArtifactManifestArchive
-    let binding: KagemushaRecursiveSpendArtifactBinding
+    let binding: KagemushaRecursiveSpendArtifactBindingV4
     private let base: FakeArtifactSession
     private unowned let world: FakeArtifactWorld
 
@@ -905,12 +965,18 @@ private final class DigestScopedStatusSession:
         self.binding = base.binding
     }
 
-    func beginArtifact(expectedArtifactSHA256: Data) throws
+    func beginArtifact(
+        role: KagemushaRecursiveSpendArtifactRoleV4,
+        expectedArtifactSHA256: Data
+    ) throws
         -> any KagemushaRecursiveSpendArtifactIngestDriver {
-        try base.beginArtifact(expectedArtifactSHA256: expectedArtifactSHA256)
+        try base.beginArtifact(
+            role: role,
+            expectedArtifactSHA256: expectedArtifactSHA256
+        )
     }
 
-    func install() throws -> KagemushaRecursiveSpendInstalledArtifactSet {
+    func install() throws -> KagemushaRecursiveSpendInstalledArtifactSetV4 {
         try base.install()
     }
 
@@ -922,14 +988,15 @@ private final class DigestScopedStatusSession:
 private final class FakeArtifactSession:
     KagemushaRecursiveSpendArtifactInstallSessionDriver {
     let manifest: KagemushaRecursiveSpendArtifactManifestArchive
-    let binding: KagemushaRecursiveSpendArtifactBinding
+    let binding: KagemushaRecursiveSpendArtifactBindingV4
     private unowned let world: FakeArtifactWorld
-    private var ingestions: [Data: FakeArtifactIngest] = [:]
+    private var ingestions: [KagemushaRecursiveSpendArtifactRoleV4:
+        (digest: Data, ingest: FakeArtifactIngest)] = [:]
     private var cancelled = false
 
     init(
         manifest: KagemushaRecursiveSpendArtifactManifestArchive,
-        binding: KagemushaRecursiveSpendArtifactBinding,
+        binding: KagemushaRecursiveSpendArtifactBindingV4,
         world: FakeArtifactWorld
     ) {
         self.manifest = manifest
@@ -937,20 +1004,27 @@ private final class FakeArtifactSession:
         self.world = world
     }
 
-    func beginArtifact(expectedArtifactSHA256: Data) throws
+    func beginArtifact(
+        role: KagemushaRecursiveSpendArtifactRoleV4,
+        expectedArtifactSHA256: Data
+    ) throws
         -> any KagemushaRecursiveSpendArtifactIngestDriver {
-        guard !cancelled, ingestions[expectedArtifactSHA256] == nil else {
+        guard !cancelled,
+              ingestions[role] == nil,
+              !ingestions.values.contains(where: {
+                  $0.digest == expectedArtifactSHA256
+              }) else {
             throw KagemushaRecursiveSpendError.invalidField("fakeSession.state")
         }
         let ingest = FakeArtifactIngest()
-        ingestions[Data(expectedArtifactSHA256)] = ingest
+        ingestions[role] = (Data(expectedArtifactSHA256), ingest)
         return ingest
     }
 
-    func install() throws -> KagemushaRecursiveSpendInstalledArtifactSet {
+    func install() throws -> KagemushaRecursiveSpendInstalledArtifactSetV4 {
         guard ingestions.count
                 == KagemushaRecursiveSpendArtifactCoordinator.requiredArtifactCount,
-              ingestions.values.allSatisfy(\.isFinalized) else {
+              ingestions.values.allSatisfy({ $0.ingest.isFinalized }) else {
             throw KagemushaRecursiveSpendError.invalidField("fakeSession.install")
         }
         try world.install(self)
@@ -968,7 +1042,7 @@ private final class FakeArtifactSession:
         guard !cancelled else { return }
         cancelled = true
         for ingest in ingestions.values {
-            try ingest.cancel()
+            try ingest.ingest.cancel()
         }
         world.cancel(self)
     }

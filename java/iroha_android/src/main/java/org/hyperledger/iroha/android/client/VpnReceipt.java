@@ -22,9 +22,9 @@ public final class VpnReceipt {
   private final String feeAssetId;
   private final String escrowAccountId;
   private final String operatorAccountId;
-  private final long leaseFeeNanos;
-  private final long earnedFeeNanos;
-  private final long refundedFeeNanos;
+  private final String leaseFee;
+  private final String earnedFee;
+  private final String refundedFee;
   private final String leaseIdHex;
   private final VpnTxInstruction settleLeaseInstruction;
   private final List<VpnTxInstruction> txInstructions;
@@ -47,9 +47,9 @@ public final class VpnReceipt {
       final String feeAssetId,
       final String escrowAccountId,
       final String operatorAccountId,
-      final long leaseFeeNanos,
-      final long earnedFeeNanos,
-      final long refundedFeeNanos,
+      final String leaseFee,
+      final String earnedFee,
+      final String refundedFee,
       final String leaseIdHex,
       final VpnTxInstruction settleLeaseInstruction,
       final List<VpnTxInstruction> txInstructions) {
@@ -70,9 +70,9 @@ public final class VpnReceipt {
     this.feeAssetId = Objects.requireNonNull(feeAssetId, "feeAssetId");
     this.escrowAccountId = Objects.requireNonNull(escrowAccountId, "escrowAccountId");
     this.operatorAccountId = Objects.requireNonNull(operatorAccountId, "operatorAccountId");
-    this.leaseFeeNanos = leaseFeeNanos;
-    this.earnedFeeNanos = earnedFeeNanos;
-    this.refundedFeeNanos = refundedFeeNanos;
+    this.leaseFee = Objects.requireNonNull(leaseFee, "leaseFee");
+    this.earnedFee = Objects.requireNonNull(earnedFee, "earnedFee");
+    this.refundedFee = Objects.requireNonNull(refundedFee, "refundedFee");
     this.leaseIdHex = Objects.requireNonNull(leaseIdHex, "leaseIdHex");
     this.settleLeaseInstruction = settleLeaseInstruction;
     this.txInstructions = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(Objects.requireNonNull(txInstructions, "txInstructions")));
@@ -95,9 +95,9 @@ public final class VpnReceipt {
   public String feeAssetId() { return feeAssetId; }
   public String escrowAccountId() { return escrowAccountId; }
   public String operatorAccountId() { return operatorAccountId; }
-  public long leaseFeeNanos() { return leaseFeeNanos; }
-  public long earnedFeeNanos() { return earnedFeeNanos; }
-  public long refundedFeeNanos() { return refundedFeeNanos; }
+  public String leaseFee() { return leaseFee; }
+  public String earnedFee() { return earnedFee; }
+  public String refundedFee() { return refundedFee; }
   public String leaseIdHex() { return leaseIdHex; }
   public VpnTxInstruction settleLeaseInstruction() { return settleLeaseInstruction; }
   public List<VpnTxInstruction> txInstructions() { return txInstructions; }

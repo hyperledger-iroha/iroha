@@ -307,7 +307,7 @@ fn council_persist_rejects_unregistered_and_underbonded_roster_entries() {
             .get(&*ALICE_ID)
             .cloned()
             .expect("citizen record stored");
-        assert_eq!(record.amount, 19);
+        assert_eq!(record.amount, Quantity::from(19_u64));
         assert_eq!(record.seats_in_epoch, 0);
         assert!(tx.world.council().get(&1).is_none());
         err
@@ -565,7 +565,7 @@ fn citizen_bond_decrease_is_rejected_without_releasing_collateral() {
         .get(&*ALICE_ID)
         .cloned()
         .expect("citizen record stored");
-    assert_eq!(record.amount, 25);
+    assert_eq!(record.amount, Quantity::from(25_u64));
     let alice_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
     let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
     assert_eq!(
@@ -669,7 +669,7 @@ fn service_outcome_rejections_do_not_mutate_citizen_bond_or_counters() {
             .get(&*ALICE_ID)
             .cloned()
             .expect("citizen record stored");
-        assert_eq!(record.amount, 10);
+        assert_eq!(record.amount, Quantity::from(10_u64));
         assert_eq!(record.no_show_strikes, 0);
         let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
         assert_eq!(
@@ -736,7 +736,7 @@ fn citizen_service_outcome_slashes_after_free_decline() {
         .cloned()
         .expect("citizen record stored");
     assert_eq!(record.declines_used, 1);
-    assert_eq!(record.amount, 100);
+    assert_eq!(record.amount, Quantity::from(100_u64));
 
     RecordCitizenServiceOutcome {
         owner: ALICE_ID.clone(),
@@ -754,7 +754,11 @@ fn citizen_service_outcome_slashes_after_free_decline() {
         .cloned()
         .expect("citizen record stored");
     assert_eq!(record.declines_used, 2);
-    assert_eq!(record.amount, 95, "bond reduced by slashing");
+    assert_eq!(
+        record.amount,
+        Quantity::from(95_u64),
+        "bond reduced by slashing"
+    );
 
     let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
     assert_eq!(

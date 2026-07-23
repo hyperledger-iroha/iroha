@@ -1009,7 +1009,11 @@ mod codec_tests {
         metadata: dm::Metadata,
     ) -> query::CommittedTransaction {
         let chain: dm::ChainId = "test-chain".parse().expect("chain id");
-        let mut builder = signed::TransactionBuilder::new(chain, authority.id.clone());
+        let mut builder = signed::TransactionBuilder::new(
+            chain,
+            authority.id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(ts_ms));
         let signed: signed::SignedTransaction = builder
             .with_metadata(metadata)
@@ -1815,7 +1819,11 @@ mod committed_tx_predicate_tests {
     ) -> query::CommittedTransaction {
         let chain: dm::ChainId = "test-chain".parse().unwrap();
 
-        let mut b = signed::TransactionBuilder::new(chain, authority.id.clone());
+        let mut b = signed::TransactionBuilder::new(
+            chain,
+            authority.id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         b.set_creation_time(core::time::Duration::from_millis(ts_ms));
         let signed: signed::SignedTransaction = b
             .with_metadata(metadata)

@@ -62,9 +62,13 @@ fn make_block(
         )
         .into(),
     ];
-    let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions(instrs)
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instrs)
+    .sign(kp.private_key());
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     BlockBuilder::new(vec![accepted])
         .chain(0, None)

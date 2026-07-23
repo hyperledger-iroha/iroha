@@ -19,7 +19,9 @@ WRITE_MESSAGE_PREFIX="${WRITE_MESSAGE_PREFIX:-taira-rollout-canary}"
 ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary}"
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
-ROLLOUT_CANARY_GAS_ASSET_ID="${ROLLOUT_CANARY_GAS_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+ROLLOUT_CANARY_FAUCET_ASSET_ID="${ROLLOUT_CANARY_FAUCET_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+ROLLOUT_CANARY_FEE_PROGRAM_ID="${ROLLOUT_CANARY_FEE_PROGRAM_ID:-testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default}"
+ROLLOUT_CANARY_FEE_PROGRAM_REVISION="${ROLLOUT_CANARY_FEE_PROGRAM_REVISION:-1}"
 ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
 POST_CANARY_STATUS_RECHECK_ATTEMPTS="${POST_CANARY_STATUS_RECHECK_ATTEMPTS:-10}"
 POST_CANARY_STATUS_RECHECK_DELAY_SECONDS="${POST_CANARY_STATUS_RECHECK_DELAY_SECONDS:-2}"
@@ -52,7 +54,8 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--skip-local] [--skip-public]
                             [--validator-root LABEL=URL]... [--require-all-validators]
                             [--write-config PATH] [--write-target local|public|URL]
-                            [--gas-asset-id ASSET_DEFINITION_ID]
+                            [--faucet-asset-id ASSET_DEFINITION_ID]
+                            [--fee-program PROGRAM_ID] [--fee-program-revision REVISION]
                             [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
                             [--curl-connect-timeout-seconds N]
                             [--curl-max-time-seconds N]
@@ -103,13 +106,13 @@ overwrites operator-supplied signing material. Automatic bootstrap posts the
 current universal-account DTO to `/v1/accounts/onboard`, requires `HTTP 202`
 with a `QUEUED` receipt, and follows that receipt through
 `/v1/pipeline/transactions/status` before using the signer. Onboarding fees are
-sponsored by the configured Torii onboarding authority; gas fields are not part
-of the onboarding request. The write canary attaches Taira's accepted XOR gas
-asset metadata by default and still retries the faucet lane on `Failed to find
-asset` so a saturated queue does not require manual signer preparation. Set
+sponsored by the configured Torii onboarding authority. The write canary gets
+an exact `/v1/fees/quote` and signs the returned intent for the configured
+sponsor-program revision. It still retries the faucet lane when the signer is
+unfunded so queue pressure does not require manual signer preparation. Set
 `ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet claim. Use
-`--gas-asset-id ""` only against networks that do not require pipeline gas
-metadata. Both onboarding and faucet helpers wait for their `202 QUEUED`
+`--fee-program` and `--fee-program-revision` to select another immutable
+revision. Both onboarding and faucet helpers wait for their `202 QUEUED`
 receipts to reach `Applied` or `Committed` through the canonical pipeline
 status route. Use `--skip-write-canary` only for read-only validation.
 
@@ -146,7 +149,7 @@ default_write_config_path() {
 should_skip_canary_faucet() {
   case "$ROLLOUT_CANARY_SKIP_FAUCET" in
     auto|"")
-      [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]
+      [[ -n "$ROLLOUT_CANARY_FAUCET_ASSET_ID" ]]
       ;;
     1|true|TRUE|yes|YES)
       return 0
@@ -232,12 +235,28 @@ while [[ $# -gt 0 ]]; do
       WRITE_TARGET="$2"
       shift 2
       ;;
-    --gas-asset-id)
+    --faucet-asset-id)
       [[ $# -ge 2 ]] || {
-        echo "missing value for --gas-asset-id" >&2
+        echo "missing value for --faucet-asset-id" >&2
         exit 1
       }
-      ROLLOUT_CANARY_GAS_ASSET_ID="$2"
+      ROLLOUT_CANARY_FAUCET_ASSET_ID="$2"
+      shift 2
+      ;;
+    --fee-program)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --fee-program" >&2
+        exit 1
+      }
+      ROLLOUT_CANARY_FEE_PROGRAM_ID="$2"
+      shift 2
+      ;;
+    --fee-program-revision)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --fee-program-revision" >&2
+        exit 1
+      }
+      ROLLOUT_CANARY_FEE_PROGRAM_REVISION="$2"
       shift 2
       ;;
     --expected-git-sha)
@@ -1501,8 +1520,9 @@ check_route_parity() {
   check_route_status "$label" POST "${root_url}/v1/musubi/instructions/yank-release" "200" \
     "Musubi pre-signing instruction builder route" \
     '{"package":"dex.universal/swap-core@1.2.3","reason":"rollout preflight"}'
-  check_route_status "$label" POST "${root_url}/v1/contracts/deploy" "400 401 403 415 422" \
-    "contract deploy route should reject an empty preflight body, not be missing" '{}'
+  check_route_status "$label" POST "${root_url}/v1/contracts/deploy" "404" \
+    "retired server-side contract deploy route must remain unmounted" '{}' \
+    "route_not_found"
   check_route_status "$label" POST "${root_url}/v1/bridge/messages" "400 401 403 415 422" \
     "bridge message preflight should hit the mounted route, not return 404/405" '{}'
 }
@@ -1792,8 +1812,8 @@ ensure_write_canary_config() {
   if [[ -n "$IROHA_BIN" ]]; then
     bootstrap_cmd+=(--iroha-bin "$IROHA_BIN")
   fi
-  if [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]; then
-    bootstrap_cmd+=(--gas-asset-id "$ROLLOUT_CANARY_GAS_ASSET_ID")
+  if [[ -n "$ROLLOUT_CANARY_FAUCET_ASSET_ID" ]]; then
+    bootstrap_cmd+=(--faucet-asset-id "$ROLLOUT_CANARY_FAUCET_ASSET_ID")
   fi
   if should_skip_canary_faucet; then
     bootstrap_cmd+=(--skip-faucet)
@@ -1893,36 +1913,20 @@ claim_faucet_for_canary() {
     --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
 }
 
-write_canary_metadata_file() {
-  local output_file="$1"
-  local gas_asset_id="$2"
-  python3 - "$output_file" "$gas_asset_id" <<'PY'
-import json
-import sys
-
-path, gas_asset_id = sys.argv[1:]
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump({"gas_asset_id": gas_asset_id}, handle, sort_keys=True)
-    handle.write("\n")
-PY
-}
-
 retry_write_canary() {
   local temp_config="$1"
   local output_file="$2"
   local write_msg="$3"
-  local metadata_file="$4"
-  local attempts="${5:-10}"
-  local delay_seconds="${6:-2}"
+  local attempts="${4:-10}"
+  local delay_seconds="${5:-2}"
   local attempt
-  local metadata_args=()
-
-  if [[ -n "$metadata_file" ]]; then
-    metadata_args=(-m "$metadata_file")
-  fi
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    if "${IROHA_RUNNER[@]}" --machine -c "$temp_config" "${metadata_args[@]}" ledger transaction ping --msg "${write_msg}-retry-${attempt}" \
+    if "${IROHA_RUNNER[@]}" --machine -c "$temp_config" \
+        --fee-payer sponsor \
+        --fee-program "$ROLLOUT_CANARY_FEE_PROGRAM_ID" \
+        --fee-program-revision "$ROLLOUT_CANARY_FEE_PROGRAM_REVISION" \
+        ledger transaction ping --msg "${write_msg}-retry-${attempt}" \
         >"$output_file" 2>&1; then
       return 0
     fi
@@ -1938,34 +1942,28 @@ retry_write_canary() {
 
 run_write_canary() {
   local target_url="$1"
-  local output_file temp_config metadata_file write_msg
+  local output_file temp_config write_msg
 
   ensure_iroha_bin
   [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$(default_write_config_path)"
   ensure_write_canary_config "$target_url"
 
   temp_config="$(mktemp)"
-  metadata_file="$(mktemp)"
   output_file="$(mktemp)"
-  trap 'rm -f "${temp_config:-}" "${metadata_file:-}" "${output_file:-}"; cleanup' EXIT
+  trap 'rm -f "${temp_config:-}" "${output_file:-}"; cleanup' EXIT
   build_write_canary_config \
     "$WRITE_CONFIG" \
     "$target_url" \
     "$temp_config" \
     "$ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
     "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
-  local metadata_args=()
-  if [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]; then
-    write_canary_metadata_file "$metadata_file" "$ROLLOUT_CANARY_GAS_ASSET_ID"
-    metadata_args=(-m "$metadata_file")
-  else
-    rm -f "$metadata_file"
-    metadata_file=""
-  fi
-
   write_msg="${WRITE_MESSAGE_PREFIX}-$(date -u +%Y%m%dT%H%M%SZ)"
   echo "==> write canary: ${target_url} (message: ${write_msg})"
-  if ! "${IROHA_RUNNER[@]}" --machine -c "$temp_config" "${metadata_args[@]}" ledger transaction ping --msg "$write_msg" \
+  if ! "${IROHA_RUNNER[@]}" --machine -c "$temp_config" \
+      --fee-payer sponsor \
+      --fee-program "$ROLLOUT_CANARY_FEE_PROGRAM_ID" \
+      --fee-program-revision "$ROLLOUT_CANARY_FEE_PROGRAM_REVISION" \
+      ledger transaction ping --msg "$write_msg" \
       >"$output_file" 2>&1; then
     if grep -q 'route_unavailable' "$output_file"; then
       echo "write canary failed: Torii is reachable but no authoritative peers accepted the lane route" >&2
@@ -1982,17 +1980,17 @@ run_write_canary() {
         exit 1
       fi
       echo "==> retrying write canary after faucet bootstrap" >&2
-      if ! retry_write_canary "$temp_config" "$output_file" "$write_msg" "$metadata_file"; then
+      if ! retry_write_canary "$temp_config" "$output_file" "$write_msg"; then
         echo "write canary failed after faucet bootstrap" >&2
         sed -n '1,80p' "$output_file" >&2 || true
         exit 1
       fi
-      rm -f "$temp_config" "$metadata_file" "$output_file"
+      rm -f "$temp_config" "$output_file"
       trap cleanup EXIT
       return 0
     fi
-    if grep -q 'missing gas_asset_id' "$output_file"; then
-      echo "write canary failed: Taira requires gas_asset_id transaction metadata; pass --gas-asset-id with an accepted asset definition id" >&2
+    if grep -Eq 'fee quote rejected|fee_payment_rejected' "$output_file"; then
+      echo "write canary failed: the exact fee quote was rejected; inspect the reported code, capacity, and remediation, then re-quote against the active program revision" >&2
       sed -n '1,80p' "$output_file" >&2 || true
       exit 1
     fi
@@ -2017,7 +2015,7 @@ run_write_canary() {
     sed -n '1,80p' "$output_file" >&2 || true
     exit 1
   fi
-  rm -f "$temp_config" "$metadata_file" "$output_file"
+  rm -f "$temp_config" "$output_file"
   trap cleanup EXIT
 }
 

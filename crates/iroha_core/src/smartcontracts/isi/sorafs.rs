@@ -319,6 +319,7 @@ fn enforce_provider_owner(
     authority: &AccountId,
     metadata: &Metadata,
     provider_hex: &str,
+    now_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
     let key = Name::from_str(PROVIDER_OWNER_METADATA_KEY).expect("static metadata key");
     let Some(value) = metadata.get(&key) else {
@@ -334,9 +335,12 @@ fn enforce_provider_owner(
     })?;
 
     let owner_literal = owner_str.trim();
-    if let Some(owner) =
-        crate::block::parse_account_literal_with_world(world, dataspace_catalog, owner_literal)
-    {
+    if let Some(owner) = crate::block::parse_account_literal_with_world(
+        world,
+        dataspace_catalog,
+        owner_literal,
+        now_ms,
+    ) {
         if same_account_subject(&owner, authority) {
             return Ok(());
         }
@@ -359,6 +363,7 @@ fn ensure_provider_owner_matches_authority(
     record: &CapacityDeclarationRecord,
     world: &impl crate::state::WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    now_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
     let provider_hex = hex::encode(record.provider_id.as_bytes());
     enforce_provider_owner(
@@ -367,6 +372,7 @@ fn ensure_provider_owner_matches_authority(
         authority,
         &record.metadata,
         &provider_hex,
+        now_ms,
     )
 }
 
@@ -1955,6 +1961,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
             authority,
             &record.metadata,
             &provider_hex,
+            state_transaction.block_unix_timestamp_ms(),
         )?;
         if let Some(existing_owner) = state_transaction.world.provider_owners.get(&provider_id) {
             if !same_account_subject(existing_owner, authority) {
@@ -2058,6 +2065,7 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             declaration_record,
             &state_transaction.world,
             &state_transaction.nexus.dataspace_catalog,
+            state_transaction.block_unix_timestamp_ms(),
         )?;
         if let Some(owner) = state_transaction.world.provider_owners.get(&provider_id)
             && !same_account_subject(owner, authority)
@@ -3656,13 +3664,13 @@ mod sorafs_tests {
         assert_eq!(
             pin_fee_balance(&stx, &alice()),
             alice_balance_before
-                .checked_sub(&expected_amount)
+                .checked_sub(expected_amount.clone().into_numeric())
                 .expect("alice has enough fee balance")
         );
         assert_eq!(
             pin_fee_balance(&stx, &treasury_account),
             treasury_balance_before
-                .checked_add(&expected_amount)
+                .checked_add(expected_amount.into_numeric())
                 .expect("treasury balance remains representable")
         );
     }

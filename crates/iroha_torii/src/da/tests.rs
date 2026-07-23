@@ -4543,7 +4543,7 @@ fn build_da_commitment_record_reflects_artifacts() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout,
     )
     .expect("build receipt");
@@ -4604,7 +4604,7 @@ fn build_da_commitment_record_sets_kzg_commitment_for_kzg_lane() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout,
     )
     .expect("build receipt");
@@ -4655,7 +4655,7 @@ fn persist_da_commitment_record_writes_and_is_idempotent() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout,
     )
     .expect("build receipt");
@@ -4730,7 +4730,7 @@ fn persist_da_commitment_schedule_entry_writes_bundle() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout,
     )
     .expect("build receipt");
@@ -4992,7 +4992,7 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout,
     )
     .expect("build receipt");
@@ -6142,7 +6142,7 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout_from_manifest(&manifest.manifest),
     )
     .expect("build receipt");
@@ -6233,7 +6233,7 @@ fn da_receipt_log_rejects_receipt_fingerprint_mismatch_against_manifest_on_open(
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes,
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout_from_manifest(&manifest.manifest),
     )
     .expect("build receipt");

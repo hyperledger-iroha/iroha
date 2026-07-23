@@ -81,7 +81,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     // Create a fresh domain, account, and asset definition
     let domain_name: Name = "seven".parse()?;
     let domain_id = DomainId::try_new(&domain_name, "universal")?;
-    let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _kp) = gen_account_in(&domain_name);
     let create_account = Register::account(Account::new(account_id.clone()));
     let asset_definition_id =
@@ -96,12 +95,15 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     let tx_timeout = sync_timeout;
     submitter_client.transaction_status_timeout = tx_timeout;
     submitter_client.transaction_ttl = Some(tx_timeout + Duration::from_secs(5));
-    ensure_domain_registration_lease_for_network(&network, &domain_id)?;
-    let setup_result = submitter_client.submit_all_blocking::<InstructionBox>([
-        create_domain.into(),
-        create_account.into(),
-        create_asset_def.into(),
-    ]);
+    let create_domain = domain_setup_instruction(&domain_id, &submitter_client.account)?;
+    let setup_result = submitter_client.submit_all_blocking::<InstructionBox>(
+        [
+            create_domain,
+            create_account.into(),
+            create_asset_def.into(),
+        ],
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     if let Err(err) = setup_result {
         eprintln!(
             "seven_peer_consistency setup submission did not confirm; waiting for state. err={err:?}"
@@ -124,10 +126,14 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     .wrap_err("seven_peer_consistency status fetch failed")?;
     // Mint on one peer and wait until the network advances a few blocks
     let quantity = numeric!(500);
-    if let Err(err) = submitter_client.submit_blocking(Mint::asset_quantity(
-        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative"),
-        AssetId::new(asset_definition_id.clone(), account_id.clone()),
-    )) {
+    if let Err(err) = submitter_client.submit_blocking(
+        Mint::asset_quantity(
+            Quantity::try_from_numeric(quantity.clone())
+                .expect("mint quantity must be non-negative"),
+            AssetId::new(asset_definition_id.clone(), account_id.clone()),
+        ),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         eprintln!("seven_peer_consistency mint did not confirm; continuing. err={err:?}");
     }
 

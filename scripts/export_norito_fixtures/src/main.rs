@@ -20,7 +20,10 @@ use iroha_data_model::{
     metadata::Metadata,
     prelude::*,
     transaction::signed::{TransactionPayload, TransactionSignature},
-    transaction::{Executable, IvmBytecode, TransactionBuilder},
+    transaction::{
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, TransactionBuilder,
+        executable::ContractInvocation,
+    },
 };
 
 #[cfg(feature = "kaigi-fixtures")]
@@ -145,6 +148,7 @@ struct RawPayload {
     executable: RawExecutable,
     ttl_ms: Option<u64>,
     nonce: Option<u32>,
+    fee_payment: FeePaymentIntent,
     metadata: Vec<(Name, Json)>,
 }
 
@@ -152,6 +156,13 @@ struct RawPayload {
 enum RawExecutable {
     Ivm(Vec<u8>),
     Instructions(Vec<RawInstruction>),
+    Batch(Vec<RawBatchItem>),
+}
+
+#[derive(Clone)]
+enum RawBatchItem {
+    Instruction(RawInstruction),
+    ContractCall(ContractInvocation),
 }
 
 #[derive(Clone, Debug)]
@@ -441,7 +452,11 @@ impl RawPayload {
         let chain_id = ChainId::from_str(&self.chain).expect("ChainId infallible");
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
-        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            self.fee_payment.clone(),
+        );
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         if let Some(ttl) = self.ttl_ms {
             builder.set_ttl(Duration::from_millis(ttl));
@@ -467,6 +482,23 @@ impl RawPayload {
                     .map(build_instruction)
                     .collect::<Result<Vec<_>>>()?;
                 builder.with_instructions(instructions)
+            }
+            RawExecutable::Batch(raws) => {
+                let items = raws
+                    .iter()
+                    .map(|raw| match raw {
+                        RawBatchItem::Instruction(raw) => {
+                            build_instruction(raw).map(ExecutableBatchItem::Instruction)
+                        }
+                        RawBatchItem::ContractCall(invocation) => {
+                            Ok(ExecutableBatchItem::ContractCall(invocation.clone()))
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if items.is_empty() {
+                    bail!("mixed executable batch must not be empty");
+                }
+                builder.with_executable_batch(items)
             }
         };
 
@@ -590,6 +622,16 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     let executable = parse_executable(executable_value)?;
     let ttl_ms = parse_optional_u64(obj, "time_to_live_ms")?;
     let nonce = parse_optional_u32(obj, "nonce")?;
+    let fee_payment = obj
+        .get("fee_payment")
+        .ok_or_else(|| anyhow::anyhow!("missing fee_payment"))
+        .and_then(|value| {
+            json::from_value::<FeePaymentIntent>(value.clone())
+                .map_err(|err| anyhow::anyhow!(err.to_string()))
+        })?;
+    fee_payment
+        .validate()
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let metadata = match obj.get("metadata") {
         Some(value) => parse_metadata_object(value)?,
         None => Vec::new(),
@@ -602,6 +644,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         executable,
         ttl_ms,
         nonce,
+        fee_payment,
         metadata,
     })
 }
@@ -628,6 +671,36 @@ fn parse_executable(value: &Value) -> Result<RawExecutable> {
             entries.push(parse_instruction(entry)?);
         }
         return Ok(RawExecutable::Instructions(entries));
+    }
+    if let Some(batch) = obj.get("Batch") {
+        let arr = batch
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("Batch must be an array"))?;
+        if arr.is_empty() {
+            bail!("Batch must contain at least one item");
+        }
+        let mut entries = Vec::with_capacity(arr.len());
+        for entry in arr {
+            let item = entry
+                .as_object()
+                .ok_or_else(|| anyhow::anyhow!("Batch items must be externally tagged objects"))?;
+            if item.len() != 1 {
+                bail!("Batch items must contain exactly one variant");
+            }
+            if let Some(instruction) = item.get("Instruction") {
+                entries.push(RawBatchItem::Instruction(parse_instruction(instruction)?));
+                continue;
+            }
+            if let Some(invocation) = item.get("ContractCall") {
+                let invocation = json::from_value::<ContractInvocation>(invocation.clone())
+                    .map_err(|err| anyhow::anyhow!(err.to_string()))
+                    .context("invalid Batch ContractCall")?;
+                entries.push(RawBatchItem::ContractCall(invocation));
+                continue;
+            }
+            bail!("unknown Batch item variant");
+        }
+        return Ok(RawExecutable::Batch(entries));
     }
     bail!("unknown executable variant")
 }
@@ -735,32 +808,68 @@ fn apply_wire_payloads_to_payload_json(
     let executable_obj = executable_value
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("payload executable must be an object"))?;
-    let instructions_value = executable_obj
-        .get_mut("Instructions")
-        .ok_or_else(|| anyhow::anyhow!("payload executable missing Instructions"))?;
-    let instructions = instructions_value
-        .as_array_mut()
-        .ok_or_else(|| anyhow::anyhow!("payload Instructions must be an array"))?;
-    if instructions.len() != wire_payloads.len() {
-        bail!(
-            "payload instructions length mismatch: expected {}, got {}",
-            wire_payloads.len(),
-            instructions.len()
-        );
-    }
-    for (entry, wire) in instructions.iter_mut().zip(wire_payloads) {
-        let obj = entry
-            .as_object_mut()
-            .ok_or_else(|| anyhow::anyhow!("instruction entries must be objects"))?;
-        if obj.contains_key("kind") || obj.contains_key("arguments") {
-            bail!("instruction entries must not include legacy kind/arguments fields");
+    if let Some(instructions_value) = executable_obj.get_mut("Instructions") {
+        let instructions = instructions_value
+            .as_array_mut()
+            .ok_or_else(|| anyhow::anyhow!("payload Instructions must be an array"))?;
+        if instructions.len() != wire_payloads.len() {
+            bail!(
+                "payload instructions length mismatch: expected {}, got {}",
+                wire_payloads.len(),
+                instructions.len()
+            );
         }
-        obj.insert("wire_name".into(), Value::String(wire.wire_name.clone()));
-        obj.insert(
-            "payload_base64".into(),
-            Value::String(wire.payload_base64.clone()),
+        for (entry, wire) in instructions.iter_mut().zip(wire_payloads) {
+            apply_wire_payload_to_instruction(entry, wire)?;
+        }
+        return Ok(());
+    }
+
+    let items = executable_obj
+        .get_mut("Batch")
+        .ok_or_else(|| anyhow::anyhow!("payload executable missing Instructions or Batch"))?
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("payload Batch must be an array"))?;
+    let mut wires = wire_payloads.iter();
+    let mut instruction_count = 0_usize;
+    for item in items {
+        let item = item
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("batch entries must be objects"))?;
+        let Some(instruction) = item.get_mut("Instruction") else {
+            continue;
+        };
+        let wire = wires
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("batch has more instructions than decoded payload"))?;
+        apply_wire_payload_to_instruction(instruction, wire)?;
+        instruction_count += 1;
+    }
+    if wires.next().is_some() || instruction_count != wire_payloads.len() {
+        bail!(
+            "payload batch instruction length mismatch: expected {}, got {}",
+            wire_payloads.len(),
+            instruction_count
         );
     }
+    Ok(())
+}
+
+fn apply_wire_payload_to_instruction(
+    entry: &mut Value,
+    wire: &WireInstructionPayload,
+) -> Result<()> {
+    let obj = entry
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("instruction entries must be objects"))?;
+    if obj.contains_key("kind") || obj.contains_key("arguments") {
+        bail!("instruction entries must not include legacy kind/arguments fields");
+    }
+    obj.insert("wire_name".into(), Value::String(wire.wire_name.clone()));
+    obj.insert(
+        "payload_base64".into(),
+        Value::String(wire.payload_base64.clone()),
+    );
     Ok(())
 }
 
@@ -919,38 +1028,12 @@ fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPaylo
     if !cursor.is_empty() {
         bail!("payload contains trailing bytes");
     }
-    let Executable::Instructions(instructions) = &payload.instructions else {
-        return Ok(Vec::new());
-    };
-
     let registry = iroha_data_model::instruction_registry::default();
-    let mut out = Vec::with_capacity(instructions.len());
-    for instruction in instructions.iter() {
+    let mut out = Vec::new();
+    for instruction in payload.instructions.explicit_instructions() {
         let type_name = Instruction::id(&**instruction);
         let wire_name = registry.wire_id(type_name).unwrap_or(type_name);
         let payload = Instruction::dyn_encode(&**instruction);
-        let framed = frame_instruction_payload(type_name, &payload)
-            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-        out.push(WireInstructionPayload {
-            wire_name: wire_name.to_owned(),
-            payload_base64: BASE64.encode(framed),
-        });
-    }
-    Ok(out)
-}
-
-fn wire_payloads_from_raw_payload(raw: &RawPayload) -> Result<Vec<WireInstructionPayload>> {
-    let RawExecutable::Instructions(instructions) = &raw.executable else {
-        return Ok(Vec::new());
-    };
-
-    let registry = iroha_data_model::instruction_registry::default();
-    let mut out = Vec::with_capacity(instructions.len());
-    for raw_instruction in instructions {
-        let instruction = build_instruction(raw_instruction)?;
-        let type_name = Instruction::id(&*instruction);
-        let wire_name = registry.wire_id(type_name).unwrap_or(type_name);
-        let payload = Instruction::dyn_encode(&*instruction);
         let framed = frame_instruction_payload(type_name, &payload)
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         out.push(WireInstructionPayload {
@@ -1020,11 +1103,7 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
 
         if let Some(mut payload) = raw.payload_json.clone() {
             if payload_json_uses_instruction_list(&payload) {
-                let wire_payloads = if let Some(raw_payload) = raw.payload.as_ref() {
-                    wire_payloads_from_raw_payload(raw_payload)
-                } else {
-                    wire_payloads_from_encoded(&fixture.encoded)
-                }?;
+                let wire_payloads = wire_payloads_from_encoded(&fixture.encoded)?;
                 apply_wire_payloads_to_payload_json(&mut payload, &wire_payloads)?;
             }
             entry.insert("payload".to_owned(), payload);
@@ -1050,21 +1129,60 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
                 RawExecutable::Ivm(bytes) => {
                     executable_obj.insert("Ivm".to_owned(), Value::String(BASE64.encode(bytes)));
                 }
-                RawExecutable::Instructions(instructions) => {
-                    let mut values = Vec::with_capacity(instructions.len());
-                    for raw_instruction in instructions {
+                RawExecutable::Instructions(_) => {
+                    let wire_payloads = wire_payloads_from_encoded(&fixture.encoded)?;
+                    let mut values = Vec::with_capacity(wire_payloads.len());
+                    for wire_payload in wire_payloads {
                         let mut inst_obj = Map::new();
                         inst_obj.insert(
                             "wire_name".to_owned(),
-                            Value::String(raw_instruction.wire_name.clone()),
+                            Value::String(wire_payload.wire_name),
                         );
                         inst_obj.insert(
                             "payload_base64".to_owned(),
-                            Value::String(raw_instruction.payload_base64.clone()),
+                            Value::String(wire_payload.payload_base64),
                         );
                         values.push(Value::Object(inst_obj));
                     }
                     executable_obj.insert("Instructions".to_owned(), Value::Array(values));
+                }
+                RawExecutable::Batch(items) => {
+                    let mut wire_payloads =
+                        wire_payloads_from_encoded(&fixture.encoded)?.into_iter();
+                    let mut values = Vec::with_capacity(items.len());
+                    for item in items {
+                        let mut item_obj = Map::new();
+                        match item {
+                            RawBatchItem::Instruction(_) => {
+                                let wire = wire_payloads.next().ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "missing decoded wire payload for batch instruction"
+                                    )
+                                })?;
+                                let mut instruction = Map::new();
+                                instruction
+                                    .insert("wire_name".to_owned(), Value::String(wire.wire_name));
+                                instruction.insert(
+                                    "payload_base64".to_owned(),
+                                    Value::String(wire.payload_base64),
+                                );
+                                item_obj
+                                    .insert("Instruction".to_owned(), Value::Object(instruction));
+                            }
+                            RawBatchItem::ContractCall(invocation) => {
+                                item_obj.insert(
+                                    "ContractCall".to_owned(),
+                                    json::to_value(invocation)
+                                        .map_err(|err| anyhow::anyhow!(err.to_string()))?,
+                                );
+                            }
+                        }
+                        values.push(Value::Object(item_obj));
+                    }
+                    if wire_payloads.next().is_some() {
+                        bail!("decoded batch contains more instructions than raw payload");
+                    }
+                    executable_obj.insert("Batch".to_owned(), Value::Array(values));
                 }
             }
             payload_obj.insert("executable".to_owned(), Value::Object(executable_obj));
@@ -1097,6 +1215,15 @@ fn payload_json_uses_instruction_list(payload: &Value) -> bool {
         .get("Instructions")
         .and_then(Value::as_array)
         .is_some()
+        || executable
+            .get("Batch")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.as_object()
+                        .is_some_and(|item| item.contains_key("Instruction"))
+                })
+            })
 }
 
 #[cfg(test)]
@@ -1390,6 +1517,7 @@ mod tests {
             executable: RawExecutable::Instructions(vec![raw_instruction.clone()]),
             ttl_ms: Some(1_000),
             nonce: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Vec::new(),
         };
 
@@ -1431,10 +1559,7 @@ mod tests {
             .clone()
             .into_fixture(&keypair, true, true)
             .expect("fixture");
-        let expected_wire = wire_payloads_from_raw_payload(
-            raw.payload.as_ref().expect("raw payload must be present"),
-        )
-        .expect("wire payloads");
+        let expected_wire = wire_payloads_from_encoded(&fixture.encoded).expect("wire payloads");
 
         let value =
             build_fixtures_json(&[raw], std::slice::from_ref(&fixture)).expect("fixtures json");
@@ -1533,6 +1658,7 @@ mod tests {
                 executable: RawExecutable::Ivm(vec![1, 2, 3, 4]),
                 ttl_ms: Some(1_000),
                 nonce: None,
+                fee_payment: FeePaymentIntent::authority(Vec::new(), None),
                 metadata: Vec::new(),
             }),
             payload_json: None,

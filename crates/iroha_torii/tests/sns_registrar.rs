@@ -22,15 +22,12 @@ use iroha_data_model::{
     metadata::Metadata,
     peer::PeerId,
     sns::{
-        DOMAIN_NAME_SUFFIX_ID, FreezeNameRequestV1, GovernanceHookV1, NameControllerV1,
-        NameFrozenStateV1, NameRecordV1, NameSelectorV1, NameStatus, PaymentProofV1,
-        RegisterNameRequestV1, RenewNameRequestV1, TransferNameRequestV1,
-        UpdateControllersRequestV1,
+        DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameFrozenStateV1, NameRecordV1, NameSelectorV1,
+        NameStatus,
     },
 };
-use iroha_primitives::json::Json;
 use iroha_torii::{Torii, test_utils};
-use norito::{codec::Encode as _, json::JsonSerialize};
+use norito::codec::Encode as _;
 use tokio::sync::broadcast;
 use tower::util::ServiceExt as _;
 
@@ -63,11 +60,6 @@ fn test_router_with_domain_records(records: Vec<SeededDomainRecord>) -> Router {
     let metrics = ();
 
     test_router_with_metrics_and_domain_records(metrics, records)
-}
-
-#[cfg(feature = "telemetry")]
-fn test_router_with_metrics(metrics: TestMetrics) -> Router {
-    test_router_with_metrics_and_domain_records(metrics, Vec::new())
 }
 
 fn test_router_with_metrics_and_domain_records(
@@ -161,14 +153,6 @@ fn sample_owner() -> AccountId {
     AccountId::new(public_key)
 }
 
-fn secondary_owner() -> AccountId {
-    let public_key: PublicKey =
-        "ed0120C70416DC2D60D9AB2F0C6CED829837F1006DDED2DE794E9D5091A60663FA8C11"
-            .parse()
-            .expect("key parses");
-    AccountId::new(public_key)
-}
-
 fn controller_for(owner: &AccountId) -> NameControllerV1 {
     let address = AccountAddress::from_account_id(owner).expect("address encode");
     NameControllerV1::account(&address)
@@ -203,57 +187,17 @@ fn seed_domain_name_record(world: &mut World, seeded: SeededDomainRecord) {
     );
 }
 
-const DEFAULT_SNS_LEASE_PAYMENT_AMOUNT: u64 = 500_000_000;
-
-fn build_payment_with_amount(payer: AccountId, amount: u64) -> PaymentProofV1 {
-    PaymentProofV1 {
-        asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-        gross_amount: amount.into(),
-        net_amount: amount.into(),
-        settlement_tx: Json::from("dummy-tx"),
-        payer,
-        signature: Json::from("dummy-signature"),
-    }
-}
-
-fn build_payment_with(payer: AccountId) -> PaymentProofV1 {
-    build_payment_with_amount(payer, DEFAULT_SNS_LEASE_PAYMENT_AMOUNT)
-}
-
-fn build_register_request_with(label: &str, owner: &AccountId) -> RegisterNameRequestV1 {
-    let selector =
-        NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_literal(label)).expect("selector");
-    RegisterNameRequestV1 {
-        selector,
-        owner: owner.clone(),
-        controllers: vec![controller_for(owner)],
-        term_years: 1,
-        pricing_class_hint: Some(0),
-        payment: build_payment_with(owner.clone()),
-        governance: None,
-        metadata: Metadata::default(),
-    }
-}
-
-fn build_register_request() -> RegisterNameRequestV1 {
-    let owner = sample_owner();
-    build_register_request_with("makoto", &owner)
-}
-
-async fn request_json<T: JsonSerialize + ?Sized>(
+async fn request_empty(
     app: &Router,
     method: &str,
     uri: impl AsRef<str>,
-    payload: &T,
 ) -> axum::response::Response {
-    let body = norito::json::to_vec(payload).expect("serialize json payload");
     app.clone()
         .oneshot(
             Request::builder()
                 .uri(uri.as_ref())
                 .method(method)
-                .header("content-type", "application/json")
-                .body(Body::from(body))
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -272,47 +216,12 @@ async fn get(app: &Router, uri: impl AsRef<str>) -> axum::response::Response {
         .expect("get response")
 }
 
-async fn post_register_name(
-    app: &Router,
-    payload: &RegisterNameRequestV1,
-) -> axum::response::Response {
-    request_json(app, "POST", "/v1/sns/names", payload).await
-}
-
-async fn response_text(resp: axum::response::Response) -> String {
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    String::from_utf8(bytes.to_vec()).expect("response body should be utf-8")
-}
-
-async fn assert_direct_mutation_disabled(resp: axum::response::Response, op: &str) {
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = response_text(resp).await;
-    assert!(
-        body.contains(&format!(
-            "SNS {op} must be submitted as a consensus transaction"
-        )),
-        "unexpected SNS mutation rejection body: {body}"
-    );
-    assert!(
-        body.contains("direct Torii WSV mutation is disabled"),
-        "SNS mutation rejection should explain why direct mutation is unavailable: {body}"
-    );
-}
-
 fn domain_name_path(label: &str) -> String {
     format!("/v1/sns/names/domain/{}", domain_literal(label))
 }
 
 fn domain_literal(label: &str) -> String {
     format!("{label}.universal")
-}
-
-#[tokio::test]
-async fn sns_register_route_rejects_direct_wsv_mutation() {
-    let app = test_router();
-    let payload = build_register_request();
-    let resp = post_register_name(&app, &payload).await;
-    assert_direct_mutation_disabled(resp, "register_name").await;
 }
 
 #[tokio::test]
@@ -392,102 +301,21 @@ async fn sns_missing_policy_returns_not_found() {
 }
 
 #[tokio::test]
-async fn sns_mutation_routes_reject_direct_wsv_mutation() {
+async fn sns_mutation_routes_are_absent() {
     let app = test_router();
-    let owner = sample_owner();
-
-    let renew = RenewNameRequestV1 {
-        term_years: 1,
-        payment: build_payment_with(owner.clone()),
-    };
-    let renew_resp = request_json(
-        &app,
-        "POST",
-        "/v1/sns/names/domain/missing.universal/renew",
-        &renew,
-    )
-    .await;
-    assert_direct_mutation_disabled(renew_resp, "renew_name").await;
-
-    let transfer = TransferNameRequestV1 {
-        new_owner: secondary_owner(),
-        governance: GovernanceHookV1 {
-            proposal_id: "proposal-transfer".into(),
-            council_vote_hash: Json::from("council-hash"),
-            dao_vote_hash: Json::from("dao-hash"),
-            steward_ack: Json::from("steward-ack"),
-            guardian_clearance: None,
-        },
-    };
-    let transfer_resp = request_json(
-        &app,
-        "POST",
-        "/v1/sns/names/domain/missing.universal/transfer",
-        &transfer,
-    )
-    .await;
-    assert_direct_mutation_disabled(transfer_resp, "transfer_name").await;
-
-    let controllers = UpdateControllersRequestV1 {
-        controllers: vec![controller_for(&owner)],
-    };
-    let controllers_resp = request_json(
-        &app,
-        "POST",
-        "/v1/sns/names/domain/missing.universal/controllers",
-        &controllers,
-    )
-    .await;
-    assert_direct_mutation_disabled(controllers_resp, "update_name_controllers").await;
-
-    let freeze = FreezeNameRequestV1 {
-        reason: "missing-name".into(),
-        until_ms: u64::MAX,
-        guardian_ticket: Json::from("ticket"),
-    };
-    let freeze_resp = request_json(
-        &app,
-        "POST",
-        "/v1/sns/names/domain/missing.universal/freeze",
-        &freeze,
-    )
-    .await;
-    assert_direct_mutation_disabled(freeze_resp, "freeze_name").await;
-
-    let unfreeze = GovernanceHookV1 {
-        proposal_id: "proposal-unfreeze".into(),
-        council_vote_hash: Json::from("council-hash"),
-        dao_vote_hash: Json::from("dao-hash"),
-        steward_ack: Json::from("steward-ack"),
-        guardian_clearance: Some(Json::from("guardian")),
-    };
-    let unfreeze_resp = request_json(
-        &app,
-        "DELETE",
-        "/v1/sns/names/domain/missing.universal/freeze",
-        &unfreeze,
-    )
-    .await;
-    assert_direct_mutation_disabled(unfreeze_resp, "unfreeze_name").await;
-}
-
-#[cfg(feature = "telemetry")]
-#[tokio::test]
-async fn sns_register_rejection_emits_error_status_metric() {
-    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-    let app = test_router_with_metrics(Arc::clone(&metrics));
-    let counter = metrics
-        .sns_registrar_status_total
-        .with_label_values(&["error", "domain"]);
-    let before = counter.get();
-
-    let resp = post_register_name(&app, &build_register_request()).await;
-    assert_direct_mutation_disabled(resp, "register_name").await;
-
-    let after = counter.get();
-    assert_eq!(
-        after,
-        before + 1,
-        "rejected registration should increment sns_registrar_status_total{{result=\"error\",suffix=\"domain\"}}"
-    );
+    for (method, path) in [
+        ("POST", "/v1/sns/names"),
+        ("POST", "/v1/sns/names/domain/missing.universal/renew"),
+        ("POST", "/v1/sns/names/domain/missing.universal/transfer"),
+        ("POST", "/v1/sns/names/domain/missing.universal/controllers"),
+        ("POST", "/v1/sns/names/domain/missing.universal/freeze"),
+        ("DELETE", "/v1/sns/names/domain/missing.universal/freeze"),
+    ] {
+        let response = request_empty(&app, method, path).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "obsolete SNS mutation route must be absent: {method} {path}"
+        );
+    }
 }

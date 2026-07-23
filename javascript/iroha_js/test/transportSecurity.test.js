@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ToriiClient } from "../src/toriiClient.js";
 import { NoritoRpcClient } from "../src/noritoRpcClient.js";
-import { generateKeyPair } from "../src/index.js";
-import { AccountAddress } from "../src/address.js";
 
 test("ToriiClient rejects cross-host absolute URLs when credentials are attached", async () => {
   const client = new ToriiClient("https://torii.primary.example", {
@@ -60,13 +58,11 @@ test("ToriiClient rejects insecure transport when canonicalAuth is present", asy
   const client = new ToriiClient("http://torii.primary.example", {
     fetchImpl: async () => ({ status: 200 }),
   });
-  const { publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 0x21) });
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
   await assert.rejects(
     () =>
       client._request("GET", "/v1/accounts", {
         canonicalAuth: {
-          accountId,
+          accountId: "operator-1@bank.paynet",
           privateKey: Buffer.alloc(32, 0x11),
         },
       }),

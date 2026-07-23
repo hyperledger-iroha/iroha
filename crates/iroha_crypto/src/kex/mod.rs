@@ -10,6 +10,7 @@ pub use x25519::X25519Sha256;
 use crate::{Error, KeyGenOption, SessionKey, error::ParseError};
 
 /// Return `true` when an X25519 public key is low-order.
+#[cfg(feature = "pqc")]
 pub(crate) fn is_x25519_low_order_public_key(public_key: &x25519_dalek::PublicKey) -> bool {
     x25519::is_x25519_low_order_public_key(public_key)
 }

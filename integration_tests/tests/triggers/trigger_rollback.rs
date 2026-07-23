@@ -48,14 +48,24 @@ async fn failed_trigger_revert() -> Result<()> {
     ));
     let _ = spawn_blocking({
         let client = client.clone();
-        move || client.submit_blocking(register_trigger)
+        move || {
+            client.submit_blocking(
+                register_trigger,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
     })
     .await?;
 
     let call_trigger = ExecuteTrigger::new(trigger_id);
     let err = spawn_blocking({
         let client = client.clone();
-        move || client.submit_blocking(call_trigger)
+        move || {
+            client.submit_blocking(
+                call_trigger,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
     })
     .await?
     .expect_err("should immediately result in error");

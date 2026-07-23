@@ -1036,7 +1036,11 @@ mod codec_tests {
         metadata: dm::Metadata,
     ) -> query::CommittedTransaction {
         let chain: dm::ChainId = "test-chain".parse().expect("chain id");
-        let mut builder = signed::TransactionBuilder::new(chain, authority.id.clone());
+        let mut builder = signed::TransactionBuilder::new(
+            chain,
+            authority.id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(ts_ms));
         let signed: signed::SignedTransaction = builder
             .with_metadata(metadata)

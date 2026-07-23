@@ -114,10 +114,10 @@ fn subscription_invoice_for_nft(
 async fn tick_block(client: &Client) -> Result<()> {
     let client = client.clone();
     spawn_blocking(move || {
-        client.submit(Log::new(
-            Level::DEBUG,
-            "subscription trigger tick".to_string(),
-        ))
+        client.submit(
+            Log::new(Level::DEBUG, "subscription trigger tick".to_string()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
     })
     .await??;
     Ok(())
@@ -304,10 +304,16 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(
-                        AssetDefinition::numeric(charge_def_id.clone())
-                            .with_name(charge_def_id.name().to_string()),
-                    ))
+                    client.submit_blocking(
+                        Register::asset_definition(
+                            AssetDefinition::numeric(charge_def_id.clone())
+                                .with_name(charge_def_id.name().to_string()),
+                        ),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -315,10 +321,16 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(
-                        AssetDefinition::numeric(plan_id.clone())
-                            .with_name(plan_id.name().to_string()),
-                    ))
+                    client.submit_blocking(
+                        Register::asset_definition(
+                            AssetDefinition::numeric(plan_id.clone())
+                                .with_name(plan_id.name().to_string()),
+                        ),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -347,11 +359,13 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let plan_key = plan_key.clone();
                 let plan = plan.clone();
                 move || {
-                    client.submit_blocking(SetKeyValue::asset_definition(
-                        plan_id,
-                        plan_key,
-                        Json::new(plan),
-                    ))
+                    client.submit_blocking(
+                        SetKeyValue::asset_definition(plan_id, plan_key, Json::new(plan)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -362,7 +376,15 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 let amount = mint_amount;
-                move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
+                move || {
+                    client.submit_blocking(
+                        Mint::asset_quantity(amount, asset_id),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                }
             })
             .await??;
             let bob_client = network
@@ -377,7 +399,13 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let client = bob_client.clone();
                 let provider = provider.clone();
                 move || {
-                    client.submit_blocking(Grant::account_permission(transfer_permission, provider))
+                    client.submit_blocking(
+                        Grant::account_permission(transfer_permission, provider),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -403,7 +431,15 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let metadata = metadata.clone();
-                move || client.submit_blocking(Register::nft(Nft::new(nft_id, metadata)))
+                move || {
+                    client.submit_blocking(
+                        Register::nft(Nft::new(nft_id, metadata)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                }
             })
             .await??;
             spawn_blocking({
@@ -411,7 +447,15 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let nft_id = nft_id.clone();
                 let provider = provider.clone();
                 let subscriber = subscriber.clone();
-                move || client.submit_blocking(Transfer::nft(provider, nft_id, subscriber))
+                move || {
+                    client.submit_blocking(
+                        Transfer::nft(provider, nft_id, subscriber),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                }
             })
             .await??;
 
@@ -429,10 +473,13 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let usage_trigger_id = usage_trigger_id.clone();
                 let usage_action = usage_action.clone();
                 move || {
-                    client.submit_blocking(Register::trigger(Trigger::new(
-                        usage_trigger_id,
-                        usage_action,
-                    )))
+                    client.submit_blocking(
+                        Register::trigger(Trigger::new(usage_trigger_id, usage_action)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -486,10 +533,13 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let billing_trigger_id = billing_trigger_id.clone();
                 let billing_action = billing_action.clone();
                 move || {
-                    client.submit_blocking(Register::trigger(Trigger::new(
-                        billing_trigger_id,
-                        billing_action,
-                    )))
+                    client.submit_blocking(
+                        Register::trigger(Trigger::new(billing_trigger_id, billing_action)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -578,10 +628,16 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(
-                        AssetDefinition::numeric(charge_def_id.clone())
-                            .with_name(charge_def_id.name().to_string()),
-                    ))
+                    client.submit_blocking(
+                        Register::asset_definition(
+                            AssetDefinition::numeric(charge_def_id.clone())
+                                .with_name(charge_def_id.name().to_string()),
+                        ),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -589,10 +645,16 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(
-                        AssetDefinition::numeric(plan_id.clone())
-                            .with_name(plan_id.name().to_string()),
-                    ))
+                    client.submit_blocking(
+                        Register::asset_definition(
+                            AssetDefinition::numeric(plan_id.clone())
+                                .with_name(plan_id.name().to_string()),
+                        ),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -620,11 +682,13 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let plan_key = plan_key.clone();
                 let plan = plan.clone();
                 move || {
-                    client.submit_blocking(SetKeyValue::asset_definition(
-                        plan_id,
-                        plan_key,
-                        Json::new(plan),
-                    ))
+                    client.submit_blocking(
+                        SetKeyValue::asset_definition(plan_id, plan_key, Json::new(plan)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -635,7 +699,15 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 let amount = mint_amount;
-                move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
+                move || {
+                    client.submit_blocking(
+                        Mint::asset_quantity(amount, asset_id),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                }
             })
             .await??;
             let bob_client = network
@@ -650,7 +722,13 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let client = bob_client.clone();
                 let provider = provider.clone();
                 move || {
-                    client.submit_blocking(Grant::account_permission(transfer_permission, provider))
+                    client.submit_blocking(
+                        Grant::account_permission(transfer_permission, provider),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -676,7 +754,15 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let metadata = metadata.clone();
-                move || client.submit_blocking(Register::nft(Nft::new(nft_id, metadata)))
+                move || {
+                    client.submit_blocking(
+                        Register::nft(Nft::new(nft_id, metadata)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                }
             })
             .await??;
             spawn_blocking({
@@ -684,7 +770,15 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let nft_id = nft_id.clone();
                 let provider = provider.clone();
                 let subscriber = subscriber.clone();
-                move || client.submit_blocking(Transfer::nft(provider, nft_id, subscriber))
+                move || {
+                    client.submit_blocking(
+                        Transfer::nft(provider, nft_id, subscriber),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                }
             })
             .await??;
 
@@ -710,10 +804,13 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let billing_trigger_id = billing_trigger_id.clone();
                 let billing_action = billing_action.clone();
                 move || {
-                    client.submit_blocking(Register::trigger(Trigger::new(
-                        billing_trigger_id,
-                        billing_action,
-                    )))
+                    client.submit_blocking(
+                        Register::trigger(Trigger::new(billing_trigger_id, billing_action)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -800,10 +897,16 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(
-                        AssetDefinition::numeric(charge_def_id.clone())
-                            .with_name(charge_def_id.name().to_string()),
-                    ))
+                    client.submit_blocking(
+                        Register::asset_definition(
+                            AssetDefinition::numeric(charge_def_id.clone())
+                                .with_name(charge_def_id.name().to_string()),
+                        ),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -811,10 +914,16 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(
-                        AssetDefinition::numeric(plan_id.clone())
-                            .with_name(plan_id.name().to_string()),
-                    ))
+                    client.submit_blocking(
+                        Register::asset_definition(
+                            AssetDefinition::numeric(plan_id.clone())
+                                .with_name(plan_id.name().to_string()),
+                        ),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -842,11 +951,13 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let plan_key = plan_key.clone();
                 let plan = plan.clone();
                 move || {
-                    client.submit_blocking(SetKeyValue::asset_definition(
-                        plan_id,
-                        plan_key,
-                        Json::new(plan),
-                    ))
+                    client.submit_blocking(
+                        SetKeyValue::asset_definition(plan_id, plan_key, Json::new(plan)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;
@@ -857,7 +968,15 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 let amount = mint_amount;
-                move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
+                move || {
+                    client.submit_blocking(
+                        Mint::asset_quantity(amount, asset_id),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                }
             })
             .await??;
 
@@ -882,7 +1001,15 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let metadata = metadata.clone();
-                move || client.submit_blocking(Register::nft(Nft::new(nft_id, metadata)))
+                move || {
+                    client.submit_blocking(
+                        Register::nft(Nft::new(nft_id, metadata)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                }
             })
             .await??;
             spawn_blocking({
@@ -890,7 +1017,15 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let nft_id = nft_id.clone();
                 let provider = provider.clone();
                 let subscriber = subscriber.clone();
-                move || client.submit_blocking(Transfer::nft(provider, nft_id, subscriber))
+                move || {
+                    client.submit_blocking(
+                        Transfer::nft(provider, nft_id, subscriber),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                }
             })
             .await??;
 
@@ -916,10 +1051,13 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let billing_trigger_id = billing_trigger_id.clone();
                 let billing_action = billing_action.clone();
                 move || {
-                    client.submit_blocking(Register::trigger(Trigger::new(
-                        billing_trigger_id,
-                        billing_action,
-                    )))
+                    client.submit_blocking(
+                        Register::trigger(Trigger::new(billing_trigger_id, billing_action)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await??;

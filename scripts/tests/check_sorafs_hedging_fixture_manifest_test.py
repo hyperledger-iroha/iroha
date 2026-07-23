@@ -64,8 +64,8 @@ def generated_sidecar(fixture: dict) -> dict:
             "account_id_hex": "70726f76696465722d61",
             "due_at_unix": 1_700_691_200,
             "lines": [generated_billing_line_sidecar("billing_line_storage_v1")],
-            "net_due_usd_micros": "1000",
-            "net_due_xor_micro": "1000000",
+            "net_due_usd": "0.001",
+            "net_due_xor": "1",
             "period_end_unix": 1_700_604_800,
             "period_start_unix": 1_700_000_000,
             "previous_statement_id_hex": "12" * 32,
@@ -73,10 +73,10 @@ def generated_sidecar(fixture: dict) -> dict:
                 fixture["expected_status"] == "rejected"
             ),
             "statement_id_hex": "34" * 32,
-            "total_credit_usd_micros": "0",
-            "total_credit_xor_micro": "0",
-            "total_debit_usd_micros": "1000",
-            "total_debit_xor_micro": "1000000",
+            "total_credit_usd": "0",
+            "total_credit_xor": "0",
+            "total_debit_usd": "0.001",
+            "total_debit_xor": "1",
             "version": 1,
         }
     raise AssertionError(f"unexpected fixture kind: {fixture['kind']}")
@@ -93,7 +93,7 @@ def generated_price_feed_sidecar(name: str) -> dict:
         "status": "degraded" if "secondary" in name else "ok",
         "version": 1,
         "weight_bps": 5_000,
-        "xor_usd_micros": 2_000_000,
+        "xor_usd_price": "2",
     }
 
 
@@ -112,7 +112,7 @@ def generated_reference_price_sidecar(rejected: bool) -> dict:
         "max_divergence_bps": 500,
         "max_feed_age_secs": 300,
         "version": 1,
-        "xor_usd_micros": 2_000_000,
+        "xor_usd_price": "2",
     }
 
 
@@ -126,10 +126,40 @@ def generated_billing_line_sidecar(name: str) -> dict:
         "note": None,
         "quantity_units": "1",
         "source_id": name,
-        "usd_micros": "1000",
+        "usd_amount": "2",
         "version": 1,
-        "xor_amount_micro": "1000000",
+        "xor_amount": "1",
     }
+
+
+def test_exact_quantity_string_policy_matches_v1_bounds() -> None:
+    assert MODULE.is_quantity_string("0", max_scale=MODULE.MAX_QUANTITY_SCALE)
+    assert MODULE.is_quantity_string("0.000000001", max_scale=MODULE.MAX_XOR_QUANTITY_SCALE)
+    assert MODULE.is_quantity_string(
+        str(MODULE.MAX_QUANTITY_MANTISSA),
+        max_scale=MODULE.MAX_QUANTITY_SCALE,
+    )
+    assert MODULE.is_quantity_string(
+        "0." + "0" * 27 + "1",
+        max_scale=MODULE.MAX_QUANTITY_SCALE,
+    )
+
+    for value in (
+        "",
+        "00",
+        "01",
+        "1.0",
+        "1.",
+        "+1",
+        "-1",
+        "1e3",
+        str(MODULE.MAX_QUANTITY_MANTISSA + 1),
+    ):
+        assert not MODULE.is_quantity_string(value, max_scale=MODULE.MAX_QUANTITY_SCALE)
+    assert not MODULE.is_quantity_string(
+        "0.0000000001",
+        max_scale=MODULE.MAX_XOR_QUANTITY_SCALE,
+    )
 
 
 def write_fake_validator(path: Path, reject_negative: bool) -> Path:
@@ -1818,8 +1848,8 @@ def test_full_mode_rejects_sidecar_numeric_policy_bounds(
     )
     line_path = repo_root / line_fixture["json_path"]
     line_sidecar = json.loads(line_path.read_text(encoding="utf-8"))
-    line_sidecar["xor_amount_micro"] = "0"
-    line_sidecar["usd_micros"] = "340282366920938463463374607431768211456"
+    line_sidecar["xor_amount"] = "0"
+    line_sidecar["usd_amount"] = f"{(1 << 511)}"
     line_sidecar["quantity_units"] = "01"
     line_path.write_text(json.dumps(line_sidecar), encoding="utf-8")
     validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
@@ -1846,11 +1876,13 @@ def test_full_mode_rejects_sidecar_numeric_policy_bounds(
         for error in result["errors"]
     )
     assert any(
-        "xor_amount_micro must be a positive unsigned u128 decimal string" in error
+        "xor_amount must be a positive canonical exact decimal string with scale at most 9"
+        in error
         for error in result["errors"]
     )
     assert any(
-        "usd_micros must be a positive unsigned u128 decimal string" in error
+        "usd_amount must be a positive canonical exact decimal string with scale at most 28"
+        in error
         for error in result["errors"]
     )
     assert any(

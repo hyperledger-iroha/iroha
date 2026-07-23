@@ -4,14 +4,21 @@ import XCTest
 @testable import IrohaSwift
 
 final class NativeBridgeLoaderTests: XCTestCase {
-    func testExpectedBridgeAbiVersionIsNineteenForPackagedArtifacts() {
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64"), 19)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 19)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 19)
-        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64"))
-        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64"))
+    func testExpectedBridgeAbiVersionIsTwentyOneForPackagedArtifacts() {
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64"), 21)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 21)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 21)
+        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(21, for: "macos-arm64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(20, for: "macos-arm64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64"))
+        XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
+            "connect_norito_kagemusha_recursive_spend_artifact_begin_v4"
+        ))
+        XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
+            "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4"
+        ))
     }
 
     func testMissingBridgeIsReported() {
@@ -257,6 +264,7 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
                                       quantity: "1",
                                       destination: authority,
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: nil)
 
         XCTAssertThrowsError(try SwiftTransactionEncoder.encodeTransfer(transfer: request,

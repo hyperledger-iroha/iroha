@@ -878,11 +878,14 @@ mod tests {
             signer: 5,
             commitment: Some([0xAA; 32]),
             reveal: Some([0xBB; 32]),
+            commit_proof: None,
+            reveal_proof: None,
             last_updated_height: 42,
         };
         let late = VrfLateRevealRecord {
             signer: 6,
             reveal: [0xCC; 32],
+            reveal_proof: None,
             noted_at_height: 360,
         };
         let record = VrfEpochRecord {

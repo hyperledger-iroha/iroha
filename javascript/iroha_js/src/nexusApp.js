@@ -406,6 +406,7 @@ const TRANSFER_DRAFT_FIELDS = new Set([
   "creationTimeMs",
   "ttlMs",
   "nonce",
+  "feePayment",
   "signingPublicKey",
 ]);
 const FINALIZE_OPTION_FIELDS = new Set([
@@ -2123,6 +2124,12 @@ export class NexusAppClient {
       "chainId",
     );
     const quantity = normalizeTransferQuantity(input.quantity);
+    if (input.feePayment === undefined) {
+      throw new NexusAppError(
+        "missing_fee_payment",
+        "transfer input requires a signature-bound feePayment intent",
+      );
+    }
     const payloadInput = {
       chainId,
       authority,
@@ -2133,6 +2140,7 @@ export class NexusAppClient {
       creationTimeMs: input.creationTimeMs ?? null,
       ttlMs: input.ttlMs ?? null,
       nonce: input.nonce ?? null,
+      feePayment: input.feePayment,
     };
     let transactionCodec;
     let payloadBuilder = null;

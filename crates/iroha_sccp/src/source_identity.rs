@@ -6,11 +6,12 @@
 
 pub use iroha_data_model::bridge::{
     SccpEvmSourceEmitterV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
-    SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpSourceEmitterV1,
-    SccpSourceIdentityV1, SccpTronSourceEmitterV1, canonical_sccp_lane_id_bytes_v1,
-    canonical_sccp_network_bytes_v1, canonical_sccp_source_emitter_bytes_v1,
-    canonical_sccp_source_identity_bytes_v1, sccp_lane_id_hash_v1, sccp_network_identity_hash_v1,
-    sccp_network_tag_v1, sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
+    SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpSolanaSourceEmitterV1,
+    SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
+    canonical_sccp_lane_id_bytes_v1, canonical_sccp_network_bytes_v1,
+    canonical_sccp_source_emitter_bytes_v1, canonical_sccp_source_identity_bytes_v1,
+    sccp_lane_id_hash_v1, sccp_network_identity_hash_v1, sccp_network_tag_v1,
+    sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
 };
 use tiny_keccak::{Hasher as _, Keccak};
 
@@ -40,6 +41,7 @@ pub const fn sccp_network_from_tag_v1(tag: u8) -> Option<SccpNetworkV1> {
         10 => Some(SccpNetworkV1::TronMainnet),
         11 => Some(SccpNetworkV1::TronNile),
         12 => Some(SccpNetworkV1::TronShasta),
+        13 => Some(SccpNetworkV1::SolanaTestnet),
         _ => None,
     }
 }
@@ -94,7 +96,7 @@ mod tests {
 
     use super::*;
 
-    const NETWORKS: [SccpNetworkV1; 8] = [
+    const NETWORKS: [SccpNetworkV1; 9] = [
         SccpNetworkV1::SoraTaira,
         SccpNetworkV1::EthereumMainnet,
         SccpNetworkV1::EthereumSepolia,
@@ -103,6 +105,7 @@ mod tests {
         SccpNetworkV1::TronMainnet,
         SccpNetworkV1::TronNile,
         SccpNetworkV1::TronShasta,
+        SccpNetworkV1::SolanaTestnet,
     ];
 
     fn sample_identity() -> SccpSourceIdentityV1 {
@@ -136,12 +139,26 @@ mod tests {
     #[test]
     fn canonical_network_bytes_bind_exact_native_identity() {
         assert_eq!(
+            canonical_sccp_network_bytes_v1(SccpNetworkV1::SoraTaira),
+            [
+                1, 1, 0, 0, 0, 0, 0xfc, 0x56, 0x98, 0x4b, 0x2b, 0xe7, 0x43, 0x1d, 0x84, 0x0e, 0x21,
+                0x51, 0x4d, 0x18, 0x83, 0xf0,
+            ],
+        );
+        assert_eq!(
             canonical_sccp_network_bytes_v1(SccpNetworkV1::EthereumMainnet),
             [1, 2, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
         );
         assert_eq!(
             canonical_sccp_network_bytes_v1(SccpNetworkV1::TronMainnet),
             [1, 10, 5, 0, 0, 0, 0xdc, 0x53, 0x66, 0x2b]
+        );
+        let solana = canonical_sccp_network_bytes_v1(SccpNetworkV1::SolanaTestnet);
+        assert_eq!(solana.len(), 38);
+        assert_eq!(&solana[..6], &[1, 13, 3, 0, 0, 0]);
+        assert_eq!(
+            &solana[6..],
+            &iroha_data_model::bridge::SCCP_SOLANA_TESTNET_GENESIS_HASH_V1
         );
         assert_ne!(
             sccp_network_identity_hash_v1(SccpNetworkV1::BscMainnet),
@@ -227,6 +244,7 @@ mod tests {
             SccpNetworkV1::TronMainnet,
             SccpNetworkV1::TronNile,
             SccpNetworkV1::TronShasta,
+            SccpNetworkV1::SolanaTestnet,
         ];
         let tags = networks.map(sccp_network_tag_v1);
         for (network, tag) in networks.into_iter().zip(tags) {
@@ -235,7 +253,7 @@ mod tests {
         for (index, tag) in tags.iter().enumerate() {
             assert!(tags[index + 1..].iter().all(|other| tag != other));
         }
-        for unknown in core::iter::once(0).chain(6..=9).chain(13..=u8::MAX) {
+        for unknown in core::iter::once(0).chain(6..=9).chain(14..=u8::MAX) {
             assert!(sccp_network_from_tag_v1(unknown).is_none());
         }
     }
@@ -318,6 +336,45 @@ mod tests {
     }
 
     #[test]
+    fn solana_identity_hash_commits_to_every_immutable_deployment_role() {
+        let identity = SccpSourceIdentityV1 {
+            lane: SccpLaneIdV1 {
+                source: SccpNetworkV1::SolanaTestnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            emitter: SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                program_id: [0x41; 32],
+                program_data_address: [0x42; 32],
+                program_data_slot: 7,
+                state_account: [0x43; 32],
+                program_code_hash: [0x44; 32],
+                route_config_hash: [0x45; 32],
+            }),
+        };
+        let expected = sccp_source_identity_hash_v1(&identity).expect("valid Solana identity");
+        for field in 0..6 {
+            let mut mutated = identity;
+            let SccpSourceEmitterV1::Solana(emitter) = &mut mutated.emitter else {
+                unreachable!("fixture uses Solana emitter")
+            };
+            match field {
+                0 => emitter.program_id[0] ^= 1,
+                1 => emitter.program_data_address[0] ^= 1,
+                2 => emitter.program_data_slot += 1,
+                3 => emitter.state_account[0] ^= 1,
+                4 => emitter.program_code_hash[0] ^= 1,
+                5 => emitter.route_config_hash[0] ^= 1,
+                _ => unreachable!(),
+            }
+            assert_ne!(
+                sccp_source_identity_hash_v1(&mutated),
+                Some(expected),
+                "Solana deployment role {field} was not committed"
+            );
+        }
+    }
+
+    #[test]
     fn malformed_emitters_fail_before_hashing() {
         for emitter in [
             SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
@@ -329,6 +386,14 @@ mod tests {
                 address: [1; 20],
                 runtime_code_hash: [2; 32],
                 route_config_hash: [2; 32],
+            }),
+            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                program_id: [1; 32],
+                program_data_address: [2; 32],
+                program_data_slot: 1,
+                state_account: [3; 32],
+                program_code_hash: [4; 32],
+                route_config_hash: [4; 32],
             }),
         ] {
             assert!(canonical_sccp_source_emitter_bytes_v1(&emitter).is_none());

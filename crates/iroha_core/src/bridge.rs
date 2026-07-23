@@ -2,19 +2,24 @@
 
 use std::{collections::BTreeSet, fmt};
 
+use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     ChainId,
     block::{
         BlockHeader, SignedBlock,
+        consensus_v2::SumeragiV2Status,
         consensus_v2::finality::{V2FinalityArtifact, V2QuorumCertificateVerificationError},
     },
     bridge::{
-        BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeCommitment, BridgeFinalityBundle,
-        BridgeFinalityProof, SccpGovernedRouteV1, SccpOutboundMessageKeyV1,
+        BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeCommitment,
+        BridgeFinalityAttestationBodyV1, BridgeFinalityAttestationV1,
+        BridgeFinalityAttestationValidationError, BridgeFinalityBundle, BridgeFinalityProof,
+        SccpGovernedRouteV1, SccpOutboundMessageKeyV1,
     },
     isi::InstructionBox,
     name::Name,
-    transaction::{Executable, TransactionEntrypoint},
+    peer::PeerId,
+    transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint},
 };
 use iroha_sccp::{
     SccpGroth16Bn254ProofRequestV1, SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1,
@@ -790,6 +795,13 @@ fn collect_sccp_messages_from_executable<F>(
             }
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::Batch(items) => {
+            for (item_index, item) in items.iter().enumerate() {
+                if let ExecutableBatchItem::Instruction(instruction) = item {
+                    push_instruction(item_index, instruction);
+                }
+            }
+        }
         Executable::IvmProved(proved) => {
             for (instruction_index, instruction) in proved.overlay.iter().enumerate() {
                 push_instruction(instruction_index, instruction);
@@ -801,10 +813,35 @@ fn collect_sccp_messages_from_executable<F>(
 fn sccp_message_candidates_from_executable(
     executable: &Executable,
 ) -> Vec<RecordedSccpMessageCandidate> {
+    if let Executable::Batch(items) = executable {
+        return items
+            .iter()
+            .enumerate()
+            .filter_map(|(instruction_index, item)| {
+                let ExecutableBatchItem::Instruction(instruction) = item else {
+                    return None;
+                };
+                let record = recorded_sccp_message_instruction(instruction)?;
+                let Ok(validated) =
+                    validate_recorded_sccp_message_payload_bytes_for_block_collection(
+                        record.context,
+                        &record.payload_bytes,
+                    )
+                else {
+                    return None;
+                };
+                Some(RecordedSccpMessageCandidate {
+                    instruction_index,
+                    validated,
+                })
+            })
+            .collect();
+    }
     let instructions = match executable {
         Executable::Instructions(instructions) => instructions.as_ref(),
         Executable::IvmProved(proved) => proved.overlay.as_ref(),
         Executable::ContractCall(_) | Executable::Ivm(_) => return Vec::new(),
+        Executable::Batch(_) => unreachable!("batch handled above"),
     };
 
     instructions
@@ -1033,68 +1070,88 @@ fn invalid_sccp_record_instruction_in_executable(
     tx_index: usize,
     executable: &Executable,
 ) -> Option<SccpRecordInstructionValidationError> {
-    let instructions = match executable {
-        Executable::Instructions(instructions) => instructions.as_ref(),
-        Executable::IvmProved(proved) => proved.overlay.as_ref(),
-        Executable::ContractCall(_) | Executable::Ivm(_) => return None,
-    };
-    instructions
-        .iter()
-        .enumerate()
-        .find_map(|(instruction_index, instruction)| {
-            let record = recorded_sccp_message_instruction(instruction)?;
-            match validate_recorded_sccp_message_payload_bytes(
-                record.context,
-                &record.payload_bytes,
-            ) {
-                Ok(_) => None,
-                Err(RecordedSccpMessageValidationError::InvalidPayload) => {
-                    Some(SccpRecordInstructionValidationError::InvalidPayload {
-                        tx_index,
-                        instruction_index,
-                    })
-                }
-                Err(RecordedSccpMessageValidationError::InvalidContext) => {
-                    Some(SccpRecordInstructionValidationError::InvalidContext {
-                        tx_index,
-                        instruction_index,
-                    })
-                }
-                Err(RecordedSccpMessageValidationError::NonSoraSource { source_domain }) => {
-                    Some(SccpRecordInstructionValidationError::NonSoraSource {
-                        tx_index,
-                        instruction_index,
-                        source_domain,
-                    })
-                }
-                Err(RecordedSccpMessageValidationError::TargetProfileMismatch {
+    let validate_one = |instruction_index: usize, instruction: &InstructionBox| {
+        let record = recorded_sccp_message_instruction(instruction)?;
+        match validate_recorded_sccp_message_payload_bytes(record.context, &record.payload_bytes) {
+            Ok(_) => None,
+            Err(RecordedSccpMessageValidationError::InvalidPayload) => {
+                Some(SccpRecordInstructionValidationError::InvalidPayload {
+                    tx_index,
+                    instruction_index,
+                })
+            }
+            Err(RecordedSccpMessageValidationError::InvalidContext) => {
+                Some(SccpRecordInstructionValidationError::InvalidContext {
+                    tx_index,
+                    instruction_index,
+                })
+            }
+            Err(RecordedSccpMessageValidationError::NonSoraSource { source_domain }) => {
+                Some(SccpRecordInstructionValidationError::NonSoraSource {
+                    tx_index,
+                    instruction_index,
+                    source_domain,
+                })
+            }
+            Err(RecordedSccpMessageValidationError::TargetProfileMismatch {
+                target,
+                payload_target_domain,
+            }) => Some(
+                SccpRecordInstructionValidationError::TargetProfileMismatch {
+                    tx_index,
+                    instruction_index,
                     target,
                     payload_target_domain,
-                }) => Some(
-                    SccpRecordInstructionValidationError::TargetProfileMismatch {
-                        tx_index,
-                        instruction_index,
-                        target,
-                        payload_target_domain,
-                    },
-                ),
-                Err(RecordedSccpMessageValidationError::HashRoleCollision) => {
-                    Some(SccpRecordInstructionValidationError::HashRoleCollision {
-                        tx_index,
-                        instruction_index,
-                    })
-                }
-                Err(RecordedSccpMessageValidationError::RouteBinding { error }) => {
-                    Some(SccpRecordInstructionValidationError::RouteBinding {
-                        tx_index,
-                        instruction_index,
-                        error,
-                    })
-                }
+                },
+            ),
+            Err(RecordedSccpMessageValidationError::HashRoleCollision) => {
+                Some(SccpRecordInstructionValidationError::HashRoleCollision {
+                    tx_index,
+                    instruction_index,
+                })
             }
-        })
-}
+            Err(RecordedSccpMessageValidationError::RouteBinding { error }) => {
+                Some(SccpRecordInstructionValidationError::RouteBinding {
+                    tx_index,
+                    instruction_index,
+                    error,
+                })
+            }
+        }
+    };
 
+    match executable {
+        Executable::Instructions(instructions) => {
+            instructions
+                .iter()
+                .enumerate()
+                .find_map(|(instruction_index, instruction)| {
+                    validate_one(instruction_index, instruction)
+                })
+        }
+        Executable::IvmProved(proved) => {
+            proved
+                .overlay
+                .iter()
+                .enumerate()
+                .find_map(|(instruction_index, instruction)| {
+                    validate_one(instruction_index, instruction)
+                })
+        }
+        Executable::Batch(items) => {
+            items
+                .iter()
+                .enumerate()
+                .find_map(|(instruction_index, item)| match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        validate_one(instruction_index, instruction)
+                    }
+                    ExecutableBatchItem::ContractCall(_) => None,
+                })
+        }
+        Executable::ContractCall(_) | Executable::Ivm(_) => None,
+    }
+}
 fn invalid_sccp_record_instruction_in_signed_block(
     block: &SignedBlock,
 ) -> Option<SccpRecordInstructionValidationError> {
@@ -1319,6 +1376,174 @@ fn build_finality_proof_from_verified(
         block_header,
         finality_artifact,
     })
+}
+
+/// Build and sign one challenge-bound attestation for the exact committed state tip.
+///
+/// The first block hash and requested tip are taken from one immutable state view. The
+/// embedded proof is loaded from Kura's verified finality boundary, and the reducer status
+/// must name that exact proof before the node key is allowed to sign anything.
+///
+/// # Errors
+///
+/// Returns [`BridgeFinalityAttestationBuildError`] when the state is empty, the requested
+/// height is not its exact tip, finality is unavailable, the status/proof body is inconsistent,
+/// or the configured signer cannot produce a verifiable signature.
+pub fn build_finality_attestation(
+    state: &impl StateReadOnly,
+    status: SumeragiV2Status,
+    height: u64,
+    challenge: [u8; 32],
+    signer: &KeyPair,
+) -> Result<BridgeFinalityAttestationV1, BridgeFinalityAttestationBuildError> {
+    if signer.algorithm() != Algorithm::BlsNormal {
+        return Err(BridgeFinalityAttestationBuildError::InvalidSignerAlgorithm);
+    }
+    let committed_height = u64::try_from(state.block_hashes().len())
+        .map_err(|_| BridgeFinalityAttestationBuildError::HeightOverflow)?;
+    if committed_height == 0 {
+        return Err(BridgeFinalityAttestationBuildError::EmptyState);
+    }
+    require_exact_durable_tip_height(height, committed_height)?;
+    let genesis_block_hash = state
+        .block_hashes()
+        .first()
+        .copied()
+        .ok_or(BridgeFinalityAttestationBuildError::EmptyState)?;
+    let committed_tip_hash = state
+        .block_hashes()
+        .last()
+        .copied()
+        .ok_or(BridgeFinalityAttestationBuildError::EmptyState)?;
+    let genesis_finality_proof = build_finality_proof(state, 1)
+        .map_err(BridgeFinalityAttestationBuildError::GenesisFinalityProof)?;
+    require_finality_proof_at_committed_genesis(
+        genesis_block_hash,
+        genesis_finality_proof.finality_artifact.block_hash,
+    )?;
+    let finality_proof = build_finality_proof(state, height)
+        .map_err(BridgeFinalityAttestationBuildError::FinalityProof)?;
+    require_finality_proof_at_committed_tip(
+        committed_tip_hash,
+        finality_proof.finality_artifact.block_hash,
+    )?;
+    let node_id = PeerId::new(signer.public_key().clone());
+    let node_fingerprint = Hash::new(norito::codec::Encode::encode(&node_id));
+    let body = BridgeFinalityAttestationBodyV1 {
+        version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
+        challenge,
+        chain_id: state.chain_id().clone(),
+        node_id,
+        node_fingerprint,
+        genesis_block_hash,
+        genesis_finality_proof,
+        status,
+        finality_proof,
+    };
+    body.validate_consistency()
+        .map_err(BridgeFinalityAttestationBuildError::InvalidBody)?;
+    let signature = SignatureOf::try_from_hash(signer.private_key(), body.signing_hash())
+        .map_err(|error| BridgeFinalityAttestationBuildError::Signing(error.to_string()))?;
+    let attestation = BridgeFinalityAttestationV1 { body, signature };
+    attestation
+        .verify()
+        .map_err(BridgeFinalityAttestationBuildError::InvalidBody)?;
+    Ok(attestation)
+}
+
+fn require_finality_proof_at_committed_tip(
+    committed_tip_hash: iroha_crypto::HashOf<BlockHeader>,
+    proof_block_hash: iroha_crypto::HashOf<BlockHeader>,
+) -> Result<(), BridgeFinalityAttestationBuildError> {
+    if proof_block_hash != committed_tip_hash {
+        return Err(BridgeFinalityAttestationBuildError::FinalityTipMismatch {
+            committed_tip_hash,
+            proof_block_hash,
+        });
+    }
+    Ok(())
+}
+
+fn require_exact_durable_tip_height(
+    requested: u64,
+    committed: u64,
+) -> Result<(), BridgeFinalityAttestationBuildError> {
+    if requested != committed {
+        return Err(BridgeFinalityAttestationBuildError::HeightIsNotDurableTip {
+            requested,
+            committed,
+        });
+    }
+    Ok(())
+}
+
+fn require_finality_proof_at_committed_genesis(
+    committed_genesis_hash: iroha_crypto::HashOf<BlockHeader>,
+    proof_block_hash: iroha_crypto::HashOf<BlockHeader>,
+) -> Result<(), BridgeFinalityAttestationBuildError> {
+    if proof_block_hash != committed_genesis_hash {
+        return Err(
+            BridgeFinalityAttestationBuildError::GenesisFinalityMismatch {
+                committed_genesis_hash,
+                proof_block_hash,
+            },
+        );
+    }
+    Ok(())
+}
+
+/// Failure while producing a node-signed durable-tip finality attestation.
+#[derive(Debug, Error)]
+pub enum BridgeFinalityAttestationBuildError {
+    /// No committed genesis exists in the state snapshot.
+    #[error("cannot attest finality for an empty state")]
+    EmptyState,
+    /// The committed block count cannot be represented on the wire.
+    #[error("committed height does not fit into u64")]
+    HeightOverflow,
+    /// Only the exact durable tip may be attested.
+    #[error("requested height {requested} is not durable tip {committed}")]
+    HeightIsNotDurableTip {
+        /// Requested block height.
+        requested: u64,
+        /// Exact committed state-view tip.
+        committed: u64,
+    },
+    /// The verified finality record is not for the immutable state-view tip hash.
+    #[error(
+        "finality proof block hash {proof_block_hash:?} does not match committed tip {committed_tip_hash:?}"
+    )]
+    FinalityTipMismatch {
+        /// Last block hash in the immutable state view.
+        committed_tip_hash: iroha_crypto::HashOf<BlockHeader>,
+        /// Block hash authenticated by the loaded finality proof.
+        proof_block_hash: iroha_crypto::HashOf<BlockHeader>,
+    },
+    /// The verified height-one finality record is not for the immutable state-view genesis hash.
+    #[error(
+        "genesis finality proof block hash {proof_block_hash:?} does not match committed genesis {committed_genesis_hash:?}"
+    )]
+    GenesisFinalityMismatch {
+        /// First block hash in the immutable state view.
+        committed_genesis_hash: iroha_crypto::HashOf<BlockHeader>,
+        /// Block hash authenticated by the loaded height-one proof.
+        proof_block_hash: iroha_crypto::HashOf<BlockHeader>,
+    },
+    /// The production node signer is not the current BLS consensus identity.
+    #[error("finality attestation signer must use BlsNormal")]
+    InvalidSignerAlgorithm,
+    /// Kura could not produce the exact verified proof for the requested tip.
+    #[error("failed to build durable-tip finality proof: {0:?}")]
+    FinalityProof(BridgeFinalityError),
+    /// Kura could not produce the exact verified proof for committed height one.
+    #[error("failed to build committed-genesis finality proof: {0:?}")]
+    GenesisFinalityProof(BridgeFinalityError),
+    /// Status, node identity, genesis, or proof duplicate bindings disagree.
+    #[error("finality attestation body is inconsistent: {0}")]
+    InvalidBody(BridgeFinalityAttestationValidationError),
+    /// The configured private key failed to sign the domain-separated body hash.
+    #[error("failed to sign finality attestation: {0}")]
+    Signing(String),
 }
 
 /// Build an SCCP Groth16 request from a bundle bound to one already verified local artifact.
@@ -1693,6 +1918,86 @@ mod tests {
     fn checked_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("bridge BLS fixture key generation should succeed")
+    }
+
+    #[test]
+    fn finality_attestation_requires_exact_state_view_tip_hash() {
+        let committed_tip = BlockHeader::new(
+            NonZeroU64::new(2).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        )
+        .hash();
+        let another_tip = BlockHeader::new(
+            NonZeroU64::new(3).expect("non-zero height"),
+            Some(committed_tip),
+            None,
+            None,
+            0,
+            0,
+        )
+        .hash();
+
+        require_finality_proof_at_committed_tip(committed_tip, committed_tip)
+            .expect("exact tip must bind");
+        assert!(matches!(
+            require_finality_proof_at_committed_tip(committed_tip, another_tip),
+            Err(BridgeFinalityAttestationBuildError::FinalityTipMismatch {
+                committed_tip_hash,
+                proof_block_hash,
+            }) if committed_tip_hash == committed_tip && proof_block_hash == another_tip
+        ));
+    }
+
+    #[test]
+    fn finality_attestation_fails_closed_when_requested_tip_races_state_view() {
+        require_exact_durable_tip_height(7, 7).expect("same immutable tip height");
+        assert!(matches!(
+            require_exact_durable_tip_height(7, 8),
+            Err(BridgeFinalityAttestationBuildError::HeightIsNotDurableTip {
+                requested: 7,
+                committed: 8,
+            })
+        ));
+    }
+
+    #[test]
+    fn finality_attestation_requires_exact_state_view_genesis_hash() {
+        let committed_genesis = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        )
+        .hash();
+        let substituted_genesis = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            1,
+            0,
+        )
+        .hash();
+
+        require_finality_proof_at_committed_genesis(committed_genesis, committed_genesis)
+            .expect("exact genesis must bind");
+        assert!(matches!(
+            require_finality_proof_at_committed_genesis(
+                committed_genesis,
+                substituted_genesis,
+            ),
+            Err(BridgeFinalityAttestationBuildError::GenesisFinalityMismatch {
+                committed_genesis_hash,
+                proof_block_hash,
+            }) if committed_genesis_hash == committed_genesis
+                && proof_block_hash == substituted_genesis
+        ));
     }
 
     fn canonical_test_sccp_payload_bytes(payload: &SccpPayloadV1) -> Vec<u8> {
@@ -2122,9 +2427,13 @@ mod tests {
         let keypair = checked_keypair();
         let chain: ChainId = "bridge-sccp-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        TransactionBuilder::new(chain, authority)
-            .with_executable(executable)
-            .sign(keypair.private_key())
+        TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(executable)
+        .sign(keypair.private_key())
     }
 
     fn accepted_transaction_with_sccp_payload(payload: Vec<u8>) -> AcceptedTransaction<'static> {
@@ -2138,8 +2447,12 @@ mod tests {
         let keypair = checked_keypair();
         let chain_id: ChainId = "bridge-sccp-sealed-index".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let inner_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .sign(keypair.private_key());
+        let inner_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
         let commitment =
             iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
                 &chain_id, &inner_tx, [0x57; 32], 5,
@@ -2164,11 +2477,15 @@ mod tests {
         let keypair = checked_keypair();
         let chain_id: ChainId = "bridge-sccp-sealed-record".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_executable(ivm_proved_with_overlay(vec![InstructionBox::from(
-                crate::bridge::test_record_sccp_message(payload),
-            )]))
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(ivm_proved_with_overlay(vec![InstructionBox::from(
+            crate::bridge::test_record_sccp_message(payload),
+        )]))
+        .sign(keypair.private_key());
         let salt = [0x58; 32];
         let reveal_deadline_height = 8;
         let commitment =
@@ -2301,9 +2618,13 @@ mod tests {
             .map(crate::bridge::test_record_sccp_message)
             .map(InstructionBox::from)
             .collect();
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_executable(ivm_proved_with_overlay(instructions))
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(ivm_proved_with_overlay(instructions))
+        .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),

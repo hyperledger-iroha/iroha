@@ -9,19 +9,21 @@
  *   4. Finalizing the referendum
  *   5. Persisting a council snapshot
  *
- * By default the script only prints the deterministic hashes. Set
+ * Every transaction is quoted before signing. By default the script only
+ * prints the resulting hashes. Set
  *   GOV_SUBMIT=1 TORII_URL=http://localhost:8080 AUTHORITY=sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB PRIVATE_KEY_HEX=...
  * to submit them to a Torii node (requires the account to hold the relevant permissions).
  */
 import { Buffer } from "node:buffer";
 import { ToriiClient } from "../src/index.js";
 import {
-  buildProposeDeployContractTransaction,
-  buildCastPlainBallotTransaction,
-  buildEnactReferendumTransaction,
-  buildFinalizeReferendumTransaction,
-  buildPersistCouncilForEpochTransaction,
+  buildProposeDeployContractInstruction,
+  buildCastPlainBallotInstruction,
+  buildEnactReferendumInstruction,
+  buildFinalizeReferendumInstruction,
+  buildPersistCouncilForEpochInstruction,
   hashSignedTransaction,
+  quoteAndSignTransaction,
 } from "../src/index.js";
 
 const TORII_URL = process.env.TORII_URL ?? "http://localhost:8080";
@@ -35,6 +37,14 @@ const PRIVATE_KEY =
   process.env.PRIVATE_KEY_HEX != null
     ? Buffer.from(process.env.PRIVATE_KEY_HEX, "hex")
     : Buffer.alloc(32, 0x11);
+const REQUESTED_FEE_PAYMENT = process.env.FEE_SPONSOR_PROGRAM
+  ? {
+      payer: "sponsor",
+      programId: process.env.FEE_SPONSOR_PROGRAM,
+      programRevision: Number(process.env.FEE_SPONSOR_PROGRAM_REVISION),
+      chargeLimits: [],
+    }
+  : { payer: "authority", chargeLimits: [] };
 
 const SAMPLE_CONTRACT_ADDRESS =
   process.env.GOV_CONTRACT_ADDRESS ??
@@ -79,83 +89,63 @@ async function main() {
   const transactions = [
     {
       label: "ProposeDeployContract",
-      build: () =>
-        buildProposeDeployContractTransaction({
-          chainId: CHAIN_ID,
-          authority: AUTHORITY,
-          proposal: {
+      buildInstruction: () =>
+        buildProposeDeployContractInstruction({
             contractAddress: SAMPLE_CONTRACT_ADDRESS,
             codeHash: Buffer.alloc(32, 0xcd),
             abiHash: Buffer.alloc(32, 0xef),
             abiVersion: "1",
             window: { lower: 100, upper: 200 },
             votingMode: "Plain",
-          },
-          privateKey: PRIVATE_KEY,
         }),
     },
     {
       label: "CastPlainBallot",
-      build: () =>
-        buildCastPlainBallotTransaction({
-          chainId: CHAIN_ID,
-          authority: AUTHORITY,
-          ballot: {
+      buildInstruction: () =>
+        buildCastPlainBallotInstruction({
             referendumId: SAMPLE_REFERENDUM_ID,
             owner: AUTHORITY,
             amount: "2500",
             durationBlocks: 7200,
             direction: "aye",
-          },
-          privateKey: PRIVATE_KEY,
         }),
     },
     {
       label: "EnactReferendum",
-      build: () =>
-        buildEnactReferendumTransaction({
-          chainId: CHAIN_ID,
-          authority: AUTHORITY,
-          enactment: {
+      buildInstruction: () =>
+        buildEnactReferendumInstruction({
             referendumId: SAMPLE_REFERENDUM_HASH,
             preimageHash: Buffer.alloc(32, 0xee),
             window: { lower: 300, upper: 360 },
-          },
-          privateKey: PRIVATE_KEY,
         }),
     },
     {
       label: "FinalizeReferendum",
-      build: () =>
-        buildFinalizeReferendumTransaction({
-          chainId: CHAIN_ID,
-          authority: AUTHORITY,
-          finalization: {
+      buildInstruction: () =>
+        buildFinalizeReferendumInstruction({
             referendumId: SAMPLE_REFERENDUM_ID,
             proposalId: SAMPLE_PROPOSAL_HASH,
-          },
-          privateKey: PRIVATE_KEY,
         }),
     },
     {
       label: "PersistCouncilForEpoch",
-      build: () =>
-        buildPersistCouncilForEpochTransaction({
-          chainId: CHAIN_ID,
-          authority: AUTHORITY,
-          record: {
+      buildInstruction: () =>
+        buildPersistCouncilForEpochInstruction({
             epoch: 42,
             members: [AUTHORITY],
             candidatesCount: 10,
             derivedBy: "Vrf",
-          },
-          privateKey: PRIVATE_KEY,
         }),
     },
   ];
 
-  const needsClient = SHOULD_SUBMIT || SHOULD_FETCH;
-  const client = needsClient ? new ToriiClient(TORII_URL) : null;
+  if (REQUESTED_FEE_PAYMENT.payer === "sponsor" &&
+      (!Number.isSafeInteger(REQUESTED_FEE_PAYMENT.programRevision) ||
+       REQUESTED_FEE_PAYMENT.programRevision <= 0)) {
+    throw new Error("FEE_SPONSOR_PROGRAM requires a positive FEE_SPONSOR_PROGRAM_REVISION");
+  }
+  const client = new ToriiClient(TORII_URL);
+  const canonicalAuth = { accountId: AUTHORITY, privateKey: PRIVATE_KEY };
   console.log(
     `Building governance transactions (submit=${SHOULD_SUBMIT ? "yes" : "no"}, fetch=${
       SHOULD_FETCH ? "yes" : "no"
@@ -163,15 +153,24 @@ async function main() {
   );
 
   for (const entry of transactions) {
-    const tx = entry.build();
+    // eslint-disable-next-line no-await-in-loop
+    const tx = await quoteAndSignTransaction(
+      client,
+      {
+        chainId: CHAIN_ID,
+        authority: AUTHORITY,
+        instructions: [entry.buildInstruction()],
+        feePayment: REQUESTED_FEE_PAYMENT,
+        privateKey: PRIVATE_KEY,
+      },
+      { canonicalAuth },
+    );
     logTransaction(entry.label, tx);
-    if (client) {
-      // eslint-disable-next-line no-await-in-loop
-      await maybeSubmit(client, entry.label, tx);
-    }
+    // eslint-disable-next-line no-await-in-loop
+    await maybeSubmit(client, entry.label, tx);
   }
 
-  if (client && SHOULD_FETCH) {
+  if (SHOULD_FETCH) {
     await inspectGovernance(client);
   }
 

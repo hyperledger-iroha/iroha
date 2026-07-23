@@ -95,7 +95,6 @@ use iroha_data_model::{
         SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
     },
     subscription::{
-        ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY, AccountAliasAutoRenewMetadata,
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
     },
@@ -163,6 +162,9 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
 // reads/enumeration remain supported; mutation must go through the validating
 // native instructions that own the records.
 const READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
+    "offline_device_attestation_policy/",
+    "kagemusha_online_registration_v1_",
+    "kagemusha_online_registration_v2_",
     "pkdeploy_verified_lane_relay_",
     "pkdeploy_verified_nexus_fee_budget_",
     "VerifiedLaneRelays/",
@@ -528,6 +530,8 @@ enum HostExecutionClass {
     Contract,
     View,
     IvmProvedContract,
+    LocalContractDebug,
+    LocalViewDebug,
 }
 
 impl HostExecutionClass {
@@ -537,7 +541,7 @@ impl HostExecutionClass {
         {
             return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: number });
         }
-        if matches!(self, Self::View)
+        if matches!(self, Self::View | Self::LocalViewDebug)
             && matches!(
                 ivm::syscalls::syscall_access(number),
                 ivm::syscalls::SyscallAccess::StateWrite
@@ -559,6 +563,7 @@ impl HostExecutionClass {
 pub struct CoreHostImpl<QS> {
     authority: AccountId,
     execution_class: HostExecutionClass,
+    local_debug_artifacts: bool,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     nested_contract_call_depth: usize,
@@ -1185,19 +1190,6 @@ where
     }
 }
 
-/// Snapshot of subscription-related data resolved from the current state.
-#[derive(Clone)]
-enum SubscriptionBillingKind {
-    Generic {
-        plan: SubscriptionPlan,
-        charge_asset_def: AssetDefinition,
-    },
-    AccountAliasAutoRenew {
-        metadata: AccountAliasAutoRenewMetadata,
-        charge_asset_def: AssetDefinition,
-    },
-}
-
 /// Resolved subscription state and billing inputs for the trigger currently being billed.
 pub struct SubscriptionContext {
     executable: Executable,
@@ -1205,7 +1197,8 @@ pub struct SubscriptionContext {
     trigger_metadata: Metadata,
     subscription_nft_id: NftId,
     subscription_state: SubscriptionState,
-    billing: SubscriptionBillingKind,
+    plan: SubscriptionPlan,
+    charge_asset_def: AssetDefinition,
     subscriber_balance: Quantity,
     nft_owner: AccountId,
 }
@@ -1312,17 +1305,6 @@ pub trait QueryStateRefOps {
         &self,
         plan_id: &AssetDefinitionId,
     ) -> Result<SubscriptionPlan, ivm::VMError>;
-    /// Quote a SNS account-alias renewal using current state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`ivm::VMError`] if the alias is invalid or not renewable.
-    fn quote_account_alias_renewal(
-        &self,
-        alias_literal: &str,
-        term_years: u8,
-        now_ms: u64,
-    ) -> Result<crate::sns::LeaseQuote, ivm::VMError>;
     /// Load deployed bytecode by its canonical complete-artifact hash.
     ///
     /// Nested dispatch calls this only after a prepared-artifact cache miss;
@@ -1904,46 +1886,6 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
         }
     }
 
-    fn quote_account_alias_renewal(
-        &self,
-        alias_literal: &str,
-        term_years: u8,
-        now_ms: u64,
-    ) -> Result<crate::sns::LeaseQuote, ivm::VMError> {
-        match *self {
-            QueryStateRef::View(view) => CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
-                view,
-                alias_literal,
-                term_years,
-                now_ms,
-            ),
-            QueryStateRef::QueryView(view) => {
-                CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
-                    view,
-                    alias_literal,
-                    term_years,
-                    now_ms,
-                )
-            }
-            QueryStateRef::Block(block) => {
-                CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
-                    block,
-                    alias_literal,
-                    term_years,
-                    now_ms,
-                )
-            }
-            QueryStateRef::Transaction(tx) => {
-                CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
-                    tx,
-                    alias_literal,
-                    term_years,
-                    now_ms,
-                )
-            }
-        }
-    }
-
     fn contract_code_bytes(&self, code_hash: &Hash) -> Option<Vec<u8>> {
         match *self {
             QueryStateRef::View(view) => {
@@ -2206,6 +2148,7 @@ enum NestedContractCallOutcome {
 struct NestedContractCallHostSnapshot {
     authority: AccountId,
     execution_class: HostExecutionClass,
+    local_debug_artifacts: bool,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     args: Option<iroha_primitives::json::Json>,
@@ -2680,6 +2623,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self {
             authority,
             execution_class: HostExecutionClass::Generic,
+            local_debug_artifacts: false,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2805,6 +2749,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self {
             authority,
             execution_class: HostExecutionClass::Generic,
+            local_debug_artifacts: false,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2890,6 +2835,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self {
             authority,
             execution_class: HostExecutionClass::Generic,
+            local_debug_artifacts: false,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2983,6 +2929,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.args = None;
         self.entrypoint_argument_record = record;
         self.prepared_argument_record_pointer = None;
+    }
+
+    /// Enable the contract syscall surface for an unauthenticated local debug run.
+    ///
+    /// This mode deliberately leaves deployed-contract identity and authorization
+    /// unset. Callers may inspect the resulting in-memory queue and durable-state
+    /// overlay, but must not treat those local artifacts as authorized for commit.
+    pub fn set_local_contract_debug_execution(&mut self) {
+        self.clear_contract_runtime_binding();
+        self.execution_class = HostExecutionClass::LocalContractDebug;
+        self.local_debug_artifacts = true;
+    }
+
+    /// Enable the read-only contract syscall surface for an unauthenticated local debug run.
+    ///
+    /// State and ledger writes remain rejected, and deployed-contract identity and
+    /// authorization remain unset. This is intended only for inspecting local views.
+    pub fn set_local_contract_debug_view_execution(&mut self) {
+        self.clear_contract_runtime_binding();
+        self.execution_class = HostExecutionClass::LocalViewDebug;
+        self.local_debug_artifacts = true;
     }
 
     /// Preserve the currently executing contract identity for queued runtime instructions.
@@ -3299,6 +3266,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Seed the NFT sequence counter used by sample syscalls so ids remain unique across calls.
     pub fn set_nft_seq_base(&mut self, base: u64) {
         self.nft_seq = base;
+    }
+
+    /// Return the next deterministic NFT sequence after this host's completed execution.
+    #[must_use]
+    pub(crate) fn next_nft_sequence(&self) -> u64 {
+        self.nft_seq
     }
 
     /// Update cryptography configuration and propagate toggles to the helper host.
@@ -4905,17 +4878,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn ensure_view_execution_has_no_effect_artifacts(&self) -> Result<(), ValidationFail> {
-        if matches!(self.execution_class, HostExecutionClass::View)
-            && (!self.queued.is_empty()
-                || self.fastpq_batch_entries.is_some()
-                || !self.durable_state_overlay.is_empty()
-                || !self.durable_state_authorizations.is_empty()
-                || self.axt_state.is_some()
-                || !self.completed_axt.is_empty()
-                || self.instruction_queue_violation.is_some())
+        if matches!(
+            self.execution_class,
+            HostExecutionClass::View | HostExecutionClass::LocalViewDebug
+        ) && (!self.queued.is_empty()
+            || self.fastpq_batch_entries.is_some()
+            || !self.durable_state_overlay.is_empty()
+            || !self.durable_state_authorizations.is_empty()
+            || self.axt_state.is_some()
+            || !self.completed_axt.is_empty()
+            || self.instruction_queue_violation.is_some())
         {
             return Err(ValidationFail::NotPermitted(
                 "read-only view execution retained mutable host artifacts".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_execution_artifacts_are_committable(&self) -> Result<(), ValidationFail> {
+        if self.local_debug_artifacts {
+            return Err(ValidationFail::NotPermitted(
+                "local debug execution artifacts cannot be committed".to_owned(),
             ));
         }
         Ok(())
@@ -4925,6 +4909,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) -> Result<HostExecutionArtifacts, ValidationFail> {
+        self.ensure_execution_artifacts_are_committable()?;
         self.ensure_view_execution_has_no_effect_artifacts()?;
         let queued = self.drain_queued_instructions_with_fallback(contract_runtime_context);
         self.validate_queued_for_zk(
@@ -4970,6 +4955,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         authority: &AccountId,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
+        self.ensure_execution_artifacts_are_committable()?;
         self.ensure_view_execution_has_no_effect_artifacts()?;
         let queued =
             self.drain_queued_instructions_with_fallback(contract_runtime_context.cloned());
@@ -6440,6 +6426,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         NestedContractCallHostSnapshot {
             authority: self.authority.clone(),
             execution_class: self.execution_class,
+            local_debug_artifacts: self.local_debug_artifacts,
             current_contract_runtime_context: self.current_contract_runtime_context.clone(),
             current_entrypoint_authorization: self.current_entrypoint_authorization.clone(),
             args: self.args.take(),
@@ -6480,6 +6467,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let NestedContractCallHostSnapshot {
             authority,
             execution_class,
+            local_debug_artifacts,
             current_contract_runtime_context,
             current_entrypoint_authorization,
             args,
@@ -6520,6 +6508,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         self.authority = authority;
         self.execution_class = execution_class;
+        self.local_debug_artifacts |= local_debug_artifacts;
         self.current_contract_runtime_context = current_contract_runtime_context;
         self.current_entrypoint_authorization = current_entrypoint_authorization;
         self.args = args;
@@ -7170,182 +7159,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .saturating_add(Self::QUERY_GAS_PER_BYTE.saturating_mul(processed_bytes))
     }
 
-    fn subscription_bill_account_alias(
-        &mut self,
-        trigger_id: &TriggerId,
-        context: SubscriptionContext,
-        metadata: AccountAliasAutoRenewMetadata,
-        charge_asset_def: AssetDefinition,
-    ) -> Result<u64, ivm::VMError> {
-        let mut subscription_state = context.subscription_state;
-        if subscription_state.subscriber != context.nft_owner {
-            return Err(ivm::VMError::NoritoInvalid);
-        }
-        subscription_state.billing_trigger_id = trigger_id.clone();
-
-        let scheduled_at_ms = subscription_state.next_charge_ms;
-        let now_ms = self.current_block_time_ms.unwrap_or(scheduled_at_ms);
-        let attempted_at_ms = now_ms.max(scheduled_at_ms);
-        let previous_period_end_ms = subscription_state.current_period_end_ms;
-        let quote = {
-            let Some(state_ref) = self.query_state.get() else {
-                return Err(ivm::VMError::NotImplemented {
-                    syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
-                });
-            };
-            state_ref.quote_account_alias_renewal(
-                &metadata.alias,
-                metadata.term_years,
-                attempted_at_ms,
-            )
-        };
-
-        let mut gas = 0_u64;
-        let invoice;
-        match quote {
-            Ok(quote) => {
-                let charge_amount = quote.charge_amount.clone();
-                let within_cap = charge_amount <= metadata.max_charge_amount.clone();
-                let can_pay = within_cap && charge_amount <= context.subscriber_balance;
-                invoice = SubscriptionInvoice {
-                    subscription_nft_id: context.subscription_nft_id.clone(),
-                    period_start_ms: previous_period_end_ms,
-                    period_end_ms: quote.expires_at_ms,
-                    attempted_at_ms,
-                    amount: charge_amount.clone(),
-                    asset_definition: charge_asset_def.id.clone(),
-                    status: if can_pay {
-                        SubscriptionInvoiceStatus::Paid
-                    } else {
-                        SubscriptionInvoiceStatus::Failed
-                    },
-                    tx_hash: None,
-                };
-                if can_pay {
-                    let alias = {
-                        let Some(state_ref) = self.query_state.get() else {
-                            return Err(ivm::VMError::NotImplemented {
-                                syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
-                            });
-                        };
-                        state_ref.parse_account_alias(&metadata.alias)?
-                    };
-                    let renew =
-                        iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
-                            alias,
-                            subscription_state.subscriber.clone(),
-                            metadata.term_years,
-                        );
-                    gas = gas.saturating_add(self.queue_instruction(InstructionBox::from(renew)));
-                    subscription_state.failure_count = 0;
-                    subscription_state.status = SubscriptionStatus::Active;
-                    subscription_state.current_period_start_ms = previous_period_end_ms;
-                    subscription_state.current_period_end_ms = quote.expires_at_ms;
-                    subscription_state.next_charge_ms = quote.expires_at_ms;
-                } else {
-                    subscription_state.failure_count =
-                        subscription_state.failure_count.saturating_add(1);
-                    subscription_state.status =
-                        if subscription_state.failure_count >= metadata.max_failures {
-                            SubscriptionStatus::Suspended
-                        } else {
-                            SubscriptionStatus::PastDue
-                        };
-                    if subscription_state.status != SubscriptionStatus::Suspended {
-                        subscription_state.next_charge_ms =
-                            attempted_at_ms.saturating_add(metadata.retry_backoff_ms);
-                    }
-                }
-            }
-            Err(_) => {
-                invoice = SubscriptionInvoice {
-                    subscription_nft_id: context.subscription_nft_id.clone(),
-                    period_start_ms: previous_period_end_ms,
-                    period_end_ms: previous_period_end_ms,
-                    attempted_at_ms,
-                    amount: Quantity::zero(),
-                    asset_definition: charge_asset_def.id.clone(),
-                    status: SubscriptionInvoiceStatus::Failed,
-                    tx_hash: None,
-                };
-                subscription_state.failure_count = metadata.max_failures.max(1);
-                subscription_state.status = SubscriptionStatus::Suspended;
-            }
-        }
-
-        #[cfg(feature = "telemetry")]
-        if let Some(telemetry) = self.telemetry.as_ref() {
-            let outcome = match subscription_state.status {
-                SubscriptionStatus::Active => "paid",
-                SubscriptionStatus::Suspended => "suspended",
-                _ => "failed",
-            };
-            telemetry.record_subscription_billing_outcome("sns_alias", outcome);
-        }
-
-        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
-            .parse()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        let subscription_json = iroha_primitives::json::Json::new(subscription_state.clone());
-        let subscription_isi = SetKeyValue::nft(
-            context.subscription_nft_id.clone(),
-            subscription_key,
-            subscription_json,
-        );
-        gas = gas.saturating_add(
-            self.queue_instruction(InstructionBox::from(SetKeyValueBox::from(subscription_isi))),
-        );
-
-        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY
-            .parse()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        let invoice_json = iroha_primitives::json::Json::new(invoice);
-        let invoice_isi = SetKeyValue::nft(
-            context.subscription_nft_id.clone(),
-            invoice_key,
-            invoice_json,
-        );
-        gas = gas.saturating_add(
-            self.queue_instruction(InstructionBox::from(SetKeyValueBox::from(invoice_isi))),
-        );
-
-        if matches!(
-            subscription_state.status,
-            SubscriptionStatus::Suspended | SubscriptionStatus::Canceled
-        ) {
-            let unregister =
-                InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
-            gas = gas.saturating_add(self.queue_instruction(unregister));
-            return Ok(gas);
-        }
-
-        let schedule = Schedule {
-            start_ms: subscription_state.next_charge_ms,
-            period_ms: None,
-        };
-        let mut next_trigger_metadata = context.trigger_metadata.clone();
-        for key in ["__registered_block_height", "__registered_at_ms"] {
-            let key = key
-                .parse::<Name>()
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
-            next_trigger_metadata.remove(&key);
-        }
-        let action = iroha_data_model::trigger::action::Action::new(
-            context.executable.clone(),
-            Repeats::Exactly(1),
-            context.authority.clone(),
-            TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        )
-        .with_metadata(next_trigger_metadata);
-        let trigger = Trigger::new(trigger_id.clone(), action);
-        let unregister =
-            InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
-        gas = gas.saturating_add(self.queue_instruction(unregister));
-        let register = InstructionBox::from(RegisterBox::from(Register::trigger(trigger)));
-        gas = gas.saturating_add(self.queue_instruction(register));
-        Ok(gas)
-    }
-
     #[allow(clippy::too_many_lines)]
     fn subscription_bill(&mut self) -> Result<u64, ivm::VMError> {
         struct BillingWindow {
@@ -7372,21 +7185,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if subscription_state.subscriber != context.nft_owner {
             return Err(ivm::VMError::NoritoInvalid);
         }
-        let billing = context.billing.clone();
-        if let SubscriptionBillingKind::Generic { plan, .. } = &billing
-            && subscription_state.provider != plan.provider
-        {
+        let plan = context.plan.clone();
+        if subscription_state.provider != plan.provider {
             return Err(ivm::VMError::NoritoInvalid);
         }
         subscription_state.billing_trigger_id = trigger_id.clone();
 
         #[cfg(feature = "telemetry")]
-        let pricing_label = match &billing {
-            SubscriptionBillingKind::Generic { plan, .. } => match &plan.pricing {
-                SubscriptionPricing::Fixed(_) => "fixed",
-                SubscriptionPricing::Usage(_) => "usage",
-            },
-            SubscriptionBillingKind::AccountAliasAutoRenew { .. } => "sns_alias",
+        let pricing_label = match &plan.pricing {
+            SubscriptionPricing::Fixed(_) => "fixed",
+            SubscriptionPricing::Usage(_) => "usage",
         };
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = self.telemetry.as_ref() {
@@ -7408,27 +7216,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Ok(self.queue_instruction(instr));
         }
 
-        if let SubscriptionBillingKind::AccountAliasAutoRenew {
-            metadata,
-            charge_asset_def,
-        } = billing
-        {
-            return self.subscription_bill_account_alias(
-                &trigger_id,
-                context,
-                metadata,
-                charge_asset_def,
-            );
-        }
-
-        let SubscriptionBillingKind::Generic {
-            plan,
-            charge_asset_def,
-        } = billing
-        else {
-            unreachable!("subscription billing kind is exhaustive");
-        };
-
+        let charge_asset_def = context.charge_asset_def.clone();
         let billing = plan.billing;
         let scheduled_at_ms = subscription_state.next_charge_ms;
         let now_ms = self.current_block_time_ms.unwrap_or(scheduled_at_ms);
@@ -7788,54 +7576,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let subscription_nft_id = trigger_ref.subscription_nft_id;
         let (subscription_state, nft_owner) =
             Self::subscription_state_and_owner(state, &subscription_nft_id)?;
-        let nft = state
-            .world()
-            .nft(&subscription_nft_id)
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        let alias_auto_renew_key: Name = ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY
-            .parse()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        let billing = if let Some(value) = nft.value().content.get(&alias_auto_renew_key) {
-            let metadata = value
-                .try_into_any_norito::<AccountAliasAutoRenewMetadata>()
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
-            let charge_asset_def = state
-                .world()
-                .asset_definition(&subscription_state.plan_id)
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
-            SubscriptionBillingKind::AccountAliasAutoRenew {
-                metadata,
-                charge_asset_def,
-            }
-        } else {
-            let plan = Self::subscription_plan(state, &subscription_state.plan_id)?;
-            let charge_asset_def = {
-                let charge_asset_id = match &plan.pricing {
-                    SubscriptionPricing::Fixed(pricing) => &pricing.asset_definition,
-                    SubscriptionPricing::Usage(pricing) => &pricing.asset_definition,
-                };
-                state
-                    .world()
-                    .asset_definition(charge_asset_id)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?
+        let plan = Self::subscription_plan(state, &subscription_state.plan_id)?;
+        let charge_asset_def = {
+            let charge_asset_id = match &plan.pricing {
+                SubscriptionPricing::Fixed(pricing) => &pricing.asset_definition,
+                SubscriptionPricing::Usage(pricing) => &pricing.asset_definition,
             };
-            SubscriptionBillingKind::Generic {
-                plan,
-                charge_asset_def,
-            }
-        };
-        let charge_asset_definition_id = match &billing {
-            SubscriptionBillingKind::Generic {
-                charge_asset_def, ..
-            }
-            | SubscriptionBillingKind::AccountAliasAutoRenew {
-                charge_asset_def, ..
-            } => charge_asset_def.id.clone(),
+            state
+                .world()
+                .asset_definition(charge_asset_id)
+                .map_err(|_| ivm::VMError::NoritoInvalid)?
         };
 
         let balance = {
             let asset_id = AssetId::of(
-                charge_asset_definition_id,
+                charge_asset_def.id.clone(),
                 subscription_state.subscriber.clone(),
             );
             state
@@ -7850,7 +7605,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             trigger_metadata,
             subscription_nft_id,
             subscription_state,
-            billing,
+            plan,
+            charge_asset_def,
             subscriber_balance: balance,
             nft_owner,
         })
@@ -7913,24 +7669,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     ) -> Result<AccountAlias, ivm::VMError> {
         AccountAlias::from_literal(alias_literal, &state.nexus().dataspace_catalog)
             .map_err(|_| ivm::VMError::NoritoInvalid)
-    }
-
-    fn quote_account_alias_renewal<S: StateReadOnly>(
-        state: &S,
-        alias_literal: &str,
-        term_years: u8,
-        now_ms: u64,
-    ) -> Result<crate::sns::LeaseQuote, ivm::VMError> {
-        let alias = AccountAlias::from_literal(alias_literal, &state.nexus().dataspace_catalog)
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        crate::sns::quote_account_alias_renewal(
-            state.world(),
-            &state.nexus().dataspace_catalog,
-            &alias,
-            term_years,
-            now_ms,
-        )
-        .map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
     fn parameter_by_name<S: StateReadOnly>(
@@ -9970,7 +9708,15 @@ impl<QS> CoreHostImpl<QS> {
         ) {
             return Err(ivm::VMError::PermissionDenied);
         }
-        if let Some(account_id) = state.world().account_aliases().get(&alias_label).cloned() {
+        let now_ms = state.latest_block().map_or(0, |block| {
+            u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+        });
+        if let Some(account_id) = crate::sns::resolve_active_account_alias(
+            state.world(),
+            &state.nexus().dataspace_catalog,
+            &alias_label,
+            now_ms,
+        ) {
             return Ok(account_id);
         }
         Err(ivm::VMError::DecodeError)
@@ -12466,6 +12212,132 @@ seiyaku ReadOnlyBinding {
             Ok(()),
             "a prior view binding must not leave the host over-restricted"
         );
+    }
+
+    #[test]
+    fn local_debug_execution_classes_are_unbound_and_preserve_view_restrictions() {
+        let authority = ALICE_ID.clone();
+        let mut host = CoreHost::new(authority);
+
+        host.set_local_contract_debug_execution();
+        assert_eq!(host.execution_class, HostExecutionClass::LocalContractDebug);
+        assert!(host.current_contract_runtime_context.is_none());
+        assert!(host.current_entrypoint_authorization.is_none());
+        assert!(host.ensure_execution_artifacts_are_committable().is_err());
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_SET),
+            Ok(())
+        );
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+            Ok(())
+        );
+
+        host.set_local_contract_debug_view_execution();
+        assert_eq!(host.execution_class, HostExecutionClass::LocalViewDebug);
+        assert!(host.current_contract_runtime_context.is_none());
+        assert!(host.current_entrypoint_authorization.is_none());
+        assert!(host.ensure_execution_artifacts_are_committable().is_err());
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_GET),
+            Ok(())
+        );
+        for syscall in [ivm_sys::SYSCALL_STATE_SET, ivm_sys::SYSCALL_REGISTER_DOMAIN] {
+            assert_eq!(
+                host.execution_class.ensure_syscall_allowed(syscall),
+                Err(ivm::VMError::PermissionDenied),
+                "local debug views must reject effect syscall 0x{syscall:02x}"
+            );
+        }
+        host.durable_state_overlay.insert(
+            "debug_view_effect"
+                .parse()
+                .expect("valid durable state path"),
+            Some(vec![1]),
+        );
+        assert!(
+            host.ensure_view_execution_has_no_effect_artifacts()
+                .is_err(),
+            "local debug views must fail closed if mutable artifacts survive dispatch"
+        );
+        host.set_generic_execution();
+        assert_eq!(host.execution_class, HostExecutionClass::Generic);
+        assert!(
+            host.ensure_execution_artifacts_are_committable().is_err(),
+            "changing execution class must not clear local-debug provenance"
+        );
+    }
+
+    #[test]
+    fn local_contract_debug_artifacts_survive_runtime_rebinding_and_fail_closed() {
+        let authority = ALICE_ID.clone();
+        let mut host = CoreHost::new(authority.clone());
+        host.set_local_contract_debug_execution();
+
+        let attempted_domain =
+            DomainId::try_new("local_debug_guard", "universal").expect("valid domain id");
+        let attempted = InstructionBox::from(RegisterBox::from(Register::domain(Domain::new(
+            attempted_domain.clone(),
+        ))));
+        host.queue_instruction(attempted.clone());
+
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            49,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive rebound contract address");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "execute".to_owned(),
+            None,
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract_address.clone(),
+                contract_alias: None,
+                contract_alias_binding: None,
+                code_hash: Hash::new(b"local debug rebound guard"),
+            },
+        );
+        host.bind_contract_runtime_context(contract_address.subject_id(), authorization);
+        assert_eq!(host.execution_class, HostExecutionClass::Contract);
+        assert!(host.local_debug_artifacts);
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let error = host
+            .apply_queued(&mut stx, &authority)
+            .expect_err("local debug artifacts must never be applied");
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message == "local debug execution artifacts cannot be committed"
+        ));
+        assert!(stx.world.domain(&attempted_domain).is_err());
+        assert!(
+            stx.tx_call_hash.is_none(),
+            "the local debug guard must run before execution identity is seeded"
+        );
+        assert_eq!(host.queued.len(), 1, "the guard must run before draining");
+        assert_eq!(host.queued[0].instruction, attempted);
+
+        let error = match host.into_execution_artifacts(None) {
+            Err(error) => error,
+            Ok(_) => panic!("local debug artifacts must never be exported"),
+        };
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message == "local debug execution artifacts cannot be committed"
+        ));
     }
 
     #[test]
@@ -16310,6 +16182,202 @@ mod tests {
         (paynet, catalog)
     }
 
+    fn resolved_test_account_alias(
+        tx: &StateTransaction<'_, '_>,
+        alias: &AccountAlias,
+    ) -> iroha_data_model::alias_setup::ResolvedAccountAliasV1 {
+        iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
+            alias
+                .to_literal(&tx.nexus.dataspace_catalog)
+                .expect("fixture alias must resolve through the live catalog")
+                .parse()
+                .expect("fixture alias literal must be canonical"),
+            alias.dataspace,
+        )
+    }
+
+    fn seed_test_account_alias_lease_record(
+        tx: &mut StateTransaction<'_, '_>,
+        alias: &AccountAlias,
+        owner: &AccountId,
+    ) {
+        let dataspace_name = tx
+            .nexus
+            .dataspace_catalog
+            .by_id(alias.dataspace)
+            .expect("fixture alias dataspace must be catalogued")
+            .alias
+            .clone();
+        let dataspace_selector =
+            crate::sns::selector_for_dataspace_alias(&dataspace_name).expect("dataspace selector");
+        let dataspace_key = crate::sns::record_storage_key(&dataspace_selector);
+        if tx.world.smart_contract_state.get(&dataspace_key).is_none() {
+            let address = AccountAddress::from_account_id(owner).expect("fixture owner address");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                dataspace_selector,
+                owner.clone(),
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                Metadata::default(),
+            );
+            tx.world
+                .smart_contract_state
+                .insert(dataspace_key, norito::codec::Encode::encode(&record));
+        }
+
+        if let Some(domain_id) = alias
+            .domain_id(&tx.nexus.dataspace_catalog)
+            .expect("fixture alias domain")
+        {
+            let domain_owner = tx
+                .world
+                .domains
+                .get(&domain_id)
+                .map(|domain| domain.owned_by().clone())
+                .unwrap_or_else(|| owner.clone());
+            if tx.world.domains.get(&domain_id).is_none() {
+                let domain = Domain::new(domain_id.clone()).build(&domain_owner);
+                tx.world.insert_domain_entry(domain_id.clone(), domain);
+                tx.world.track_domain_owner(&domain_id, &domain_owner);
+            }
+            let domain_selector =
+                AccountDomainSelector::from_domain(&domain_id).expect("fixture domain selector");
+            tx.world
+                .domain_selectors
+                .insert(domain_selector, domain_id.clone());
+            let selector =
+                crate::sns::selector_for_domain(&domain_id).expect("SNS domain selector");
+            let storage_key = crate::sns::record_storage_key(&selector);
+            if tx.world.smart_contract_state.get(&storage_key).is_none() {
+                let address =
+                    AccountAddress::from_account_id(&domain_owner).expect("domain owner address");
+                let record = iroha_data_model::sns::NameRecordV1::new(
+                    selector,
+                    domain_owner,
+                    vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                    0,
+                    0,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    Metadata::default(),
+                );
+                tx.world
+                    .smart_contract_state
+                    .insert(storage_key, norito::codec::Encode::encode(&record));
+            }
+        }
+
+        let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
+            .expect("fixture alias selector");
+        let storage_key = crate::sns::record_storage_key(&selector);
+        if tx.world.smart_contract_state.get(&storage_key).is_some() {
+            return;
+        }
+        let address = AccountAddress::from_account_id(owner).expect("fixture owner address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector,
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        tx.world
+            .smart_contract_state
+            .insert(storage_key, norito::codec::Encode::encode(&record));
+    }
+
+    /// Lease-only state fixture for alias-resolution tests.
+    struct SeedTestAccountAliasLease {
+        alias: AccountAlias,
+        owner: AccountId,
+    }
+
+    impl SeedTestAccountAliasLease {
+        fn new(
+            alias: AccountAlias,
+            owner: AccountId,
+            _payer: AccountId,
+            _term_years: u8,
+            _pricing_class_hint: Option<u8>,
+        ) -> Self {
+            Self { alias, owner }
+        }
+    }
+
+    impl Execute for SeedTestAccountAliasLease {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            tx: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), iroha_data_model::isi::error::InstructionExecutionError> {
+            seed_test_account_alias_lease_record(tx, &self.alias, &self.owner);
+            Ok(())
+        }
+    }
+
+    /// Declarative repair/CAS adapter used to build alias-resolution fixtures.
+    struct EnsureTestAccountAliasBinding {
+        account: AccountId,
+        alias: AccountAlias,
+    }
+
+    impl EnsureTestAccountAliasBinding {
+        fn bind(account: AccountId, alias: AccountAlias, _lease_expiry_ms: Option<u64>) -> Self {
+            Self { account, alias }
+        }
+    }
+
+    impl Execute for EnsureTestAccountAliasBinding {
+        fn execute(
+            self,
+            authority: &AccountId,
+            tx: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), iroha_data_model::isi::error::InstructionExecutionError> {
+            seed_test_account_alias_lease_record(tx, &self.alias, &self.account);
+            let resolved = resolved_test_account_alias(tx, &self.alias);
+            if let Some(expected_target) = tx.world.account_aliases.get(&self.alias).cloned()
+                && expected_target != self.account
+            {
+                return iroha_data_model::isi::alias_setup::RebindAccountAlias::new(
+                    resolved,
+                    expected_target,
+                    self.account,
+                )
+                .execute(authority, tx);
+            }
+            iroha_data_model::isi::alias_setup::EnsureAlias::new(
+                iroha_data_model::alias_setup::AliasIntentV1::AccountAlias(
+                    iroha_data_model::alias_setup::AliasAccountIntentV1 {
+                        alias: resolved,
+                        target_account: self.account,
+                        provision: iroha_data_model::alias_setup::AccountProvisionV1::Existing,
+                        role: iroha_data_model::alias_setup::AccountAliasRoleV1::Additional,
+                    },
+                ),
+                iroha_data_model::alias_setup::AliasLeaseAcquisitionV1::new(1, None),
+                iroha_data_model::alias_setup::AliasQuoteGuardV1 {
+                    expected_policy_version: 0,
+                    expected_payment_asset: AssetDefinitionId::new(
+                        DomainId::try_new("assets", "universal").expect("fixture asset domain"),
+                        "xor".parse().expect("fixture asset name"),
+                    ),
+                    max_amount: Quantity::zero(),
+                    valid_until_ms: 0,
+                },
+            )
+            .execute(authority, tx)
+        }
+    }
+
     fn fixture_signing_keypair(authority: &AccountId) -> KeyPair {
         if authority == &*ALICE_ID {
             return (*ALICE_KEYPAIR).clone();
@@ -16770,15 +16838,16 @@ seiyaku StaleRuntimeBinding {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "gas_limit".parse().expect("static metadata key"),
-            Json::new(1_000_000_u64),
-        );
-        let tx = TransactionBuilder::new(ChainId::from("test-chain"), authority.clone())
-            .with_metadata(metadata)
-            .with_executable(Executable::ContractCall(invocation))
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            ChainId::from("test-chain"),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                core::num::NonZeroU64::new(1_000_000),
+            ),
+        )
+        .with_executable(Executable::ContractCall(invocation))
+        .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut stx = block.transaction();
         let result = crate::executor::Executor::Initial
@@ -19260,378 +19329,6 @@ seiyaku OuterCaller {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
-    fn subscription_bill_account_alias_auto_renew_queues_renewal_and_reschedules() {
-        crate::test_alias::ensure();
-        let provider = fixture_account_in_domain("acme", "commerce");
-        let subscriber = fixture_account_in_domain("alice", "users");
-        let charge_asset_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
-        let scheduled_at_ms = 10_000_u64;
-        let trigger_id: TriggerId = "alias-renew".parse().unwrap();
-        let alias = iroha_data_model::account::rekey::AccountAlias::domainless(
-            "member".parse().unwrap(),
-            DataSpaceId::UNIVERSAL,
-        );
-        let selector = crate::sns::selector_for_account_alias(
-            &alias,
-            &iroha_data_model::nexus::DataSpaceCatalog::default(),
-        )
-        .expect("selector");
-        let alias_address = iroha_data_model::account::AccountAddress::from_account_id(&subscriber)
-            .expect("account address");
-        let alias_record = iroha_data_model::sns::NameRecordV1::new(
-            selector.clone(),
-            subscriber.clone(),
-            vec![iroha_data_model::sns::NameControllerV1::account(
-                &alias_address,
-            )],
-            0,
-            1,
-            scheduled_at_ms,
-            scheduled_at_ms + (30 * 86_400_000),
-            scheduled_at_ms + (90 * 86_400_000),
-            Metadata::default(),
-        );
-
-        let subscription_state = SubscriptionState {
-            plan_id: charge_asset_id.clone(),
-            provider: subscriber.clone(),
-            subscriber: subscriber.clone(),
-            status: SubscriptionStatus::Active,
-            current_period_start_ms: 0,
-            current_period_end_ms: scheduled_at_ms,
-            next_charge_ms: scheduled_at_ms,
-            cancel_at_period_end: false,
-            cancel_at_ms: None,
-            failure_count: 0,
-            usage_accumulated: BTreeMap::new(),
-            billing_trigger_id: trigger_id.clone(),
-        };
-        let auto_renew = AccountAliasAutoRenewMetadata {
-            alias: "member@universal".to_owned(),
-            term_years: 1,
-            max_charge_amount: Quantity::from(200_u32),
-            retry_backoff_ms: 500,
-            max_failures: 3,
-        };
-        let mut nft_meta = Metadata::default();
-        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
-        nft_meta.insert(
-            subscription_key.clone(),
-            Json::new(subscription_state.clone()),
-        );
-        let auto_renew_key: Name = ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY.parse().unwrap();
-        nft_meta.insert(auto_renew_key, Json::new(auto_renew.clone()));
-        let nft_id: NftId = "alias-renew$subscriptions.universal".parse().unwrap();
-        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
-
-        let charge_def = AssetDefinition::numeric(charge_asset_id.clone())
-            .with_name("xor".to_owned())
-            .build(&provider);
-        let asset = Asset::new(
-            AssetId::of(charge_asset_id.clone(), subscriber.clone()),
-            Quantity::from(500_u32),
-        );
-
-        let domains = vec![
-            Domain::new(DomainId::try_new("genesis", "universal").unwrap()).build(&provider),
-            Domain::new(DomainId::try_new("subscriptions", "universal").unwrap()).build(&provider),
-        ];
-        let accounts = vec![
-            build_fixture_account(&provider, &provider),
-            build_fixture_account(&subscriber, &provider),
-        ];
-        let mut world = World::with_assets(domains, accounts, [charge_def], [asset], [nft]);
-        crate::sns::seed_default_namespace_policies(&mut world);
-        world.smart_contract_state_mut_for_testing().insert(
-            crate::sns::record_storage_key(&selector),
-            norito::codec::Encode::encode(&alias_record),
-        );
-
-        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
-        let mut trigger_metadata = Metadata::default();
-        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
-        trigger_metadata.insert(
-            trigger_ref_key,
-            Json::new(SubscriptionTriggerRef {
-                subscription_nft_id: nft_id.clone(),
-            }),
-        );
-        trigger_metadata.insert(
-            "__registered_block_height".parse().unwrap(),
-            Json::from(42_u64),
-        );
-        trigger_metadata.insert(
-            "__registered_at_ms".parse().unwrap(),
-            Json::from(12_345_u64),
-        );
-        let schedule = Schedule {
-            start_ms: scheduled_at_ms,
-            period_ms: None,
-        };
-        let mut action = SpecializedAction::new(
-            Executable::Ivm(bytecode.clone()),
-            Repeats::Exactly(1),
-            subscriber.clone(),
-            TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
-        action.metadata = trigger_metadata.clone();
-        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
-        {
-            let mut block = world.triggers.block();
-            let mut tx = block.transaction();
-            tx.add_time_trigger(trigger).expect("add trigger");
-            tx.apply();
-            block.commit();
-        }
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        let view = state.view();
-        let quote = crate::sns::quote_account_alias_renewal(
-            view.world(),
-            &view.nexus.dataspace_catalog,
-            &alias,
-            auto_renew.term_years,
-            scheduled_at_ms,
-        )
-        .expect("renewal quote");
-        let mut host = CoreHostImpl::new(subscriber.clone());
-        host.set_query_state(&view);
-        host.set_trigger_id(trigger_id.clone());
-        host.set_block_time_ms(scheduled_at_ms);
-        let mut vm = IVM::new(1_000_000);
-
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
-            .expect("billing");
-
-        let mut expected_state = subscription_state.clone();
-        expected_state.current_period_start_ms = scheduled_at_ms;
-        expected_state.current_period_end_ms = quote.expires_at_ms;
-        expected_state.next_charge_ms = quote.expires_at_ms;
-        expected_state.failure_count = 0;
-        expected_state.status = SubscriptionStatus::Active;
-
-        let expected_renew = InstructionBox::from(
-            iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
-                alias.clone(),
-                subscriber.clone(),
-                auto_renew.term_years,
-            ),
-        );
-        let expected_set = InstructionBox::from(SetKeyValue::nft(
-            nft_id.clone(),
-            subscription_key,
-            Json::new(expected_state),
-        ));
-        let expected_invoice = SubscriptionInvoice {
-            subscription_nft_id: nft_id.clone(),
-            period_start_ms: scheduled_at_ms,
-            period_end_ms: quote.expires_at_ms,
-            attempted_at_ms: scheduled_at_ms,
-            amount: quote.charge_amount.clone(),
-            asset_definition: charge_asset_id.clone(),
-            status: SubscriptionInvoiceStatus::Paid,
-            tx_hash: None,
-        };
-        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
-        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
-            nft_id.clone(),
-            invoice_key,
-            Json::new(expected_invoice),
-        ));
-        let expected_schedule = Schedule {
-            start_ms: quote.expires_at_ms,
-            period_ms: None,
-        };
-        let expected_action = iroha_data_model::trigger::action::Action::new(
-            Executable::Ivm(bytecode),
-            Repeats::Exactly(1),
-            subscriber.clone(),
-            TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
-        )
-        .with_metadata({
-            let mut metadata = trigger_metadata;
-            let registered_height_key: Name = "__registered_block_height".parse().unwrap();
-            metadata.remove(&registered_height_key);
-            let registered_time_key: Name = "__registered_at_ms".parse().unwrap();
-            metadata.remove(&registered_time_key);
-            metadata
-        });
-        let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
-        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id.clone()));
-        let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
-
-        assert_eq!(
-            host.queued,
-            vec![
-                expected_renew.clone(),
-                expected_set.clone(),
-                expected_invoice_set.clone(),
-                expected_unregister.clone(),
-                expected_register.clone(),
-            ]
-        );
-        let expected_gas = crate::gas::meter_instruction(&expected_renew)
-            .saturating_add(crate::gas::meter_instruction(&expected_set))
-            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
-            .saturating_add(crate::gas::meter_instruction(&expected_unregister))
-            .saturating_add(crate::gas::meter_instruction(&expected_register));
-        assert_eq!(gas, expected_gas);
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn subscription_bill_account_alias_auto_renew_suspends_when_alias_is_missing() {
-        crate::test_alias::ensure();
-        let provider = fixture_account_in_domain("acme", "commerce");
-        let subscriber = fixture_account_in_domain("alice", "users");
-        let charge_asset_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
-        let scheduled_at_ms = 10_000_u64;
-        let trigger_id: TriggerId = "alias-renew-missing".parse().unwrap();
-
-        let subscription_state = SubscriptionState {
-            plan_id: charge_asset_id.clone(),
-            provider: subscriber.clone(),
-            subscriber: subscriber.clone(),
-            status: SubscriptionStatus::Active,
-            current_period_start_ms: 0,
-            current_period_end_ms: scheduled_at_ms,
-            next_charge_ms: scheduled_at_ms,
-            cancel_at_period_end: false,
-            cancel_at_ms: None,
-            failure_count: 0,
-            usage_accumulated: BTreeMap::new(),
-            billing_trigger_id: trigger_id.clone(),
-        };
-        let auto_renew = AccountAliasAutoRenewMetadata {
-            alias: "ghost@universal".to_owned(),
-            term_years: 1,
-            max_charge_amount: Quantity::from(200_u32),
-            retry_backoff_ms: 500,
-            max_failures: 3,
-        };
-        let mut nft_meta = Metadata::default();
-        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
-        nft_meta.insert(
-            subscription_key.clone(),
-            Json::new(subscription_state.clone()),
-        );
-        let auto_renew_key: Name = ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY.parse().unwrap();
-        nft_meta.insert(auto_renew_key, Json::new(auto_renew.clone()));
-        let nft_id: NftId = "alias-missing$subscriptions.universal".parse().unwrap();
-        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
-
-        let charge_def = AssetDefinition::numeric(charge_asset_id.clone())
-            .with_name("xor".to_owned())
-            .build(&provider);
-        let asset = Asset::new(
-            AssetId::of(charge_asset_id.clone(), subscriber.clone()),
-            Quantity::from(500_u32),
-        );
-
-        let domains = vec![
-            Domain::new(DomainId::try_new("genesis", "universal").unwrap()).build(&provider),
-            Domain::new(DomainId::try_new("subscriptions", "universal").unwrap()).build(&provider),
-        ];
-        let accounts = vec![
-            build_fixture_account(&provider, &provider),
-            build_fixture_account(&subscriber, &provider),
-        ];
-        let mut world = World::with_assets(domains, accounts, [charge_def], [asset], [nft]);
-        crate::sns::seed_default_namespace_policies(&mut world);
-
-        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
-        let mut trigger_metadata = Metadata::default();
-        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
-        trigger_metadata.insert(
-            trigger_ref_key,
-            Json::new(SubscriptionTriggerRef {
-                subscription_nft_id: nft_id.clone(),
-            }),
-        );
-        let schedule = Schedule {
-            start_ms: scheduled_at_ms,
-            period_ms: None,
-        };
-        let mut action = SpecializedAction::new(
-            Executable::Ivm(bytecode.clone()),
-            Repeats::Exactly(1),
-            subscriber.clone(),
-            TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
-        action.metadata = trigger_metadata.clone();
-        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
-        {
-            let mut block = world.triggers.block();
-            let mut tx = block.transaction();
-            tx.add_time_trigger(trigger).expect("add trigger");
-            tx.apply();
-            block.commit();
-        }
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        let view = state.view();
-        let mut host = CoreHostImpl::new(subscriber.clone());
-        host.set_query_state(&view);
-        host.set_trigger_id(trigger_id.clone());
-        host.set_block_time_ms(scheduled_at_ms);
-        let mut vm = IVM::new(1_000_000);
-
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
-            .expect("billing");
-
-        let mut expected_state = subscription_state.clone();
-        expected_state.failure_count = auto_renew.max_failures;
-        expected_state.status = SubscriptionStatus::Suspended;
-
-        let expected_set = InstructionBox::from(SetKeyValue::nft(
-            nft_id.clone(),
-            subscription_key,
-            Json::new(expected_state),
-        ));
-        let expected_invoice = SubscriptionInvoice {
-            subscription_nft_id: nft_id.clone(),
-            period_start_ms: scheduled_at_ms,
-            period_end_ms: scheduled_at_ms,
-            attempted_at_ms: scheduled_at_ms,
-            amount: Quantity::zero(),
-            asset_definition: charge_asset_id,
-            status: SubscriptionInvoiceStatus::Failed,
-            tx_hash: None,
-        };
-        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
-        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
-            nft_id.clone(),
-            invoice_key,
-            Json::new(expected_invoice),
-        ));
-        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id));
-
-        assert_eq!(
-            host.queued,
-            vec![
-                expected_set.clone(),
-                expected_invoice_set.clone(),
-                expected_unregister.clone(),
-            ]
-        );
-        let expected_gas = crate::gas::meter_instruction(&expected_set)
-            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
-            .saturating_add(crate::gas::meter_instruction(&expected_unregister));
-        assert_eq!(gas, expected_gas);
-    }
-
-    #[test]
     fn queue_instructions_accumulates_gas_and_enqueues() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
@@ -20286,7 +19983,7 @@ seiyaku OpaqueInstructionSubmission {
         assert_eq!(quote, vm.remaining_gas());
         assert!(actual <= quote);
         assert_eq!(host.queued.len(), 512, "at most 256 NFT pairs are queued");
-        assert_eq!(host.nft_seq, 256);
+        assert_eq!(host.next_nft_sequence(), 256);
 
         let mut exhausted = CoreHost::with_accounts(
             authority,
@@ -20306,7 +20003,7 @@ seiyaku OpaqueInstructionSubmission {
         assert_eq!(exact, actual);
         assert!(actual <= quote);
         assert_eq!(exhausted.queued.len(), 2);
-        assert_eq!(exhausted.nft_seq, u64::MAX);
+        assert_eq!(exhausted.next_nft_sequence(), u64::MAX);
 
         exhausted.queued.clear();
         let quote = exhausted
@@ -20990,13 +20687,9 @@ seiyaku OpaqueInstructionSubmission {
                 scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account_id.clone(),
-            alias.clone(),
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account_id.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("bind alias");
         tx.apply();
         block.commit().expect("commit permissions");
         let first_view = state.view();
@@ -21024,13 +20717,9 @@ seiyaku OpaqueInstructionSubmission {
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut tx = block.transaction();
         seed_test_call_hash(&mut tx, 0xA2);
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            replacement_account_id.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("rebind alias");
+        EnsureTestAccountAliasBinding::bind(replacement_account_id.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("rebind alias");
         tx.apply();
         block.commit().expect("commit alias rebind");
 
@@ -21157,13 +20846,9 @@ seiyaku OpaqueInstructionSubmission {
                 scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account_id,
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account_id, alias, None)
+            .execute(&authority, &mut tx)
+            .expect("bind alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -21232,7 +20917,7 @@ seiyaku OpaqueInstructionSubmission {
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         seed_test_call_hash(&mut tx, 0xF1);
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+        SeedTestAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
             authority.clone(),
@@ -21265,13 +20950,9 @@ seiyaku OpaqueInstructionSubmission {
                 scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account_id.clone(),
-            alias.clone(),
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind domain-qualified alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account_id.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("bind domain-qualified alias");
         tx.apply();
         block.commit().expect("commit permissions");
         let first_view = state.view();
@@ -21296,13 +20977,9 @@ seiyaku OpaqueInstructionSubmission {
             .expect("next block height");
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut tx = block.transaction();
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            replacement_account_id.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("rebind domain-qualified alias");
+        EnsureTestAccountAliasBinding::bind(replacement_account_id.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("rebind domain-qualified alias");
         tx.apply();
         block.commit().expect("commit alias rebind");
 
@@ -21323,7 +21000,7 @@ seiyaku OpaqueInstructionSubmission {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account_id: AccountId = fixture_account("bob");
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
@@ -21338,7 +21015,7 @@ seiyaku OpaqueInstructionSubmission {
             .with_name("xor".to_owned())
             .build(&authority);
         let payment_asset = Asset::new(
-            AssetId::of(payment_asset_definition_id, authority.clone()),
+            AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
@@ -21351,6 +21028,10 @@ seiyaku OpaqueInstructionSubmission {
             [],
         );
         crate::sns::seed_default_namespace_policies(&mut world);
+        assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+            &mut world,
+            &payment_asset_definition_id.to_string(),
+        ));
         let state = State::new_for_testing(world, kura, query);
         let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
@@ -21368,9 +21049,15 @@ seiyaku OpaqueInstructionSubmission {
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         seed_test_call_hash(&mut tx, 0xF2);
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        SeedTestAccountAliasLease::new(
             alias.clone(),
-            authority.clone(),
+            merchant_account_id.clone(),
             authority.clone(),
             1,
             None,
@@ -21395,13 +21082,9 @@ seiyaku OpaqueInstructionSubmission {
                 scope: AccountAliasPermissionScope::Domain(retail_domain_id),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account_id,
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind domain-qualified alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account_id, alias, None)
+            .execute(&authority, &mut tx)
+            .expect("bind domain-qualified alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -21419,11 +21102,11 @@ seiyaku OpaqueInstructionSubmission {
     }
 
     #[test]
-    fn resolve_account_alias_syscall_requires_dataspace_permission_for_domain_qualified_alias() {
+    fn resolve_account_alias_syscall_accepts_domain_permission_without_dataspace_permission() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account_id: AccountId = fixture_account("bob");
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
@@ -21438,7 +21121,7 @@ seiyaku OpaqueInstructionSubmission {
             .with_name("xor".to_owned())
             .build(&authority);
         let payment_asset = Asset::new(
-            AssetId::of(payment_asset_definition_id, authority.clone()),
+            AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
@@ -21451,6 +21134,10 @@ seiyaku OpaqueInstructionSubmission {
             [],
         );
         crate::sns::seed_default_namespace_policies(&mut world);
+        assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+            &mut world,
+            &payment_asset_definition_id.to_string(),
+        ));
         let state = State::new_for_testing(world, kura, query);
         let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
@@ -21468,9 +21155,15 @@ seiyaku OpaqueInstructionSubmission {
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         seed_test_call_hash(&mut tx, 0xF3);
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        SeedTestAccountAliasLease::new(
             alias.clone(),
-            authority.clone(),
+            merchant_account_id.clone(),
             authority.clone(),
             1,
             None,
@@ -21495,13 +21188,9 @@ seiyaku OpaqueInstructionSubmission {
                 scope: AccountAliasPermissionScope::Domain(retail_domain_id),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account_id,
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind domain-qualified alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account_id.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("bind domain-qualified alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -21512,10 +21201,12 @@ seiyaku OpaqueInstructionSubmission {
         let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
         vm.set_register(10, alias_ptr);
 
-        let err = host
-            .syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
-            .expect_err("domain-qualified alias resolution should require dataspace permission");
-        assert!(matches!(err, ivm::VMError::PermissionDenied));
+        host.syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect("exact domain permission should resolve without dataspace permission");
+        let resolved: AccountId =
+            CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
+                .expect("resolved account id");
+        assert_eq!(resolved, merchant_account_id);
     }
 
     #[test]
@@ -23473,13 +23164,9 @@ seiyaku Callee {
                 scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account.clone(),
-            alias.clone(),
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind merchant alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("bind merchant alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -23550,13 +23237,9 @@ seiyaku AliasPayout {
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut tx = block.transaction();
         seed_test_call_hash(&mut tx, 0xB2);
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            replacement_account.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("rebind merchant alias");
+        EnsureTestAccountAliasBinding::bind(replacement_account.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("rebind merchant alias");
         tx.apply();
         block.commit().expect("commit alias rebind");
 
@@ -23640,13 +23323,9 @@ seiyaku AliasPayout {
                 scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account.clone(),
-            alias.clone(),
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind merchant alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("bind merchant alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -23717,13 +23396,9 @@ seiyaku AliasPayout {
             .expect("next block height");
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut tx = block.transaction();
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            replacement_account.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("rebind merchant alias");
+        EnsureTestAccountAliasBinding::bind(replacement_account.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("rebind merchant alias");
         tx.apply();
         block.commit().expect("commit alias rebind");
 
@@ -23819,7 +23494,7 @@ seiyaku AliasPayout {
             paynet,
         );
         tx.tx_call_hash = Some(Hash::prehashed([0xF4; Hash::LENGTH]));
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+        SeedTestAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
             authority.clone(),
@@ -23852,13 +23527,9 @@ seiyaku AliasPayout {
                 scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account.clone(),
-            alias.clone(),
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind merchant alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("bind merchant alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -23910,13 +23581,9 @@ seiyaku AliasPayout {
             .expect("next block height");
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut tx = block.transaction();
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            replacement_account.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("rebind merchant alias");
+        EnsureTestAccountAliasBinding::bind(replacement_account.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("rebind merchant alias");
         tx.apply();
         block.commit().expect("commit alias rebind");
 
@@ -23991,13 +23658,9 @@ seiyaku AliasPayout {
                 scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind merchant alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("bind merchant alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -24239,7 +23902,7 @@ seiyaku AliasPayout {
         let merchant_account = fixture_account("bob");
         let asset_def_id: AssetDefinitionId =
             AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
         let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
@@ -24257,7 +23920,7 @@ seiyaku AliasPayout {
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
-            AssetId::of(payment_asset_definition_id, authority.clone()),
+            AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
@@ -24269,7 +23932,25 @@ seiyaku AliasPayout {
             [source_asset, payment_asset],
             [],
         );
+        let mut permissions = Permissions::new();
+        assert!(
+            permissions.insert(
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into(),
+            )
+        );
+        assert!(permissions.insert(Permission::new(
+            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
+            Json::new(()),
+        )));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
         crate::sns::seed_default_namespace_policies(&mut world);
+        assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+            &mut world,
+            &payment_asset_definition_id.to_string(),
+        ));
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
         let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
@@ -24288,9 +23969,15 @@ seiyaku AliasPayout {
             paynet,
         );
         tx.tx_call_hash = Some(Hash::prehashed([0xF5; Hash::LENGTH]));
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        SeedTestAccountAliasLease::new(
             alias.clone(),
-            authority.clone(),
+            merchant_account.clone(),
             authority.clone(),
             1,
             None,
@@ -24315,13 +24002,9 @@ seiyaku AliasPayout {
                 scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind merchant alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("bind merchant alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -24544,7 +24227,7 @@ seiyaku AliasPayout {
         let merchant_account = fixture_account("bob");
         let asset_def_id: AssetDefinitionId =
             AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
         let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
@@ -24562,7 +24245,7 @@ seiyaku AliasPayout {
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
-            AssetId::of(payment_asset_definition_id, authority.clone()),
+            AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
@@ -24574,7 +24257,25 @@ seiyaku AliasPayout {
             [source_asset, payment_asset],
             [],
         );
+        let mut permissions = Permissions::new();
+        assert!(
+            permissions.insert(
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into(),
+            )
+        );
+        assert!(permissions.insert(Permission::new(
+            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
+            Json::new(()),
+        )));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
         crate::sns::seed_default_namespace_policies(&mut world);
+        assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+            &mut world,
+            &payment_asset_definition_id.to_string(),
+        ));
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
         let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
@@ -24593,9 +24294,15 @@ seiyaku AliasPayout {
             paynet,
         );
         tx.tx_call_hash = Some(Hash::prehashed([0xF6; Hash::LENGTH]));
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        SeedTestAccountAliasLease::new(
             alias.clone(),
-            authority.clone(),
+            merchant_account.clone(),
             authority.clone(),
             1,
             None,
@@ -24620,13 +24327,9 @@ seiyaku AliasPayout {
                 scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind merchant alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("bind merchant alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -24681,14 +24384,14 @@ seiyaku AliasPayout {
     }
 
     #[test]
-    fn contract_call_transaction_domain_qualified_account_id_alias_shorthand_without_dataspace_permission_is_rejected()
+    fn contract_call_transaction_domain_qualified_account_id_alias_shorthand_accepts_domain_permission_without_dataspace_permission()
      {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
         let asset_def_id: AssetDefinitionId =
             AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
         let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
@@ -24706,7 +24409,7 @@ seiyaku AliasPayout {
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
-            AssetId::of(payment_asset_definition_id, authority.clone()),
+            AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
@@ -24718,7 +24421,25 @@ seiyaku AliasPayout {
             [source_asset, payment_asset],
             [],
         );
+        let mut permissions = Permissions::new();
+        assert!(
+            permissions.insert(
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into(),
+            )
+        );
+        assert!(permissions.insert(Permission::new(
+            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
+            Json::new(()),
+        )));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
         crate::sns::seed_default_namespace_policies(&mut world);
+        assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+            &mut world,
+            &payment_asset_definition_id.to_string(),
+        ));
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
         let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
@@ -24737,9 +24458,15 @@ seiyaku AliasPayout {
             paynet,
         );
         tx.tx_call_hash = Some(Hash::prehashed([0xF7; Hash::LENGTH]));
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        SeedTestAccountAliasLease::new(
             alias.clone(),
-            authority.clone(),
+            merchant_account.clone(),
             authority.clone(),
             1,
             None,
@@ -24764,13 +24491,9 @@ seiyaku AliasPayout {
                 scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind merchant alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("bind merchant alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -24794,20 +24517,14 @@ seiyaku AliasPayout {
         );
 
         let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
-        let result = execute_contract_call_transaction_result(
+        execute_contract_call_transaction_result(
             &state,
             &authority,
             &fixture_signing_keypair(&authority),
             contract_invocation_from_json(&state, contract, "pay", &pay_payload),
             &mut ivm_cache,
-        );
-        assert!(
-            matches!(
-                result,
-                Err(iroha_data_model::ValidationFail::NotPermitted(_))
-            ),
-            "domain-qualified shorthand alias resolution should require dataspace permission"
-        );
+        )
+        .expect("exact domain permission should resolve shorthand without dataspace permission");
 
         let view = state.view();
         let authority_balance = view
@@ -24817,11 +24534,14 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
-        assert!(
-            view.world().asset(&merchant_asset_id).is_err(),
-            "failed alias resolution must not mint or transfer to the merchant account",
-        );
+        let merchant_balance = view
+            .world()
+            .asset(&merchant_asset_id)
+            .expect("domain-scoped shorthand recipient asset")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(3_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
     }
 
     #[test]
@@ -24881,15 +24601,9 @@ seiyaku AliasPayout {
             paynet,
         );
         tx.tx_call_hash = Some(Hash::prehashed([0xF8; Hash::LENGTH]));
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
-            alias,
-            authority.clone(),
-            authority.clone(),
-            1,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("acquire domain-qualified alias lease");
+        SeedTestAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
+            .execute(&authority, &mut tx)
+            .expect("acquire domain-qualified alias lease");
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
@@ -25009,15 +24723,9 @@ seiyaku AliasPayout {
             paynet,
         );
         tx.tx_call_hash = Some(Hash::prehashed([0xF9; Hash::LENGTH]));
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
-            alias,
-            authority.clone(),
-            authority.clone(),
-            1,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("acquire domain-qualified alias lease");
+        SeedTestAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
+            .execute(&authority, &mut tx)
+            .expect("acquire domain-qualified alias lease");
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
@@ -25081,14 +24789,14 @@ seiyaku AliasPayout {
     }
 
     #[test]
-    fn contract_call_transaction_domain_qualified_resolve_account_alias_builtin_without_dataspace_permission_is_rejected()
+    fn contract_call_transaction_domain_qualified_resolve_account_alias_builtin_accepts_domain_permission_without_dataspace_permission()
      {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
         let asset_def_id: AssetDefinitionId =
             AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
         let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
@@ -25106,7 +24814,7 @@ seiyaku AliasPayout {
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
-            AssetId::of(payment_asset_definition_id, authority.clone()),
+            AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
@@ -25118,7 +24826,25 @@ seiyaku AliasPayout {
             [source_asset, payment_asset],
             [],
         );
+        let mut permissions = Permissions::new();
+        assert!(
+            permissions.insert(
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into(),
+            )
+        );
+        assert!(permissions.insert(Permission::new(
+            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
+            Json::new(()),
+        )));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
         crate::sns::seed_default_namespace_policies(&mut world);
+        assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+            &mut world,
+            &payment_asset_definition_id.to_string(),
+        ));
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
         let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
@@ -25137,9 +24863,15 @@ seiyaku AliasPayout {
             paynet,
         );
         tx.tx_call_hash = Some(Hash::prehashed([0xFA; Hash::LENGTH]));
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        SeedTestAccountAliasLease::new(
             alias.clone(),
-            authority.clone(),
+            merchant_account.clone(),
             authority.clone(),
             1,
             None,
@@ -25164,13 +24896,9 @@ seiyaku AliasPayout {
                 scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind merchant alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("bind merchant alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -25194,20 +24922,14 @@ seiyaku AliasPayout {
         );
 
         let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
-        let result = execute_contract_call_transaction_result(
+        execute_contract_call_transaction_result(
             &state,
             &authority,
             &fixture_signing_keypair(&authority),
             contract_invocation_from_json(&state, contract, "pay", &pay_payload),
             &mut ivm_cache,
-        );
-        assert!(
-            matches!(
-                result,
-                Err(iroha_data_model::ValidationFail::NotPermitted(_))
-            ),
-            "domain-qualified builtin alias resolution should require dataspace permission"
-        );
+        )
+        .expect("exact domain permission should resolve builtin without dataspace permission");
 
         let view = state.view();
         let authority_balance = view
@@ -25217,11 +24939,14 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
-        assert!(
-            view.world().asset(&merchant_asset_id).is_err(),
-            "failed alias resolution must not mint or transfer to the merchant account",
-        );
+        let merchant_balance = view
+            .world()
+            .asset(&merchant_asset_id)
+            .expect("domain-scoped builtin recipient asset")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(3_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
     }
 
     #[test]
@@ -25433,7 +25158,7 @@ seiyaku AliasPayout {
             paynet,
         );
         tx.tx_call_hash = Some(Hash::prehashed([0xFB; Hash::LENGTH]));
-        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+        SeedTestAccountAliasLease::new(
             alias.clone(),
             authority.clone(),
             authority.clone(),
@@ -25466,13 +25191,9 @@ seiyaku AliasPayout {
                 scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
             }),
         );
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            merchant_account.clone(),
-            alias.clone(),
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind merchant alias");
+        EnsureTestAccountAliasBinding::bind(merchant_account.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("bind merchant alias");
         tx.apply();
         block.commit().expect("commit alias setup");
 
@@ -25542,13 +25263,9 @@ seiyaku AliasPayout {
             .expect("next block height");
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut tx = block.transaction();
-        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
-            replacement_account.clone(),
-            alias,
-            None,
-        )
-        .execute(&authority, &mut tx)
-        .expect("rebind merchant alias");
+        EnsureTestAccountAliasBinding::bind(replacement_account.clone(), alias, None)
+            .execute(&authority, &mut tx)
+            .expect("rebind merchant alias");
         tx.apply();
         block.commit().expect("commit alias rebind");
 
@@ -25823,7 +25540,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+            "kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             "core",
             Vec::new(),
         );
@@ -25833,7 +25550,7 @@ seiyaku DurableOwner {
         map.insert(
             VerifyingKeyId::new(
                 "halo2/ipa",
-                "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+                "kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             ),
             rec,
         );
@@ -25851,7 +25568,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+            "kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
             "core",
             Vec::new(),
         );
@@ -25861,7 +25578,7 @@ seiyaku DurableOwner {
         map.insert(
             VerifyingKeyId::new(
                 "halo2/ipa",
-                "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+                "kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
             ),
             rec,
         );
@@ -26556,6 +26273,10 @@ seiyaku DurableOwner {
             );
         }
         for key in [
+            "offline_device_attestation_policy",
+            "offline_device_attestation_policy/platform-roots",
+            "kagemusha_online_registration_v1_deadbeef",
+            "kagemusha_online_registration_v2_deadbeef",
             "pkdeploy_verified_lane_relay",
             "pkdeploy_verified_lane_relay_1_2_3_deadbeef",
             "pkdeploy_verified_nexus_fee_budget_deadbeef",
@@ -26571,6 +26292,9 @@ seiyaku DurableOwner {
         for key in [
             "scatter/counter",
             "merge_lane_frontier_v1x",
+            "offline_device_attestation_policyx",
+            "kagemusha_online_registration_v1x",
+            "kagemusha_online_registration_v2x",
             "pkdeploy_verified_lane_relayx",
             "counter",
         ] {

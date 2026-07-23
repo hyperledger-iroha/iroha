@@ -12,8 +12,8 @@ import java.util.Objects;
 public final class KagemushaNfcProtocol {
   public static final byte[] AID =
       new byte[] {(byte) 0xF0, 0x50, 0x4B, 0x45, 0x50, 0x4B, 0x52, 0x4E, 0x46, 0x43, 0x01};
-  public static final String AID_HEX = "F0504B45504B524E464301";
-  public static final int RAW_TRANSPORT_VERSION = 2;
+  public static final String AID_HEX = IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX;
+  public static final int RAW_TRANSPORT_VERSION = 4;
   public static final int SAFE_CHUNK_BYTES = 220;
   public static final int MAX_EXTENDED_READ_CHUNK_BYTES = 1024;
   public static final int MAX_EXTENDED_WRITE_CHUNK_BYTES = 16 * 1024;
@@ -32,6 +32,8 @@ public final class KagemushaNfcProtocol {
   private static final int INS_WRITE_META = 0x20;
   private static final int INS_WRITE_CHUNK = 0x21;
   private static final int INS_COMMIT = 0x22;
+  private static final int OFFSET_BYTES = 4;
+  private static final int READ_REQUEST_BYTES = OFFSET_BYTES + 2;
 
   private KagemushaNfcProtocol() {}
 
@@ -48,7 +50,9 @@ public final class KagemushaNfcProtocol {
   }
 
   public static byte[] getInfoApdu() {
-    return new byte[] {(byte) CLA_IROHA, (byte) INS_GET_INFO, 0x00, 0x00, 0x00};
+    return new byte[] {
+      (byte) CLA_IROHA, (byte) INS_GET_INFO, (byte) RAW_TRANSPORT_VERSION, 0x00, 0x00
+    };
   }
 
   public static byte[] readChunkApdu(final int offset) {
@@ -56,26 +60,13 @@ public final class KagemushaNfcProtocol {
   }
 
   public static byte[] readChunkApdu(final int offset, final int length) {
-    requireValidOffset(offset);
     requireChunkLength(length, MAX_EXTENDED_READ_CHUNK_BYTES);
-    if (length <= 0xFF) {
-      return new byte[] {
-        (byte) CLA_IROHA,
-        (byte) INS_READ_CHUNK,
-        (byte) ((offset >>> 8) & 0xFF),
-        (byte) (offset & 0xFF),
-        (byte) length
-      };
-    }
-    return new byte[] {
-      (byte) CLA_IROHA,
-      (byte) INS_READ_CHUNK,
-      (byte) ((offset >>> 8) & 0xFF),
-      (byte) (offset & 0xFF),
-      0x00,
-      (byte) ((length >>> 8) & 0xFF),
-      (byte) (length & 0xFF)
-    };
+    requireTransferRange(offset, length, MAX_EXTENDED_READ_CHUNK_BYTES);
+    final byte[] data = new byte[READ_REQUEST_BYTES];
+    writeInt32(offset, data, 0);
+    data[4] = (byte) ((length >>> 8) & 0xFF);
+    data[5] = (byte) (length & 0xFF);
+    return dataApdu(INS_READ_CHUNK, data);
   }
 
   public static byte[] writeMetaApdu(
@@ -88,14 +79,7 @@ public final class KagemushaNfcProtocol {
     meta[1] = (byte) kind.code();
     writeInt32(payloadBytes.length, meta, 2);
     System.arraycopy(sha256(payloadBytes), 0, meta, 6, 32);
-    final byte[] apdu = new byte[5 + meta.length];
-    apdu[0] = (byte) CLA_IROHA;
-    apdu[1] = (byte) INS_WRITE_META;
-    apdu[2] = 0x00;
-    apdu[3] = 0x00;
-    apdu[4] = (byte) meta.length;
-    System.arraycopy(meta, 0, apdu, 5, meta.length);
-    return apdu;
+    return dataApdu(INS_WRITE_META, meta);
   }
 
   public static byte[] writeChunkApdu(final int offset, final byte[] bytes) {
@@ -106,7 +90,6 @@ public final class KagemushaNfcProtocol {
   public static byte[] writeChunkApdu(
       final int offset, final byte[] bytes, final int startIndex, final int endIndex) {
     Objects.requireNonNull(bytes, "bytes");
-    requireValidOffset(offset);
     if (startIndex < 0 || startIndex > bytes.length) {
       throw new IllegalArgumentException("startIndex out of bounds");
     }
@@ -115,15 +98,17 @@ public final class KagemushaNfcProtocol {
     }
     final int length = endIndex - startIndex;
     requireChunkLength(length, MAX_EXTENDED_WRITE_CHUNK_BYTES);
-    final int headerLength = length <= 0xFF ? 5 : 7;
-    final byte[] apdu = new byte[headerLength + length];
-    appendCommandHeader(apdu, INS_WRITE_CHUNK, offset, length);
-    System.arraycopy(bytes, startIndex, apdu, headerLength, length);
-    return apdu;
+    requireTransferRange(offset, length, MAX_EXTENDED_WRITE_CHUNK_BYTES);
+    final byte[] data = new byte[OFFSET_BYTES + length];
+    writeInt32(offset, data, 0);
+    System.arraycopy(bytes, startIndex, data, OFFSET_BYTES, length);
+    return dataApdu(INS_WRITE_CHUNK, data);
   }
 
   public static byte[] commitApdu() {
-    return new byte[] {(byte) CLA_IROHA, (byte) INS_COMMIT, 0x00, 0x00, 0x00};
+    return new byte[] {
+      (byte) CLA_IROHA, (byte) INS_COMMIT, (byte) RAW_TRANSPORT_VERSION, 0x00, 0x00
+    };
   }
 
   public static List<byte[]> writePayloadApdus(
@@ -158,8 +143,9 @@ public final class KagemushaNfcProtocol {
     final List<byte[]> apdus = new ArrayList<>();
     int offset = 0;
     while (offset < payloadLength) {
-      apdus.add(readChunkApdu(offset, maxChunkLength));
-      offset += maxChunkLength;
+      final int requested = Math.min(maxChunkLength, payloadLength - offset);
+      apdus.add(readChunkApdu(offset, requested));
+      offset += requested;
     }
     return Collections.unmodifiableList(apdus);
   }
@@ -178,27 +164,44 @@ public final class KagemushaNfcProtocol {
       return Command.unsupported();
     }
     final int ins = apdu[1] & 0xFF;
-    final int offset = ((apdu[2] & 0xFF) << 8) | (apdu[3] & 0xFF);
+    final boolean canonicalParameters =
+        (apdu[2] & 0xFF) == RAW_TRANSPORT_VERSION && apdu[3] == 0;
     return switch (ins) {
-      case INS_GET_INFO -> offset == 0 && isNoDataApdu(apdu) ? Command.getInfo() : Command.invalid();
-      case INS_READ_CHUNK ->
-          isReadChunkApdu(apdu)
-              ? Command.readChunk(offset, requestedReadChunkLength(apdu))
-              : Command.invalid();
+      case INS_GET_INFO ->
+          canonicalParameters && isNoDataApdu(apdu) ? Command.getInfo() : Command.invalid();
+      case INS_READ_CHUNK -> {
+        final byte[] data = canonicalParameters ? commandData(apdu) : null;
+        if (data == null || data.length != READ_REQUEST_BYTES) {
+          yield Command.invalid();
+        }
+        final int offset = readInt32(data, 0);
+        final int length = readUInt16(data, OFFSET_BYTES);
+        yield transferRangeIsValid(offset, length, MAX_EXTENDED_READ_CHUNK_BYTES)
+            ? Command.readChunk(offset, length)
+            : Command.invalid();
+      }
       case INS_WRITE_META -> {
-        if (offset != 0) {
+        if (!canonicalParameters) {
           yield Command.invalid();
         }
         final byte[] data = commandData(apdu);
         yield data == null ? Command.invalid() : parseWriteMeta(data);
       }
       case INS_WRITE_CHUNK -> {
-        final byte[] data = commandData(apdu);
-        yield data == null || data.length == 0 || data.length > MAX_EXTENDED_WRITE_CHUNK_BYTES
-            ? Command.invalid()
-            : Command.writeChunk(offset, data);
+        final byte[] data = canonicalParameters ? commandData(apdu) : null;
+        if (data == null
+            || data.length <= OFFSET_BYTES
+            || data.length > OFFSET_BYTES + MAX_EXTENDED_WRITE_CHUNK_BYTES) {
+          yield Command.invalid();
+        }
+        final int offset = readInt32(data, 0);
+        final byte[] chunk = Arrays.copyOfRange(data, OFFSET_BYTES, data.length);
+        yield transferRangeIsValid(offset, chunk.length, MAX_EXTENDED_WRITE_CHUNK_BYTES)
+            ? Command.writeChunk(offset, chunk)
+            : Command.invalid();
       }
-      case INS_COMMIT -> offset == 0 && isNoDataApdu(apdu) ? Command.commit() : Command.invalid();
+      case INS_COMMIT ->
+          canonicalParameters && isNoDataApdu(apdu) ? Command.commit() : Command.invalid();
       default -> Command.unsupported();
     };
   }
@@ -304,15 +307,20 @@ public final class KagemushaNfcProtocol {
 
   public static int requestedReadChunkLength(final byte[] apdu) {
     Objects.requireNonNull(apdu, "apdu");
-    if (apdu.length < 5 || (apdu[0] & 0xFF) != CLA_IROHA || (apdu[1] & 0xFF) != INS_READ_CHUNK) {
+    if (apdu.length < 5
+        || (apdu[0] & 0xFF) != CLA_IROHA
+        || (apdu[1] & 0xFF) != INS_READ_CHUNK
+        || (apdu[2] & 0xFF) != RAW_TRANSPORT_VERSION
+        || apdu[3] != 0) {
       return SAFE_CHUNK_BYTES;
     }
-    final int length = apdu[4] & 0xFF;
-    if (length == 0 && apdu.length >= 7) {
-      final int extendedLength = ((apdu[5] & 0xFF) << 8) | (apdu[6] & 0xFF);
-      return Math.min(Math.max(extendedLength, 1), MAX_EXTENDED_READ_CHUNK_BYTES);
-    }
-    return Math.min(Math.max(length, 1), SAFE_CHUNK_BYTES);
+    final byte[] data = commandData(apdu);
+    if (data == null || data.length != READ_REQUEST_BYTES) return SAFE_CHUNK_BYTES;
+    final int offset = readInt32(data, 0);
+    final int length = readUInt16(data, OFFSET_BYTES);
+    return transferRangeIsValid(offset, length, MAX_EXTENDED_READ_CHUNK_BYTES)
+        ? length
+        : SAFE_CHUNK_BYTES;
   }
 
   public static int iosFastWriteChunkLength(final boolean peerSupportsExtendedChunks) {
@@ -372,17 +380,6 @@ public final class KagemushaNfcProtocol {
     return apdu.length == 4 || (apdu.length == 5 && (apdu[4] & 0xFF) == 0);
   }
 
-  private static boolean isReadChunkApdu(final byte[] apdu) {
-    if (apdu.length == 5) {
-      return (apdu[4] & 0xFF) != 0;
-    }
-    if (apdu.length != 7 || (apdu[4] & 0xFF) != 0) {
-      return false;
-    }
-    final int extendedLength = ((apdu[5] & 0xFF) << 8) | (apdu[6] & 0xFF);
-    return extendedLength > 0 && extendedLength <= MAX_EXTENDED_READ_CHUNK_BYTES;
-  }
-
   private static Command parseWriteMeta(final byte[] data) {
     if (data.length != 38 || (data[0] & 0xFF) != RAW_TRANSPORT_VERSION) {
       return Command.invalid();
@@ -400,24 +397,38 @@ public final class KagemushaNfcProtocol {
     return Command.writeMeta(kind, payloadLength, Arrays.copyOfRange(data, 6, 38));
   }
 
-  private static void appendCommandHeader(
-      final byte[] apdu, final int instruction, final int offset, final int length) {
+  private static byte[] dataApdu(final int instruction, final byte[] data) {
+    if (data.length == 0 || data.length > 0xFFFF) {
+      throw new IllegalArgumentException("APDU data length out of bounds");
+    }
+    final int headerLength = data.length <= 0xFF ? 5 : 7;
+    final byte[] apdu = new byte[headerLength + data.length];
     apdu[0] = (byte) CLA_IROHA;
     apdu[1] = (byte) instruction;
-    apdu[2] = (byte) ((offset >>> 8) & 0xFF);
-    apdu[3] = (byte) (offset & 0xFF);
-    if (length <= 0xFF) {
-      apdu[4] = (byte) length;
+    apdu[2] = (byte) RAW_TRANSPORT_VERSION;
+    apdu[3] = 0;
+    if (data.length <= 0xFF) {
+      apdu[4] = (byte) data.length;
     } else {
       apdu[4] = 0x00;
-      apdu[5] = (byte) ((length >>> 8) & 0xFF);
-      apdu[6] = (byte) (length & 0xFF);
+      apdu[5] = (byte) ((data.length >>> 8) & 0xFF);
+      apdu[6] = (byte) (data.length & 0xFF);
     }
+    System.arraycopy(data, 0, apdu, headerLength, data.length);
+    return apdu;
   }
 
-  private static void requireValidOffset(final int offset) {
-    if (offset < 0 || offset > 0xFFFF) {
-      throw new IllegalArgumentException("offset out of bounds");
+  private static boolean transferRangeIsValid(
+      final int offset, final int length, final int maximumChunkLength) {
+    if (offset < 0 || length <= 0 || length > maximumChunkLength) return false;
+    final long end = (long) offset + (long) length;
+    return offset < MAXIMUM_PAYLOAD_BYTES && end <= MAXIMUM_PAYLOAD_BYTES;
+  }
+
+  private static void requireTransferRange(
+      final int offset, final int length, final int maximumChunkLength) {
+    if (!transferRangeIsValid(offset, length, maximumChunkLength)) {
+      throw new IllegalArgumentException("transfer range out of bounds");
     }
   }
 
@@ -687,6 +698,7 @@ public final class KagemushaNfcProtocol {
     private final byte[] bytes;
     private final boolean[] written;
     private int writtenCount;
+    private boolean cleared;
 
     public PayloadAssembler(final PayloadInfo info) {
       this(info.kind(), info.payloadLength(), info.sha256());
@@ -723,12 +735,13 @@ public final class KagemushaNfcProtocol {
     }
 
     public boolean isComplete() {
-      return writtenCount == expectedLength;
+      return !cleared && writtenCount == expectedLength;
     }
 
     public boolean write(final int offset, final byte[] chunk) {
       Objects.requireNonNull(chunk, "chunk");
-      if (offset < 0
+      if (cleared
+          || offset < 0
           || offset > expectedLength
           || chunk.length == 0
           || chunk.length > MAX_EXTENDED_WRITE_CHUNK_BYTES) {
@@ -755,6 +768,9 @@ public final class KagemushaNfcProtocol {
     }
 
     public byte[] commit() {
+      if (cleared) {
+        throw new IllegalStateException("payload assembler is cleared");
+      }
       if (!isComplete()) {
         throw new IllegalStateException("payload is incomplete");
       }
@@ -762,6 +778,15 @@ public final class KagemushaNfcProtocol {
         throw new IllegalStateException("payload checksum mismatch");
       }
       return bytes.clone();
+    }
+
+    /** Zeroizes all owned payload and digest bytes and makes this assembler unusable. */
+    public void clear() {
+      Arrays.fill(expectedSha256, (byte) 0);
+      Arrays.fill(bytes, (byte) 0);
+      Arrays.fill(written, false);
+      writtenCount = 0;
+      cleared = true;
     }
   }
 }

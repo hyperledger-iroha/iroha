@@ -52,7 +52,11 @@ public enum KagemushaPeerTransportContract {
     public static let acknowledgementTextPrefix = "PKK2A."
     public static let qrStreamTextPrefix = "PKKQ1."
 
-    public static let nfcApplicationIdentifierHex = "F0504B45504B524E464301"
+    /// Kagemusha uses the canonical SDK NFC AID; it does not register a
+    /// parallel application identifier that could route the same transfer to
+    /// a different protocol implementation.
+    public static let nfcApplicationIdentifierHex =
+        IrohaPeerNfcV1.applicationIdentifierHex
     public static let nearbyServiceName = "pk-kagemusha"
     public static let nearbyBonjourService = "_pk-kagemusha._tcp"
 
@@ -61,7 +65,11 @@ public enum KagemushaPeerTransportContract {
     public static let paymentContentType = "text/vnd.pk.kagemusha-v2.payment"
     public static let acknowledgementContentType = "text/vnd.pk.kagemusha-v2.ack"
 
-    public static let maximumArchiveBytes = KagemushaRecursiveSpend.maximumPeerArchiveBytes
+    public static let maximumArchiveBytesV2 =
+        KagemushaRecursiveSpend.maximumPeerArchiveBytesV2
+    public static let maximumArchiveBytesV4 =
+        KagemushaRecursiveSpend.maximumPeerArchiveBytesV4
+    public static let maximumArchiveBytes = maximumArchiveBytesV4
     /// Largest raw archive that fits in a direct `PKK2?.` text envelope.
     public static let maximumTextArchiveBytes =
         KagemushaRecursiveSpend.maximumPeerTextArchiveBytes
@@ -71,8 +79,10 @@ public enum KagemushaPeerTransportContract {
 
 /// A canonical, decoded Kagemusha peer archive.
 public enum KagemushaPeerPayload: Equatable, Sendable {
-    case receiveRequest(KagemushaRecipientPaymentRequest)
-    case payment(KagemushaRecursiveSpendPeerPayment)
+    /// ABI-21 carries the whole portable offer (signed request, reusable
+    /// lineage, and publisher checkpoint envelope) under wire kind 1.
+    case receiveRequest(KagemushaRecipientReceiveOfferV2)
+    case payment(KagemushaRecursiveSpendPeerPaymentV4)
     case acknowledgement(KagemushaReceiverAcknowledgement)
 
     public var kind: KagemushaPeerPayloadKind {
@@ -88,8 +98,8 @@ public enum KagemushaPeerPayload: Equatable, Sendable {
 
     public var archive: Data {
         switch self {
-        case .receiveRequest(let request):
-            return request.archive
+        case .receiveRequest(let offer):
+            return offer.noritoArchive
         case .payment(let payment):
             return payment.archive
         case .acknowledgement(let acknowledgement):
@@ -114,10 +124,10 @@ public enum KagemushaPeerPayload: Equatable, Sendable {
             switch kind {
             case .receiveRequest:
                 return .receiveRequest(
-                    try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(archive)
+                    try KagemushaRecipientReceiveOfferV2(noritoArchive: archive)
                 )
             case .payment:
-                return .payment(try KagemushaRecursiveSpendPeerPayment.decode(archive))
+                return .payment(try KagemushaRecursiveSpendPeerPaymentV4(noritoArchive: archive))
             case .acknowledgement:
                 return .acknowledgement(
                     try KagemushaRecursiveSpendCodecs.decodeAcknowledgement(archive)
@@ -135,11 +145,11 @@ public enum KagemushaPeerPayload: Equatable, Sendable {
 /// acknowledgement's cryptographic sender verification before releasing any
 /// locally reserved inputs.
 public struct KagemushaPeerSendResult: Equatable, Sendable {
-    public let payment: KagemushaRecursiveSpendPeerPayment
+    public let payment: KagemushaRecursiveSpendPeerPaymentV4
     public let acknowledgement: KagemushaReceiverAcknowledgement
 
     public init(
-        payment: KagemushaRecursiveSpendPeerPayment,
+        payment: KagemushaRecursiveSpendPeerPaymentV4,
         acknowledgement: KagemushaReceiverAcknowledgement
     ) {
         self.payment = payment

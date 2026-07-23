@@ -1,7 +1,7 @@
 ---
 title: Nexus Cross-Lane Execution
 sidebar_label: Cross-Lane Execution
-description: Production lane lifecycle, certification, global merge, proof, and recovery rules.
+description: Cross-lane lifecycle, certification, global merge, proof, and recovery rules.
 ---
 
 # Nexus cross-lane execution
@@ -9,11 +9,22 @@ description: Production lane lifecycle, certification, global merge, proof, and 
 Nexus partitions transaction scheduling and lane-local certification while
 retaining one deterministic, globally ordered WSV. Lanes can be created and
 retired automatically to add horizontal execution capacity, but lane QCs never
-mutate shared state directly. A merge QC bound to a canonical global carrier is
-the only bridge from autonomous lane execution into WSV.
+mutate shared state directly. For an accepted embedded autonomous batch, only a
+merge QC bound to a canonical global carrier can bridge its effects into WSV;
+the first release does not originate that form.
 
-This document describes the current production path. The exact merge protocol
-and storage crash contract are specified in [Merge ledger](merge_ledger.md).
+The first-release runtime does **not** originate autonomous lane execution
+payloads. Local payload construction, reservation handoff, availability/NewView
+collection, and drain-vote collection remain fail-closed and test-only until a
+single durable reservation identity can be carried through the queue, wire,
+lane session, Kura, and global carrier. Nodes still validate and replay an
+already embedded execution batch for chain-history compatibility, and the live
+V2 path retains ordinary global-body lane proposal/vote/QC processing plus
+relay-settlement candidates.
+
+The flow below is the activation contract for autonomous execution, not a claim
+that its producer is enabled in the first release. The exact merge protocol and
+storage crash contract are specified in [Merge ledger](merge_ledger.md).
 
 ## End-to-end flow
 
@@ -104,6 +115,11 @@ proposals only at the following global height, so messages prepared before
 catalog commitment cannot race activation.
 
 ### Scale in
+
+First-release note: the certificate-collection and certificate-dependent
+retirement flow below is an activation contract. Drain-vote ingress is
+decode-only and rejected, so the runtime cannot complete this path from live
+votes; it remains fail-closed rather than retiring without the certificate.
 
 A complete cold window and expired cooldown select the highest active managed
 elastic lane. Selection begins an irreversible drain; it does not remove the
@@ -233,9 +249,12 @@ replay.
 
 ## Native AMX cross-dataspace transactions
 
-Native AMX execution uses the same globally certified batch. A routing plan
-names its coordinator and every participant leg. The producer must collect the
-required participant prepare/commit QCs; coordinator-only evidence is not
+Native-AMX control, attestation, and participant-receipt validation remain live
+in the ordinary global-body lane proposal/QC path. The autonomous batch
+construction described below applies only to already embedded history and the
+future activation contract; the first release does not synthesize it. A routing
+plan names its coordinator and every participant leg. The producer must collect
+the required participant prepare/commit QCs; coordinator-only evidence is not
 synthesized. `NativeAmxReceipt.authority_context_height` binds the global
 application context, while each leg retains its lane-local height. Validation
 checks chain, source ID, entrypoint, routing-plan digest, lane/dataspace roles,
@@ -249,16 +268,19 @@ expected post-state hash invalidates the complete candidate.
 ## Compact carrier, recovery, and proofs
 
 The full merge entry can be up to 16 MiB; the global block instead carries a
-`CertifiedMergeLedgerReference`. Its merge QC identifies authenticated sidecar
-holders. Fetch uses bounded 64-KiB chunks and global/per-peer resource caps,
-while authoritative pending blocks retry through holder withholding without a
-fixed attempt horizon.
+`CertifiedMergeLedgerReference`. For live non-execution entries, its merge QC
+identifies authenticated sidecar holders. Fetch uses bounded 64-KiB chunks and
+global/per-peer resource caps, while authoritative pending blocks retry through
+holder withholding without a fixed attempt horizon. First-release responders
+do not serve entries carrying `execution_batch`; historical replay of that form
+requires the canonical full entry to be durable already.
 
 Kura maintains indexed full-entry and carrier stores. A node that restarts with
-only the compact block fetches or replays the exact sidecar, re-executes the
-same WSV transition, and reconstructs the same transaction history. Torn,
-oversized, non-canonical, conflicting, symlinked, or future-uncommitted storage
-is truncated or rejected according to the crash boundary; incomplete network
+a live non-execution compact block can fetch the exact sidecar. An embedded
+historical execution batch replays and reconstructs the same transaction
+history only from its already-durable exact full entry. Torn, oversized,
+non-canonical, conflicting, symlinked, or future-uncommitted storage is
+truncated or rejected according to the crash boundary; incomplete network
 assemblies are never persisted.
 
 Chain truncation publishes a fsynced prune intent before lowering the durable
@@ -312,7 +334,9 @@ rows, or stale prior-cycle logs do not prove expansion or safe contraction.
 
 ## Verification matrix
 
-The production corridor includes:
+Activation requires the following corridor. Current first-release tests cover
+the replay, validation, crash-recovery, and fail-closed boundaries; they do not
+make the autonomous producer live:
 
 - unit tests for router activation/incarnation boundaries, committee and quorum
   authority, lane proposal/QC aggregation, payload recovery, merge
@@ -334,7 +358,9 @@ The production corridor includes:
 Primary code lives in `crates/iroha_core/src/state.rs`,
 `crates/iroha_core/src/lane_consensus.rs`,
 `crates/iroha_core/src/lane_drain.rs`,
-`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/v2_lane_work.rs`,
+`crates/iroha_core/src/sumeragi/v2_candidate.rs`,
+`crates/iroha_core/src/sumeragi/v2_apply.rs`,
 `crates/iroha_core/src/merge_sidecar.rs`, and
 `crates/iroha_core/src/kura.rs`; canonical DTOs live under
 `crates/iroha_data_model/src/{block,merge,nexus,query}`.

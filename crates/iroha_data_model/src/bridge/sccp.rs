@@ -36,6 +36,17 @@ pub const SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1: usize = 4 * 1024;
 /// index.
 pub const SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1: u32 = 512;
 
+/// Canonical raw 32-byte genesis hash of the Solana testnet profile.
+///
+/// The bytes are the Base58 decoding of Solana's published
+/// `4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY` genesis hash. Consensus
+/// encodings use these raw bytes directly; Base58 is presentation-only and is
+/// deliberately absent from the SCCP wire model.
+pub const SCCP_SOLANA_TESTNET_GENESIS_HASH_V1: [u8; 32] = [
+    0x3a, 0x13, 0x2e, 0xce, 0x10, 0x30, 0x5e, 0xc1, 0x83, 0x07, 0x25, 0x50, 0x2f, 0xa2, 0xb7, 0xe7,
+    0xeb, 0x81, 0x57, 0xe9, 0x12, 0x3d, 0x4c, 0x1f, 0x65, 0x4a, 0x71, 0x78, 0x71, 0x61, 0xdc, 0x21,
+];
+
 /// A supported SCCP network profile for the V1 wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -84,6 +95,13 @@ pub enum SccpNetworkV1 {
     #[codec(index = 12)]
     #[norito(rename = "tron_shasta")]
     TronShasta,
+    /// Solana testnet, bound to [`SCCP_SOLANA_TESTNET_GENESIS_HASH_V1`].
+    ///
+    /// Tag 13 is the first unassigned exact-profile tag after the retained
+    /// TRON inventory. The retired tags `6..=9` remain permanently reserved.
+    #[codec(index = 13)]
+    #[norito(rename = "solana_testnet")]
+    SolanaTestnet,
 }
 
 impl SccpNetworkV1 {
@@ -94,6 +112,7 @@ impl SccpNetworkV1 {
             Self::SoraTaira => 0,
             Self::EthereumMainnet | Self::EthereumSepolia => 1,
             Self::BscMainnet | Self::BscTestnet => 2,
+            Self::SolanaTestnet => 3,
             Self::TronMainnet | Self::TronNile | Self::TronShasta => 5,
         }
     }
@@ -110,6 +129,7 @@ impl SccpNetworkV1 {
             Self::TronMainnet => "tron-mainnet",
             Self::TronNile => "tron-nile",
             Self::TronShasta => "tron-shasta",
+            Self::SolanaTestnet => "solana-testnet",
         }
     }
 
@@ -129,6 +149,7 @@ impl SccpNetworkV1 {
             "tron-mainnet" => Some(Self::TronMainnet),
             "tron-nile" => Some(Self::TronNile),
             "tron-shasta" => Some(Self::TronShasta),
+            "solana-testnet" => Some(Self::SolanaTestnet),
             _ => None,
         }
     }
@@ -175,6 +196,7 @@ impl SccpNetworkV1 {
                 | Self::TronMainnet
                 | Self::TronNile
                 | Self::TronShasta
+                | Self::SolanaTestnet
         )
     }
 }
@@ -908,6 +930,35 @@ pub struct SccpTronSourceEmitterV1 {
     pub route_config_hash: [u8; 32],
 }
 
+/// Exact governed immutable Solana source-program deployment identity.
+///
+/// Every address is the raw 32-byte Solana public key. No Base58 text enters
+/// consensus state. The Loader-v3 ProgramData identity and deployment slot
+/// make the reviewed executable revision explicit, while the state account
+/// and route commitment bind the program to one configured value-moving lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+pub struct SccpSolanaSourceEmitterV1 {
+    /// Immutable source bridge program public key.
+    pub program_id: [u8; 32],
+    /// Loader-v3 ProgramData account public key for the reviewed executable.
+    pub program_data_address: [u8; 32],
+    /// Nonzero Loader-v3 deployment slot of the reviewed executable.
+    pub program_data_slot: u64,
+    /// Program-owned source-state account public key.
+    pub state_account: [u8; 32],
+    /// Blake2b-256 hash of the immutable source ProgramData executable bytes.
+    pub program_code_hash: [u8; 32],
+    /// Commitment to the exact source program's immutable route configuration.
+    pub route_config_hash: [u8; 32],
+}
+
 /// Exact source-bridge emitter identity for a supported external chain family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -927,6 +978,10 @@ pub enum SccpSourceEmitterV1 {
     #[codec(index = 1)]
     #[norito(rename = "tron")]
     Tron(SccpTronSourceEmitterV1),
+    /// Solana Loader-v3 program, ProgramData, and route-state identity.
+    #[codec(index = 2)]
+    #[norito(rename = "solana")]
+    Solana(SccpSolanaSourceEmitterV1),
 }
 
 impl SccpSourceEmitterV1 {
@@ -944,7 +999,7 @@ impl SccpSourceEmitterV1 {
             ) | (
                 Self::Tron(_),
                 SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
-            )
+            ) | (Self::Solana(_), SccpNetworkV1::SolanaTestnet)
         )
     }
 
@@ -962,9 +1017,22 @@ impl SccpSourceEmitterV1 {
     /// full lane, whose SORA target may still be Taira.
     #[must_use]
     pub fn is_production_source_for(&self, network: SccpNetworkV1) -> bool {
-        network.is_production_profile()
-            && network.is_external()
+        network.is_production_profile() && self.is_governance_activatable_source_for(network)
+    }
+
+    /// Return whether reviewed material is complete enough for governance to
+    /// activate native inbound settlement for `network`.
+    ///
+    /// Solana testnet is the single explicit first-release exception to the
+    /// production-profile requirement: it remains testnet-classified while
+    /// governance may activate it after reviewing the closed Agave backend and
+    /// immutable deployment pins. Other staging profiles retain their existing
+    /// fail-closed activation policy.
+    #[must_use]
+    pub fn is_governance_activatable_source_for(&self, network: SccpNetworkV1) -> bool {
+        network.is_external()
             && network.supports_native_inbound_source()
+            && (network.is_production_profile() || network == SccpNetworkV1::SolanaTestnet)
             && self.is_well_formed()
             && self.matches_profile(network)
     }
@@ -984,6 +1052,21 @@ impl SccpSourceEmitterV1 {
                     && nonzero(&emitter.runtime_code_hash)
                     && nonzero(&emitter.route_config_hash)
                     && emitter.runtime_code_hash != emitter.route_config_hash
+            }
+            Self::Solana(emitter) => {
+                emitter.program_data_slot != 0
+                    && nonzero(&emitter.program_id)
+                    && nonzero(&emitter.program_data_address)
+                    && nonzero(&emitter.state_account)
+                    && nonzero(&emitter.program_code_hash)
+                    && nonzero(&emitter.route_config_hash)
+                    && all_distinct(&[
+                        emitter.program_id,
+                        emitter.program_data_address,
+                        emitter.state_account,
+                        emitter.program_code_hash,
+                        emitter.route_config_hash,
+                    ])
             }
         }
     }
@@ -1025,6 +1108,18 @@ impl SccpSourceIdentityV1 {
         self.is_well_formed() && self.emitter.is_production_source_for(self.lane.source)
     }
 
+    /// Return whether exact reviewed source material satisfies the closed
+    /// governance-activation policy. This is true for production profiles and
+    /// for the explicit Solana-testnet first-release lane, without changing
+    /// that lane's environment classification.
+    #[must_use]
+    pub fn has_governance_activatable_source(&self) -> bool {
+        self.is_well_formed()
+            && self
+                .emitter
+                .is_governance_activatable_source_for(self.lane.source)
+    }
+
     /// Return whether the complete inbound lane uses production endpoints and source material.
     #[must_use]
     pub fn is_production_lane(&self) -> bool {
@@ -1042,13 +1137,20 @@ fn nonzero<const N: usize>(bytes: &[u8; N]) -> bool {
     bytes.iter().any(|byte| *byte != 0)
 }
 
+fn all_distinct<const N: usize>(values: &[[u8; N]]) -> bool {
+    values
+        .iter()
+        .enumerate()
+        .all(|(index, value)| values[index + 1..].iter().all(|other| value != other))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bridge::BridgeNativeProofBackendV1;
     use norito::codec::DecodeAll as _;
 
-    const NETWORKS: [SccpNetworkV1; 8] = [
+    const NETWORKS: [SccpNetworkV1; 9] = [
         SccpNetworkV1::SoraTaira,
         SccpNetworkV1::EthereumMainnet,
         SccpNetworkV1::EthereumSepolia,
@@ -1057,6 +1159,7 @@ mod tests {
         SccpNetworkV1::TronMainnet,
         SccpNetworkV1::TronNile,
         SccpNetworkV1::TronShasta,
+        SccpNetworkV1::SolanaTestnet,
     ];
 
     fn evm_emitter() -> SccpSourceEmitterV1 {
@@ -1073,6 +1176,21 @@ mod tests {
             runtime_code_hash: [5; 32],
             route_config_hash: [6; 32],
         })
+    }
+
+    fn solana_emitter_value() -> SccpSolanaSourceEmitterV1 {
+        SccpSolanaSourceEmitterV1 {
+            program_id: [7; 32],
+            program_data_address: [8; 32],
+            program_data_slot: 9,
+            state_account: [10; 32],
+            program_code_hash: [11; 32],
+            route_config_hash: [12; 32],
+        }
+    }
+
+    fn solana_emitter() -> SccpSourceEmitterV1 {
+        SccpSourceEmitterV1::Solana(solana_emitter_value())
     }
 
     fn inbound_lane(source: SccpNetworkV1) -> SccpLaneIdV1 {
@@ -1157,7 +1275,7 @@ mod tests {
 
     #[test]
     fn network_inventory_and_profile_keys_are_exact() {
-        assert_eq!(NETWORKS.len(), 8);
+        assert_eq!(NETWORKS.len(), 9);
         for network in NETWORKS {
             assert_eq!(
                 SccpNetworkV1::from_profile_key(network.profile_key()),
@@ -1172,7 +1290,7 @@ mod tests {
             "ethereum",
             "ETHEREUM-MAINNET",
             "solana-mainnet-beta",
-            "solana-testnet",
+            "solana_testnet",
             "ton-mainnet",
             "ton-testnet",
         ] {
@@ -1187,6 +1305,9 @@ mod tests {
         assert_eq!(SccpNetworkV1::TronMainnet.domain_id(), 5);
         assert_eq!(SccpNetworkV1::TronNile.domain_id(), 5);
         assert_eq!(SccpNetworkV1::TronShasta.domain_id(), 5);
+        assert_eq!(SccpNetworkV1::SolanaTestnet.domain_id(), 3);
+        assert!(SccpNetworkV1::SolanaTestnet.is_staging_profile());
+        assert!(!SccpNetworkV1::SolanaTestnet.is_production_profile());
     }
 
     #[test]
@@ -1199,7 +1320,7 @@ mod tests {
             );
         }
 
-        for emitter in [evm_emitter(), tron_emitter()] {
+        for emitter in [evm_emitter(), tron_emitter(), solana_emitter()] {
             let encoded = emitter.encode();
             assert_eq!(
                 SccpSourceEmitterV1::decode_all(&mut encoded.as_slice()).expect("emitter decodes"),
@@ -1210,7 +1331,7 @@ mod tests {
 
     #[test]
     fn unknown_binary_enum_tags_are_rejected() {
-        for unsupported_tag in [0_u32, 6, 7, 8, 9, 13, u32::MAX] {
+        for unsupported_tag in [0_u32, 6, 7, 8, 9, 14, u32::MAX] {
             let encoded = unsupported_tag.encode();
             assert!(
                 SccpNetworkV1::decode_all(&mut encoded.as_slice()).is_err(),
@@ -1218,7 +1339,7 @@ mod tests {
             );
         }
 
-        for unsupported_tag in [2_u32, 3, u32::MAX] {
+        for unsupported_tag in [3_u32, 4, u32::MAX] {
             let encoded = unsupported_tag.encode();
             assert!(
                 SccpSourceEmitterV1::decode_all(&mut encoded.as_slice()).is_err(),
@@ -1238,6 +1359,7 @@ mod tests {
             (SccpNetworkV1::TronMainnet, 10),
             (SccpNetworkV1::TronNile, 11),
             (SccpNetworkV1::TronShasta, 12),
+            (SccpNetworkV1::SolanaTestnet, 13),
         ];
         for (network, tag) in expected {
             assert_eq!(
@@ -1254,7 +1376,6 @@ mod tests {
         for profile in [
             "sora_nexus",
             "solana_mainnet_beta",
-            "solana_testnet",
             "ton_mainnet",
             "ton_testnet",
             "unknown_network",
@@ -1266,7 +1387,7 @@ mod tests {
             );
         }
 
-        for emitter in ["solana", "ton", "unknown_emitter"] {
+        for emitter in ["ton", "unknown_emitter"] {
             let json = format!(r#"{{"emitter":"{emitter}","identity":{{}}}}"#);
             assert!(
                 norito::json::from_json::<SccpSourceEmitterV1>(&json).is_err(),
@@ -1280,7 +1401,6 @@ mod tests {
     fn json_roundtrips_advertise_only_first_release_profiles() {
         for network in NETWORKS {
             let json = norito::json::to_json(&network).expect("network serializes");
-            assert!(!json.to_ascii_lowercase().contains("solana"));
             assert!(!json.to_ascii_lowercase().contains("ton_"));
             assert_eq!(
                 norito::json::from_json::<SccpNetworkV1>(&json).expect("network decodes"),
@@ -1288,9 +1408,8 @@ mod tests {
             );
         }
 
-        for emitter in [evm_emitter(), tron_emitter()] {
+        for emitter in [evm_emitter(), tron_emitter(), solana_emitter()] {
             let json = norito::json::to_json(&emitter).expect("emitter serializes");
-            assert!(!json.to_ascii_lowercase().contains("solana"));
             assert!(!json.to_ascii_lowercase().contains(r#""ton""#));
             assert_eq!(
                 norito::json::from_json::<SccpSourceEmitterV1>(&json).expect("emitter decodes"),
@@ -1356,7 +1475,7 @@ mod tests {
     }
 
     #[test]
-    fn native_source_support_is_closed_to_evm_bsc_and_tron() {
+    fn native_source_support_is_closed_to_exact_external_inventory() {
         for network in NETWORKS {
             assert_eq!(
                 network.supports_native_inbound_source(),
@@ -1387,6 +1506,10 @@ mod tests {
                         | SccpNetworkV1::TronShasta
                 )
             );
+            assert_eq!(
+                solana_emitter().matches_network(network),
+                matches!(network, SccpNetworkV1::SolanaTestnet)
+            );
         }
     }
 
@@ -1394,6 +1517,7 @@ mod tests {
     fn emitter_components_are_nonzero_and_role_separated() {
         assert!(evm_emitter().is_well_formed());
         assert!(tron_emitter().is_well_formed());
+        assert!(solana_emitter().is_well_formed());
 
         for invalid in [
             SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
@@ -1436,6 +1560,42 @@ mod tests {
                 runtime_code_hash: [5; 32],
                 route_config_hash: [5; 32],
             }),
+            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                program_id: [0; 32],
+                ..solana_emitter_value()
+            }),
+            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                program_data_slot: 0,
+                ..solana_emitter_value()
+            }),
+            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                program_data_address: [0; 32],
+                ..solana_emitter_value()
+            }),
+            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                state_account: [0; 32],
+                ..solana_emitter_value()
+            }),
+            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                program_code_hash: [0; 32],
+                ..solana_emitter_value()
+            }),
+            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                route_config_hash: [0; 32],
+                ..solana_emitter_value()
+            }),
+            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                program_data_address: [7; 32],
+                ..solana_emitter_value()
+            }),
+            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                state_account: [8; 32],
+                ..solana_emitter_value()
+            }),
+            SccpSourceEmitterV1::Solana(SccpSolanaSourceEmitterV1 {
+                program_code_hash: [12; 32],
+                ..solana_emitter_value()
+            }),
         ] {
             assert!(!invalid.is_well_formed(), "{invalid:?}");
         }
@@ -1453,9 +1613,28 @@ mod tests {
                 emitter,
             };
             assert!(identity.is_well_formed());
+            assert!(identity.has_governance_activatable_source());
             assert!(identity.has_production_source());
             assert!(identity.is_production_lane());
         }
+
+        let solana = SccpSourceIdentityV1 {
+            lane: inbound_lane(SccpNetworkV1::SolanaTestnet),
+            emitter: solana_emitter(),
+        };
+        assert!(solana.is_well_formed());
+        assert!(solana.has_governance_activatable_source());
+        assert!(!solana.has_production_source());
+        assert!(!solana.is_production_lane());
+        assert!(solana.uses_staging_environment());
+
+        let sepolia = SccpSourceIdentityV1 {
+            lane: inbound_lane(SccpNetworkV1::EthereumSepolia),
+            emitter: evm_emitter(),
+        };
+        assert!(sepolia.is_well_formed());
+        assert!(!sepolia.has_governance_activatable_source());
+        assert!(!sepolia.has_production_source());
 
         for identity in [
             SccpSourceIdentityV1 {
@@ -1471,6 +1650,14 @@ mod tests {
                 emitter: evm_emitter(),
             },
             SccpSourceIdentityV1 {
+                lane: inbound_lane(SccpNetworkV1::SolanaTestnet),
+                emitter: evm_emitter(),
+            },
+            SccpSourceIdentityV1 {
+                lane: inbound_lane(SccpNetworkV1::EthereumMainnet),
+                emitter: solana_emitter(),
+            },
+            SccpSourceIdentityV1 {
                 lane: inbound_lane(SccpNetworkV1::EthereumMainnet),
                 emitter: SccpSourceEmitterV1::Evm(SccpEvmSourceEmitterV1 {
                     address: [0; 20],
@@ -1480,6 +1667,7 @@ mod tests {
             },
         ] {
             assert!(!identity.is_well_formed(), "{identity:?}");
+            assert!(!identity.has_governance_activatable_source());
             assert!(!identity.has_production_source());
             assert!(!identity.is_production_lane());
         }
@@ -1821,6 +2009,10 @@ mod tests {
                 SccpNetworkV1::TronShasta,
                 BridgeNativeProofBackendV1::TronDpos,
             ),
+            (
+                SccpNetworkV1::SolanaTestnet,
+                BridgeNativeProofBackendV1::SolanaAgave,
+            ),
         ];
 
         for (source, backend) in cases {
@@ -1832,6 +2024,7 @@ mod tests {
                 BridgeNativeProofBackendV1::EthereumBeacon,
                 BridgeNativeProofBackendV1::BscParlia,
                 BridgeNativeProofBackendV1::TronDpos,
+                BridgeNativeProofBackendV1::SolanaAgave,
             ] {
                 assert_eq!(
                     SccpInboundMessageRecordV1 {

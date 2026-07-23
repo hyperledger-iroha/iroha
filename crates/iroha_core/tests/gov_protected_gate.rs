@@ -2,7 +2,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::too_many_lines, clippy::items_after_statements)]
 
+use std::num::NonZeroU64;
+
+use iroha_config::parameters::actual::{GovernanceCatalog, LaneRegistry};
 use iroha_core::{
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
@@ -10,13 +14,14 @@ use iroha_core::{
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::nexus::DataSpaceId;
-use iroha_primitives::json::Json;
 
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 
-fn insert_gas_limit(md: &mut iroha_data_model::metadata::Metadata) {
-    let key: iroha_data_model::name::Name = "gas_limit".parse().expect("gas_limit key");
-    md.insert(key, Json::new(TEST_GAS_LIMIT));
+fn fee_payment_with_gas_limit() -> iroha_data_model::transaction::FeePaymentIntent {
+    iroha_data_model::transaction::FeePaymentIntent::authority(
+        Vec::new(),
+        NonZeroU64::new(TEST_GAS_LIMIT),
+    )
 }
 
 fn compute_proposal_id(
@@ -99,6 +104,11 @@ fn protected_namespace_requires_enacted_proposal() {
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
+    state.install_lane_manifests(&std::sync::Arc::new(LaneManifestRegistry::from_config(
+        &iroha_data_model::nexus::LaneCatalog::default(),
+        &GovernanceCatalog::default(),
+        &LaneRegistry::default(),
+    )));
 
     // Set custom parameter gov_protected_namespaces = ["apps"]
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -116,12 +126,12 @@ fn protected_namespace_requires_enacted_proposal() {
     block1.commit().unwrap();
 
     // Prepare one exact self-describing artifact. It omits hajimari so the protected
-    // view can run immediately after the governance binding is enacted.
+    // transaction entrypoint can run immediately after the governance binding is enacted.
     let (prog, _) = ivm::KotodamaCompiler::new()
         .compile_source_with_manifest(
             r#"
 seiyaku ProtectedGate {
-    view fn ready() {}
+    kotoage fn ready() authorize("CanEnactGovernance") {}
 }
 "#,
         )
@@ -140,15 +150,22 @@ seiyaku ProtectedGate {
         iroha_primitives::json::Json::new(contract_address.to_string()),
     );
     md.insert(
+        "contract_address".parse().unwrap(),
+        iroha_primitives::json::Json::new(contract_address.to_string()),
+    );
+    md.insert(
         "contract_entrypoint".parse().unwrap(),
         iroha_primitives::json::Json::new("ready"),
     );
-    insert_gas_limit(&mut md);
     let chain: ChainId = "chain".parse().unwrap();
-    let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog.clone())))
-        .with_metadata(md)
-        .sign(&sk);
+    let tx = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        fee_payment_with_gas_limit(),
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog.clone())))
+    .with_metadata(md)
+    .sign(&sk);
 
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -156,7 +173,15 @@ seiyaku ProtectedGate {
     use std::borrow::Cow;
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let (_h, res) = block2.validate_transaction(accepted, &mut ivm_cache);
-    assert!(res.is_err(), "should reject without enacted proposal");
+    match res {
+        Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+            iroha_data_model::ValidationFail::NotPermitted(message),
+        )) => assert_eq!(
+            message,
+            "deployment into governed contract address requires enacted governance proposal"
+        ),
+        other => panic!("expected protected-namespace rejection, got {other:?}"),
+    }
     drop(block2);
 
     // Enact a matching proposal via public instructions
@@ -224,7 +249,7 @@ seiyaku ProtectedGate {
     // Retry with same tx; should accept now
     let header4 = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let mut block4 = state.block(header4);
-    let tx2 = TransactionBuilder::new(chain, authority)
+    let tx2 = TransactionBuilder::new(chain, authority, fee_payment_with_gas_limit())
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .with_metadata({
             let mut md = iroha_data_model::metadata::Metadata::default();
@@ -233,15 +258,21 @@ seiyaku ProtectedGate {
                 iroha_primitives::json::Json::new(contract_address.to_string()),
             );
             md.insert(
+                "contract_address".parse().unwrap(),
+                iroha_primitives::json::Json::new(contract_address.to_string()),
+            );
+            md.insert(
                 "contract_entrypoint".parse().unwrap(),
                 iroha_primitives::json::Json::new("ready"),
             );
-            insert_gas_limit(&mut md);
             md
         })
         .sign(&sk);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let accepted2 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
     let (_h2, res2) = block4.validate_transaction(accepted2, &mut ivm_cache);
-    assert!(res2.is_ok(), "should accept with enacted proposal");
+    assert!(
+        res2.is_ok(),
+        "should accept with enacted proposal, got {res2:?}"
+    );
 }

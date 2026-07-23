@@ -69,7 +69,15 @@ async fn submit_with_context(
     ));
     let instruction = instruction.into();
     let context = context.to_string();
-    spawn_blocking(move || client.submit_blocking(instruction).wrap_err(context)).await??;
+    spawn_blocking(move || {
+        client
+            .submit_blocking(
+                instruction,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .wrap_err(context)
+    })
+    .await??;
     Ok(())
 }
 
@@ -87,7 +95,15 @@ async fn submit_all_with_context(
         network.sync_timeout(),
     ));
     let context = context.to_string();
-    spawn_blocking(move || client.submit_all_blocking(instructions).wrap_err(context)).await??;
+    spawn_blocking(move || {
+        client
+            .submit_all_blocking(
+                instructions,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .wrap_err(context)
+    })
+    .await??;
     Ok(())
 }
 
@@ -409,8 +425,18 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                 // Submit without waiting for tx confirmation to avoid queue-timeout flakiness.
                 let submit_client = leader_client_for_submit(network, &test_client).await;
                 let context = "pre_commit_trigger_should_be_executed sample ISI".to_string();
-                spawn_blocking(move || submit_client.submit(sample_isi).wrap_err(context))
-                    .await??;
+                spawn_blocking(move || {
+                    submit_client
+                        .submit(
+                            sample_isi,
+                            iroha_data_model::transaction::FeePaymentIntent::authority(
+                                Vec::new(),
+                                None,
+                            ),
+                        )
+                        .wrap_err(context)
+                })
+                .await??;
                 target_height = target_height.saturating_add(1);
                 network
                     .ensure_blocks_with(|height| height.total >= target_height)
@@ -640,7 +666,15 @@ async fn submit_sample_isi_on_every_block_commit(
         // Submit without waiting for tx confirmation to avoid queue-timeout flakiness.
         let submit_client = leader_client_for_submit(network, test_client).await;
         let context = "time_trigger sample ISI".to_string();
-        spawn_blocking(move || submit_client.submit(sample_isi).wrap_err(context)).await??;
+        spawn_blocking(move || {
+            submit_client
+                .submit(
+                    sample_isi,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .wrap_err(context)
+        })
+        .await??;
         println!("submitted sample ISI {}/{}", idx + 1, times);
     }
     // Ensure at least one additional block committed after submissions were sent.

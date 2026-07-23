@@ -3743,6 +3743,16 @@ mod tests {
     }
 
     #[test]
+    fn build_host_for_fixture_uses_canonical_default_caller() {
+        let compiled = compiled_suite_with_fixtures(Vec::new());
+        let host = build_host_for_fixture(&compiled, None).expect("build default host");
+        assert_eq!(
+            host.caller_subject(),
+            parse_account_literal(DEFAULT_CALLER).expect("canonical default caller")
+        );
+    }
+
+    #[test]
     fn build_host_for_fixture_applies_bound_caller() {
         let fixture = FixtureDecl {
             name: "seeded".to_string(),

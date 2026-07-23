@@ -7,6 +7,7 @@ use std::sync::{Arc, LazyLock};
 use criterion::{BatchSize, Criterion};
 use iroha_core::{
     block::*,
+    governance::manifest::LaneManifestRegistry,
     prelude::*,
     query::store::LiveQueryStore,
     smartcontracts::{Execute, isi::Registrable as _, ivm::cache::IvmCache},
@@ -35,19 +36,15 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 });
 
 fn build_test_transaction(chain_id: ChainId) -> TransactionBuilder {
-    let domain_id: DomainId = DomainId::try_new("domain", "universal").unwrap();
-    let create_domain = Register::domain(Domain::new(domain_id.clone()));
-    let create_account = Register::account(Account::new(gen_account_in(&domain_id).0.clone()));
-    let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
-    let create_asset = Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
-
-    TransactionBuilder::new(chain_id, STARTER_ID.clone()).with_instructions::<InstructionBox>([
-        create_domain.into(),
-        create_account.into(),
-        create_asset.into(),
+    TransactionBuilder::new(
+        chain_id,
+        STARTER_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions::<InstructionBox>([
+        Log::new(Level::INFO, "validation benchmark one".to_owned()).into(),
+        Log::new(Level::INFO, "validation benchmark two".to_owned()).into(),
+        Log::new(Level::INFO, "validation benchmark three".to_owned()).into(),
     ])
 }
 
@@ -58,7 +55,7 @@ fn build_test_and_transient_state() -> State {
     let query_handle = LiveQueryStore::start_test();
     let (account_id, key_pair) = gen_account_in(&*STARTER_DOMAIN);
 
-    let state = State::new(
+    let state = State::try_new(
         {
             let domain = Domain::new(STARTER_DOMAIN.clone()).build(&account_id);
             let account = Account::new(account_id.clone()).build(&account_id);
@@ -68,13 +65,22 @@ fn build_test_and_transient_state() -> State {
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
-    );
+    )
+    .expect("benchmark State startup must validate");
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let transaction = TransactionBuilder::new(chain_id.clone(), account_id.clone())
-            .with_instructions([Log::new(Level::INFO, "init".to_string())])
-            .sign(key_pair.private_key());
+        let transaction = TransactionBuilder::new(
+            chain_id.clone(),
+            account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "init".to_string())])
+        .sign(key_pair.private_key());
         let (max_clock_drift, tx_limits) = {
             let state_view = state.view();
             let params = state_view.world.parameters();
@@ -200,9 +206,13 @@ fn validate_transaction(criterion: &mut Criterion) {
     let state = build_test_and_transient_state();
 
     let (account_id, key_pair) = gen_account_in(&*STARTER_DOMAIN);
-    let transaction = TransactionBuilder::new(chain_id.clone(), account_id.clone())
-        .with_instructions([Log::new(Level::INFO, "init".to_string())])
-        .sign(key_pair.private_key());
+    let transaction = TransactionBuilder::new(
+        chain_id.clone(),
+        account_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "init".to_string())])
+    .sign(key_pair.private_key());
     let (max_clock_drift, tx_limits) = {
         let state_view = state.view();
         let params = state_view.world.parameters();
@@ -287,13 +297,14 @@ fn sign_blocks(criterion: &mut Criterion) {
     // Ensure Tokio reactor is available for LiveQueryStore background task
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(
+    let state = State::try_new(
         World::new(),
         kura,
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
-    );
+    )
+    .expect("benchmark State startup must validate");
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();

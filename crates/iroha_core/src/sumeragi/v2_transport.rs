@@ -8,6 +8,9 @@
 use core::fmt;
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+use std::collections::BTreeSet;
+
 use iroha_crypto::{HashOf, Signature};
 use iroha_data_model::{
     block::{consensus_v2 as wire, decode_framed_signed_block},
@@ -87,6 +90,8 @@ pub(crate) enum V2TransportError {
     },
     /// A response did not match any currently outstanding exact request hash.
     UnsolicitedResponse(HashOf<wire::CertifiedBodyRequest>),
+    /// The two exact-request indexes disagree for an internally owned request.
+    InconsistentRequestIndex(HashOf<wire::CertifiedBodyRequest>),
     /// The exact commit-certificate request is already outstanding.
     DuplicateCommitCertificateRequest(HashOf<wire::CommitCertificateRequest>),
     /// Another signed request already occupies this exact context/requester slot.
@@ -143,6 +148,10 @@ impl fmt::Display for V2TransportError {
             Self::UnsolicitedResponse(hash) => write!(
                 f,
                 "certified-body response for request {hash} is unsolicited or replayed"
+            ),
+            Self::InconsistentRequestIndex(hash) => write!(
+                f,
+                "certified-body request {hash} has inconsistent exact ownership indexes"
             ),
             Self::DuplicateCommitCertificateRequest(hash) => write!(
                 f,
@@ -216,7 +225,6 @@ pub(crate) struct AuthenticatedCertifiedBodyResponse {
 
 impl AuthenticatedCertifiedBodyResponse {
     /// Borrow the authenticated response.
-    #[cfg(test)]
     pub(crate) const fn response(&self) -> &wire::CertifiedBodyResponse {
         &self.response
     }
@@ -399,13 +407,38 @@ pub(crate) fn authenticate_commit_certificate_request_identity(
 
 /// Bounded set of exact certified-body requests awaiting a response.
 ///
-/// A successful response atomically consumes its request. Every rejected
-/// response leaves the request outstanding so a Byzantine or corrupt sender
-/// cannot suppress a later valid answer.
+/// Authentication never consumes a request. The serialized executor retires
+/// it only after the authenticated body has passed canonical manifest
+/// reconstruction and entered the reducer queue, so a Byzantine or corrupt
+/// sender cannot suppress a later valid answer.
 pub(crate) struct OutstandingCertifiedBodyRequests {
     capacity: usize,
     requests: BTreeMap<HashOf<wire::CertifiedBodyRequest>, AuthenticatedCertifiedBodyRequest>,
     identities: BTreeMap<RequestIdentity, HashOf<wire::CertifiedBodyRequest>>,
+}
+
+/// Preflighted insertion into both exact certified-request indexes.
+///
+/// The tracker is serialized by its executor owner. Planning performs every
+/// duplicate, logical-identity, and capacity check; committing this value
+/// after the body-fetch service accepts its exact task is insertion-only and
+/// cannot reject.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CertifiedBodyRequestRegistrationPlan {
+    incoming: HashOf<wire::CertifiedBodyRequest>,
+    identity: RequestIdentity,
+    authenticated: AuthenticatedCertifiedBodyRequest,
+}
+
+/// Preflighted removal from both exact certified-request indexes.
+///
+/// The exact logical identity is retained in the plan so commit needs no
+/// fallible lookup after an external body-fetch owner has transferred its
+/// completion to the executor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CertifiedBodyRequestRetirementPlan {
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    identity: RequestIdentity,
 }
 
 impl OutstandingCertifiedBodyRequests {
@@ -431,29 +464,26 @@ impl OutstandingCertifiedBodyRequests {
     }
 
     /// Whether the tracker has no outstanding requests.
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.requests.is_empty()
     }
 
     /// Whether one exact request hash is currently outstanding.
-    #[cfg(test)]
     pub(crate) fn contains(&self, hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
         self.requests.contains_key(&hash)
     }
 
-    /// Register an authenticated request without eviction.
-    ///
-    /// Exact repeats and logically conflicting reissues are distinguished from
-    /// capacity exhaustion and never mutate the tracker.
-    ///
-    /// # Errors
-    ///
-    /// Returns a duplicate, conflict, or capacity error as applicable.
-    pub(crate) fn register(
-        &mut self,
+    /// Exact sorted set of outstanding signed-request hashes.
+    #[cfg(test)]
+    pub(crate) fn hashes(&self) -> BTreeSet<HashOf<wire::CertifiedBodyRequest>> {
+        self.requests.keys().copied().collect()
+    }
+
+    /// Validate one registration without changing either bounded index.
+    pub(crate) fn plan_registration(
+        &self,
         authenticated: AuthenticatedCertifiedBodyRequest,
-    ) -> Result<(), V2TransportError> {
+    ) -> Result<CertifiedBodyRequestRegistrationPlan, V2TransportError> {
         let incoming = authenticated.request_hash;
         if self.requests.contains_key(&incoming) {
             return Err(V2TransportError::DuplicateRequest(incoming));
@@ -470,8 +500,71 @@ impl OutstandingCertifiedBodyRequests {
                 capacity: self.capacity,
             });
         }
-        self.requests.insert(incoming, authenticated);
-        self.identities.insert(identity, incoming);
+        Ok(CertifiedBodyRequestRegistrationPlan {
+            incoming,
+            identity,
+            authenticated,
+        })
+    }
+
+    /// Install a previously validated exact registration.
+    ///
+    /// The serialized tracker owner must not mutate either index between
+    /// [`Self::plan_registration`] and this commit.
+    pub(crate) fn commit_registration(&mut self, plan: CertifiedBodyRequestRegistrationPlan) {
+        debug_assert!(!self.requests.contains_key(&plan.incoming));
+        debug_assert!(!self.identities.contains_key(&plan.identity));
+        debug_assert!(self.requests.len() < self.capacity);
+        self.requests.insert(plan.incoming, plan.authenticated);
+        self.identities.insert(plan.identity, plan.incoming);
+    }
+
+    /// Validate exact removal from both bounded indexes without changing them.
+    pub(crate) fn plan_retirement(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Result<CertifiedBodyRequestRetirementPlan, V2TransportError> {
+        let authenticated = self
+            .requests
+            .get(&request_hash)
+            .cloned()
+            .ok_or(V2TransportError::UnsolicitedResponse(request_hash))?;
+        let identity = RequestIdentity::from(authenticated.request());
+        if self.identities.get(&identity) != Some(&request_hash) {
+            return Err(V2TransportError::InconsistentRequestIndex(request_hash));
+        }
+        Ok(CertifiedBodyRequestRetirementPlan {
+            request_hash,
+            identity,
+        })
+    }
+
+    /// Remove one previously preflighted request from both indexes.
+    ///
+    /// This is structurally infallible because the serialized executor does
+    /// not mutate the tracker between planning and commit. Keeping the exact
+    /// request identity in the plan makes both removals independent of any
+    /// later fallible lookup.
+    pub(crate) fn commit_retirement(&mut self, plan: CertifiedBodyRequestRetirementPlan) {
+        self.requests.remove(&plan.request_hash);
+        self.identities.remove(&plan.identity);
+    }
+
+    /// Register an authenticated request without eviction.
+    ///
+    /// Exact repeats and logically conflicting reissues are distinguished from
+    /// capacity exhaustion and never mutate the tracker.
+    ///
+    /// # Errors
+    ///
+    /// Returns a duplicate, conflict, or capacity error as applicable.
+    #[cfg(test)]
+    pub(crate) fn register(
+        &mut self,
+        authenticated: AuthenticatedCertifiedBodyRequest,
+    ) -> Result<(), V2TransportError> {
+        let plan = self.plan_registration(authenticated)?;
+        self.commit_registration(plan);
         Ok(())
     }
 
@@ -481,71 +574,75 @@ impl OutstandingCertifiedBodyRequests {
     /// Removing both indexes prevents abandoned requests from permanently
     /// consuming the bounded request capacity while late responses remain
     /// correctly classified as unsolicited.
+    #[cfg(test)]
     pub(crate) fn cancel(&mut self, request_hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
-        let Some(authenticated) = self.requests.remove(&request_hash) else {
+        let Ok(plan) = self.plan_retirement(request_hash) else {
             return false;
         };
-        let identity = RequestIdentity::from(authenticated.request());
-        let removed = self.identities.remove(&identity);
-        debug_assert_eq!(removed, Some(request_hash));
+        self.commit_retirement(plan);
         true
     }
 
-    /// Authenticate and consume a response for an outstanding exact request.
+    /// Complete one exact request after its authenticated body entered the
+    /// reducer queue.
+    #[cfg(test)]
+    pub(crate) fn complete(&mut self, request_hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
+        let Ok(plan) = self.plan_retirement(request_hash) else {
+            return false;
+        };
+        self.commit_retirement(plan);
+        true
+    }
+
+    /// Authenticate a response for an outstanding exact request without
+    /// consuming the request.
     ///
     /// # Errors
     ///
     /// Returns an error for unsolicited/replayed responses, malformed bodies
     /// or manifests, uncertified/spoofed responders, and invalid signatures.
-    /// The outstanding request is retained on every error.
+    /// The outstanding request is retained on both success and error until the
+    /// serialized executor explicitly completes or cancels it.
     pub(crate) fn authenticate_response(
-        &mut self,
+        &self,
         context: &wire::HeightContext,
         response: wire::CertifiedBodyResponse,
         authenticated_responder: &PeerId,
     ) -> Result<AuthenticatedCertifiedBodyResponse, V2TransportError> {
         let request_hash = response.request_hash;
-        let identity = {
-            let authenticated_request = self
-                .requests
-                .get(&request_hash)
-                .ok_or(V2TransportError::UnsolicitedResponse(request_hash))?;
-            let request = authenticated_request.request();
-            let claimed_responder = roster_peer(context, response.responder)?;
-            bind_outer_identity(
-                TransportIdentityKind::Responder,
-                claimed_responder,
-                authenticated_responder,
-            )?;
-            if request
-                .certificate
-                .signers
-                .binary_search(&response.responder)
-                .is_err()
-            {
-                return Err(wire::ValidationError::ResponderNotCertified.into());
-            }
-            response.validate_against(context, request, authenticated_responder)?;
-            verify_signature(
-                TransportSignatureKind::CertifiedBodyResponse,
-                claimed_responder,
-                &response.signature,
-                &response.signature_preimage(),
-            )?;
-            let proposal = decode_framed_signed_block(&response.body)
-                .map_err(|error| V2TransportError::InvalidProposalBody(error.to_string()))?;
-            if !proposal.is_resultless_proposal() {
-                return Err(V2TransportError::InvalidProposalBody(
-                    "execution results or result root are present".to_owned(),
-                ));
-            }
-            RequestIdentity::from(request)
-        };
-
-        let removed = self.requests.remove(&request_hash);
-        debug_assert!(removed.is_some(), "validated request remains registered");
-        let removed_identity = self.identities.remove(&identity);
-        debug_assert_eq!(removed_identity, Some(request_hash));
+        let authenticated_request = self
+            .requests
+            .get(&request_hash)
+            .ok_or(V2TransportError::UnsolicitedResponse(request_hash))?;
+        let request = authenticated_request.request();
+        let claimed_responder = roster_peer(context, response.responder)?;
+        bind_outer_identity(
+            TransportIdentityKind::Responder,
+            claimed_responder,
+            authenticated_responder,
+        )?;
+        if request
+            .certificate
+            .signers
+            .binary_search(&response.responder)
+            .is_err()
+        {
+            return Err(wire::ValidationError::ResponderNotCertified.into());
+        }
+        response.validate_against(context, request, authenticated_responder)?;
+        verify_signature(
+            TransportSignatureKind::CertifiedBodyResponse,
+            claimed_responder,
+            &response.signature,
+            &response.signature_preimage(),
+        )?;
+        let proposal = decode_framed_signed_block(&response.body)
+            .map_err(|error| V2TransportError::InvalidProposalBody(error.to_string()))?;
+        if !proposal.is_resultless_proposal() {
+            return Err(V2TransportError::InvalidProposalBody(
+                "execution results or result root are present".to_owned(),
+            ));
+        }
         Ok(AuthenticatedCertifiedBodyResponse { response })
     }
 }
@@ -583,7 +680,6 @@ impl OutstandingCommitCertificateRequests {
     }
 
     /// Whether the exact request remains outstanding.
-    #[cfg(test)]
     pub(crate) fn contains(&self, request_hash: HashOf<wire::CommitCertificateRequest>) -> bool {
         self.requests.contains_key(&request_hash)
     }
@@ -765,6 +861,8 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
     use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
 
+    use crate::sumeragi::v2_chunks::encode_payload;
+
     use super::*;
 
     struct Fixture {
@@ -773,6 +871,7 @@ mod tests {
         observer: KeyPair,
         body: Vec<u8>,
         manifest: wire::PayloadManifest,
+        chunks: Vec<Vec<u8>>,
     }
 
     impl Fixture {
@@ -839,14 +938,9 @@ mod tests {
                 block_hash: block.hash(),
                 payload_hash: Hash::new(&body),
             };
-            let manifest = wire::PayloadManifest::derive(
-                &context,
-                round,
-                subject,
-                u64::try_from(body.len()).expect("small body"),
-                std::slice::from_ref(&body),
-            )
-            .expect("canonical fixture manifest");
+            let (manifest, chunks) = encode_payload(&context, round, subject, &body)
+                .expect("encode canonical fixture payload")
+                .into_parts();
             let observer = KeyPair::try_from_seed(vec![90; 32], Algorithm::Ed25519)
                 .expect("deterministic observer key");
             Self {
@@ -855,6 +949,7 @@ mod tests {
                 observer,
                 body,
                 manifest,
+                chunks,
             }
         }
 
@@ -866,7 +961,7 @@ mod tests {
             let mut chunk = wire::PayloadChunk {
                 manifest_hash: HashOf::new(&self.manifest),
                 index: 0,
-                bytes: self.body.clone(),
+                bytes: self.chunks[0].clone(),
                 sender,
                 signature: Vec::new(),
             };
@@ -886,6 +981,7 @@ mod tests {
                 subject: self.manifest.subject,
                 certificate: wire::QuorumCertificate {
                     round: self.manifest.round,
+                    proposal_round: self.manifest.round,
                     phase: wire::GlobalPhase::Prepare,
                     subject: self.manifest.subject,
                     execution_commitment: wire::ExecutionCommitment::without_topups(
@@ -1065,7 +1161,61 @@ mod tests {
     }
 
     #[test]
-    fn invalid_responses_never_consume_the_outstanding_request() {
+    fn later_commit_qc_authenticates_the_exact_locked_body_origin() {
+        let fixture = Fixture::new();
+        let mut request = fixture.signed_request();
+        request.certificate.phase = wire::GlobalPhase::Commit;
+        request.certificate.round.view = request
+            .round
+            .view
+            .checked_add(2)
+            .expect("fixture finality view increment");
+        request.signature = Signature::new(
+            fixture.observer.private_key(),
+            &request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+
+        let authenticated = fixture
+            .authenticate_request(request.clone())
+            .expect("later CommitQC authorizes its exact earlier body origin");
+        let mut tracker = OutstandingCertifiedBodyRequests::new(1).expect("one request slot");
+        tracker
+            .register(authenticated)
+            .expect("register historical-origin request");
+        let response = fixture.signed_response(&request, 0);
+        let _authenticated = tracker
+            .authenticate_response(
+                &fixture.context,
+                response,
+                &Fixture::peer(&fixture.validators[0]),
+            )
+            .expect("authenticate exact historical-origin response");
+
+        let mut body_after_finality = request;
+        body_after_finality.round.view = body_after_finality
+            .certificate
+            .round
+            .view
+            .checked_add(1)
+            .expect("fixture body view increment");
+        body_after_finality.signature = Signature::new(
+            fixture.observer.private_key(),
+            &body_after_finality.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        assert!(matches!(
+            fixture.authenticate_request(body_after_finality),
+            Err(V2TransportError::Wire(
+                wire::ValidationError::CertifiedBodyCertificateMismatch
+            ))
+        ));
+    }
+
+    #[test]
+    fn response_authentication_never_consumes_before_explicit_completion() {
         let fixture = Fixture::new();
         let request = fixture.signed_request();
         let request_hash = HashOf::new(&request);
@@ -1148,7 +1298,14 @@ mod tests {
             .authenticate_response(&fixture.context, valid.clone(), &valid_sender)
             .expect("valid certified response");
         assert_eq!(admitted.response(), &valid);
+        assert!(tracker.contains(request_hash));
+        let _ = tracker
+            .authenticate_response(&fixture.context, valid.clone(), &valid_sender)
+            .expect("authentication remains retryable before executor completion");
+
+        assert!(tracker.complete(request_hash));
         assert!(tracker.is_empty());
+        assert!(!tracker.complete(request_hash));
         assert_eq!(
             tracker.authenticate_response(&fixture.context, valid, &valid_sender),
             Err(V2TransportError::UnsolicitedResponse(request_hash))
@@ -1161,7 +1318,7 @@ mod tests {
         let request = fixture.signed_request();
         let response = fixture.signed_response(&request, 0);
         let sender = Fixture::peer(&fixture.validators[0]);
-        let mut tracker = OutstandingCertifiedBodyRequests::new(1).expect("positive capacity");
+        let tracker = OutstandingCertifiedBodyRequests::new(1).expect("positive capacity");
         assert_eq!(
             tracker.authenticate_response(&fixture.context, response, &sender),
             Err(V2TransportError::UnsolicitedResponse(HashOf::new(&request)))
@@ -1256,5 +1413,89 @@ mod tests {
             Err(V2TransportError::CapacityExceeded { capacity: 1 })
         );
         assert_eq!(tracker.len(), 1);
+    }
+
+    #[test]
+    fn registration_plan_is_exact_atomic_and_requires_one_commit() {
+        let fixture = Fixture::new();
+        let request = fixture.signed_request();
+        let request_hash = HashOf::new(&request);
+        let authenticated = fixture
+            .authenticate_request(request.clone())
+            .expect("authenticate request");
+        let mut tracker = OutstandingCertifiedBodyRequests::new(2).expect("positive capacity");
+        let empty_hashes = tracker.hashes();
+        let empty_identities = tracker.identities.clone();
+
+        let plan = tracker
+            .plan_registration(authenticated.clone())
+            .expect("plan exact registration");
+        assert_eq!(tracker.hashes(), empty_hashes);
+        assert_eq!(tracker.identities, empty_identities);
+
+        tracker.commit_registration(plan);
+        assert_eq!(tracker.hashes(), BTreeSet::from([request_hash]));
+        assert_eq!(tracker.identities.len(), 1);
+        let committed_hashes = tracker.hashes();
+        let committed_identities = tracker.identities.clone();
+
+        assert_eq!(
+            tracker.plan_registration(authenticated),
+            Err(V2TransportError::DuplicateRequest(request_hash))
+        );
+        assert_eq!(tracker.hashes(), committed_hashes);
+        assert_eq!(tracker.identities, committed_identities);
+
+        let mut conflicting = request.clone();
+        conflicting.certificate.aggregate_signature = vec![0x5A; 48];
+        conflicting.signature = Signature::new(
+            fixture.observer.private_key(),
+            &conflicting.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let conflicting_hash = HashOf::new(&conflicting);
+        assert_eq!(
+            tracker.plan_registration(
+                fixture
+                    .authenticate_request(conflicting)
+                    .expect("authenticate conflicting request")
+            ),
+            Err(V2TransportError::ConflictingRequest {
+                existing: request_hash,
+                incoming: conflicting_hash,
+            })
+        );
+        assert_eq!(tracker.hashes(), committed_hashes);
+        assert_eq!(tracker.identities, committed_identities);
+
+        let mut capacity_tracker =
+            OutstandingCertifiedBodyRequests::new(1).expect("positive capacity");
+        capacity_tracker
+            .register(
+                fixture
+                    .authenticate_request(request.clone())
+                    .expect("authenticate capacity owner"),
+            )
+            .expect("fill request capacity");
+        let capacity_hashes = capacity_tracker.hashes();
+        let capacity_identities = capacity_tracker.identities.clone();
+        let mut second = request;
+        second.round.view += 1;
+        second.certificate.round = second.round;
+        second.signature =
+            Signature::new(fixture.observer.private_key(), &second.signature_preimage())
+                .payload()
+                .to_vec();
+        assert_eq!(
+            capacity_tracker.plan_registration(
+                fixture
+                    .authenticate_request(second)
+                    .expect("authenticate over-capacity request")
+            ),
+            Err(V2TransportError::CapacityExceeded { capacity: 1 })
+        );
+        assert_eq!(capacity_tracker.hashes(), capacity_hashes);
+        assert_eq!(capacity_tracker.identities, capacity_identities);
     }
 }

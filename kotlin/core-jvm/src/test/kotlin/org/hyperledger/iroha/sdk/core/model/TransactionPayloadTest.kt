@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.sdk.core.model
 
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.tx.norito.NoritoException
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -8,7 +10,7 @@ import kotlin.test.assertNotEquals
 
 class TransactionPayloadTest {
 
-    private fun defaultPayload() = TransactionPayload(
+    private fun defaultPayload() = testPayload(
         creationTimeMs = 1000L,
     )
 
@@ -26,21 +28,21 @@ class TransactionPayloadTest {
     @Test
     fun `blank chainId throws`() {
         assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(chainId = "  ", creationTimeMs = 1000L)
+            testPayload(chainId = "  ", creationTimeMs = 1000L)
         }
     }
 
     @Test
     fun `blank authority throws`() {
         assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(authority = "", creationTimeMs = 1000L)
+            testPayload(authority = "", creationTimeMs = 1000L)
         }
     }
 
     @Test
     fun `padded chainId throws before payload can be signed`() {
         val error = assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(chainId = " chain", creationTimeMs = 1000L)
+            testPayload(chainId = " chain", creationTimeMs = 1000L)
         }
         assertEquals("chainId must not contain surrounding whitespace", error.message)
     }
@@ -49,12 +51,12 @@ class TransactionPayloadTest {
     fun `authority must be exact canonical I105 before payload can be signed`() {
         val authority = sampleAuthority(0x01)
         val padded = assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(authority = " $authority", creationTimeMs = 1000L)
+            testPayload(authority = " $authority", creationTimeMs = 1000L)
         }
         assertEquals("authority must not contain surrounding whitespace", padded.message)
 
         val alias = assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(authority = "alice@wonderland", creationTimeMs = 1000L)
+            testPayload(authority = "alice@wonderland", creationTimeMs = 1000L)
         }
         assertEquals(
             "authority must use canonical I105 encoded account without @domain",
@@ -65,67 +67,67 @@ class TransactionPayloadTest {
     @Test
     fun `negative creationTimeMs throws`() {
         assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(creationTimeMs = -1)
+            testPayload(creationTimeMs = -1)
         }
     }
 
     @Test
     fun `zero creationTimeMs is valid`() {
-        val payload = TransactionPayload(creationTimeMs = 0)
+        val payload = testPayload(creationTimeMs = 0)
         assertEquals(0L, payload.creationTimeMs)
     }
 
     @Test
     fun `zero timeToLiveMs throws`() {
         assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(timeToLiveMs = 0L, creationTimeMs = 1000L)
+            testPayload(timeToLiveMs = 0L, creationTimeMs = 1000L)
         }
     }
 
     @Test
     fun `negative timeToLiveMs throws`() {
         assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(timeToLiveMs = -5L, creationTimeMs = 1000L)
+            testPayload(timeToLiveMs = -5L, creationTimeMs = 1000L)
         }
     }
 
     @Test
     fun `positive timeToLiveMs is valid`() {
-        val payload = TransactionPayload(timeToLiveMs = 500L, creationTimeMs = 1000L)
+        val payload = testPayload(timeToLiveMs = 500L, creationTimeMs = 1000L)
         assertEquals(500L, payload.timeToLiveMs)
     }
 
     @Test
     fun `zero nonce throws`() {
         assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(nonce = 0, creationTimeMs = 1000L)
+            testPayload(nonce = 0, creationTimeMs = 1000L)
         }
     }
 
     @Test
     fun `negative nonce throws`() {
         assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(nonce = -1, creationTimeMs = 1000L)
+            testPayload(nonce = -1, creationTimeMs = 1000L)
         }
     }
 
     @Test
     fun `positive nonce is valid`() {
-        val payload = TransactionPayload(nonce = 42, creationTimeMs = 1000L)
+        val payload = testPayload(nonce = 42, creationTimeMs = 1000L)
         assertEquals(42, payload.nonce)
     }
 
     @Test
     fun `blank metadata key throws`() {
         assertFailsWith<IllegalArgumentException> {
-            TransactionPayload(metadata = mapOf("  " to JsonValue.string("value")), creationTimeMs = 1000L)
+            testPayload(metadata = mapOf("  " to JsonValue.string("value")), creationTimeMs = 1000L)
         }
     }
 
     @Test
     fun `defensive copy on metadata input`() {
         val original = mutableMapOf("key" to JsonValue.string("value"))
-        val payload = TransactionPayload(metadata = original, creationTimeMs = 1000L)
+        val payload = testPayload(metadata = original, creationTimeMs = 1000L)
         original["injected"] = JsonValue.string("bad")
         assertEquals(1, payload.metadata.size)
         assertEquals(JsonValue.string("value"), payload.metadata["key"])
@@ -133,7 +135,7 @@ class TransactionPayloadTest {
 
     @Test
     fun `metadata getter returns immutable snapshot`() {
-        val payload = TransactionPayload(
+        val payload = testPayload(
             metadata = mapOf("a" to JsonValue.string("1")),
             creationTimeMs = 1000L,
         )
@@ -145,7 +147,7 @@ class TransactionPayloadTest {
 
     @Test
     fun `copy preserves values and allows overrides`() {
-        val original = TransactionPayload(
+        val original = testPayload(
             chainId = "chain1",
             authority = sampleAuthority(0x21),
             creationTimeMs = 2000L,
@@ -167,22 +169,59 @@ class TransactionPayloadTest {
     }
 
     @Test
+    fun `VM and contract executables require gas before payload encoding`() {
+        val invocation = ContractInvocation(
+            CONTRACT_ADDRESS,
+            ByteArray(32) { 1 },
+            "run",
+        )
+        val executables = listOf(
+            Executable.ivm(byteArrayOf(1)),
+            Executable.contractCall(invocation),
+            Executable.batch(listOf(ExecutableBatchItem.contractCall(invocation))),
+        )
+
+        executables.forEach { executable ->
+            val gasless = testPayload(executable = executable)
+            assertFailsWith<NoritoException> {
+                NoritoJavaCodecAdapter().encodeTransaction(gasless)
+            }
+            val gasBound = testPayload(
+                executable = executable,
+                feePayment = FeePaymentIntent.authority(emptyList(), 1L),
+            )
+            NoritoJavaCodecAdapter().encodeTransaction(gasBound)
+        }
+    }
+
+    @Test
+    fun `native instructions do not require a transaction gas limit`() {
+        testPayload(
+            executable = Executable.instructions(
+                listOf(InstructionBox.fromWirePayload("iroha.test", byteArrayOf(1))),
+            ),
+        )
+    }
+
+    @Test
     fun `equal instances are equal`() {
         val executable = Executable.ivm(byteArrayOf(1, 2, 3))
-        val a = TransactionPayload(
+        val a = testPayload(
             chainId = "c",
             authority = sampleAuthority(0x31),
             creationTimeMs = 100,
             executable = executable,
+            feePayment = FeePaymentIntent.authority(emptyList(), 1L),
             timeToLiveMs = 500,
             nonce = 1,
             metadata = mapOf("k" to JsonValue.string("v")),
         )
-        val b = TransactionPayload(
+        val b = testPayload(
             chainId = "c",
             authority = sampleAuthority(0x31),
             creationTimeMs = 100,
             executable = executable,
+            feePayment = FeePaymentIntent.authority(emptyList(), 1L),
             timeToLiveMs = 500,
             nonce = 1,
             metadata = mapOf("k" to JsonValue.string("v")),
@@ -193,12 +232,37 @@ class TransactionPayloadTest {
 
     @Test
     fun `different instances are not equal`() {
-        val a = TransactionPayload(chainId = "c1", creationTimeMs = 100)
-        val b = TransactionPayload(chainId = "c2", creationTimeMs = 100)
+        val a = testPayload(chainId = "c1", creationTimeMs = 100)
+        val b = testPayload(chainId = "c2", creationTimeMs = 100)
         assertNotEquals(a, b)
     }
+
+    private fun testPayload(
+        chainId: String = "00000000",
+        authority: String = sampleAuthority(0x00),
+        creationTimeMs: Long = System.currentTimeMillis(),
+        executable: Executable = Executable.instructions(emptyList()),
+        timeToLiveMs: Long? = null,
+        nonce: Int? = null,
+        feePayment: FeePaymentIntent = FeePaymentIntent.authority(emptyList()),
+        metadata: Map<String, JsonValue> = emptyMap(),
+    ): TransactionPayload = TransactionPayload(
+        chainId = chainId,
+        authority = authority,
+        creationTimeMs = creationTimeMs,
+        executable = executable,
+        timeToLiveMs = timeToLiveMs,
+        nonce = nonce,
+        feePayment = feePayment,
+        metadata = metadata,
+    )
 
     private fun sampleAuthority(fill: Int): String = AccountAddress
         .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+
+    companion object {
+        private const val CONTRACT_ADDRESS =
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+    }
 }

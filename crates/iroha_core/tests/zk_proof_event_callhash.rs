@@ -47,9 +47,13 @@ fn proof_event_includes_call_hash() {
         iroha_data_model::proof::VerifyingKeyId::new("groth16/bn254", "proof_event_vk"),
     );
     let verify = iroha_data_model::isi::zk::VerifyProof::new(attach);
-    let tx = TransactionBuilder::new(ChainId::from("chain"), authority_id.clone())
-        .with_instructions([InstructionBox::from(verify)])
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        ChainId::from("chain"),
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([InstructionBox::from(verify)])
+    .sign(kp.private_key());
     let tx_call_hash = tx.hash_as_entrypoint();
 
     // Build/commit block and collect events

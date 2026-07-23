@@ -41,7 +41,7 @@ use mv::storage::StorageReadOnly; // bring trait into scope for .get()
 use parking_lot::RwLock;
 
 use crate::{
-    executor::parse_gas_limit,
+    executor::transaction_gas_limit,
     smartcontracts::triggers::set::{ExecutableRef, SetReadOnly},
     smartcontracts::{code, ivm::host::QueryStateSource},
     state::{StateReadOnly, WorldReadOnly},
@@ -635,6 +635,14 @@ where
             derive_from_isi_batch_with_state(batch.as_ref(), state_ro),
             None,
         ),
+        // Mixed batches execute against the live state at a singleton DAG barrier. Precise
+        // ordered access derivation is intentionally deferred until the live-batch executor can
+        // expose one access journal spanning native ISIs and every contract call.
+        Executable::Batch(_) => with_stateful_admission_keys(
+            tx,
+            AccessSet::global(),
+            Some(AccessSetSource::ConservativeFallback),
+        ),
         Executable::ContractCall(call) => {
             if let Some(view) = state_ro
                 && let Some(identity) =
@@ -834,6 +842,11 @@ where
             tx,
             derive_from_overlay_artifacts(overlay, None, Some(state_ro), false),
             None,
+        ),
+        Executable::Batch(_) => with_stateful_admission_keys(
+            tx,
+            AccessSet::global(),
+            Some(AccessSetSource::ConservativeFallback),
         ),
         Executable::IvmProved(proved) => {
             let mut set = derive_from_overlay_artifacts(overlay, None, Some(state_ro), false);
@@ -2076,6 +2089,7 @@ where
                 ));
             }
         }
+        ExecutableRef::Batch(_) => set.union_with(AccessSet::global()),
         ExecutableRef::ContractCall(invocation) => {
             if let Some(identity) =
                 code::fetch_bound_contract_identity(state_ro, &invocation.contract_address)
@@ -2319,8 +2333,7 @@ fn add_trigger_rw(set: &mut AccessSet, id: &TriggerId) {
 }
 
 fn tx_gas_limit(tx: &SignedTransaction) -> Result<u64, String> {
-    let gas_limit = parse_gas_limit(tx.metadata()).map_err(|err| err.to_string())?;
-    gas_limit.ok_or_else(|| "missing gas_limit in transaction metadata".to_owned())
+    transaction_gas_limit(tx).ok_or_else(|| "missing gas limit in fee payment intent".to_owned())
 }
 
 fn derive_from_ivm_dynamic<R>(
@@ -2638,12 +2651,10 @@ fn access_key_from_state_log(key: &str) -> AccessKey {
 
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr;
-
     use iroha_data_model::{
         isi::Log,
         level::Level,
-        transaction::{Executable, IvmBytecode, TransactionBuilder},
+        transaction::{Executable, ExecutableBatchItem, IvmBytecode, TransactionBuilder},
     };
 
     use super::*;
@@ -2668,13 +2679,6 @@ mod tests {
 
     fn build_wonderland_account(account_id: &AccountId) -> Account {
         new_wonderland_account(account_id).build(account_id)
-    }
-
-    fn insert_gas_limit(metadata: &mut iroha_data_model::metadata::Metadata) {
-        metadata.insert(
-            Name::from_str("gas_limit").expect("static gas_limit key"),
-            iroha_primitives::json::Json::new(TEST_GAS_LIMIT),
-        );
     }
 
     fn sccp_transfer_payload(
@@ -2976,14 +2980,18 @@ mod tests {
             ("kaizen", true),
             ("改善", true),
         ] {
-            let transaction = TransactionBuilder::new("chain".parse().unwrap(), authority.clone())
-                .with_executable(Executable::ContractCall(ContractInvocation {
-                    contract_address: contract_address.clone(),
-                    expected_code_hash: iroha_crypto::Hash::new(entrypoint.as_bytes()),
-                    entrypoint: entrypoint.to_owned(),
-                    arguments: None,
-                }))
-                .sign(keypair.private_key());
+            let transaction = TransactionBuilder::new(
+                "chain".parse().unwrap(),
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: contract_address.clone(),
+                expected_code_hash: iroha_crypto::Hash::new(entrypoint.as_bytes()),
+                entrypoint: entrypoint.to_owned(),
+                arguments: None,
+            }))
+            .sign(keypair.private_key());
             let (set, _) = with_stateful_admission_keys(&transaction, AccessSet::new(), None);
             assert!(set.read_keys.contains(&marker_key));
             assert_eq!(
@@ -2992,6 +3000,48 @@ mod tests {
                 "unexpected lifecycle marker mode for `{entrypoint}`"
             );
         }
+    }
+
+    #[test]
+    fn mixed_executable_batch_forces_a_global_scheduler_barrier() {
+        let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            92,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let transaction = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "before call".to_owned(),
+                ))),
+                ExecutableBatchItem::ContractCall(ContractInvocation {
+                    contract_address,
+                    expected_code_hash: iroha_crypto::Hash::new(b"mixed-batch"),
+                    entrypoint: "main".to_owned(),
+                    arguments: None,
+                }),
+            ]
+            .into(),
+        ))
+        .sign(keypair.private_key());
+
+        let (set, source) = derive_for_transaction_with_source::<crate::state::StateView<'_>>(
+            &transaction,
+            None,
+            IvmStrategy::Conservative,
+        );
+
+        assert!(set.write_keys.contains("*"));
+        assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
     }
 
     fn generic_state_get_test_program() -> Vec<u8> {
@@ -3733,11 +3783,17 @@ seiyaku DynamicAccessCounter {
                     .expect("contract entrypoint metadata key"),
                 iroha_primitives::json::Json::new(entrypoint_name.to_owned()),
             );
-            insert_gas_limit(&mut metadata);
-            let transaction = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-                .with_metadata(metadata)
-                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
-                .sign(key_pair.private_key());
+            let transaction = TransactionBuilder::new(
+                "chain".parse().unwrap(),
+                alice.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(
+                    Vec::new(),
+                    core::num::NonZeroU64::new(TEST_GAS_LIMIT),
+                ),
+            )
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
+            .sign(key_pair.private_key());
 
             let (set, source) = derive_for_transaction_with_source::<crate::state::StateView<'_>>(
                 &transaction,
@@ -3779,9 +3835,13 @@ seiyaku DynamicAccessCounter {
             Transfer::asset_quantity(src.clone(), 5u32, bob.clone()).into(),
         ];
         let exec = Executable::from_iter(isis);
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_executable(exec)
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(exec)
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
 
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
@@ -3845,9 +3905,13 @@ seiyaku DynamicAccessCounter {
     #[test]
     fn log_instruction_has_no_access_keys() {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_instructions([Log::new(Level::INFO, "hello".to_owned())])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "hello".to_owned())])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
         let authority = tx.authority().clone();
 
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
@@ -4240,9 +4304,13 @@ seiyaku DynamicAccessCounter {
             Register::account(account).into(),
             Register::asset_definition(asset_def).into(),
         ];
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_executable(Executable::from_iter(isis))
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::from_iter(isis))
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
 
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
@@ -4388,12 +4456,16 @@ seiyaku DynamicAccessCounter {
         prog.extend(std::iter::repeat_n(0_u8, post_pad));
         prog.extend_from_slice(&code);
 
-        let mut md = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut md);
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_metadata(md)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                core::num::NonZeroU64::new(TEST_GAS_LIMIT),
+            ),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let Executable::Ivm(bytecode) = tx.instructions() else {
             panic!("fixture executable is raw IVM");
@@ -4466,9 +4538,13 @@ seiyaku DynamicAccessCounter {
         prog.extend_from_slice(&0u32.to_le_bytes()); // literal size
         prog.extend_from_slice(&code);
 
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
         let authority = tx.authority().clone();
 
         let (set, source) = derive_for_transaction_with_source(
@@ -4540,9 +4616,13 @@ seiyaku DynamicAccessCounter {
             events_commitment: IrohaHash::new(b"proved-events"),
             gas_policy_commitment: IrohaHash::new(b"proved-gas-policy"),
         };
-        let transaction = TransactionBuilder::new("chain".parse().unwrap(), authority)
-            .with_executable(Executable::IvmProved(proved))
-            .sign(key_pair.private_key());
+        let transaction = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::IvmProved(proved))
+        .sign(key_pair.private_key());
         let (proved_set, source) = derive_for_transaction_with_source::<crate::state::StateView<'_>>(
             &transaction,
             None,
@@ -4873,10 +4953,14 @@ seiyaku DynamicAccessCounter {
         let mut md = iroha_data_model::metadata::Metadata::default();
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
         md.insert("contract_entrypoint".parse().unwrap(), Json::new("main"));
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_metadata(md)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(md)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let (set, source) = derive_for_transaction_with_source(
             &tx,
@@ -4933,10 +5017,14 @@ seiyaku DynamicAccessCounter {
         let mut md = iroha_data_model::metadata::Metadata::default();
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
         md.insert("contract_entrypoint".parse().unwrap(), Json::new("main"));
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_metadata(md)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(md)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let (set, source) = derive_for_transaction_with_source(
             &tx,
@@ -4997,9 +5085,13 @@ seiyaku DynamicAccessCounter {
         stx.apply();
         let _ = st_block.commit();
 
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let set_a = derive_for_transaction(&tx, Some(&state.view()), IvmStrategy::Conservative);
         assert!(set_a.read_keys.contains("state:alpha"));
@@ -5085,9 +5177,13 @@ seiyaku DynamicAccessCounter {
         stx.apply();
         let _ = st_block.commit();
 
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let (set, source) =
             derive_for_transaction_with_source(&tx, Some(&state.view()), IvmStrategy::Conservative);
@@ -5186,9 +5282,13 @@ seiyaku DynamicAccessCounter {
         stx.apply();
         let _ = st_block.commit();
 
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let (set, source) =
             derive_for_transaction_with_source(&tx, Some(&state.view()), IvmStrategy::Conservative);
@@ -5272,9 +5372,13 @@ seiyaku DynamicAccessCounter {
         stx.apply();
         let _ = st_block.commit();
 
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let (set, source) =
             derive_for_transaction_with_source(&tx, Some(&state.view()), IvmStrategy::Conservative);
@@ -5359,9 +5463,13 @@ seiyaku DynamicAccessCounter {
         stx.apply();
         let _ = st_block.commit();
 
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let (set, source) =
             derive_for_transaction_with_source(&tx, Some(&state.view()), IvmStrategy::Conservative);
@@ -5390,9 +5498,13 @@ seiyaku DynamicAccessCounter {
             Revoke::role_permission(perm.clone(), role_id.clone()).into(),
         ];
         let exec = Executable::from_iter(isis);
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_executable(exec)
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(exec)
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
             None,
@@ -5426,9 +5538,13 @@ seiyaku DynamicAccessCounter {
         let trig: TriggerId = "t0".parse().unwrap();
         let isi: InstructionBox = ExecuteTrigger::new(trig.clone()).into();
         let exec = Executable::from_iter([isi]);
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice)
-            .with_executable(exec)
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(exec)
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
             None,
@@ -5497,11 +5613,15 @@ seiyaku DynamicAccessCounter {
         }
         st_block.commit().unwrap();
 
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_instructions([InstructionBox::from(ExecuteTrigger::new(
-                "mint_asset_trigger".parse().unwrap(),
-            ))])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+            "mint_asset_trigger".parse().unwrap(),
+        ))])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
             Some(&state.view()),
@@ -5565,11 +5685,15 @@ seiyaku DynamicAccessCounter {
         }
         st_block.commit().unwrap();
 
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_instructions([InstructionBox::from(ExecuteTrigger::new(
-                "meta_trigger".parse().unwrap(),
-            ))])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+            "meta_trigger".parse().unwrap(),
+        ))])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
             Some(&state.view()),
@@ -5650,11 +5774,15 @@ seiyaku DynamicAccessCounter {
         };
         st_block.commit().unwrap();
 
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_instructions([InstructionBox::from(ExecuteTrigger::new(
-                trigger_id.clone(),
-            ))])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+            trigger_id.clone(),
+        ))])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
             Some(&state.view()),
@@ -5769,11 +5897,15 @@ seiyaku DynamicAccessCounter {
         };
         st_block.commit().unwrap();
 
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
-            .with_instructions([InstructionBox::from(ExecuteTrigger::new(
-                trigger_id.clone(),
-            ))])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+            trigger_id.clone(),
+        ))])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
             Some(&state.view()),
@@ -5812,9 +5944,13 @@ seiyaku DynamicAccessCounter {
                     .under_authority(alice.clone()),
             ),
         );
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice)
-            .with_instructions([InstructionBox::from(Register::trigger(trigger))])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            "chain".parse().unwrap(),
+            alice,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(Register::trigger(trigger))])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
             None,

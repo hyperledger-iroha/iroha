@@ -725,6 +725,7 @@ mod tests {
         let transaction = TransactionBuilder::new(
             "v2-context-signed-roster-test".into(),
             AccountId::new(authority.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
         .sign(authority.private_key());
@@ -956,6 +957,11 @@ mod tests {
         };
         let commit_qc = wire::QuorumCertificate {
             round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 0,
+            },
+            proposal_round: wire::ConsensusRound {
                 context_id: context.id(),
                 height: context.height,
                 view: 0,

@@ -39,12 +39,20 @@ fn quarantine_overflow_rejects_one_tx() {
     block::set_quarantine_classifier(Some(classify_all));
 
     // Build two simple log transactions signed by the authority.
-    let tx1 = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
-        .with_instructions([Log::new(Level::INFO, "q1".to_string())])
-        .sign(kp.private_key());
-    let tx2 = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
-        .with_instructions([Log::new(Level::INFO, "q2".to_string())])
-        .sign(kp.private_key());
+    let tx1 = TransactionBuilder::new(
+        chain_id.clone(),
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "q1".to_string())])
+    .sign(kp.private_key());
+    let tx2 = TransactionBuilder::new(
+        chain_id.clone(),
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "q2".to_string())])
+    .sign(kp.private_key());
 
     // Convert into accepted txs and build a block with both.
     let a1 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx1));

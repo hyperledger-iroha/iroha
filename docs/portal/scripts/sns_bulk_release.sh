@@ -4,11 +4,11 @@
 set -euo pipefail
 
 SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_ROOT}/../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_ROOT}/../../.." && pwd)"
 PYTHON="${PYTHON:-python3}"
 
 log() {
-  printf '[sns-release] %s\n' "$*" >&2
+  printf '[alias-setup] %s\n' "$*" >&2
 }
 
 err() {
@@ -18,198 +18,157 @@ err() {
 
 usage() {
   cat <<'EOF'
-Usage: sns_bulk_release.sh [options]
+Usage: sns_bulk_release.sh --intent PATH [options]
 
-Automates SNS registrar bulk releases by:
-  1. Building a manifest + NDJSON stream from a CSV (or reusing an existing manifest)
-  2. Submitting requests via Torii and/or the iroha CLI with structured receipt logging
-  3. Writing a release summary alongside the manifest, NDJSON, submission log, and source CSV
+Plans one typed alias setup vector against live state. Planning is the default.
+Use --apply to have the ordinary client verify the plan, locally sign one normal
+transaction, and submit that transaction through the existing transaction path.
 
 Options:
-  --csv PATH                 Source CSV with registrations (omit if --manifest is supplied)
-  --manifest PATH            Existing manifest to reuse (skips CSV build)
-  --release-dir PATH         Directory root for releases (default: artifacts/sns/releases)
-  --release-name NAME        Release identifier appended to the root (default: UTC timestamp)
-  --metrics PATH             Custom path for Prometheus metrics output (default: <release-dir>/metrics.prom)
-  --torii-url URL            Torii base URL for submissions
-  --token-env VAR            Env var exposing the Torii bearer token (default: SNS_TORII_TOKEN)
-  --token-file PATH          File containing the Torii bearer token (overrides token-env)
-  --suffix-map PATH          JSON mapping suffix ids to suffix labels for polling
-  --poll-status              Enable Torii status polling after each submission
-  --poll-attempts N          Poll attempts (default: 5)
-  --poll-interval SECS       Poll interval seconds (default: 2)
-  --cli-path PATH            Path to the iroha CLI binary (enables CLI submissions)
-  --cli-config PATH          iroha CLI config path
-  --cli-extra-arg ARG        Extra argument forwarded to the CLI (repeatable)
-  --require-governance       Fail CSV rows that omit a governance column
-  --builder-arg ARG          Additional argument forwarded to sns_bulk_onboard.py build step (repeatable)
-  --submission-log PATH      Custom path for submission receipts (default: <release-dir>/submissions.log)
-  --summary PATH             Custom path for release summary JSON (default: <release-dir>/summary.json)
-  -h, --help                 Show this help message
+  --intent PATH               Secret-free alias setup intent JSON (required)
+  --release-dir PATH          Artifact root (default: artifacts/sns/releases)
+  --release-name NAME         Artifact directory name (default: UTC timestamp)
+  --plan-file PATH            Verified plan output (default: <release>/alias-plan.json)
+  --metrics PATH              Plan metrics output (default: <release>/metrics.prom)
+  --summary PATH              Secret-free summary output (default: <release>/summary.json)
+  --iroha-cli PATH            Iroha CLI executable (default: iroha)
+  --config PATH               Ordinary client configuration used for signing
+  --apply                     Submit the complete verified plan atomically
+  -h, --help                  Show this help message
 
-Environment defaults:
-  SNS_TORII_URL, SNS_TORII_TOKEN, SNS_RELEASE_DIR
+Raw tokens, private keys, direct Torii mutation URLs, split manifests, suffix
+maps, and submission-log inputs are intentionally unsupported.
 EOF
 }
 
-CSV_PATH=""
-MANIFEST_PATH=""
+INTENT_PATH=""
 RELEASE_ROOT="${SNS_RELEASE_DIR:-artifacts/sns/releases}"
 RELEASE_NAME="${SNS_RELEASE_NAME:-}"
+PLAN_PATH=""
 METRICS_PATH=""
-TORII_URL="${SNS_TORII_URL:-}"
-TOKEN_ENV="SNS_TORII_TOKEN"
-TOKEN_FILE=""
-SUFFIX_MAP=""
-POLL_STATUS=false
-POLL_ATTEMPTS=5
-POLL_INTERVAL=2
-CLI_PATH=""
-CLI_CONFIG=""
-SUBMISSION_LOG=""
 SUMMARY_PATH=""
-REQUIRE_GOV=false
-BUILDER_ARGS=()
-CLI_EXTRA_ARGS=()
+IROHA_CLI="iroha"
+CLIENT_CONFIG=""
+APPLY=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --csv) CSV_PATH="$2"; shift 2 ;;
-    --manifest) MANIFEST_PATH="$2"; shift 2 ;;
-    --release-dir) RELEASE_ROOT="$2"; shift 2 ;;
-    --release-name) RELEASE_NAME="$2"; shift 2 ;;
-    --metrics) METRICS_PATH="$2"; shift 2 ;;
-    --torii-url) TORII_URL="$2"; shift 2 ;;
-    --token-env) TOKEN_ENV="$2"; shift 2 ;;
-    --token-file) TOKEN_FILE="$2"; shift 2 ;;
-    --suffix-map) SUFFIX_MAP="$2"; shift 2 ;;
-    --poll-status) POLL_STATUS=true; shift ;;
-    --poll-attempts) POLL_ATTEMPTS="$2"; shift 2 ;;
-    --poll-interval) POLL_INTERVAL="$2"; shift 2 ;;
-    --cli-path) CLI_PATH="$2"; shift 2 ;;
-    --cli-config) CLI_CONFIG="$2"; shift 2 ;;
-    --cli-extra-arg) CLI_EXTRA_ARGS+=("$2"); shift 2 ;;
-    --submission-log) SUBMISSION_LOG="$2"; shift 2 ;;
-    --summary) SUMMARY_PATH="$2"; shift 2 ;;
-    --require-governance) REQUIRE_GOV=true; shift ;;
-    --builder-arg) BUILDER_ARGS+=("$2"); shift 2 ;;
-    -h|--help) usage; exit 0 ;;
+    --intent)
+      [[ $# -ge 2 ]] || err "--intent requires a path"
+      INTENT_PATH="$2"
+      shift 2
+      ;;
+    --release-dir)
+      [[ $# -ge 2 ]] || err "--release-dir requires a path"
+      RELEASE_ROOT="$2"
+      shift 2
+      ;;
+    --release-name)
+      [[ $# -ge 2 ]] || err "--release-name requires a name"
+      RELEASE_NAME="$2"
+      shift 2
+      ;;
+    --plan-file)
+      [[ $# -ge 2 ]] || err "--plan-file requires a path"
+      PLAN_PATH="$2"
+      shift 2
+      ;;
+    --metrics)
+      [[ $# -ge 2 ]] || err "--metrics requires a path"
+      METRICS_PATH="$2"
+      shift 2
+      ;;
+    --summary)
+      [[ $# -ge 2 ]] || err "--summary requires a path"
+      SUMMARY_PATH="$2"
+      shift 2
+      ;;
+    --iroha-cli)
+      [[ $# -ge 2 ]] || err "--iroha-cli requires a path"
+      IROHA_CLI="$2"
+      shift 2
+      ;;
+    --config)
+      [[ $# -ge 2 ]] || err "--config requires a path"
+      CLIENT_CONFIG="$2"
+      shift 2
+      ;;
+    --apply)
+      APPLY=true
+      shift
+      ;;
+    --token|--token=*|--submit-token|--submit-token=*|--private-key|--private-key=*|--private_key|--private_key=*)
+      err "raw token and private-key command-line values are forbidden"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
     *)
-      err "unknown argument: $1"
+      err "unsupported command-line argument"
       ;;
   esac
 done
 
+[[ -n "${INTENT_PATH}" ]] || err "--intent is required"
+[[ -f "${INTENT_PATH}" ]] || err "alias setup intent is not a readable file"
+
 if [[ -z "${RELEASE_NAME}" ]]; then
   RELEASE_NAME="$(date -u +%Y%m%dT%H%M%SZ)"
 fi
+
 release_dir="${RELEASE_ROOT%/}/${RELEASE_NAME}"
 mkdir -p "${release_dir}"
 
-manifest_out="${release_dir}/registrations.manifest.json"
-ndjson_out="${release_dir}/registrations.ndjson"
-submission_log="${SUBMISSION_LOG:-${release_dir}/submissions.log}"
-summary_out="${SUMMARY_PATH:-${release_dir}/summary.json}"
+plan_out="${PLAN_PATH:-${release_dir}/alias-plan.json}"
 metrics_out="${METRICS_PATH:-${release_dir}/metrics.prom}"
-csv_copy=""
+summary_out="${SUMMARY_PATH:-${release_dir}/summary.json}"
+mkdir -p "$(dirname "${plan_out}")" "$(dirname "${metrics_out}")" "$(dirname "${summary_out}")"
 
-if [[ -n "${MANIFEST_PATH}" ]]; then
-  cp "${MANIFEST_PATH}" "${manifest_out}"
-else
-  if [[ -z "${CSV_PATH}" ]]; then
-    err "either --csv or --manifest must be provided"
-  fi
-  python_args=("${CSV_PATH}" "--output" "${manifest_out}" "--ndjson" "${ndjson_out}")
-  if [[ "${REQUIRE_GOV}" == "true" ]]; then
-    python_args+=("--require-governance")
-  fi
-  if [[ "${#BUILDER_ARGS[@]}" -gt 0 ]]; then
-    python_args+=("${BUILDER_ARGS[@]}")
-  fi
-  log "Building manifest via sns_bulk_onboard.py"
-  (cd "${REPO_ROOT}" && "${PYTHON}" scripts/sns_bulk_onboard.py "${python_args[@]}")
-  csv_copy="${release_dir}/registrations.csv"
-  cp "${CSV_PATH}" "${csv_copy}"
-fi
-
-if [[ ! -f "${ndjson_out}" ]]; then
-  # Manifest was reused, regenerate NDJSON for completeness.
-  (cd "${REPO_ROOT}" && "${PYTHON}" scripts/sns_bulk_onboard.py --manifest "${manifest_out}" --ndjson "${ndjson_out}")
-fi
-
-submit_args=( "--manifest" "${manifest_out}" "--submission-log" "${submission_log}" )
-if [[ "${POLL_STATUS}" == "true" ]]; then
-  submit_args+=("--poll-status" "--poll-attempts" "${POLL_ATTEMPTS}" "--poll-interval" "${POLL_INTERVAL}")
-fi
-if [[ -n "${SUFFIX_MAP}" ]]; then
-  submit_args+=("--suffix-map" "${SUFFIX_MAP}")
-fi
-
-torii_used=false
-cli_used=false
-token_value=""
-
-if [[ -n "${TORII_URL}" ]]; then
-  if [[ -n "${TOKEN_FILE}" ]]; then
-    token_value="$(<"${TOKEN_FILE}")"
-  elif [[ -n "${TOKEN_ENV}" && -n "${!TOKEN_ENV:-}" ]]; then
-    token_value="${!TOKEN_ENV}"
-  fi
-  if [[ -z "${token_value}" ]]; then
-    err "Torii submissions requested but no token provided (use --token-file or --token-env)"
-  fi
-  submit_args+=(
-    "--submit-torii-url" "${TORII_URL}"
-    "--submit-token" "${token_value}"
-    "--submit-timeout" "45"
-  )
-  torii_used=true
-fi
-
-if [[ -n "${CLI_PATH}" ]]; then
-  submit_args+=("--submit-cli-path" "${CLI_PATH}")
-  if [[ -n "${CLI_CONFIG}" ]]; then
-    submit_args+=("--submit-cli-config" "${CLI_CONFIG}")
-  fi
-  for extra in "${CLI_EXTRA_ARGS[@]}"; do
-    submit_args+=("--submit-cli-extra-arg" "${extra}")
-  done
-  cli_used=true
-fi
-
-if [[ "${torii_used}" == "true" || "${cli_used}" == "true" ]]; then
-  log "Submitting manifest (${manifest_out})"
-  (cd "${REPO_ROOT}" && "${PYTHON}" scripts/sns_bulk_onboard.py "${submit_args[@]}")
-else
-  log "No submission targets specified; skipping submissions"
-fi
-
-if [[ ! -f "${submission_log}" ]]; then
-  : > "${submission_log}"
-fi
-
-summary_json=$(cat <<EOF
-{
-  "generated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "source_csv": "${csv_copy}",
-  "manifest": "${manifest_out}",
-  "ndjson": "${ndjson_out}",
-  "submission_log": "${submission_log}",
-  "release_name": "${RELEASE_NAME}",
-  "release_root": "${RELEASE_ROOT}",
-  "metrics": "${metrics_out}",
-  "torii_url": "${torii_used:+${TORII_URL}}",
-  "cli_path": "${cli_used:+${CLI_PATH}}"
-}
-EOF
+planner_args=(
+  "${INTENT_PATH}"
+  "--plan-file" "${plan_out}"
+  "--iroha-cli" "${IROHA_CLI}"
 )
-printf '%s\n' "${summary_json}" > "${summary_out}"
+if [[ -n "${CLIENT_CONFIG}" ]]; then
+  planner_args+=("--config" "${CLIENT_CONFIG}")
+fi
+if [[ "${APPLY}" == "true" ]]; then
+  planner_args+=("--apply")
+fi
 
-log "Generating Prometheus metrics (${metrics_out})"
+if [[ "${APPLY}" == "true" ]]; then
+  log "Planning and atomically submitting the typed alias setup"
+else
+  log "Planning the typed alias setup without mutation"
+fi
+(cd "${REPO_ROOT}" && "${PYTHON}" scripts/sns_bulk_onboard.py "${planner_args[@]}")
+
+log "Generating plan-derived metrics"
 (cd "${REPO_ROOT}" && "${PYTHON}" scripts/sns_bulk_metrics.py \
-  --manifest "${manifest_out}" \
-  --submission-log "${submission_log}" \
+  --plan "${plan_out}" \
   --release "${RELEASE_NAME}" \
   --output "${metrics_out}")
 
-log "SNS release artifacts written to ${release_dir}"
+mode="planned"
+if [[ "${APPLY}" == "true" ]]; then
+  mode="submitted"
+fi
+"${PYTHON}" - "${summary_out}" "${INTENT_PATH}" "${plan_out}" "${metrics_out}" "${RELEASE_NAME}" "${mode}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+summary_path, intent_path, plan_path, metrics_path, release_name, mode = sys.argv[1:]
+summary = {
+    "schema_version": 1,
+    "release_name": release_name,
+    "mode": mode,
+    "intent": intent_path,
+    "plan": plan_path,
+    "metrics": metrics_path,
+}
+Path(summary_path).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
+log "Secret-free alias setup artifacts written to ${release_dir}"

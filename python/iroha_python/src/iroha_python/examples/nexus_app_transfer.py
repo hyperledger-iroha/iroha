@@ -24,6 +24,10 @@ WALLET_SIGNATURE = bytes.fromhex(
     "c82d2ee732a9251153eff6f510a0d12b292cb51a5d961a7eddb84f6ee944e34eaca60ca2f1ccfe7a53fd6813fc9a6db9e35cb276b2411b7d583d45fdc6caee05"
 )
 SIGNED_TRANSACTION_HASH_HEX = "2d22bf944c58886de938e4094bf9887a43e66d598162bd2205f0812b64e180bb"
+FEE_PAYMENT = {
+    "payer": "authority",
+    "value": {"charge_limits": [], "gas_limit": None},
+}
 
 
 class DemoConnectTransport:
@@ -83,6 +87,7 @@ def main() -> None:
             source_asset_id=SOURCE_ASSET_ID,
             quantity="12.34",
             destination_account_id=DESTINATION_ACCOUNT_ID,
+            fee_payment=FEE_PAYMENT,
             metadata={"purpose": "nexus-app-fixture"},
             creation_time_ms=1_700_000_000_000,
             ttl_ms=30_000,

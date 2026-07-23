@@ -25,10 +25,16 @@ The embedded SoraFS worker (`sorafs_node::NodeHandle`) instantiates a
 - accrues XOR-denominated charges when replication usage is reported;
 - evaluates probabilistic micropayment windows using deterministic
   BLAKE3-based sampling;
-- persists exact nano-XOR accounting, ticket replay protection, funding
+- persists exact XOR quantity accounting, ticket replay protection, funding
   sequences, and the canonical settlement head in atomic checkpoints; and
 - produces ledger snapshots and settlement payloads suitable for governance
   publishing.
+
+All public XOR amounts use canonical decimal strings with at most nine
+fractional digits and a mantissa bounded by the positive range of a signed
+512-bit integer. Unsuffixed fields such as `amount`, `expected_charge`, and
+`outstanding` accept values like `"5"`, `"0.05"`, or `"0.000000001"`. JSON
+numbers and legacy `_nano`/`_micro` integer aliases are rejected.
 
 Every external funding request carries the exact next one-based durable
 sequence; replays, gaps, and concurrent forks fail before balance mutation and
@@ -58,23 +64,25 @@ with settlement outcomes.
 Torii exposes the complete authenticated deal lifecycle:
 
 - `POST /v1/sorafs/deal/fund-provider` accepts the exact next provider funding
-  sequence and requires a fresh, body-bound signature from the current Ed25519
-  key in that provider's admitted advert.
+  sequence and an exact decimal `amount`; it requires a fresh, body-bound
+  signature from the current Ed25519 key in that provider's admitted advert.
 - `POST /v1/sorafs/deal/fund-client` accepts the exact next client funding
-  sequence and requires a configured operator signature.
+  sequence and an exact decimal `amount`; it requires a configured operator
+  signature.
 - `POST /v1/sorafs/deal/open` validates and atomically activates a funded deal
   for a provider with a current admitted advert; it requires a configured
   operator signature.
 - `POST /v1/sorafs/deal/usage` accepts `DealUsageReport` telemetry and returns
-  deterministic accounting outcomes (`UsageOutcome`); the complete request is
-  signed by the deal provider's current admitted Ed25519 key.
+  deterministic accounting outcomes (`UsageOutcome`) with unsuffixed exact XOR
+  strings; the complete request is signed by the deal provider's current
+  admitted Ed25519 key.
 - `POST /v1/sorafs/deal/cancel` performs conservative boundary-only
   cancellation and returns the final canonical governance payload; it requires
   a configured operator signature.
 - `POST /v1/sorafs/deal/settle` finalises the current window, streaming the
   resulting `DealSettlementRecord` alongside a base64-encoded `DealSettlementV1`
-  ready for governance DAG publication; it requires a configured operator
-  signature.
+  ready for governance DAG publication. Its accounting fields are unsuffixed
+  exact XOR strings, and it requires a configured operator signature.
 - Torii's `/v1/events/sse` feed now broadcasts `SorafsGatewayEvent::DealUsage`
   records summarising each usage submission (epoch, metered GiB-hours, ticket
   counters, deterministic charges), `SorafsGatewayEvent::DealSettlement`

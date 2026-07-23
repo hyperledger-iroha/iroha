@@ -17,7 +17,10 @@ use iroha_data_model::{
     isi::error::{InstructionExecutionError, MathError},
     prelude::*,
     query::error::FindError,
-    transaction::{IvmBytecode, executable::ContractInvocation},
+    transaction::{
+        IvmBytecode,
+        executable::{ContractInvocation, ExecutableBatchItem},
+    },
     trigger::action::EnsureTriggerAuthority,
 };
 use iroha_logger::prelude::*;
@@ -551,6 +554,7 @@ enum ExecutableRefDto {
     Ivm(HashOf<IvmBytecode>),
     ContractCall(ContractInvocation),
     Instructions(ConstVec<InstructionBox>),
+    Batch(ConstVec<ExecutableBatchItem>),
 }
 
 impl From<&ExecutableRef> for ExecutableRefDto {
@@ -561,6 +565,7 @@ impl From<&ExecutableRef> for ExecutableRefDto {
                 ExecutableRefDto::ContractCall(invocation.clone())
             }
             ExecutableRef::Instructions(v) => ExecutableRefDto::Instructions(v.clone()),
+            ExecutableRef::Batch(items) => ExecutableRefDto::Batch(items.clone()),
         }
     }
 }
@@ -572,6 +577,7 @@ impl TryFrom<ExecutableRefDto> for ExecutableRef {
             ExecutableRefDto::Ivm(h) => ExecutableRef::Ivm(h),
             ExecutableRefDto::ContractCall(invocation) => ExecutableRef::ContractCall(invocation),
             ExecutableRefDto::Instructions(v) => ExecutableRef::Instructions(v),
+            ExecutableRefDto::Batch(items) => ExecutableRef::Batch(items),
         })
     }
 }
@@ -729,6 +735,7 @@ pub trait SetReadOnly {
             }
             ExecutableRef::ContractCall(invocation) => Executable::ContractCall(invocation),
             ExecutableRef::Instructions(isi) => Executable::Instructions(isi),
+            ExecutableRef::Batch(items) => Executable::Batch(items),
         };
 
         let mut specialized =
@@ -1399,6 +1406,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             }
             Executable::ContractCall(invocation) => ExecutableRef::ContractCall(invocation),
             Executable::Instructions(instructions) => ExecutableRef::Instructions(instructions),
+            Executable::Batch(items) => ExecutableRef::Batch(items),
         };
         map(self).insert(
             trigger_id.clone(),
@@ -1712,6 +1720,8 @@ pub enum ExecutableRef {
     ContractCall(ContractInvocation),
     /// Vector of ISI
     Instructions(ConstVec<InstructionBox>),
+    /// Ordered batch of ISIs and deployed contract invocations.
+    Batch(ConstVec<ExecutableBatchItem>),
 }
 
 impl core::fmt::Debug for ExecutableRef {
@@ -1724,6 +1734,7 @@ impl core::fmt::Debug for ExecutableRef {
             Self::Instructions(instructions) => {
                 f.debug_tuple("Instructions").field(instructions).finish()
             }
+            Self::Batch(items) => f.debug_tuple("Batch").field(items).finish(),
         }
     }
 }
@@ -1747,6 +1758,11 @@ impl FastJsonWrite for ExecutableRef {
                 norito::json::write_json_string("Instructions", out);
                 out.push(':');
                 JsonSerializeTrait::json_serialize(instrs, out);
+            }
+            ExecutableRef::Batch(items) => {
+                norito::json::write_json_string("Batch", out);
+                out.push(':');
+                JsonSerializeTrait::json_serialize(items, out);
             }
         }
         out.push('}');
@@ -1779,6 +1795,7 @@ impl json::JsonDeserialize for ExecutableRef {
             "Ivm" => json::from_value(inner).map(ExecutableRef::Ivm),
             "ContractCall" => json::from_value(inner).map(ExecutableRef::ContractCall),
             "Instructions" => json::from_value(inner).map(ExecutableRef::Instructions),
+            "Batch" => json::from_value(inner).map(ExecutableRef::Batch),
             other => Err(json::Error::unknown_field(other)),
         }
     }
@@ -1944,6 +1961,40 @@ mod tests {
         match reparsed {
             ExecutableRef::Instructions(restored) => assert_eq!(restored, instructions),
             other => panic!("expected Instructions variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn executable_ref_json_roundtrip_mixed_batch() {
+        let authority = sample_authority();
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            7,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let items = ConstVec::from(vec![
+            ExecutableBatchItem::Instruction(InstructionBox::from(Log::new(
+                Level::INFO,
+                "before call".to_owned(),
+            ))),
+            ExecutableBatchItem::ContractCall(ContractInvocation {
+                contract_address,
+                expected_code_hash: iroha_crypto::Hash::new(b"trigger-batch"),
+                entrypoint: "main".to_owned(),
+                arguments: None,
+            }),
+        ]);
+        let original = ExecutableRef::Batch(items.clone());
+
+        let json = norito::json::to_json(&original).expect("serialize ExecutableRef::Batch");
+        let reparsed: ExecutableRef =
+            norito::json::from_json(&json).expect("deserialize ExecutableRef::Batch");
+
+        match reparsed {
+            ExecutableRef::Batch(restored) => assert_eq!(restored, items),
+            other => panic!("expected Batch variant, got {other:?}"),
         }
     }
 

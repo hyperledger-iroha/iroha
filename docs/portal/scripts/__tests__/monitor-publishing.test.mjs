@@ -26,16 +26,27 @@ test('buildBindingCommand assembles xtask invocation', () => {
     proofStatus: 'ok',
     manifestJson,
   });
-  assert.equal(args[0], 'xtask');
-  assert.equal(args[1], 'soradns-verify-binding');
-  assert.equal(args[2], '--binding');
+  assert.deepEqual(args.slice(0, 9), [
+    'run',
+    '--locked',
+    '-p',
+    'xtask',
+    '--bin',
+    'xtask',
+    '--',
+    'soradns-verify-binding',
+    '--binding',
+  ]);
   assert.equal(bindingPath, path.resolve(process.cwd(), 'artifacts/sorafs/portal.gateway.binding.json'));
   assert.ok(args.includes('--alias'));
   assert.ok(args.includes('--content-cid'));
   assert.ok(args.includes('--hostname'));
   assert.ok(args.includes('--proof-status'));
   assert.ok(args.includes('--manifest-json'));
-  assert.match(command, /cargo xtask soradns-verify-binding/);
+  assert.match(
+    command,
+    /cargo run --locked -p xtask --bin xtask -- soradns-verify-binding/,
+  );
   assert.equal(
     args[args.indexOf('--manifest-json') + 1],
     path.resolve(process.cwd(), manifestJson),
@@ -120,7 +131,7 @@ test('monitorTryIt surfaces probe failures', async () => {
 
 test('monitorBinding wraps successful verification', async () => {
   const summary = {
-    command: 'cargo xtask soradns-verify-binding --binding /tmp/portal.gateway.binding.json',
+    command: 'cargo run --locked -p xtask --bin xtask -- soradns-verify-binding --binding /tmp/portal.gateway.binding.json',
     stdout: '[soradns] verified gateway binding docs.sora.link -> bafytestcid',
     stderr: '',
   };
@@ -145,11 +156,11 @@ test('monitorBinding supports multiple bindings', async () => {
   const results = [
     {
       bindingPath: '/tmp/portal.gateway.binding.json',
-      command: 'cargo xtask soradns-verify-binding --binding /tmp/portal.gateway.binding.json',
+      command: 'cargo run --locked -p xtask --bin xtask -- soradns-verify-binding --binding /tmp/portal.gateway.binding.json',
     },
     {
       bindingPath: '/tmp/openapi.gateway.binding.json',
-      command: 'cargo xtask soradns-verify-binding --binding /tmp/openapi.gateway.binding.json',
+      command: 'cargo run --locked -p xtask --bin xtask -- soradns-verify-binding --binding /tmp/openapi.gateway.binding.json',
     },
   ];
 
@@ -187,7 +198,9 @@ test('monitorBinding flags missing bindings and verifier failures', async () => 
         if (bindingPath.includes('missing.gateway.binding.json')) {
           throw new Error('binding not found');
         }
-        return {command: 'cargo xtask soradns-verify-binding --binding ok'};
+        return {
+          command: 'cargo run --locked -p xtask --bin xtask -- soradns-verify-binding --binding ok',
+        };
       },
     },
   );

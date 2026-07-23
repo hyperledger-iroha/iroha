@@ -6,7 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { machOSigningIndependentSHA256 } from "../src/nativeArtifactHash.js";
+import {
+  machOSigningIndependentSHA256,
+  peSigningIndependentSHA256,
+} from "../src/nativeArtifactHash.js";
 
 const NATIVE_IMPLEMENTATIONS = [
   ["source", await import("../src/native.js")],
@@ -47,6 +50,38 @@ function syntheticSignedMachO({ signatureByte, signatureSize, codeByte = 0x42 })
   bytes.fill(codeByte, headerBytes + commandBytes, signatureOffset);
   bytes.fill(signatureByte, signatureOffset);
   return bytes;
+}
+
+function syntheticUnsignedPe({ codeByte = 0x42 } = {}) {
+  const peOffset = 64;
+  const coffBytes = 20;
+  const optionalBytes = 240;
+  const optionalOffset = peOffset + 4 + coffBytes;
+  const bytes = Buffer.alloc(optionalOffset + optionalBytes + 17, codeByte);
+  bytes.fill(0, 0, optionalOffset + optionalBytes);
+  bytes.write("MZ", 0, "ascii");
+  bytes.writeUInt32LE(peOffset, 0x3c);
+  bytes.write("PE\0\0", peOffset, "binary");
+  bytes.writeUInt16LE(optionalBytes, peOffset + 4 + 16);
+  bytes.writeUInt16LE(0x20b, optionalOffset);
+  bytes.writeUInt32LE(16, optionalOffset + 108);
+  return bytes;
+}
+
+function authenticodeSignPe(unsigned, { certificateByte = 0x77, certificateBytes = 64 } = {}) {
+  const padding = (8 - (unsigned.length % 8)) % 8;
+  const certificateOffset = unsigned.length + padding;
+  const signed = Buffer.alloc(certificateOffset + certificateBytes);
+  unsigned.copy(signed);
+  signed.writeUInt32LE(0x1234_5678, 64 + 4 + 20 + 64);
+  const certificateDirectory = 64 + 4 + 20 + 112 + 4 * 8;
+  signed.writeUInt32LE(certificateOffset, certificateDirectory);
+  signed.writeUInt32LE(certificateBytes, certificateDirectory + 4);
+  signed.fill(certificateByte, certificateOffset);
+  signed.writeUInt32LE(certificateBytes, certificateOffset);
+  signed.writeUInt16LE(0x0200, certificateOffset + 4);
+  signed.writeUInt16LE(0x0002, certificateOffset + 6);
+  return signed;
 }
 
 async function withTempDir(run) {
@@ -157,6 +192,95 @@ variantTest("Darwin signing-independent fallback rejects malformed Mach-O bounds
     });
     assert.equal(result.ok, false);
     assert.equal(result.status, "hash_error");
+  });
+});
+
+variantTest("Windows verification accepts only a final bounded Authenticode region", async () => {
+  __resetNativeStateForTests();
+  await withTempDir(async (dir) => {
+    const bindingPath = path.join(dir, "iroha_js_host.node");
+    const manifestPath = path.join(dir, "iroha_js_host.checksums.json");
+    const original = syntheticUnsignedPe();
+    const signed = authenticodeSignPe(original);
+    const stableDigest = peSigningIndependentSHA256(original);
+    assert.equal(
+      stableDigest,
+      peSigningIndependentSHA256(signed, original.length, { requireSigned: true }),
+    );
+    await fs.writeFile(bindingPath, signed);
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        entries: {
+          "win32-x64": {
+            sha256: sha256(original),
+            pe_signing_independent_sha256: stableDigest,
+            pe_unsigned_size: original.length,
+            source_git_revision: "a".repeat(40),
+            source_tree_clean: true,
+          },
+        },
+      })}\n`,
+    );
+    const verified = verifyNativeBinding(bindingPath, {
+      manifestPath,
+      platformKey: "win32-x64",
+    });
+    assert.equal(verified.ok, true);
+    assert.equal(verified.status, "verified_resigned_pe");
+    assert.equal(verified.peSigningIndependentSha256, stableDigest);
+    assert.equal(verified.expectedPeUnsignedSize, original.length);
+    assert.equal(verified.sourceGitRevision, "a".repeat(40));
+    assert.equal(verified.sourceTreeClean, true);
+
+    signed[original.length - 1] ^= 1;
+    await fs.writeFile(bindingPath, signed);
+    const tampered = verifyNativeBinding(bindingPath, {
+      manifestPath,
+      platformKey: "win32-x64",
+    });
+    assert.equal(tampered.ok, false);
+    assert.equal(tampered.status, "hash_mismatch");
+  });
+});
+
+variantTest("Windows signing fallback rejects missing or malformed certificate bounds", async () => {
+  __resetNativeStateForTests();
+  await withTempDir(async (dir) => {
+    const bindingPath = path.join(dir, "iroha_js_host.node");
+    const manifestPath = path.join(dir, "iroha_js_host.checksums.json");
+    const original = syntheticUnsignedPe();
+    const malformed = authenticodeSignPe(original);
+    malformed[original.length] = 1;
+    await fs.writeFile(bindingPath, malformed);
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        entries: {
+          "win32-x64": {
+            sha256: sha256(original),
+            pe_signing_independent_sha256: peSigningIndependentSHA256(original),
+            pe_unsigned_size: original.length,
+          },
+        },
+      })}\n`,
+    );
+    const malformedResult = verifyNativeBinding(bindingPath, {
+      manifestPath,
+      platformKey: "win32-x64",
+    });
+    assert.equal(malformedResult.ok, false);
+    assert.equal(malformedResult.status, "hash_error");
+
+    await fs.writeFile(bindingPath, original);
+    original[original.length - 1] ^= 1;
+    await fs.writeFile(bindingPath, original);
+    const unsignedResult = verifyNativeBinding(bindingPath, {
+      manifestPath,
+      platformKey: "win32-x64",
+    });
+    assert.equal(unsignedResult.ok, false);
+    assert.equal(unsignedResult.status, "hash_error");
   });
 });
 
@@ -305,6 +429,31 @@ variantTest("verification rejects malformed checksum manifests and entries", asy
       { entries: [] },
       { entries: { [platformKey]: { sha256: "A".repeat(64) } } },
       { entries: { [platformKey]: { sha256: "0".repeat(64), extra: true } } },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            source_git_revision: "a".repeat(40),
+          },
+        },
+      },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            source_git_revision: "A".repeat(40),
+            source_tree_clean: true,
+          },
+        },
+      },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            pe_signing_independent_sha256: "0".repeat(64),
+          },
+        },
+      },
       {
         entries: {
           [platformKey]: { sha256: validHash },

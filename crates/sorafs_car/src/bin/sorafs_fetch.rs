@@ -2985,8 +2985,7 @@ mod tests {
         EndpointMetadataKey, GovernanceProofs, ManifestBuilder, PROVIDER_ADVERT_VERSION_V1,
         PathDiversityPolicy, PinPolicy, ProviderAdvertBodyV1, ProviderCapabilityRangeV1, QosHints,
         RendezvousTopic, SignatureAlgorithm, StakePointer, StorageClass, StreamBudgetV1,
-        TransportHintV1, TransportProtocol, hybrid_envelope::HybridKemBundleV1,
-        deal::XorQuantity,
+        TransportHintV1, TransportProtocol, deal::XorQuantity, hybrid_envelope::HybridKemBundleV1,
         provider_advert::ProviderCapabilitySoranetPqV1,
     };
     use tempfile::{NamedTempFile, TempDir, tempdir};

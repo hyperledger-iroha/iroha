@@ -29,7 +29,8 @@ that cutover, use the local-package form documented below.
 1. In Xcode select **File → Add Package Dependencies…**
 2. Enter `https://github.com/hyperledger/iroha-swift` and select the exact
    first-release version `0.1.0`.
-3. Add the `IrohaSwift` library product to your application target.
+3. Add the `IrohaSwift` library product to your application target. Apps using
+   NFC or Nearby peer transfer must also add `IrohaSwiftMobileTransports`.
 
 ### Swift Package Manager (`Package.swift`)
 
@@ -45,10 +46,70 @@ targets: [
     .target(
         name: "YourApp",
         dependencies: [
-            .product(name: "IrohaSwift", package: "iroha-swift")
+            .product(name: "IrohaSwift", package: "iroha-swift"),
+            .product(name: "IrohaSwiftMobileTransports", package: "iroha-swift")
         ]
     )
 ]
+```
+
+Peer-transfer apps import both modules:
+
+```swift
+import IrohaSwift
+import IrohaSwiftMobileTransports
+```
+
+The host app, not SwiftPM, owns Apple privacy strings and entitlements. Add the
+keys used by the rails you enable (replace only the human-readable strings):
+
+```xml
+<!-- Info.plist: needed only when the app captures QR with the camera. -->
+<key>NSCameraUsageDescription</key>
+<string>Scan an offline-transfer QR code.</string>
+
+<!-- Info.plist: Google Nearby. Keep the Bonjour service exact. -->
+<key>NSBonjourServices</key>
+<array>
+    <string>_F2EBA4BCB49B._tcp</string>
+</array>
+<key>NSBluetoothAlwaysUsageDescription</key>
+<string>Discover a nearby device for an offline transfer.</string>
+<key>NSLocalNetworkUsageDescription</key>
+<string>Exchange an offline transfer with a nearby device.</string>
+
+<!-- Info.plist: Core NFC reader mode. Keep the AID exact. -->
+<key>NFCReaderUsageDescription</key>
+<string>Exchange an offline transfer over NFC.</string>
+<key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
+<array>
+    <string>F049524F48415045455201</string>
+</array>
+```
+
+Reader builds also need the Near Field Communication Tag Reading capability,
+which produces this entitlement:
+
+```xml
+<key>com.apple.developer.nfc.readersession.formats</key>
+<array>
+    <string>TAG</string>
+</array>
+```
+
+Receiver/CardSession builds additionally require an Apple-provisioned HCE
+profile containing the following entitlements. Do not make CardSession a
+runtime fallback: require iOS 17.4 or newer and proceed only when
+`IrohaPeerNfcCardSessionControllerV1.availability(...)` reports an eligible
+device.
+
+```xml
+<key>com.apple.developer.nfc.hce</key>
+<true/>
+<key>com.apple.developer.nfc.hce.iso7816.select-identifier-prefixes</key>
+<array>
+    <string>F049524F48415045455201</string>
+</array>
 ```
 
 When working from the monorepo, use `.package(name: "IrohaSwift", path: "../../IrohaSwift")`
@@ -72,7 +133,7 @@ every Apple slice and marks the XCFramework plus its artifact manifest. The
 Do not use skip-build mode with this option: the builder rejects that ambiguous
 combination rather than labeling pre-existing libraries as production-enabled.
 
-CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging.
+CI runs `.github/workflows/mobile_sdk_artifacts.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging and mandatory missing-artifact rejection.
 
 ### CocoaPods
 
@@ -106,6 +167,42 @@ let toriiAuth = try ToriiClientAuthentication.bearerToken(
 )
 let torii = ToriiClient(baseURL: toriiURL, authentication: toriiAuth)
 
+// Account onboarding requires the dedicated route token explicitly. It remains
+// separate from an optional global X-API-Token configured on the client. Plan
+// first, then apply the exact stateless receipt; neither body contains a key or token.
+// The bundled Norito bridge encodes the exact receipt body and verifies its
+// domain-separated hash, pinned chain, and authority signature before either
+// call returns/submits.
+// An older/missing bridge fails closed; JSON is never used as receipt hash input.
+let onboardingIntent = try ToriiAccountOnboardingPlanRequest(
+    alias: "merchant@paynet",
+    accountId: accountId
+)
+let onboardingReceipt = try await torii.planAccountOnboarding(
+    onboardingIntent,
+    onboardingToken: routeToken,
+    expectedAuthority: configuredOnboardingAuthority,
+    expectedChainId: configuredChainId
+)
+let onboarding = try await torii.applyAccountOnboarding(
+    onboardingReceipt,
+    onboardingToken: routeToken,
+    expectedAuthority: configuredOnboardingAuthority,
+    expectedChainId: configuredChainId
+)
+
+// Operator alias setup is plan-only on Torii. The wallet verifies the plan
+// hash and byte-identical instruction frames, signs one ordinary transaction,
+// and submits it through the existing pipeline endpoint.
+let setupPlan = try await torii.planAliasSetup(setupRequest, canonicalAuth: canonicalAuth)
+try await sdk.submitAliasSetupPlan(
+    setupRequest,
+    plan: setupPlan,
+    bodyEncoder: encodeCanonicalAliasPlanBody,
+    feePayment: feePayment,
+    signingKey: signingKey
+)
+
 // Or opt into any native-bridge signing algorithm explicitly.
 let pqSigningKey = try pqSDK.generateSigningKey()
 let gostSigningKey = try gostSDK.signingKey(fromSeed: Data("seed".utf8))
@@ -135,6 +232,26 @@ sdk.submit(envelope: envelope) { err in
     print(err as Any)
 }
 
+// Interleave canonical instruction frames and deployed-contract calls in one
+// atomic transaction. All items share the signed gas limit.
+let invocation = try TransactionContractInvocation(
+    contractAddress: contractAddress,
+    expectedCodeHash: expectedCodeHash,
+    entrypoint: "apply",
+    arguments: argumentRecord
+)
+let mixedEnvelope = try sdk.buildSignedExecutableBatch(
+    chainId: "00000000-0000-0000-0000-000000000000",
+    authority: accountId,
+    entries: [
+        .instruction(registerFrame),
+        .contractCall(invocation),
+        .instruction(transferFrame),
+    ],
+    feePayment: .authority(chargeLimits: [], gasLimit: 500_000),
+    signingKey: signingKey
+)
+
 // Query pipeline status if needed
 torii.getTransactionStatus(hashHex: envelope.hashHex) { status in
     print(status)
@@ -145,6 +262,23 @@ sdk.submitAndWait(envelope: envelope) { result in
     print("pipeline status:", result)
 }
 ```
+
+Executable batches must be non-empty. Contract-call entries require a positive
+signature-bound gas limit and an exact lowercase V1 Bech32m contract address;
+invalid payloads are rejected before signing.
+
+Lease renewal and native auto-renew use the same local-signing flow through
+`planAliasLeaseRenewal`, `planAliasAutoRenew`, and
+`submitAliasLifecyclePlan`. An exact auto-renew no-op returns without creating
+or submitting an empty transaction. Visibility-aware reads are available as
+signed or unsigned overloads of `resolveAccountAlias`,
+`resolveAccountAliasIndex`, and `aliasesByAccount`; signed calls emit the
+canonical Iroha account/signature/timestamp/nonce headers. Alias plan and
+intent values never contain API tokens or private keys.
+The default alias frame codec uses the bundled Rust instruction registry to
+typed-decode and canonically re-encode every complete planner frame; an older
+or missing bridge fails closed. Advanced callers may still inject an equivalent
+registry codec for testing or alternate packaging.
 
 Wallet-scoped Torii deployments commonly require the `Authorization`,
 `X-Account-Id`, and `X-Dataspace-Id` headers on every request. Use
@@ -157,6 +291,138 @@ requests by the shared transport-security check.
 canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 `IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only while native-backed algorithms use `NoritoBridge`.
+
+### Offline peer transport V1
+
+`IrohaPeerWireMessageV1` is the only first-release request/payment/ACK envelope.
+Profile `1` requires schema `1` and allows a 24,576-byte encoded body; profile
+`2` requires schema `0x0102` and allows a 24,576-byte bounded whole-offer body
+(24,660 bytes including the fixed 84-byte IPM1 header). Canonical
+bytes are capped at 32 KiB. Offline Note bytes remain opaque. Its text-based
+apps can use `IrohaPeerCanonicalTextPayloadCodecV1` for an exact UTF-8 round
+trip; the codec rejects profile `2`, whose bytes must instead be a kind-matched
+ABI21 archive. Profile-2 construction and decode validate NRT0 v0.0, no
+compression, exact compact-length flags, CRC64, the authoritative
+fully-qualified schema, and static padding (request/payment 8, ACK 0) without
+requiring the native bridge. The typed adapter performs deeper semantics.
+The shared `fixtures/offline/kagemusha_peer_transport_v2.json` vector pins the
+same qualified 49-byte structural archive through IPM1, IQR1, NFC, and an
+authenticated Nearby record. Its one-byte body is structural-only and must not
+be sent to the typed adapter.
+
+QR uses bounded multi-stream `IQR1` scanning with idle and absolute expiry.
+Its standard values are hard V1 ceilings: three active streams, twelve
+pre-header frames, 3,072 pre-header bytes, 30 seconds idle, and 180 seconds
+absolute; custom policies may only tighten them.
+Bind optional expected profile, kind, and schema when constructing the scan
+session; wrong-schema streams are quarantined before completion. The
+`.peerOptimized` compression policy is shared by all rails and uses zlib only
+when it saves at least 32 bytes and one 256-byte shard. If wallet-domain
+validation rejects a structurally valid completion, call
+`scanSession.quarantine(streamID:)` before resuming capture. Scan input is exact
+IQR1 text with no whitespace trimming; explicit Swift scanner uptimes are
+throwing and must be finite and nonnegative.
+Nearby uses Google Connections point-to-point service
+`org.hyperledger.iroha.offline.transfer.v1`, mandatory matching 4...12 ASCII digits,
+and canonical Base64URL-no-padding ASCII IPD1 discovery. Only the sender may
+start with the zero bootstrap; it adopts the receiver's advertised nonzero
+request context before the `IPN1` certificate-bound P-256/HKDF/AES-GCM
+session. The adapter marks
+a BYTES send complete only after its terminal transfer update succeeds. NFC
+uses AID `F049524F48415045455201`, exact ISC1 sender checkpoints, 244-byte IPA1
+durable BEGIN records, IDA1 durable ACK records, min(local, peer) chunk
+negotiation, and GET_STATUS recovery after
+ambiguous RF loss. The complete reader runner applies a whole-exchange
+73,996-action default even when a peer advertises one-byte chunks. One NFC
+profile policy binds request, payment, and acknowledgement to the same profile;
+mixed-profile sessions fail closed. Its
+`loadOrCreateDurableCheckpoint` callback is one atomic load-or-create/debit/store
+boundary and must return the exact durable request- and peer-bound ISC1; the
+runner validates it before BEGIN_PAYMENT. `updateDurableCheckpoint` separately
+installs the ACK-bearing ISC1 before CONFIRM_ACK. Failure at either durability
+boundary emits neither the command it gates nor a replacement debit.
+
+Wire limits are hard-capped at 32 KiB canonical, 24,576 Offline Note encoded,
+and 24,576 bounded Kagemusha encoded bytes. NFC messages cannot exceed 24,660
+bytes. Nearby timeouts must be finite, positive, and at most 300 seconds; its
+receive budget admits the four-record V1 transcript and fails closed on a
+fifth. Epoch invalidation suppresses callbacks not yet admitted; an
+already-admitted application callback may finish.
+Listener callbacks are bounded and reject overload. Terminal send completions
+remain exact-once through a separately bounded fallback; if both callback lanes
+are stalled and saturated, the final nonblocking path runs inline and therefore
+does not promise the configured callback context or global FIFO order.
+
+The portable wire, QR, Nearby cryptography, and NFC state machines live in
+`IrohaSwift`; Google Nearby and Core NFC lifecycle adapters live in
+`IrohaSwiftMobileTransports`. These `IrohaPeer*V1` APIs have no
+MultipeerConnectivity, legacy AID, raw-text, or unauthenticated BYTES fallback.
+That scope does not remove the independent Kagemusha ABI21 bulk family.
+
+The application entry points are:
+
+- QR: produce display strings with
+  `IrohaPeerQRCodecV1.staticCompleteTextCandidate(...)` or
+  `animatedFrameTexts(...)`; feed scanner text to
+  `IrohaPeerQRScanSessionV1.ingest(...)`, and call `reset()` when the camera
+  session or expected kind changes. The producer preflights the exact Base45
+  length before building a complete frame and emits animated strings directly,
+  reusing each repeated header string without changing the V1 wire sequence.
+- Nearby: authenticate records with `IrohaPeerNearbySessionV1`, and own radio
+  lifecycle through `IrohaPeerNearbyConnectionsTransportV1.startAdvertising`,
+  `startDiscovering`, `send`, and `stop`. A `send` completion means delivery
+  only after the exact payload's terminal transfer update is `.success`; queue
+  acceptance is never success.
+- NFC: use `IrohaPeerNfcReaderServiceV1.run(...)` for reader mode and
+  `IrohaPeerNfcCardSessionControllerV1.start(...)` for an eligible receiver.
+  The admission callback receives an ephemeral context and must atomically
+  persist and return a distinct `IrohaPeerNfcDurablePaymentAdmissionV1`; pass
+  that decoded IPA1 back as `restoredPaymentAdmission` after relaunch. Admission
+  and commit callbacks are idempotent because their default and maximum
+  five-second deadline makes a timeout ambiguous. A callback that ignores task
+  cancellation cannot hold the CardSession past that deadline. Admission and
+  COMMIT share one process-wide, queue-free lease: timeout/cancel does not
+  release it until the actual callback returns, and retaps fail immediately
+  with a distinct saturation failure instead of spawning more tasks. A callback
+  that never returns therefore requires process restart. Its late value is not
+  installed or published and is loaded from durable storage on the next start.
+  IPA1 resumes at byte zero; IDA1 wins after COMMIT. Exact/restored BEGIN
+  and COMMIT replays publish the idempotent `.paymentAdmitted` and
+  `.acknowledgementReady` state events.
+  Reader contact retries default to three attempts over three seconds and are
+  hard-capped at ten attempts and 30 seconds. A connect slot is claimed before
+  an attempt, so duplicate detection callbacks cannot consume retry budget.
+  Apps with a custom transceiver can call the portable
+  `IrohaPeerNfcReaderExchangeV1.run(...)` directly, preserving both durable
+  checkpoint callbacks.
+
+The bounded Retail V1 Kagemusha handoff uses profile `2` and only schema `0x0102`.
+`IrohaPeerKagemushaAdapterV1` rejects every other schema before invoking the
+native archive decoder, and its IPM1 adapter fails explicitly above the 24,576
+byte whole-offer body ceiling (24,660 bytes with the IPM1 header). The
+independent ABI21 APIs remain
+`KagemushaQRStreamCodec`, `KagemushaNFCProtocol`, and
+`KagemushaNearbyExchange`, with distinct `PKK2*`/`PKKQ1`, the canonical
+`F049524F48415045455201` SDK NFC AID, and
+Bonjour/Multipeer identifiers. They are never negotiated, reinterpreted, or
+used as fallback for Retail V1. Full QR, NFC, and native ABI21 archives up to
+32 MiB continue to use those rails; Kagemusha Nearby's JSON/text envelope has
+its own smaller bound. The profile identifier must not be used for a different
+sidecar or demo encoding.
+
+This transport hardening is client-side and requires no backend API change.
+
+The canonical cross-SDK vectors live in `../fixtures/offline/peer_*.json`.
+From this directory, run the portable/mobile suites and the mainline Kagemusha
+adapter boundary with:
+
+```bash
+swift test --filter IrohaPeer
+swift test --filter KagemushaPeerTransportTests
+```
+
+See the [peer transport V1 guide](../docs/source/peer_transport_v1.md) for byte
+layouts, fixture hashes, Android permissions, and durability boundaries.
 
 ### Kagemusha offline cash lifecycle
 
@@ -175,14 +441,18 @@ rounding.
 
 Wallet applications own encrypted note state and peer transport. Persist the
 opaque bundle, recipient output, optional sender change, artifact binding, and
-operation status at each commit boundary. Fetch the complete V3 artifact set,
+operation status at each commit boundary. Fetch the complete ABI-21/V4 artifact set,
 wrap each one-shot source in `KagemushaRecursiveSpendArtifactStream`, and acquire
-it through `KagemushaRecursiveSpendArtifactCoordinator.shared`. Keep every proof
+it through a `KagemushaRecursiveSpendArtifactCoordinator` created with
+`.authenticated(...)` from deployment-provisioned release trust. Keep every proof
 operation inside the returned lease's `withInstalledArtifactSet` callback. The
-coordinator verifies the exact manifest generation, six-file inventory, lengths,
-offsets, and digests; serializes install, use, rotation, and uninstall; and fails
-stale leases closed. No network or artifact access belongs on the offline send
-or receive path.
+coordinator verifies the exact manifest generation and eight-file inventory:
+`ParamsIPA`, processed proving key, processed verifying key, and final-key
+selector-zero bootstrap witness for each Eq/Ep parity. The two bounded circuit
+parameter records are authenticated inline in the manifest rather than streamed
+as extra files. The coordinator verifies lengths, offsets, and digests;
+serializes install, use, rotation, and uninstall; and fails stale leases closed.
+No network or artifact access belongs on the offline send or receive path.
 
 ### Push Devices
 
@@ -234,10 +504,10 @@ let plan: ToriiSubscriptionPlan = [
 
 ```
 
-The direct subscription mutation helpers now fail closed instead of accepting
-embedded private keys. Build the equivalent subscription instructions locally,
-sign them with your wallet key material, and submit the resulting transaction
-through `submitTransaction` or `/v1/pipeline/transactions`.
+Direct subscription mutation helpers are not exposed. Build the equivalent
+subscription instructions locally, sign them with wallet key material, and
+submit the resulting transaction through `submitTransaction` or
+`/v1/pipeline/transactions`.
 
 ### Canonical request signing
 
@@ -309,7 +579,7 @@ let request = ToriiAssetTransferRequest(
     amount: "750",
     destination: destination,
     memo: "invoice 42",
-    feeSponsor: sponsor,
+    feePayment: .authority(chargeLimits: [], gasLimit: nil),
     creationTimeMs: torii.recommendedCreationTimeMs(),
     transactionTtlMs: 120_000
 )
@@ -327,12 +597,24 @@ let finality = try await torii.waitForDetachedAssetTransferFinality(
 )
 ```
 
-Preparation fails closed unless ABI-19 native inspection proves the versioned
+Preparation fails closed unless ABI-21 native inspection proves the versioned
 scaffold has the exact authority, chain, definition, source scope, amount,
-destination, memo, fee sponsor, creation time, TTL, and no extra metadata.
+destination, memo, typed fee payer, creation time, TTL, and no extra metadata.
+The prepare route obtains the canonical fee quote and replaces only the charge
+maxima before returning the scaffold. To select sponsorship, pass
+`.sponsor(programId:programRevision:chargeLimits:gasLimit:)` with one exact
+`FeeSponsorProgramId` and non-zero immutable revision; there is no account-only
+sponsor selector or authority fallback.
 Submission locally verifies Ed25519 authority/signature binding, uses native
 finalization, and requires Torii's final transaction and entrypoint hashes to
 match. `IrohaSDK` forwards the same prepare, submit, and finality methods.
+
+For locally assembled transactions, build the complete unsigned payload first,
+then call `quoteAndApplyFees(unsignedPayload:canonicalAuth:)`. Sign the returned
+payload without changing any other field. `quoteFees` and
+`getFeeSponsorProgram` expose the underlying account-signed
+`/v1/fees/quote` and exact program lookup routes. Transaction metadata named
+`fee_sponsor`, `gas_asset_id`, or `gas_limit` is retired and rejected.
 
 ### Kotodama contract manifests
 
@@ -729,37 +1011,66 @@ Use `getKagemushaReadiness(assetDefinitionId:)`, `submitKagemushaTopUp`,
 
 `KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
 typed Kagemusha Norito archive. They derive the lowercase idempotency key from
-the embedded nonzero operation ID; callers cannot override it. Keep a submitted
+the embedded nonzero operation ID; callers cannot override it. Top-up archives
+are limited to 512 KiB and redeem archives to 48 MiB, exactly matching Torii.
+Keep a submitted
 operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
 operation ID.
 
-Runtime use requires the exact ABI 19 capability archive, the complete native
-first-release symbol inventory, and a
-validated proof-backend readiness result. The V3 manifest and its six streamed
-key artifacts are content-addressed and installed atomically through
-`KagemushaRecursiveSpendArtifactInstallSessionV3`; a partial or corrupt
-generation never becomes active.
+Artifact and readiness validation requires exact bridge ABI 21 and manifest
+schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4
+manifest's eight streamed artifacts are content-addressed and installed
+atomically through `KagemushaRecursiveSpendArtifactInstallSessionV4`; a partial,
+corrupt, unpromoted, or role-substituted generation never becomes active.
+`KagemushaRecursiveSpendReleaseAuthenticationV4` requires the canonical
+candidate-bound promotion record in addition to policy, attestation, benchmark,
+and review bytes. Circuit parameters remain authenticated inline in the Eq/Ep
+profiles.
 
-Top-up uses `KagemushaRecursiveSpendTopUpUnsigned`, an authorization over its
-canonical digest, direct Torii submission, authenticated finality verification,
-and `KagemushaRecursiveSpend.initSpend`. Offline transfer is receiver-initiated:
-verify the nonce-bound `KagemushaRecipientPaymentRequest`, construct an append
-request with recipient and optional change branches, call `appendSpend`, verify
-the result locally, and send only the recipient peer-payment archive.
+`ToriiKagemushaReadiness.artifactSet` is required but nullable. A non-null value
+binds the authenticated generation, manifest, release-policy and
+release-attestation digests, issuance window, proof-pair bound, and asset scale
+to both exact recursive verifier records:
+`kagemusha_recursive_step_eq_v4_verifier_record` with
+`kagemusha-recursive-spend-step-eq-authenticated-layout-v4`, and
+`kagemusha_recursive_step_ep_v4_verifier_record` with
+`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`. Authenticated
+backend construction is not proof admission. A null artifact set requires both
+recursive records and backend construction to be unavailable with exactly one
+`recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed`
+blocker. `proofBackendAvailable` reports exact backend construction
+independently.
+`recursiveLineageSupported` is true only when the artifact set, distinct active
+Eq/Ep records, and backend are all available; its inverse is represented by
+`recursive_lineage_unavailable`. `ready` is true only when the complete blocker
+set is empty, so unrelated issuer or transfer blockers do not erase valid
+backend and lineage facts.
 
-The receiver calls `verifySpend`, checks the exact asset, scale, amount,
+Top-up uses `KagemushaTopUpShieldBuildRequestV4`,
+`KagemushaRecursiveSpendTopUpUnsignedV4`, and an authorization over the
+canonical ABI-21 digest. After direct Torii submission and authenticated
+finality verification, initialize the offline branch with
+`KagemushaRecursiveSpendInitLocalRequestV4` and
+`KagemushaRecursiveSpend.initSpendV4`. Offline transfer is receiver-initiated:
+verify the nonce-bound `KagemushaRecipientPaymentRequest`, construct a
+`KagemushaRecursiveSpendAppendLocalRequestV4` with recipient and optional change
+branches, call `appendSpendV4`, verify the result locally, and send only the V4
+recipient peer-payment archive.
+
+The receiver calls `verifySpendV4`, checks the exact asset, scale, amount,
 recipient commitment, verifier window, hop bound, and lineage requirements,
 then durably stores the bundle before creating a
 `KagemushaReceiverAcknowledgement`. The sender marks its reserved inputs spent
 only after `verifiedForSender` accepts that acknowledgement. Replayed peer
 payments and acknowledgements remain idempotent at the wallet operation layer.
 
-Redemption uses `KagemushaRecursiveSpendRedemptionIntentBuildRequest`, the
-unshield-v3 proof APIs, and `KagemushaRecursiveSpendRedeemUnsigned`. Full redeem
-has no change branch; partial redeem binds one offline change branch to the same
-proof and operation ID. `redeemSpend` returns the canonical request submitted by
-`submitKagemushaRedeem`.
+Redemption uses `KagemushaRecursiveSpendRedeemLocalRequestV4`, the retained
+unshield-v3 primitive proof APIs, and
+`KagemushaRecursiveSpendRedeemUnsignedV4`. Full redeem has no change branch;
+partial redeem binds one offline change branch to the same proof and operation
+ID. `buildRedeemV4` produces the authorization-bound build result; finalizing it
+returns the canonical V4 request submitted by `submitKagemushaRedeem`.
 
 All accumulator, proof, verifier-record, and finality-proof archives are opaque
 to wallet code. The first-release wire API has no separate lineage-witness
@@ -774,7 +1085,7 @@ admitted production privacy entrypoints, including
 `buildZkAceAuthorizationProofV1(requestArchive:)`, dispatch through the same
 production archive paths and remain fail-closed while the privacy rows are
 gated. Planned catalog entrypoints stay unexported until their production gates
-pass. Native availability in the first release requires exact ABI 19, the privacy
+pass. Native availability in the first release requires exact ABI 21, the privacy
 capability/build/verify symbols, and successful Norito probe outputs whose
 operation-specific result schema bytes match the called entry point.
 

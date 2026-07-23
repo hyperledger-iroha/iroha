@@ -2,178 +2,114 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 ---
-title: SNS Arbitration Toolkit (SN-6a)
-summary: Case schema, SLA targets, dashboards, and transparency templates for dispute resolution.
+title: SNS Arbitration Toolkit
+summary: Evidence-only case schema and handling boundaries for alias disputes.
 ---
 
-# Sora Name Service Arbitration Toolkit (SN-6a)
+# Sora Name Service arbitration toolkit
 
-**Status:** Drafted 2026-04-26 — fulfils the “define dispute case schema, SLAs, and transparency reports” portion of SN-6a.  
-**Roadmap links:** SN-6 “Compliance & Dispute Resolution” (roadmap.md), SN-7 resolver/gateway sync, SNS metrics roadmap (SN-8).  
-**Artifacts:** JSON schema (`docs/examples/sns/arbitration_case_schema.json`) and transparency template (`docs/examples/sns/arbitration_transparency_report_template.md`).
+This toolkit is an off-chain case and evidence format. It does not register,
+transfer, rebind, freeze, unfreeze, auction, renew, or otherwise mutate an SNS
+record. The first release exposes no `sns governance case` command and no
+freeze/unfreeze/auction mutation command. Do not present such commands, legacy
+Torii routes, or a dashboard export as implemented release behavior.
 
-This toolkit gives governance councils, legal reviewers, and registrar support
-teams a deterministic package for SNS arbitration. It specifies the machine-
-readable case schema, response SLAs, evidence capture workflow, and the
-reporting template required for monthly transparency releases. Implementations
-can load the schema to validate CLI submissions, surface SLA breaches in
-Grafana, and feed reports directly into the public governance portal.
+The canonical case schema is
+`docs/examples/sns/arbitration_case_schema.json`; the publication outline is
+`docs/examples/sns/arbitration_transparency_report_template.md`. They support
+human governance and external case-management tooling only. They are not
+Norito transaction payloads.
 
-## 1. Arbitration Case Schema
+## 1. Intake
 
-The canonical schema lives in
-`docs/examples/sns/arbitration_case_schema.json`. It follows JSON Schema
-Draft 7 and mirrors the registrar/Norito selector data model, so automation can
-attach disputes to the same i105 selectors and suffix identifiers used
-elsewhere in SNS.
+Assign an immutable case ID and record:
 
-```bash
-jq '.properties' docs/examples/sns/arbitration_case_schema.json
-```
+- the canonical textual resource and, when known, its expected numeric
+  dataspace ID;
+- allegation, policy reference, priority, reporter/respondents, and timestamps;
+- content-addressed evidence references, hashes, access classification, and
+  retention policy; and
+- acknowledgement/resolution deadlines and every approved extension.
 
-### 1.1 Required fields
+Keep raw tokens, authorization headers, private keys, and unredacted identity
+material outside the case file. A hash or redacted reference is sufficient for
+restricted evidence.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `case_id` | string (`SNS-YYYY-NNNNN` or UUID) | Immutable identifier referenced by governance votes and RCA logs. |
-| `selector` | object `{suffix_id,label,global_form}` | Targeted name. `global_form` must match the canonical I105 output documented in `address_display_guidelines.md`. |
-| `dispute_type` | enum (`ownership`,`policy_violation`,`abuse`,`billing`,`other`) | Tracks the policy clause under review. |
-| `priority` | enum (`urgent`,`high`,`standard`,`info`) | Drives the SLA matrix below and alert routing. |
-| `reported_at` | RFC3339 timestamp | Time the complaint entered the queue (pre-notary). |
-| `status` | enum (`open`,`triage`,`hearing`,`decision`,`remediation`,`closed`,`suspended`) | Mirrors the workflow in §2. |
-| `reporter` | object `{role,contact,reference_ticket}` | Who filed the complaint (registrar, steward, guardian, public). |
-| `respondents` | array of `{role,account_id,contact}` | Parties expected to answer the complaint. |
-| `allegations` | array of `{code,summary,policy_reference}` | Enumerates the norms allegedly violated. |
-| `evidence` | array of `{id,kind,uri,hash,description,sealed}` | Items attached at intake; `sealed=true` keeps artefacts in confidential storage. |
-| `sla` | object `{acknowledge_by,resolution_by,extensions[]}` | Deadlines derived from §2 plus any granted extensions. |
-| `actions` | timeline array `{timestamp,actor,action,notes}` | Mandatory for every state transition so SLAs and dashboards stay reproducible. |
-| `decision` | object `{finding,remedies,effective_at,publication_state}` | Populated once the council renders a verdict, even when the outcome is “dismissed”. |
+## 2. Canonical technical evidence
 
-### 1.2 Optional fields
+For a provisioning or billing dispute, collect evidence from the supported
+flow:
 
-- `acknowledged_at`, `triage_started_at`, `hearing_scheduled_at`,
-  `resolution_issued_at` — recorded automatically by the workflow engine to
-  support SLA analytics.
-- `respondent_submissions` — documents and statements the respondent provided.
-- `guardian_overrides` — when the guardian board freezes a selector mid-case.
-- `billing_adjustments` — ledger instructions when the outcome affects rent,
-  penalties, or refunds.
+1. the approved secret-free alias intent;
+2. the canonical signed planner request and response;
+3. the `AliasTransactionPlanV1` body/hash, ordered framed instructions,
+   disposition, exact quote, cap, policy version, payment asset, and anchor;
+4. the locally signed ordinary transaction and committed/rejected result;
+5. payer and owner ledger balances before/after; and
+6. a redacted `AliasSetupReportV1` plus visibility-authorized query results.
 
-## 2. Workflow & SLA Matrix
+A dashboard, application log, or screenshot can provide context but cannot
+replace these canonical artifacts. Never infer a charge from the cap: consensus
+charges the exact recomputed quote.
 
-Arbitration follows the same five-phase lifecycle across all suffixes. The SLA
-matrix keeps response times enforceable even as suffix volume grows.
+## 3. Triage questions
 
-| Priority | Incident Definition | Acknowledge | Hearing scheduled | Decision issued | Owner |
-|----------|--------------------|-------------|-------------------|-----------------|-------|
-| Urgent | Active abuse / security impact | ≤ 2 h | ≤ 24 h | ≤ 72 h | Guardian on-call + council liaison |
-| High | Ownership / policy disputes impacting launches | ≤ 8 h | ≤ 48 h | ≤ 10 d | Council case manager |
-| Standard | Routine billing, renewal, or content disputes | ≤ 24 h | ≤ 5 d | ≤ 21 d | Registrar steward |
-| Info | FYI / requests for clarification | ≤ 3 d | n/a | ≤ 30 d | Support queue |
+- Did canonical text resolve to the expected `DataSpaceId` in both the plan and
+  execution context?
+- Was the resource classified before quote validation as `NoOp`, `Repair`,
+  `Create`, or conflict?
+- Did a conflict return 409 without any partial executable plan?
+- Did the local verifier reproduce the plan hash and exact framed bytes?
+- Was the complete ordered vector submitted as one transaction?
+- Does the ledger debit equal the exact calculated amount, with no second
+  charge on replay?
+- On rejection, are earlier resource, binding, index, permission, and balance
+  writes absent?
+- Were restricted reads authorized in the 401 → 403 → 404 order without
+  existence leakage?
 
-Workflow phases:
+## 4. Decision and remediation boundary
 
-1. **Intake:** Support CLI (`sns governance case create`) or portal form
-   populates the schema, verifies the selector, stores attachments in
-   Norito-backed object storage, and enqueues the case with calculated SLA
-   deadlines.
-2. **Triage:** Case manager validates jurisdiction, confirms payment proofs, and
-   either escalates to guardians (urgent) or schedules the hearing window.
-3. **Hearing:** Respondents upload statements via `sns governance case file`,
-   optional synchronous calls are recorded, and `actions[]` receives the
-   transcript hash plus attendance metadata.
-4. **Decision:** Council votes recorded as `actions[]` entries referencing the
-   governance vote id; verdict populates `decision`.
-5. **Remediation & Closure:** Resolver freeze/unfreeze (`sns governance
-   freeze/unfreeze`), billing adjustments, and transparency artefacts attached.
+Record findings, approvals, dissent, effective time, publication state, and the
+exact remediation authorized. The case decision itself is not executable.
 
-Automation must emit `sns_arbitration_sla_breach_total` labels whenever
-`acknowledged_at > sla.acknowledge_by` or `resolution_issued_at >
-sla.resolution_by` even if extensions exist—extensions just add metadata for
-the transparency report.
+If a documented registered instruction supports the remediation, create or
+plan that instruction through its supported API, obtain the required
+signatures, and submit it in a normal transaction separate from the case
+record. Renewal uses expiry CAS; rebind and primary-alias changes use their CAS
+instructions; auto-renew uses expected revision.
 
-## 3. Evidence & Attachments
+If no registered instruction supports the requested freeze, unfreeze, transfer,
+auction, refund, or other action, mark remediation `Blocked`. Do not use raw
+domain registration, a storage edit, a removed `/v1/sns` mutation route, or an
+undocumented CLI command as a substitute.
 
-- **Hashing:** Every attachment stores `hash` (SHA-256) in the schema and
-  optionally a Norito manifest path or content-addressed CAR file for Taikai.
-- **Confidential evidence:** set `sealed=true` for material restricted to
-  guardians/legal; the transparency report only publishes hashed pointers.
-- **Linked manifests:** For auctions or registrar misconfigurations, copy the
-  registrar manifest hash and Torii request id into `actions[]` so auditors can
-  pull the payload later.
+## 5. SLA and publication
 
-## 4. Transparency Reports
+Teams may adopt local acknowledgement and decision SLAs, but those deadlines
+are governance policy rather than consensus behavior. Calculate reports from
+the reviewed case files and canonical transaction evidence. Publish only
+aggregates and redacted case summaries; filter restricted resources and sealed
+attachments before computing public totals.
 
-Governance releases monthly reports per suffix using
-`docs/examples/sns/arbitration_transparency_report_template.md`. Each report
-captures:
+The repository does not currently provide a supported arbitration submission
+CLI, Torii case endpoint, case-event metric contract, or canonical arbitration
+Grafana dashboard. Any future automation must be implemented and tested before
+its command, route, metric, or dashboard is added to this runbook.
 
-- Case counts by type, severity, and disposition.
-- SLA compliance metrics (`sns_arbitration_cases_open_total`,
-  `sns_arbitration_sla_breach_total`, `sns_arbitration_cases_closed_total`).
-- Summaries of remedial actions (freezes, transfers, refunds).
-- Guardian overrides and appeal outcomes.
+## 6. Minimum case checklist
 
-Populate the template by exporting NDJSON via
-`sns governance case export --since=<ISO8601>` and piping through `jq`
-aggregations:
+- [ ] Case schema validated by the repository's approved document validation
+      workflow.
+- [ ] Secrets and restricted identity evidence are absent or separately sealed.
+- [ ] Canonical alias plan/transaction/readiness evidence is attached when
+      relevant.
+- [ ] Decision identifies a supported typed remediation or explicitly says
+      `Blocked`.
+- [ ] No removed SNS mutation command or route appears in the execution log.
+- [ ] Public report totals are calculated after visibility/redaction filtering.
 
-```bash
-sns governance case export --since 2026-04-01 > artifacts/sns/cases.ndjson
-jq -s 'group_by(.dispute_type) | map({type: .[0].dispute_type, count: length})' \
-  artifacts/sns/cases.ndjson > artifacts/sns/case_summary.json
-```
-
-Attach both the rendered report and raw NDJSON to the transparency ticket.
-
-## 5. CLI Automation
-
-CLI helpers live under `sns governance case ...`:
-
-- `sns governance case create --case-json cases/alpha.json` validates the payload
-  against `docs/examples/sns/arbitration_case_schema.json` before POSTing it to
-  Torii. Use `--dry-run` to lint cases without submitting, or `--schema` to
-  supply a staged schema file during reviews.
-- `sns governance case export --since 2026-04-01T00:00:00Z --limit 200` returns
-  the NDJSON feed used by dashboards and transparency reports. Filters for
-  `--status` and `--since` match the toolkit workflow in §4.
-
-Both commands rely on the validation helpers implemented in
-`crates/iroha_cli/src/commands/sns.rs` so automation pipelines, docs portal
-scripts, and governance workstations all enforce the exact same structure.
-
-## 6. Dashboard & Telemetry Hooks
-
-The arbitration dashboard (Grafana export pending) must track:
-
-- `sns_arbitration_cases_open_total{suffix_id,priority}` and
-  `sns_arbitration_cases_closed_total`.
-- `sns_arbitration_sla_breach_total{phase}` broken out by acknowledge vs.
-  resolution deadlines.
-- `sns_arbitration_hearing_lead_time_seconds` histogram to visualise backlog.
-- `sns_arbitration_decision_age_seconds` histogram to ensure resolved cases are
-  published quickly.
-- `sns_arbitration_guardian_override_total` for emergency freezes or forced
-  transfers.
-
-Reference implementation: `dashboards/grafana/sns_arbitration_observability.json`
-plus the matching Alertmanager pack (`dashboards/alerts/sns_arbitration_rules.yml`).
-The dashboard gates SN-6a readiness by feeding the same queries referenced in
-the Grafana descriptions into CI evidence bundles.
-
-Alert rules:
-
-- Urgent cases unacknowledged for >1 h.
-- >2 simultaneous urgent/high cases in the same suffix.
-- SLA breach ratio >5 % in a trailing 30 d window.
-
-## 6. Implementation Checklist
-
-- [x] Publish schema + docs (this file + JSON schema).
-- [x] Publish transparency template.
-- [ ] Wire schema validation into `sns governance case create`.
-- [ ] Publish Grafana/Alertmanager bundle referenced above.
-- [ ] Automate monthly report generation in CI and publish to the portal.
-
-As the remaining automation lands, update this file with dashboard/CLI paths
-and mark SN-6a complete in `roadmap.md`.
+See [`governance_playbook.md`](./governance_playbook.md),
+[`registrar_api.md`](./registrar_api.md), and
+[`payment_settlement_plan.md`](./payment_settlement_plan.md) for the operational
+surfaces that are implemented.

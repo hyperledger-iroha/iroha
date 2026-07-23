@@ -20,7 +20,7 @@ sm-ffi-openssl = []
 iroha_config_base = { workspace = true }
 iroha_data_model = { workspace = true }
 iroha_primitives = { workspace = true }
-iroha_crypto = { workspace = true }
+iroha_crypto = { workspace = true, features = ["pqc"] }
 norito = {workspace = true}
 error-stack = { workspace = true }
 tracing = { workspace = true }

@@ -84,7 +84,8 @@ final class NexusAppClientTests: XCTestCase {
             let input = NexusTransferInput(
                 sourceAssetID: "\(Self.assetDefinitionID)#\(Self.accountID)",
                 quantity: quantity,
-                destinationAccountID: Self.destinationAccountID
+                destinationAccountID: Self.destinationAccountID,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
             )
             XCTAssertThrowsError(try client.buildTransferDraft(input: input), quantity) { error in
                 XCTAssertTrue(error is KotodamaNumericV1Error)
@@ -332,6 +333,7 @@ final class NexusAppClientTests: XCTestCase {
                 input: NexusTransferInput(sourceAssetID: "\(Self.assetDefinitionID)#\(Self.destinationAccountID)",
                                           quantity: "12.34",
                                           destinationAccountID: Self.destinationAccountID,
+                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                           authority: Self.destinationAccountID,
                                           signingPublicKey: Self.publicKey)
             )
@@ -427,7 +429,8 @@ final class NexusAppClientTests: XCTestCase {
             let input = NexusTransferInput(
                 sourceAssetID: "\(Self.assetDefinitionID)#\(Self.accountID)",
                 quantity: quantity,
-                destinationAccountID: Self.destinationAccountID
+                destinationAccountID: Self.destinationAccountID,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
             )
             XCTAssertThrowsError(
                 try codec.buildTransferPayload(
@@ -453,6 +456,7 @@ final class NexusAppClientTests: XCTestCase {
             sourceAssetID: "\(assetDefinitionID)#\(accountID)",
             quantity: "12.34",
             destinationAccountID: destinationAccountID,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
             creationTimeMs: 1_700_000_000_000,
             ttlMs: 30_000,
             nonce: 7,

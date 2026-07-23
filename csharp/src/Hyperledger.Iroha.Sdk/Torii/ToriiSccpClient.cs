@@ -216,18 +216,20 @@ public sealed partial class ToriiClient
             context,
             SccpJsonResponseMaximumBytes,
             cancellationToken);
-        var (authority, proof, transactionPayload, signature) = request switch
+        var (authority, proof, feePayment, transactionPayload, signature) = request switch
         {
             SccpBridgeProofSubmitRequest proofRequest =>
                 (
                     proofRequest.Authority,
                     Convert.FromBase64String(proofRequest.DestinationProofBase64),
+                    proofRequest.FeePayment,
                     proofRequest.TransactionPayloadBase64,
                     proofRequest.SignatureBase64),
             SccpBridgeMessageSubmitRequest messageRequest =>
                 (
                     messageRequest.Authority,
                     Convert.FromBase64String(messageRequest.NativeProofBase64),
+                    messageRequest.FeePayment,
                     messageRequest.TransactionPayloadBase64,
                     messageRequest.SignatureBase64),
             _ => throw new InvalidOperationException("Unknown SCCP submit request type."),
@@ -238,7 +240,8 @@ public sealed partial class ToriiClient
             authority,
             proof,
             transactionPayload,
-            signature);
+            signature,
+            expectedFeePayment: feePayment);
     }
 
     private async Task<byte[]> GetExactSccpJsonAsync(

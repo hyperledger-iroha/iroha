@@ -572,7 +572,7 @@ pub(crate) struct SignedAgentLeaseRenewRequest {
     pub private_key: Option<ExposedPrivateKey>,
 }
 
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 pub(crate) struct HfDeployPayload {
     pub repo_id: String,
     #[norito(default)]
@@ -733,7 +733,7 @@ pub(crate) struct SignedAgentPolicyRevokeRequest {
     pub private_key: Option<ExposedPrivateKey>,
 }
 
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 pub(crate) struct AgentWalletSpendPayload {
     pub apartment_name: String,
     pub asset_definition: String,
@@ -17240,7 +17240,9 @@ mod tests {
                                 aad_digest: Hash::new(b"wrapped-aad"),
                             },
                         pricing_policy: SoraUploadedModelPricingPolicyV1 {
-                            storage_xor_nanos: 1,
+                            storage_price: "0.000000001"
+                                .parse()
+                                .expect("canonical storage price"),
                         },
                         decryption_policy_ref: "policy-1".to_string(),
                     },
@@ -17701,7 +17703,9 @@ mod tests {
                     aad_digest: Hash::new(b"wrapped-aad"),
                 },
                 pricing_policy: SoraUploadedModelPricingPolicyV1 {
-                    storage_xor_nanos: 1,
+                    storage_price: "0.000000001"
+                        .parse()
+                        .expect("canonical storage price"),
                 },
                 decryption_policy_ref: "policy-1".to_string(),
             },

@@ -52,12 +52,14 @@ fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {
         block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block")),
         payload_hash: Hash::new(b"payload"),
     };
+    let round = ConsensusRound {
+        context_id,
+        height: 42,
+        view: 3,
+    };
     let certificate = QuorumCertificateRef {
-        round: ConsensusRound {
-            context_id,
-            height: 42,
-            view: 3,
-        },
+        round,
+        proposal_round: round,
         phase: GlobalPhase::Prepare,
         subject,
         execution_commitment: ExecutionCommitment::without_topups(
@@ -98,6 +100,7 @@ fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {
                 },
             },
             last_commit_qc: None,
+            liveness: Default::default(),
         },
         certificate,
     )

@@ -22,10 +22,11 @@ use iroha::{
         name::Name,
         prelude::*,
         smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
-        transaction::TransactionBuilder,
+        transaction::{FeePaymentIntent, TransactionBuilder},
     },
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
+use iroha_torii_shared::FeeQuoteResponse;
 use iroha_version::codec::EncodeVersioned;
 
 #[cfg(test)]
@@ -49,8 +50,9 @@ struct Args {
     deploy_nonce: u64,
     #[arg(long, default_value_t = 753)]
     chain_discriminant: u16,
-    #[arg(long)]
-    gas_asset_id: Option<String>,
+    /// Canonical JSON file selecting authority or an exact sponsor-program revision.
+    #[arg(long, value_name = "PATH")]
+    fee_payment_json: PathBuf,
     #[arg(long, default_value_t = false)]
     route_anchor_authority_account: bool,
     #[arg(long)]
@@ -66,11 +68,77 @@ fn sign_transaction(
     metadata: Metadata,
     instructions: impl IntoIterator<Item = InstructionBox>,
 ) -> Result<SignedTransaction> {
-    TransactionBuilder::new(chain.clone(), authority.clone())
-        .with_instructions(instructions)
-        .with_metadata(metadata)
+    TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .with_metadata(metadata)
+    .try_sign(private_key)
+    .wrap_err("failed to sign split contract deploy transaction")
+}
+
+fn fee_payment_selection_matches(requested: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
+    match (requested, quoted) {
+        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
+            requested.gas_limit == quoted.gas_limit
+        }
+        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
+            requested.program_id == quoted.program_id
+                && requested.program_revision == quoted.program_revision
+                && requested.gas_limit == quoted.gas_limit
+        }
+        _ => false,
+    }
+}
+
+fn quote_and_resign_transaction(
+    client: &Client,
+    draft: SignedTransaction,
+    fee_payment: &FeePaymentIntent,
+    private_key: &PrivateKey,
+) -> Result<(SignedTransaction, FeeQuoteResponse)> {
+    let mut payload = draft.payload().clone();
+    payload.fee_payment = fee_payment.clone();
+    let quote = client
+        .quote_fees(&payload)
+        .wrap_err("failed to quote exact split-deploy transaction fees")?;
+    if !fee_payment_selection_matches(fee_payment, &quote.intent) {
+        return Err(eyre!(
+            "fee quote changed the selected payer, sponsor revision, or gas bound"
+        ));
+    }
+    quote
+        .intent
+        .validate()
+        .wrap_err("fee quote returned an invalid payment intent")?;
+    payload.fee_payment = quote.intent.clone();
+    let transaction = TransactionBuilder::from_payload(payload)
+        .wrap_err("quoted split-deploy payload has an invalid fee payment intent")?
         .try_sign(private_key)
-        .wrap_err("failed to sign split contract deploy transaction")
+        .wrap_err("failed to sign exact quoted split-deploy transaction")?;
+    Ok((transaction, quote))
+}
+
+fn quote_native_upload_plan(
+    client: &Client,
+    mut plan: NativeUploadPlan,
+    fee_payment: &FeePaymentIntent,
+    private_key: &PrivateKey,
+) -> Result<(NativeUploadPlan, Vec<FeeQuoteResponse>)> {
+    let mut quotes = Vec::with_capacity(plan.pre_stage.len() + 1);
+    for (_, _, transaction) in &mut plan.pre_stage {
+        let (quoted, quote) =
+            quote_and_resign_transaction(client, transaction.clone(), fee_payment, private_key)?;
+        *transaction = quoted;
+        quotes.push(quote);
+    }
+    let (quoted, quote) =
+        quote_and_resign_transaction(client, plan.finalize.2, fee_payment, private_key)?;
+    plan.finalize.2 = quoted;
+    quotes.push(quote);
+    Ok((plan, quotes))
 }
 
 fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathBuf, usize)> {
@@ -80,16 +148,6 @@ fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathB
     let bytes = tx.encode_versioned();
     fs::write(&path, &bytes).wrap_err_with(|| format!("write {}", path.display()))?;
     Ok((path, bytes.len()))
-}
-
-fn transaction_metadata(gas_asset_id: Option<&str>) -> Metadata {
-    let mut metadata = Metadata::default();
-    if let Some(asset_id) = gas_asset_id.filter(|value| !value.trim().is_empty()) {
-        let gas_asset_key =
-            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, Json::new(asset_id.to_owned()));
-    }
-    metadata
 }
 
 fn insert_contract_deployment_address_metadata(
@@ -241,6 +299,13 @@ fn main() -> Result<()> {
         .private_key
         .parse()
         .wrap_err("failed to parse --private-key")?;
+    let fee_payment_bytes = fs::read(&args.fee_payment_json)
+        .wrap_err_with(|| format!("read {}", args.fee_payment_json.display()))?;
+    let fee_payment: FeePaymentIntent = norito::json::from_slice(&fee_payment_bytes)
+        .wrap_err_with(|| format!("parse {}", args.fee_payment_json.display()))?;
+    fee_payment
+        .validate()
+        .wrap_err("invalid signature-bound fee payment intent")?;
     let signer = KeyPair::from(private_key.clone());
     let contract_address: iroha::data_model::smart_contract::ContractAddress = args
         .contract_address
@@ -262,7 +327,7 @@ fn main() -> Result<()> {
         .deploy_nonce
         .checked_add(1)
         .ok_or_else(|| eyre!("deploy nonce overflow"))?;
-    let mut tx_metadata = transaction_metadata(args.gas_asset_id.as_deref());
+    let mut tx_metadata = Metadata::default();
     insert_contract_deployment_address_metadata(&mut tx_metadata, &contract_address);
     let route_anchor_instruction = args.route_anchor_authority_account.then(|| {
         InstructionBox::from(SetKeyValue::account(
@@ -281,6 +346,8 @@ fn main() -> Result<()> {
         code_hash,
         &code,
     )?;
+    let (upload_plan, mut fee_quotes) =
+        quote_native_upload_plan(&client, upload_plan, &fee_payment, &private_key)?;
     let upload_report = native_upload_report(&upload_plan);
     let register_manifest_tx = sign_transaction(
         &client.chain,
@@ -289,6 +356,9 @@ fn main() -> Result<()> {
         tx_metadata.clone(),
         [InstructionBox::from(RegisterSmartContractCode { manifest })],
     )?;
+    let (register_manifest_tx, register_manifest_quote) =
+        quote_and_resign_transaction(&client, register_manifest_tx, &fee_payment, &private_key)?;
+    fee_quotes.push(register_manifest_quote);
     let activate_tx = sign_transaction(
         &client.chain,
         &authority,
@@ -306,6 +376,9 @@ fn main() -> Result<()> {
             )),
         ],
     )?;
+    let (activate_tx, activate_quote) =
+        quote_and_resign_transaction(&client, activate_tx, &fee_payment, &private_key)?;
+    fee_quotes.push(activate_quote);
 
     let register_manifest_hash = register_manifest_tx.hash();
     let activate_hash = activate_tx.hash();
@@ -353,6 +426,10 @@ fn main() -> Result<()> {
         (
             "activate_tx_hash".to_owned(),
             activate_hash.to_string().into(),
+        ),
+        (
+            "fee_quotes".to_owned(),
+            norito::json::to_value(&fee_quotes).wrap_err("encode split-deploy fee quotes")?,
         ),
     ]);
     let norito::json::Value::Object(upload_report) = upload_report else {
@@ -542,7 +619,7 @@ mod tests {
         let code = (0..(3 * 1024 * 1024 + 17))
             .map(|index| u8::try_from(index % 251).expect("remainder fits u8"))
             .collect::<Vec<_>>();
-        let mut metadata = transaction_metadata(Some("fee#split-native"));
+        let mut metadata = Metadata::default();
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
             0,
             &authority,
@@ -695,7 +772,7 @@ mod tests {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
         let chain = ChainId::from("split-contract-deploy-emit-sequence-test");
-        let metadata = transaction_metadata(Some("fee#emit"));
+        let metadata = Metadata::default();
         let code = vec![0x83; 2 * SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
         let upload_plan = build_native_upload_plan(
             &chain,

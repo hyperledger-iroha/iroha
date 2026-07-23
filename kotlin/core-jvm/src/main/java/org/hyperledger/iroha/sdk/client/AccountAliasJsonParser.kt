@@ -8,10 +8,17 @@ object AccountAliasJsonParser {
     @JvmStatic
     fun parseResolution(payload: ByteArray): AccountAliasResolution {
         val root = expectObject(parse(payload, "account alias resolution"), "account alias resolution")
+        val allowed = setOf("alias", "account_id", "index", "source")
+        check(root.keys.all { it in allowed }) {
+            "account alias resolution contains unknown or retired fields"
+        }
+        check(root.containsKey("alias") && root.containsKey("account_id")) {
+            "account alias resolution is missing required fields"
+        }
         return AccountAliasResolution(
             requiredExactString(root["alias"], "account alias resolution.alias"),
             requiredExactString(root["account_id"], "account alias resolution.account_id"),
-            if (root.containsKey("index")) asOptionalLong(root["index"], "account alias resolution.index") else null,
+            if (root.containsKey("index")) aliasOptionalU64(root["index"], "account alias resolution.index") else null,
             optionalExactString(root["source"], "account alias resolution.source"),
         )
     }
@@ -29,12 +36,6 @@ object AccountAliasJsonParser {
         return value as Map<String, Any?>
     }
 
-    private fun requiredString(value: Any?, path: String): String {
-        val string = optionalString(value)
-        check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
-        return string.trim()
-    }
-
     private fun requiredExactString(value: Any?, path: String): String {
         val string = optionalString(value)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
@@ -49,11 +50,8 @@ object AccountAliasJsonParser {
 
     private fun optionalString(value: Any?): String? {
         if (value == null) return null
-        return if (value is String) value else value.toString()
+        check(value is String) { "account alias resolution string fields must be strings" }
+        return value
     }
 
-    private fun asOptionalLong(value: Any?, path: String): Long? {
-        if (value == null) return null
-        return JsonNumbers.asLong(value, path)
-    }
 }

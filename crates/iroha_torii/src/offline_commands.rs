@@ -12,14 +12,15 @@ use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
+    asset::AssetId,
     isi::{
         InstructionBox,
-        offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
+        offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
     },
     name::Name,
-    offline::KagemushaRecursiveSpendTopUpAnchorV2,
+    offline::KagemushaRecursiveSpendTopUpAnchorV4,
     transaction::{
-        Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
+        SignedTransaction, TransactionBuilder, TransactionEntrypoint,
         error::TransactionRejectionReason, signed::TransactionResult,
     },
 };
@@ -48,6 +49,7 @@ const ADMITTED_OPERATION_ACCOUNTED_BYTES: usize =
 pub(crate) struct OfflineCommandRuntime {
     authority: AccountId,
     key_pair: KeyPair,
+    minimum_xor_balance: Quantity,
     max_tx_value: Quantity,
     admission: Arc<Mutex<OfflineOperationRegistry>>,
 }
@@ -57,6 +59,7 @@ impl OfflineCommandRuntime {
         Self {
             authority: config.authority,
             key_pair: config.key_pair,
+            minimum_xor_balance: config.minimum_xor_balance,
             max_tx_value: config.max_tx_value,
             admission: Arc::new(Mutex::new(OfflineOperationRegistry::new(
                 config.operation_registry_max_entries,
@@ -65,12 +68,18 @@ impl OfflineCommandRuntime {
         }
     }
 
-    fn sign_transaction(
+    fn quote_and_sign_transaction(
         &self,
+        app: &AppState,
         transaction: TransactionBuilder,
         context: &'static str,
     ) -> Result<SignedTransaction, Error> {
-        transaction
+        let mut payload = transaction
+            .into_payload()
+            .map_err(|source| offline_transaction_signing_error(context, source))?;
+        payload.fee_payment = crate::quote_internal_fee_payment(app, &payload)?;
+        TransactionBuilder::from_payload(payload)
+            .map_err(|source| offline_transaction_signing_error(context, source))?
             .try_sign(self.key_pair.private_key())
             .map_err(|source| offline_transaction_signing_error(context, source))
     }
@@ -153,17 +162,20 @@ pub(crate) async fn handle_top_up(
         drop(submission);
         return Ok(response);
     }
-    validate_kagemusha_v2_topup_snapshot(&app, &topup_request)?;
+    validate_kagemusha_v4_topup_snapshot(&app, &topup_request)?;
     if topup_request.amount.public_quantity() > issuer.max_tx_value.clone() {
         return Err(validation(
             "offline_amount_exceeds_limit",
             "Offline top-up amount exceeds issuer policy.",
         ));
     }
-    let instruction = TopUpKagemushaRecursiveV2::new(topup_request.clone());
-    let mut transaction =
-        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
-            .with_instructions([InstructionBox::from(instruction)]);
+    let instruction = TopUpKagemushaRecursiveV4::new(topup_request.clone());
+    let mut transaction = TransactionBuilder::new(
+        (*app.chain_id).clone(),
+        issuer.authority.clone().into(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([InstructionBox::from(instruction)]);
     transaction.set_creation_time(Duration::from_millis(
         topup_request.authorization.issued_at_ms,
     ));
@@ -173,7 +185,7 @@ pub(crate) async fn handle_top_up(
             .expires_at_ms
             .saturating_sub(topup_request.authorization.issued_at_ms),
     ));
-    let tx = issuer.sign_transaction(transaction, "offline_top_up_transaction")?;
+    let tx = issuer.quote_and_sign_transaction(&app, transaction, "offline_top_up_transaction")?;
     let tx_hash = tx.hash();
     let admission = routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -242,7 +254,7 @@ pub(crate) async fn handle_redeem(
         drop(submission);
         return Ok(response);
     }
-    validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;
+    validate_kagemusha_v4_redeem_snapshot(&app, &redeem_request)?;
     if redeem_request.amount.public_quantity() > issuer.max_tx_value.clone() {
         return Err(validation(
             "offline_amount_exceeds_limit",
@@ -250,17 +262,20 @@ pub(crate) async fn handle_redeem(
         ));
     }
     let authorization = redeem_request.authorization.clone();
-    let instruction = RedeemKagemushaRecursiveV2::new(redeem_request.clone());
-    let mut transaction =
-        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
-            .with_instructions([InstructionBox::from(instruction)]);
+    let instruction = RedeemKagemushaRecursiveV4::new(redeem_request.clone());
+    let mut transaction = TransactionBuilder::new(
+        (*app.chain_id).clone(),
+        issuer.authority.clone().into(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([InstructionBox::from(instruction)]);
     transaction.set_creation_time(Duration::from_millis(authorization.issued_at_ms));
     transaction.set_ttl(Duration::from_millis(
         authorization
             .expires_at_ms
             .saturating_sub(authorization.issued_at_ms),
     ));
-    let tx = issuer.sign_transaction(transaction, "offline_redeem_transaction")?;
+    let tx = issuer.quote_and_sign_transaction(&app, transaction, "offline_redeem_transaction")?;
     let tx_hash = tx.hash();
     let admission = routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -284,17 +299,16 @@ pub(crate) async fn handle_redeem(
     offline_operation_reference_for_admitted_record(&record)
 }
 
-fn kagemusha_v2_snapshot_time_ms(state: &impl StateReadOnly) -> u64 {
+fn kagemusha_v4_snapshot_time_ms(state: &impl StateReadOnly) -> u64 {
     state.latest_block().map_or(0, |block| {
         u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
     })
 }
 
-fn validate_kagemusha_v2_topup_snapshot(
+fn validate_kagemusha_v4_topup_snapshot(
     app: &SharedAppState,
     request: &OfflineTopUpRequest,
 ) -> Result<(), Error> {
-    ensure_kagemusha_v2_backend_available()?;
     if request.current_note.chain_id != *app.chain_id {
         return Err(validation(
             "offline_wrong_chain",
@@ -323,6 +337,20 @@ fn validate_kagemusha_v2_topup_snapshot(
             "Offline top-up amount scale differs from the live asset scale.",
         ));
     }
+    let block_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
+    ensure_kagemusha_v4_transaction_release(
+        iroha_core::smartcontracts::isi::offline::resolve_kagemusha_recursive_transaction_release_v4(
+            world,
+            &state.kagemusha_release_catalog,
+            &request.artifact_binding,
+            block_height,
+            block_height,
+            app.chain_id.as_ref(),
+            request.asset.definition(),
+            live_scale,
+        ),
+        true,
+    )?;
     let zk_state = world
         .zk_assets()
         .get(request.asset.definition())
@@ -395,7 +423,7 @@ fn validate_kagemusha_v2_topup_snapshot(
         ));
     }
     request
-        .validate_authorization_at(kagemusha_v2_snapshot_time_ms(&state))
+        .validate_authorization_at(kagemusha_v4_snapshot_time_ms(&state))
         .map_err(|err| {
             validation_owned(
                 "offline_authorization_invalid",
@@ -404,11 +432,10 @@ fn validate_kagemusha_v2_topup_snapshot(
         })
 }
 
-fn validate_kagemusha_v2_redeem_snapshot(
+fn validate_kagemusha_v4_redeem_snapshot(
     app: &SharedAppState,
     request: &OfflineRedeemRequest,
 ) -> Result<(), Error> {
-    ensure_kagemusha_v2_backend_available()?;
     if request.bundle.statement.chain_id != *app.chain_id {
         return Err(validation(
             "offline_wrong_chain",
@@ -437,8 +464,37 @@ fn validate_kagemusha_v2_redeem_snapshot(
             "Offline redemption scale differs from the live asset scale.",
         ));
     }
+    let block_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
+    ensure_kagemusha_v4_transaction_release(
+        iroha_core::smartcontracts::isi::offline::resolve_kagemusha_recursive_transaction_release_v4(
+            world,
+            &state.kagemusha_release_catalog,
+            &request.bundle.statement.artifact_binding,
+            request.block_height,
+            block_height,
+            app.chain_id.as_ref(),
+            &request.bundle.statement.asset,
+            live_scale,
+        ),
+        false,
+    )?;
+    if let Some(change) = request.offline_change.as_ref() {
+        ensure_kagemusha_v4_transaction_release(
+            iroha_core::smartcontracts::isi::offline::resolve_kagemusha_recursive_transaction_release_v4(
+                world,
+                &state.kagemusha_release_catalog,
+                &change.bundle.statement.artifact_binding,
+                request.block_height,
+                block_height,
+                &change.bundle.statement.chain_id,
+                &change.bundle.statement.asset,
+                change.bundle.statement.asset_scale,
+            ),
+            true,
+        )?;
+    }
     request
-        .validate_authorization_at(kagemusha_v2_snapshot_time_ms(&state))
+        .validate_authorization_at(kagemusha_v4_snapshot_time_ms(&state))
         .map_err(|err| {
             validation_owned(
                 "offline_authorization_invalid",
@@ -447,14 +503,32 @@ fn validate_kagemusha_v2_redeem_snapshot(
         })
 }
 
-fn ensure_kagemusha_v2_backend_available() -> Result<(), Error> {
-    if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
-        return Ok(());
+fn ensure_kagemusha_v4_transaction_release(
+    resolution: Result<
+        iroha_core::smartcontracts::isi::offline::KagemushaRecursiveTransactionReleaseV4,
+        String,
+    >,
+    issuance_required: bool,
+) -> Result<(), Error> {
+    let resolved = resolution.map_err(|error| Error::AppServiceUnavailable {
+        code: "offline_recursive_release_invalid",
+        message: format!("The authenticated ABI-21 V4 release could not be resolved: {error}"),
+    })?;
+    ensure_kagemusha_v4_issuance_window(resolved.issuance_active, issuance_required)
+}
+
+fn ensure_kagemusha_v4_issuance_window(
+    issuance_active: bool,
+    issuance_required: bool,
+) -> Result<(), Error> {
+    if issuance_required && !issuance_active {
+        return Err(Error::AppServiceUnavailable {
+            code: "offline_recursive_release_outside_issuance_window",
+            message: "The selected authenticated ABI-21 V4 release is outside its issuance window."
+                .to_owned(),
+        });
     }
-    Err(Error::AppServiceUnavailable {
-        code: "offline_not_ready",
-        message: "Offline proof generation and verification are not ready.".to_owned(),
-    })
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -977,14 +1051,11 @@ fn offline_operation_record_in_transaction(
     if operation_id == [0; 32] || transaction.authority() != issuer_authority {
         return None;
     }
-    let Executable::Instructions(instructions) = transaction.instructions() else {
-        return None;
-    };
-    for instruction in instructions.iter() {
+    for instruction in transaction.instructions().explicit_instructions() {
         let any = instruction.as_any();
-        let candidate = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV2>() {
+        let candidate = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
             Some(OfflineOperationRequest::TopUp(&top_up.request))
-        } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
+        } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
             Some(OfflineOperationRequest::Redeem(&redeem.request))
         } else {
             None
@@ -1029,7 +1100,7 @@ fn terminal_offline_operation_in_transaction(
     let transaction_hash = record.transaction_hash.to_string();
     Some((
         record,
-        kagemusha_v2_committed_finality(
+        kagemusha_v4_committed_finality(
             operation_id,
             transaction_hash,
             finalized_block_height,
@@ -1038,7 +1109,7 @@ fn terminal_offline_operation_in_transaction(
                 .0
                 .as_ref()
                 .err()
-                .map(|reason| kagemusha_v2_rejection_detail(Some(reason))),
+                .map(|reason| kagemusha_v4_rejection_detail(Some(reason))),
         ),
     ))
 }
@@ -1086,7 +1157,7 @@ fn find_existing_offline_operation(
         .map(Some);
     }
 
-    let Some(finality) = find_committed_kagemusha_v2_operation(app, issuer, requested)? else {
+    let Some(finality) = find_committed_kagemusha_v4_operation(app, issuer, requested)? else {
         return Ok(None);
     };
     offline_operation_reference_response(
@@ -1278,7 +1349,7 @@ fn terminal_rejected_or_expired_offline_operation_status(
             operation_id,
             kind,
             transaction_hash,
-            kagemusha_v2_rejection_detail(entry.rejection.as_ref()),
+            kagemusha_v4_rejection_detail(entry.rejection.as_ref()),
         )
     })
 }
@@ -1318,12 +1389,12 @@ fn offline_operation_status_response(
         }
         let result = match kind {
             KagemushaV2OperationKind::TopUp => {
-                let anchor = load_finalized_kagemusha_v2_anchor(app, operation_id)?;
+                let anchor = load_finalized_kagemusha_v4_anchor(app, operation_id)?;
                 let OfflineOperationRequest::TopUp(request) = &record.request else {
                     unreachable!("the operation kind was derived from the same typed request")
                 };
-                ensure_kagemusha_v2_topup_anchor_matches_request(&anchor, request)?;
-                ensure_kagemusha_v2_anchor_finality_binding(
+                ensure_kagemusha_v4_topup_anchor_matches_request(&anchor, request)?;
+                ensure_kagemusha_v4_anchor_finality_binding(
                     anchor.topup_operation_id,
                     anchor.finalized_tx_hash,
                     anchor.finalized_height,
@@ -1331,7 +1402,7 @@ fn offline_operation_status_response(
                     &record.transaction_hash,
                     finalized_block_height,
                 )?;
-                let finality_proof = load_finalized_kagemusha_v2_topup_proof(
+                let finality_proof = load_finalized_kagemusha_v4_topup_proof(
                     app,
                     finalized_block_height,
                     operation_id,
@@ -1362,7 +1433,7 @@ fn offline_operation_status_response(
         rejected_offline_operation_status(operation_id, kind, &record.transaction_hash, message)
     };
     let status = if let Some(finality) = committed {
-        ensure_kagemusha_v2_terminal_finality_matches_record(record, finality)?;
+        ensure_kagemusha_v4_terminal_finality_matches_record(record, finality)?;
         match &finality.outcome {
             KagemushaV2TerminalOutcome::Applied => {
                 applied(finality.finalized_block_height, finality.server_time_ms)?
@@ -1436,7 +1507,7 @@ fn offline_operation_status_response(
     } else {
         let state = app.state.view();
         ensure_unproven_pending_window_is_live(
-            kagemusha_v2_snapshot_time_ms(&state),
+            kagemusha_v4_snapshot_time_ms(&state),
             record.request.authorization().expires_at_ms,
         )?;
         pending_offline_operation_status(
@@ -1503,7 +1574,7 @@ fn admitted_offline_operation_status_response(
 
     let state = app.state.view();
     ensure_unproven_pending_window_is_live(
-        kagemusha_v2_snapshot_time_ms(&state),
+        kagemusha_v4_snapshot_time_ms(&state),
         admitted.binding.expires_at_ms,
     )?;
     let status = pending_offline_operation_status(
@@ -1569,13 +1640,13 @@ enum KagemushaV2TerminalOutcome {
     Rejected(String),
 }
 
-fn kagemusha_v2_applied_finality(
+fn kagemusha_v4_applied_finality(
     operation_id: [u8; 32],
     transaction_hash: String,
     finalized_block_height: u64,
     server_time_ms: u64,
 ) -> KagemushaV2CommittedFinality {
-    kagemusha_v2_committed_finality(
+    kagemusha_v4_committed_finality(
         operation_id,
         transaction_hash,
         finalized_block_height,
@@ -1584,7 +1655,7 @@ fn kagemusha_v2_applied_finality(
     )
 }
 
-fn kagemusha_v2_committed_finality(
+fn kagemusha_v4_committed_finality(
     operation_id: [u8; 32],
     transaction_hash: String,
     finalized_block_height: u64,
@@ -1602,7 +1673,7 @@ fn kagemusha_v2_committed_finality(
     }
 }
 
-fn kagemusha_v2_rejection_detail(rejection: Option<&TransactionRejectionReason>) -> String {
+fn kagemusha_v4_rejection_detail(rejection: Option<&TransactionRejectionReason>) -> String {
     canonical_offline_rejection_message(
         rejection.map_or_else(|| "no rejection reason".to_owned(), ToString::to_string),
     )
@@ -1635,7 +1706,7 @@ fn ensure_unproven_pending_window_is_live(
     ))
 }
 
-fn ensure_kagemusha_v2_terminal_finality_matches_record(
+fn ensure_kagemusha_v4_terminal_finality_matches_record(
     record: &OfflineOperationRecord,
     finality: &KagemushaV2CommittedFinality,
 ) -> Result<(), Error> {
@@ -1652,7 +1723,7 @@ fn ensure_kagemusha_v2_terminal_finality_matches_record(
     Ok(())
 }
 
-fn find_committed_kagemusha_v2_operation(
+fn find_committed_kagemusha_v4_operation(
     app: &SharedAppState,
     issuer: &OfflineCommandRuntime,
     requested: OfflineOperationRequestRef<'_>,
@@ -1667,13 +1738,13 @@ fn find_committed_kagemusha_v2_operation(
     Ok(Some(finality))
 }
 
-fn kagemusha_v2_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
+fn kagemusha_v4_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
     if operation_id == [0; 32] {
         return Err(offline_operation_index_inconsistent(
             "A finalized top-up anchor requires a non-zero operation id.",
         ));
     }
-    format!("kagemusha_v2_topup_anchor_{}", hex::encode(operation_id))
+    format!("kagemusha_v4_topup_anchor_{}", hex::encode(operation_id))
         .parse()
         .map_err(|err| {
             offline_operation_index_inconsistent(format!(
@@ -1682,8 +1753,8 @@ fn kagemusha_v2_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> 
         })
 }
 
-fn ensure_kagemusha_v2_topup_anchor_matches_request(
-    anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
+fn ensure_kagemusha_v4_topup_anchor_matches_request(
+    anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
     request: &OfflineTopUpRequest,
 ) -> Result<(), Error> {
     if anchor.chain_id != request.current_note.chain_id
@@ -1703,7 +1774,7 @@ fn ensure_kagemusha_v2_topup_anchor_matches_request(
     Ok(())
 }
 
-fn ensure_kagemusha_v2_anchor_finality_binding(
+fn ensure_kagemusha_v4_anchor_finality_binding(
     anchor_operation_id: [u8; 32],
     anchor_transaction_hash: [u8; 32],
     anchor_height: u64,
@@ -1726,18 +1797,18 @@ fn ensure_kagemusha_v2_anchor_finality_binding(
     Ok(())
 }
 
-fn load_finalized_kagemusha_v2_anchor(
+fn load_finalized_kagemusha_v4_anchor(
     app: &SharedAppState,
     operation_id: [u8; 32],
-) -> Result<KagemushaRecursiveSpendTopUpAnchorV2, Error> {
-    let key = kagemusha_v2_anchor_state_key(operation_id)?;
+) -> Result<KagemushaRecursiveSpendTopUpAnchorV4, Error> {
+    let key = kagemusha_v4_anchor_state_key(operation_id)?;
     let world = app.state.world_view();
     let archive = world.smart_contract_state().get(&key).ok_or_else(|| {
         offline_operation_index_inconsistent(
             "The finalized top-up anchor is missing from canonical chain state.",
         )
     })?;
-    let anchor: KagemushaRecursiveSpendTopUpAnchorV2 =
+    let anchor: KagemushaRecursiveSpendTopUpAnchorV4 =
         norito::decode_from_bytes(archive).map_err(|err| {
             offline_operation_index_inconsistent(format!(
                 "The finalized top-up anchor is invalid: {err}"
@@ -1761,11 +1832,11 @@ fn load_finalized_kagemusha_v2_anchor(
     Ok(anchor)
 }
 
-fn load_finalized_kagemusha_v2_topup_proof(
+fn load_finalized_kagemusha_v4_topup_proof(
     app: &SharedAppState,
     finalized_block_height: u64,
     operation_id: [u8; 32],
-    anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
+    anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
 ) -> Result<OfflineTopUpFinalityProof, Error> {
     let proof = app
         .kura
@@ -1789,12 +1860,76 @@ fn offline_topup_finality_proof_unavailable() -> Error {
 }
 
 fn require_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime>, Error> {
-    app.offline_commands
+    let issuer = app
+        .offline_commands
         .clone()
         .ok_or_else(|| Error::AppServiceUnavailable {
             code: "offline_service_unavailable",
             message: "Offline operation signing is not configured on this Torii node.".to_owned(),
-        })
+        })?;
+    ensure_offline_command_authority_ready(app, &issuer)?;
+    Ok(issuer)
+}
+
+pub(crate) fn ensure_offline_command_authority_ready(
+    app: &AppState,
+    issuer: &OfflineCommandRuntime,
+) -> Result<(), Error> {
+    let state = app.state.view();
+    let fee_asset_selector = app.state.nexus_snapshot().fees.fee_asset_id;
+    ensure_offline_command_authority_ready_in_world(
+        state.world(),
+        issuer,
+        &fee_asset_selector,
+        kagemusha_v4_snapshot_time_ms(&state),
+    )
+}
+
+fn ensure_offline_command_authority_ready_in_world(
+    world: &impl WorldReadOnly,
+    issuer: &OfflineCommandRuntime,
+    fee_asset_selector: &str,
+    snapshot_time_ms: u64,
+) -> Result<(), Error> {
+    if world.account(&issuer.authority).is_err()
+        || !iroha_core::smartcontracts::isi::offline::isi::world_has_offline_escrow_manager_permission(
+            world,
+            &issuer.authority,
+        )
+    {
+        return Err(Error::AppServiceUnavailable {
+            code: "offline_command_authority_not_ready",
+            message: "Offline command authority is not registered with the exact CanManageOfflineEscrow permission."
+                .to_owned(),
+        });
+    }
+
+    let fee_asset_definition =
+        routing::resolve_asset_definition_selector(world, fee_asset_selector, snapshot_time_ms)
+            .map_err(|error| {
+                iroha_logger::error!(
+                    ?error,
+                    %fee_asset_selector,
+                    "offline command authority XOR fee asset could not be resolved"
+                );
+                Error::AppServiceUnavailable {
+                    code: "offline_command_fee_asset_not_ready",
+                    message: "Offline command authority XOR fee asset is not available.".to_owned(),
+                }
+            })?;
+    let fee_asset = AssetId::new(fee_asset_definition, issuer.authority.clone());
+    let balance = world
+        .asset(&fee_asset)
+        .map(|entry| entry.value().as_ref().clone())
+        .unwrap_or_else(|_| Quantity::zero());
+    if balance < issuer.minimum_xor_balance {
+        return Err(Error::AppServiceUnavailable {
+            code: "offline_command_authority_unfunded",
+            message: "Offline command authority does not meet its configured minimum XOR balance."
+                .to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn offline_transaction_signing_error(
@@ -1866,8 +2001,9 @@ mod tests {
     use iroha_core::kura::Kura;
     use iroha_crypto::{Algorithm, Hash, Signature, SignatureOf};
     use iroha_data_model::{
-        ChainId,
-        asset::{AssetDefinitionId, AssetId},
+        ChainId, Registrable as _,
+        account::Account,
+        asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature,
             CertifiedMergeLedgerReference, SignedBlock,
@@ -1885,11 +2021,12 @@ mod tests {
         nexus::{DataSpaceId, LaneId},
         offline::{
             KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2,
-            KagemushaRecursiveSpendArtifactBindingV3, KagemushaRequestAuthorizationV2,
+            KagemushaRecursiveSpendArtifactBindingV4, KagemushaRequestAuthorizationV2,
             KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
             KagemushaTopUpShieldEvidenceV2,
         },
         peer::PeerId,
+        permission::{Permission, Permissions},
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         transaction::signed::TransactionResultInner,
         trigger::DataTriggerSequence,
@@ -1897,6 +2034,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use iroha_core::state::World;
 
     fn submission_test_issuer() -> Arc<OfflineCommandRuntime> {
         submission_test_issuer_with_limits(64, 64 * ADMITTED_OPERATION_ACCOUNTED_BYTES)
@@ -1911,12 +2049,95 @@ mod tests {
         Arc::new(OfflineCommandRuntime {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
+            minimum_xor_balance: Quantity::from(25_u32),
             max_tx_value: Quantity::from(1_000_u32),
             admission: Arc::new(Mutex::new(OfflineOperationRegistry::new(
                 NonZeroUsize::new(max_entries).expect("positive registry count"),
                 NonZeroUsize::new(max_accounted_bytes).expect("positive registry byte budget"),
             ))),
         })
+    }
+
+    fn command_authority_readiness_world(
+        issuer: &OfflineCommandRuntime,
+        permission: Permission,
+        xor_balance: Quantity,
+    ) -> (World, String) {
+        let fee_asset_definition_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("canonical XOR asset definition id");
+        let account = Account::new(issuer.authority.clone()).build(&issuer.authority);
+        let definition =
+            AssetDefinition::numeric(fee_asset_definition_id.clone()).build(&issuer.authority);
+        let asset = Asset::new(
+            AssetId::new(fee_asset_definition_id.clone(), issuer.authority.clone()),
+            xor_balance,
+        );
+        let mut world = World::with_assets([], [account], [definition], [asset], []);
+        let mut permissions = Permissions::new();
+        permissions.insert(permission);
+        world
+            .account_permissions_mut_for_testing()
+            .insert(issuer.authority.clone(), permissions);
+        (world, fee_asset_definition_id.to_string())
+    }
+
+    fn assert_offline_readiness_code(error: Error, expected: &'static str) {
+        match error {
+            Error::AppServiceUnavailable { code, .. } => assert_eq!(code, expected),
+            other => panic!("unexpected offline readiness error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_authority_readiness_requires_exact_permission_and_xor_floor() {
+        let issuer = submission_test_issuer();
+        let wrong_permission = Permission::new(
+            "CanManageOfflineEscrow".to_owned(),
+            iroha_primitives::json::Json::new("wildcard"),
+        );
+        let (mut world, fee_asset_selector) = command_authority_readiness_world(
+            &issuer,
+            wrong_permission,
+            issuer.minimum_xor_balance.clone(),
+        );
+        let error = ensure_offline_command_authority_ready_in_world(
+            &world.view(),
+            &issuer,
+            &fee_asset_selector,
+            0,
+        )
+        .expect_err("same-name wildcard payload must not authorize offline commands");
+        assert_offline_readiness_code(error, "offline_command_authority_not_ready");
+
+        world.account_permissions_mut_for_testing().insert(
+            issuer.authority.clone(),
+            [iroha_core::smartcontracts::isi::offline::isi::offline_escrow_manager_permission()]
+                .into_iter()
+                .collect(),
+        );
+        ensure_offline_command_authority_ready_in_world(
+            &world.view(),
+            &issuer,
+            &fee_asset_selector,
+            0,
+        )
+        .expect("exact manager permission and configured XOR floor must be ready");
+
+        let (underfunded_world, underfunded_fee_asset_selector) = command_authority_readiness_world(
+            &issuer,
+            iroha_core::smartcontracts::isi::offline::isi::offline_escrow_manager_permission(),
+            Quantity::from(24_u32),
+        );
+        let error = ensure_offline_command_authority_ready_in_world(
+            &underfunded_world.view(),
+            &issuer,
+            &underfunded_fee_asset_selector,
+            0,
+        )
+        .expect_err("balance below the configured XOR floor must stay unavailable");
+        assert_offline_readiness_code(error, "offline_command_authority_unfunded");
     }
 
     fn submission_test_request(operation_seed: u8) -> OfflineTopUpRequest {
@@ -1938,6 +2159,7 @@ mod tests {
         let operation_id = [operation_seed; 32];
         let issued_at_ms = now_ms().max(1);
         let mut request = OfflineTopUpRequest {
+            version: 4,
             asset: AssetId::new(definition.clone(), authority.clone()),
             amount,
             current_note: KagemushaSpendableNoteDescriptorV2 {
@@ -1962,7 +2184,8 @@ mod tests {
                     attachment
                 },
             },
-            artifact_binding: KagemushaRecursiveSpendArtifactBindingV3 {
+            artifact_binding: KagemushaRecursiveSpendArtifactBindingV4 {
+                version: 4,
                 generation: "submission-coordinator-fixture".to_owned(),
                 manifest_sha256: [0x69; 32],
             },
@@ -1970,27 +2193,51 @@ mod tests {
             authorization: KagemushaRequestAuthorizationV2 {
                 authority,
                 device_id: "submission-coordinator-device".to_owned(),
+                asset_definition_id: definition,
                 operation_id,
                 issued_at_ms,
                 expires_at_ms: issued_at_ms
                     .saturating_add(KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2),
                 nonce: [0x63; 32],
                 payload_digest: [0x64; 32],
-                app_attest_evidence_sha256: None,
-                app_attest_evidence: None,
-                signature: Signature::new(key_pair.private_key(), b"placeholder"),
+                registration_hash: [0x6A; 32],
+                hardware_assertion:
+                    iroha_data_model::offline::KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
+                        iroha_data_model::offline::KagemushaAndroidKeyMintHardwareAssertionV1 {
+                            signature: iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                                &[1_u8; 64],
+                            )
+                            .expect("fixture hardware signature"),
+                        },
+                    ),
             },
         };
         let signing_bytes = request
             .authorization
             .signing_bytes()
             .expect("encode exact offline authorization signing bytes");
-        request.authorization.signature = Signature::new(key_pair.private_key(), &signing_bytes);
+        use p256::{ecdsa::signature::Signer as _, elliptic_curve::sec1::ToEncodedPoint as _};
+        let hardware_key =
+            p256::ecdsa::SigningKey::from_slice(&[1_u8; 32]).expect("fixed P-256 fixture key");
+        let hardware_signature: p256::ecdsa::Signature = hardware_key.sign(&signing_bytes);
+        let hardware_signature = hardware_signature
+            .normalize_s()
+            .unwrap_or(hardware_signature);
+        request.authorization.set_hardware_signature(
+            iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                hardware_signature.to_bytes().as_slice(),
+            )
+            .expect("canonical hardware fixture signature"),
+        );
         request
             .authorization
-            .signature
-            .verify(request.authorization.authority.signatory(), &signing_bytes)
-            .expect("offline authorization fixture signature must bind the exact typed fields");
+            .verify_hardware_signature(
+                hardware_key
+                    .verifying_key()
+                    .to_encoded_point(false)
+                    .as_bytes(),
+            )
+            .expect("offline hardware fixture signature must bind the exact typed fields");
         request
     }
 
@@ -2039,12 +2286,13 @@ mod tests {
         let issuer = submission_test_issuer();
         let instructions = requests
             .into_iter()
-            .map(TopUpKagemushaRecursiveV2::new)
+            .map(TopUpKagemushaRecursiveV4::new)
             .map(InstructionBox::from)
             .collect::<Vec<_>>();
         let transaction = TransactionBuilder::new(
             ChainId::from("offline-submission-coordinator"),
             issuer.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
         .sign(issuer.key_pair.private_key());
@@ -2412,6 +2660,7 @@ mod tests {
         let unrelated = TransactionBuilder::new(
             ChainId::from("offline-submission-coordinator"),
             issuer.authority.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([iroha_data_model::isi::Log::new(
             iroha_data_model::Level::INFO,
@@ -2435,8 +2684,9 @@ mod tests {
         let front_runner_transaction = TransactionBuilder::new(
             ChainId::from("offline-submission-coordinator"),
             AccountId::new(front_runner.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([InstructionBox::from(TopUpKagemushaRecursiveV2::new(
+        .with_instructions([InstructionBox::from(TopUpKagemushaRecursiveV4::new(
             request.clone(),
         ))])
         .sign(front_runner.private_key());
@@ -3196,16 +3446,60 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_v2_backend_fails_closed_with_stable_service_error() {
-        let error = ensure_kagemusha_v2_backend_available()
-            .expect_err("the unreleased V2 proof backend must fail closed");
-        assert!(matches!(
-            error,
-            Error::AppServiceUnavailable {
-                code: "offline_not_ready",
-                ..
-            }
-        ));
+    fn v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag() {
+        let runtime_source = include_str!("offline_commands.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("offline command runtime source");
+        assert!(
+            !runtime_source.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE"),
+            "Torii V4 admission must authenticate a concrete release instead of treating compile capability as runtime readiness",
+        );
+        assert!(
+            runtime_source.contains("resolve_kagemusha_recursive_transaction_release_v4")
+                && runtime_source.contains("ensure_kagemusha_v4_transaction_release"),
+            "Torii V4 admission must authenticate the exact activated release",
+        );
+        assert_eq!(
+            runtime_source
+                .matches("resolve_kagemusha_recursive_transaction_release_v4")
+                .count(),
+            3,
+            "top-up, redemption parent, and optional redemption change each resolve an exact binding",
+        );
+        assert!(
+            runtime_source.contains("&request.bundle.statement.artifact_binding")
+                && runtime_source.contains("&change.bundle.statement.artifact_binding"),
+            "redemption must authenticate parent and change bindings independently",
+        );
+    }
+
+    #[test]
+    fn v4_issuance_window_distinguishes_historic_redemption_from_new_notes() {
+        ensure_kagemusha_v4_issuance_window(false, false)
+            .expect("full redemption remains valid after parent issuance withdrawal");
+        for operation in ["top-up", "redemption change"] {
+            let error = ensure_kagemusha_v4_issuance_window(false, true)
+                .expect_err("new note issuance must reject a withdrawn release");
+            assert!(
+                matches!(
+                    &error,
+                    Error::AppServiceUnavailable {
+                        code: "offline_recursive_release_outside_issuance_window",
+                        ..
+                    }
+                ),
+                "unexpected {operation} error: {error:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn v4_rotated_change_accepts_withdrawn_parent_and_active_successor() {
+        ensure_kagemusha_v4_issuance_window(false, false)
+            .expect("the exact withdrawn parent remains valid for redemption");
+        ensure_kagemusha_v4_issuance_window(true, true)
+            .expect("an independently selected active successor may issue change");
     }
 
     #[test]
@@ -3721,10 +4015,10 @@ mod tests {
     }
 
     #[test]
-    fn applied_kagemusha_v2_finality_preserves_requested_operation_id() {
+    fn applied_kagemusha_v4_finality_preserves_requested_operation_id() {
         let operation_id = [0x5A; 32];
         let finality =
-            kagemusha_v2_applied_finality(operation_id, "transaction-hash".to_owned(), 7, 11);
+            kagemusha_v4_applied_finality(operation_id, "transaction-hash".to_owned(), 7, 11);
 
         assert_eq!(finality.operation_id, operation_id);
         assert_eq!(finality.transaction_hash, "transaction-hash");
@@ -3839,22 +4133,22 @@ mod tests {
         let record =
             offline_operation_record_in_transaction(&transaction, &issuer.authority, operation_id)
                 .expect("fixture operation must be recoverable");
-        let matching = kagemusha_v2_applied_finality(
+        let matching = kagemusha_v4_applied_finality(
             operation_id,
             record.transaction_hash.to_string(),
             41,
             43,
         );
-        ensure_kagemusha_v2_terminal_finality_matches_record(&record, &matching)
+        ensure_kagemusha_v4_terminal_finality_matches_record(&record, &matching)
             .expect("matching canonical finality");
-        let rejected = kagemusha_v2_committed_finality(
+        let rejected = kagemusha_v4_committed_finality(
             operation_id,
             record.transaction_hash.to_string(),
             41,
             43,
             Some("canonical rejection".to_owned()),
         );
-        ensure_kagemusha_v2_terminal_finality_matches_record(&record, &rejected)
+        ensure_kagemusha_v4_terminal_finality_matches_record(&record, &rejected)
             .expect("a canonical rejection is terminal finality, not incomplete finality");
 
         for (label, finality) in [
@@ -3894,7 +4188,7 @@ mod tests {
                 },
             ),
         ] {
-            let error = ensure_kagemusha_v2_terminal_finality_matches_record(&record, &finality)
+            let error = ensure_kagemusha_v4_terminal_finality_matches_record(&record, &finality)
                 .expect_err("terminal mismatch must fail closed");
             match &error {
                 Error::AppServiceUnavailable { code, .. } => {
@@ -4004,11 +4298,11 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_v2_anchor_finality_binding_rejects_identity_hash_or_height_mismatch() {
+    fn kagemusha_v4_anchor_finality_binding_rejects_identity_hash_or_height_mismatch() {
         let operation_id = [0x31; 32];
         let transaction_hash = submission_test_hash(0x73);
         let anchor_transaction_hash = *transaction_hash.as_ref();
-        ensure_kagemusha_v2_anchor_finality_binding(
+        ensure_kagemusha_v4_anchor_finality_binding(
             operation_id,
             anchor_transaction_hash,
             42,
@@ -4048,7 +4342,7 @@ mod tests {
                 0,
             ),
         ] {
-            let result = ensure_kagemusha_v2_anchor_finality_binding(
+            let result = ensure_kagemusha_v4_anchor_finality_binding(
                 anchor_operation_id,
                 anchor_hash,
                 anchor_height,
@@ -4073,7 +4367,7 @@ mod tests {
         }
 
         let zero_transaction_hash = submission_test_hash(0);
-        let error = ensure_kagemusha_v2_anchor_finality_binding(
+        let error = ensure_kagemusha_v4_anchor_finality_binding(
             [0; 32],
             [0; 32],
             42,
@@ -4099,14 +4393,14 @@ mod tests {
         refreshed.authorization.expires_at_ms = u64::MAX - 1;
 
         assert_eq!(
-            kagemusha_v2_anchor_state_key(original.authorization.operation_id)
+            kagemusha_v4_anchor_state_key(original.authorization.operation_id)
                 .expect("original anchor key"),
-            kagemusha_v2_anchor_state_key(refreshed.authorization.operation_id)
+            kagemusha_v4_anchor_state_key(refreshed.authorization.operation_id)
                 .expect("refreshed anchor key"),
             "one operation id has exactly one direct canonical anchor key"
         );
         assert!(
-            kagemusha_v2_anchor_state_key([0; 32]).is_err(),
+            kagemusha_v4_anchor_state_key([0; 32]).is_err(),
             "the all-zero operation id must never address chain state"
         );
 
@@ -4130,21 +4424,21 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_v2_rejection_detail_formats_borrowed_reason() {
-        assert_eq!(kagemusha_v2_rejection_detail(None), "no rejection reason");
+    fn kagemusha_v4_rejection_detail_formats_borrowed_reason() {
+        assert_eq!(kagemusha_v4_rejection_detail(None), "no rejection reason");
 
         let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "fixture rejection".to_owned(),
         ));
         assert_eq!(
-            kagemusha_v2_rejection_detail(Some(&rejection)),
+            kagemusha_v4_rejection_detail(Some(&rejection)),
             rejection.to_string()
         );
 
         let adversarial = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "attacker-controlled\nmessage".to_owned(),
         ));
-        let message = kagemusha_v2_rejection_detail(Some(&adversarial));
+        let message = kagemusha_v4_rejection_detail(Some(&adversarial));
         assert_eq!(message, adversarial.to_string());
         assert_eq!(message, "Validation failed");
         assert!(!message.contains("attacker-controlled"));
@@ -4168,7 +4462,7 @@ mod tests {
             assert!(crate::utils::is_valid_error_message(&message));
         }
 
-        let finality = kagemusha_v2_committed_finality(
+        let finality = kagemusha_v4_committed_finality(
             [0x2D; 32],
             submission_test_hash(0x2E).to_string(),
             47,

@@ -32,30 +32,33 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
 1. From the repository root, invoke the helper script to assemble the XCFramework:
 
    ```bash
-   ./scripts/build_norito_xcframework.sh --workspace-root "$(pwd)" \
-       --output "artifacts/NoritoBridge.xcframework" \
-       --profile release
+   ./scripts/build_norito_xcframework.sh --privacy-production-enabled
    ```
 
-   The script compiles the Rust bridge library for iOS and macOS targets and bundles the
-   resulting static libraries under a single XCFramework directory.
-   It also emits `dist/NoritoBridge.artifacts.json`, capturing the bridge version and
-   per-platform SHA-256 hashes (override the version with `--bridge-version <version>` if
-   needed).
+   The release command requires a clean dependency-closure source tree, compiles the Rust
+   bridge for the iOS device, arm64 and x86_64 iOS simulator, and arm64 macOS targets,
+   and writes `dist/NoritoBridge.xcframework` plus
+   `dist/NoritoBridge.artifacts.json`. The manifest binds exact native bridge ABI 21,
+   the privacy-production feature state, source commit and fingerprint, header digest,
+   required-symbol inventory, and per-slice SHA-256 hashes. The helper finishes by
+   invoking `scripts/check_mobile_sdk_artifacts.sh --apple-only`; a checker failure makes
+   the build fail. Override only the recorded bridge version with
+   `--bridge-version <version>` when needed. `--allow-dirty-source` is for local
+   integration artifacts and must not be used for a release artifact.
 
 2. Zip the XCFramework for distribution:
 
    ```bash
    ditto -c -k --sequesterRsrc --keepParent \
-     artifacts/NoritoBridge.xcframework \
-     artifacts/NoritoBridge.xcframework.zip
+     dist/NoritoBridge.xcframework \
+     dist/NoritoBridge.xcframework.zip
    ```
 
 3. Update the Swift package manifest (`IrohaSwift/Package.swift`) to point to the new
    version and checksum:
 
    ```bash
-   swift package compute-checksum artifacts/NoritoBridge.xcframework.zip
+   swift package compute-checksum dist/NoritoBridge.xcframework.zip
    ```
 
    Record the checksum in `Package.swift` when defining the binary target.

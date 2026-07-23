@@ -162,7 +162,8 @@ pub mod genesis {
     pub const BOOTSTRAP_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
     /// Base retry/backoff interval between bootstrap attempts.
     pub const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(1);
-    /// Maximum number of bootstrap attempts before failing startup.
+    /// Request windows per bootstrap retry cycle before resetting backoff and emitting a warning.
+    /// Bootstrap remains active across cycles while enabled.
     pub const BOOTSTRAP_MAX_ATTEMPTS: u32 = 5;
 }
 
@@ -881,8 +882,10 @@ pub mod network {
     pub const DEFERRED_SEND_TTL_MS: u64 = 1_500;
     /// Maximum deferred outbound frames retained per peer while session is missing.
     pub const DEFERRED_SEND_MAX_PER_PEER: usize = 256;
-    /// Maximum encoded deferred outbound frame bytes retained per peer while session is missing.
+    /// Maximum stream-wire bytes retained per peer by deferred outbound frames.
     pub const DEFERRED_SEND_MAX_BYTES_PER_PEER: usize = 32 * 1024 * 1024;
+    /// Maximum stream-wire bytes retained by all deferred outbound peer queues together.
+    pub const DEFERRED_SEND_MAX_BYTES_TOTAL: usize = 128 * 1024 * 1024;
     /// Idle timeout before expiring accept throttle buckets.
     pub const ACCEPT_BUCKET_IDLE: Duration = Duration::from_secs(10 * 60);
     /// Maximum number of accept throttle buckets to retain.
@@ -903,15 +906,15 @@ pub mod network {
     ///
     /// Chosen conservatively to avoid IP fragmentation on typical Internet paths.
     pub const QUIC_DATAGRAM_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1200_usize);
-    /// Total receive buffer reserved for QUIC datagrams (bytes).
+    /// Receive buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     ///
-    /// This stays near the datagram payload scale because large per-endpoint
-    /// reserves multiply across localnet peers and can dominate RSS.
+    /// This stays near the datagram payload scale because the reserve multiplies
+    /// by the configured total-connection cap and can otherwise dominate RSS.
     pub const QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES: NonZeroUsize = nonzero!(1024 * 1024_usize);
-    /// Total send buffer reserved for QUIC datagrams (bytes).
+    /// Send buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     ///
-    /// Operators can raise this together with the receive buffer for
-    /// datagram-heavy deployments.
+    /// Operators can raise this together with the receive buffer, accounting
+    /// for both reserves once per configured active connection.
     pub const QUIC_DATAGRAM_SEND_BUFFER_BYTES: NonZeroUsize = nonzero!(1024 * 1024_usize);
 
     /// Enable SCION-guided outbound peer dialing.
@@ -931,10 +934,13 @@ pub mod network {
     pub const P2P_QUEUE_CAP_LOW: NonZeroUsize = nonzero!(32768_usize);
     /// Capacity for post-queue tasks (per topic).
     pub const P2P_POST_QUEUE_CAP: NonZeroUsize = nonzero!(2048_usize);
-    /// Maximum encrypted high-priority outbound frame bytes retained per peer.
+    /// Maximum high-priority stream wire bytes (prefix plus AEAD body) retained per peer and
+    /// ordinary-high actor subcap. The actor adds one maximum control-frame safety charge and one
+    /// maximum route-qualified semantic-progress frame charge as disjoint reserves; each
+    /// authenticated peer separately gets one such progress charge bounded by the connection cap.
     pub const P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES: NonZeroUsize =
         nonzero!(128 * 1024 * 1024_usize);
-    /// Maximum encrypted low-priority outbound frame bytes retained per peer.
+    /// Maximum low-priority stream wire bytes retained per peer, including frame prefixes.
     pub const P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES: NonZeroUsize =
         nonzero!(64 * 1024 * 1024_usize);
     /// Maximum encrypted high-priority outbound frames retained per peer.
@@ -984,19 +990,38 @@ pub mod network {
     /// Default hop limit for relayed frames.
     pub const RELAY_TTL: u8 = 8;
 
-    // Maximum allowed Norito frame size for peer messages (bytes)
-    /// Maximum Norito frame size for peer messages in bytes (16 MiB default).
-    pub const MAX_FRAME_BYTES: NonZeroUsize = nonzero!(16 * 1024 * 1024_usize); // 16 MiB default
+    /// Complete plaintext P2P frame ceiling used by the largest topic classes.
+    pub const MAX_PLAINTEXT_FRAME_BYTES: NonZeroUsize = nonzero!(17 * 1024 * 1024_usize); // 17 MiB
+    /// Nonce and authentication-tag bytes added by the first-release
+    /// ChaCha20-Poly1305 transport.
+    pub const DEFAULT_AEAD_FRAME_OVERHEAD_BYTES: usize = 12 + 16;
+    // Maximum allowed encrypted frame size for peer messages (bytes).
+    /// Maximum encrypted frame size for peer messages in bytes.
+    ///
+    /// The recommended maximal Sumeragi v2 `CertifiedBodyResponse` occupies
+    /// 16,811,581 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
+    /// Rounding the cap up to 17 MiB leaves just under 1 MiB for those bounded
+    /// layers while keeping every retained frame allocation finite.
+    /// The encrypted ceiling includes AEAD expansion in addition to the full
+    /// 17 MiB plaintext topic cap; keeping these as distinct constants avoids
+    /// making the default geometry invalid by exactly one nonce and tag.
+    pub const MAX_FRAME_BYTES: NonZeroUsize =
+        nonzero!(17 * 1024 * 1024_usize + DEFAULT_AEAD_FRAME_OVERHEAD_BYTES);
     // Per-topic caps (defaults stricter than global except BlockSync)
     /// Maximum frame size for consensus control traffic.
     ///
     /// Consensus certificates and READY bundles can scale with validator set size, so keep
-    /// this aligned with the global frame cap to avoid dropping liveness-critical frames.
-    pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = MAX_FRAME_BYTES;
+    /// this aligned with the global plaintext ceiling to avoid dropping liveness-critical
+    /// frames. The encrypted global cap additionally includes nonce/tag expansion.
+    pub const MAX_FRAME_BYTES_CONSENSUS: NonZeroUsize = MAX_PLAINTEXT_FRAME_BYTES;
     /// Maximum frame size for control-plane messages.
-    pub const MAX_FRAME_BYTES_CONTROL: NonZeroUsize = nonzero!(131_072_usize);
+    ///
+    /// Consensus-safety proposals and timeout certificates use this topic. A
+    /// 2 MiB cap carries the reviewed sub-1 MiB non-manifest proposal ceiling
+    /// plus the recommended manifest and bounded P2P envelope overhead.
+    pub const MAX_FRAME_BYTES_CONTROL: NonZeroUsize = nonzero!(2 * 1024 * 1024_usize);
     /// Maximum frame size for block sync / consensus payload traffic.
-    pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = MAX_FRAME_BYTES; // allow full frame
+    pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = MAX_PLAINTEXT_FRAME_BYTES;
     /// Maximum frame size for transaction gossip.
     pub const MAX_FRAME_BYTES_TX_GOSSIP: NonZeroUsize = nonzero!(262_144_usize); // 256 KiB
     /// Maximum frame size for peer gossip.
@@ -1722,6 +1747,10 @@ pub mod torii {
     pub mod recipient_lookup {
         /// HTTP request timeout applied to configured bank Core API lookups.
         pub const REQUEST_TIMEOUT_MS: u64 = 4_000;
+        /// Governed FX corridor policy used to authorize retail recipient reads.
+        pub const POLICY_ID: &str = "cbuae_aed_sbp_pkr";
+        /// Maximum retail recipient route/lookup requests accepted per signer each minute.
+        pub const REQUESTS_PER_MINUTE: u32 = 30;
     }
     /// Operator request-signature defaults for Torii operator endpoints.
     pub mod operator_signatures {
@@ -2195,6 +2224,12 @@ pub mod torii {
         pub const BURST: Option<u32> = Some(120);
     }
 
+    /// Account-onboarding defaults surfaced via `torii.account_onboarding`.
+    pub mod account_onboarding {
+        /// Default alias lease acquisition term.
+        pub const LEASE_TERM_YEARS: u8 = 1;
+    }
+
     /// CORS defaults surfaced via `torii.cors`.
     pub mod cors {
         /// Enable CORS response headers.
@@ -2530,14 +2565,14 @@ pub mod nexus {
 
     /// Universal fee schedule defaults.
     pub mod fees {
+        use iroha_data_model::account::AccountId;
         use iroha_primitives::numeric::Quantity;
 
         /// Account that receives collected fees (string form).
         pub const FEE_SINK_ACCOUNT_ID: &str = super::pipeline::GAS_TECH_ACCOUNT_ID;
-        /// Whether fee sponsorship is allowed.
-        pub const SPONSORSHIP_ENABLED: bool = false;
-        /// Whether sponsored fee settlement is performed outside this chain.
-        pub const EXTERNAL_SETTLEMENT_ENABLED: bool = false;
+        /// Protocol account that physically custodies isolated sponsor-program vault assets.
+        pub const SPONSOR_VAULT_CUSTODY_ACCOUNT_ID: &str =
+            "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT";
         /// Base fee charged per transaction.
         pub fn base_fee() -> Quantity {
             Quantity::zero()
@@ -2554,22 +2589,18 @@ pub mod nexus {
         pub fn per_gas_unit_fee() -> Quantity {
             "0.00005".parse().expect("canonical fee quantity")
         }
-        /// Maximum fee a sponsor can cover (0 = unlimited).
-        pub fn sponsor_max_fee() -> Quantity {
-            Quantity::zero()
-        }
-        /// Minimum verified sponsor balance left unused by asynchronous lane-relay fee admission.
-        pub fn sponsor_verified_balance_safety_floor() -> Quantity {
-            Quantity::zero()
-        }
-        /// Default canonical sponsor for asynchronous lane-relay fee burns.
-        pub const CANONICAL_SPONSOR_ACCOUNT_ID: Option<&str> = None;
-        /// First block height whose lane commitments include Nexus fee receipts.
-        pub const FEE_RECEIPTS_ACTIVATION_HEIGHT: u64 = u64::MAX;
-        /// Direct Nexus fees burn immediately.
-        pub const BURN_FROM_UNIX_TIMESTAMP_MS: u64 = 0;
         /// Default Nexus fee settlement mode.
         pub const SETTLEMENT_MODE: &str = "direct";
+
+        /// Sponsor vault custody account parsed under the default Sora chain discriminant.
+        pub fn sponsor_vault_custody_account_id() -> AccountId {
+            let _default_chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                super::super::common::chain_discriminant(),
+            );
+            AccountId::parse_encoded(SPONSOR_VAULT_CUSTODY_ACCOUNT_ID)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("default sponsor vault custody account must be canonical I105")
+        }
 
         /// Fee asset definition identifier (string form).
         pub fn fee_asset_id() -> String {
@@ -2589,8 +2620,6 @@ pub mod nexus {
         pub const RETRY_BACKOFF_MS: u64 = 5_000;
         /// Maximum proof/submission attempts before marking local worker state rejected.
         pub const MAX_RETRY_ATTEMPTS: u32 = 10;
-        /// Sponsor budget proof refresh interval measured in committed blocks.
-        pub const BUDGET_REFRESH_INTERVAL_BLOCKS: u64 = 10;
     }
 
     /// Domain endorsement defaults.
@@ -3118,15 +3147,16 @@ pub mod sumeragi {
     use std::num::NonZeroUsize;
 
     use iroha_crypto::Algorithm;
+    use iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT;
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
     pub const PROTOCOL_VERSION: u32 = 3;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
-    /// A round deadline is ten signed block-cadence intervals.
+    /// The view-zero round deadline is ten signed block-cadence intervals.
     pub const ROUND_TIMEOUT_CADENCE_MULTIPLIER: u32 = 10;
-    /// Critical-message retransmission is always one fifth of the derived round deadline.
+    /// Critical-message retransmission is one fifth of the derived view-zero deadline.
     pub const RETRANSMIT_DIVISOR: u32 = 5;
 
     /// Maximum transactions selected for one candidate block.
@@ -3138,14 +3168,65 @@ pub mod sumeragi {
 
     /// Serialized reducer command FIFO capacity.
     pub const QUEUE_COMMAND_CAPACITY: NonZeroUsize = nonzero!(1024_usize);
-    /// Certified-body and block-sync ingress capacity.
-    pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(256_usize);
+    /// Maximum simultaneously materialized authenticated non-validator fair-ingress lanes.
+    pub const QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY: NonZeroUsize = nonzero!(2_usize);
+    /// Certified-body and block-sync outer-ingress message capacity.
+    ///
+    /// Every admitted validator owns four protected positions (general source,
+    /// non-timeout progress, timeout vote, and transport completion), while
+    /// each configured authenticated non-validator source owns two positions, and
+    /// anonymous traffic owns two further positions.
+    /// Deriving the default from the protocol roster ceiling keeps the queue
+    /// count allocation representable for every legal height context; byte
+    /// quotas remain explicitly roster-scaled by deployment generators.
+    pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(
+        4 * MAX_VALIDATORS_PER_HEIGHT
+            + 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
+            + 2
+    );
+    /// Aggregate canonical outer-ingress wire bytes retained across all sources.
+    ///
+    /// Seven default per-source quotas cover a four-validator roster, two
+    /// independently authenticated non-validator lanes, and the anonymous lane.
+    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(231_usize * 1024 * 1024);
+    /// Per-ingress-source canonical outer-ingress wire-byte partition. The
+    /// default contains disjoint maximum ordinary-envelope, payload-completion,
+    /// and timeout-vote partitions. The ordinary and completion partitions also
+    /// cover the one-MiB atomic lane-certificate and four-MiB executable-source
+    /// protocol floors when deployments choose a smaller global block body.
+    pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = nonzero!(33_usize * 1024 * 1024);
+    /// Fixed wire-envelope headroom beyond body or chunk-hash bytes.
+    pub const BODY_ENVELOPE_HEADROOM_BYTES: usize = 64 * 1024;
+    /// Maximum chunk count in the recommended signed DA layout.
+    pub const RECOMMENDED_DA_MAX_CHUNK_COUNT: usize = 1024;
+    /// Canonical `Vec<Hash>` bytes for the recommended signed DA layout.
+    ///
+    /// Bare Norito encodes the fixed sequence count in eight bytes and each
+    /// hash as a one-byte compact element length plus 32 payload bytes. Height
+    /// activation separately derives the exact requirement from the frozen
+    /// layout and fails closed if it exceeds the configured partition.
+    pub const TRANSPORT_COMPLETION_RECOMMENDED_MANIFEST_WIRE_BYTES: usize =
+        8 + RECOMMENDED_DA_MAX_CHUNK_COUNT * 33;
+    /// Per-validator source bytes isolated from ordinary traffic for a timeout vote.
+    pub const TIMEOUT_VOTE_RESERVE_BYTES: usize = 64 * 1024;
     /// Payload-chunk ingress and orphan-buffer capacity.
     pub const QUEUE_CHUNK_CAPACITY: NonZeroUsize = nonzero!(2048_usize);
     /// Reconstructed bodies waiting for reducer delivery.
     pub const QUEUE_READY_BODY_CAPACITY: NonZeroUsize = nonzero!(128_usize);
     /// Smallest reducer FIFO admitting normal, progress, and completion regions.
     pub const MIN_RUNTIME_COMMAND_CAPACITY: usize = 8;
+    /// Divisor used to reserve trusted completion slots from the reducer command FIFO.
+    pub const V2_RUNTIME_COMPLETION_RESERVE_DIVISOR: usize = 4;
+    /// Maximum effects one serialized reducer input can emit.
+    ///
+    /// This is shared with the executable refinement gate so configuration
+    /// validation reserves the exact same producer batch used by production.
+    pub const V2_MAX_EFFECTS_PER_STEP: usize = 8;
+    /// Number of independently reserved exact-output progress classes.
+    ///
+    /// Safety, lane-progress, and bulk-progress each require one ownership
+    /// unit for every source in a maximum fanout.
+    pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;
     /// Ready-body byte budget relative to the per-body bound.
     pub const READY_BODY_BYTE_MULTIPLIER: u64 = 2;
 
@@ -3785,8 +3866,19 @@ pub mod settlement {
     }
     /// Offline settlement defaults.
     pub mod offline {
-        /// Kagemusha shielded offline-offline payments are enabled by default.
-        pub const KAGEMUSHA_ENABLED: bool = true;
+        use std::path::PathBuf;
+
+        /// No Kagemusha release policy is trusted unless an operator configures one.
+        #[must_use]
+        pub const fn kagemusha_release_policy_path() -> Option<PathBuf> {
+            None
+        }
+
+        /// No Kagemusha artifact catalog is loaded unless an operator configures one.
+        #[must_use]
+        pub const fn kagemusha_artifact_dir() -> Option<PathBuf> {
+            None
+        }
     }
     /// Router defaults (shadow price, guard rails).
     pub mod router {
@@ -3812,7 +3904,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::account::AccountId;
 
-    use super::{governance, oracle, pipeline, queue, torii};
+    use super::{governance, nexus::fees, oracle, pipeline, queue, torii};
 
     #[test]
     fn gas_technical_account_matches_default_bootstrap_identity() {
@@ -3823,6 +3915,18 @@ mod tests {
             .expect("default gas technical account must be canonical I105")
             .into_account_id();
         assert_eq!(parsed, governance::bond_escrow_account_id());
+    }
+
+    #[test]
+    fn sponsor_vault_custody_account_is_canonical_and_dedicated() {
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            super::common::chain_discriminant(),
+        );
+        let parsed = AccountId::parse_encoded(fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID)
+            .expect("default sponsor vault custody account must be canonical I105")
+            .into_account_id();
+        assert_eq!(parsed, fees::sponsor_vault_custody_account_id());
+        assert_ne!(parsed.to_string(), pipeline::GAS_TECH_ACCOUNT_ID);
     }
 
     #[test]

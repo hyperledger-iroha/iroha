@@ -19,7 +19,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     fmt,
-    num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
+    num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
@@ -56,9 +56,10 @@ use iroha_data_model::{
     domain::DomainId,
     hijiri::HijiriFeePolicy as ModelHijiriFeePolicy,
     jurisdiction::JdgSignatureScheme,
+    merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     name::Name,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
         LaneConfig as LaneConfigMetadata, LaneId, LaneStorageProfile, LaneVisibility, ShardId,
         UniversalAccountId,
     },
@@ -69,6 +70,7 @@ use iroha_data_model::{
         pricing::PricingScheduleRecord,
     },
     taikai::TaikaiAvailabilityClass,
+    transaction::FeePaymentIntent,
 };
 use iroha_primitives::{
     addr::SocketAddr,
@@ -228,13 +230,6 @@ impl SoracloudRuntime {
             "soracloud_runtime.production_mode requires soracloud_runtime.inrou.proxy_only = false"
         );
         assert!(
-            self.submission
-                .gas_asset_id
-                .as_ref()
-                .is_some_and(|asset_id| !asset_id.trim().is_empty()),
-            "soracloud_runtime.production_mode requires soracloud_runtime.submission.gas_asset_id"
-        );
-        assert!(
             !self.egress.default_allow,
             "soracloud_runtime.production_mode requires soracloud_runtime.egress.default_allow = false"
         );
@@ -313,8 +308,37 @@ impl Default for SoracloudRuntimeInrou {
 /// Runtime-originated transaction submission settings.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SoracloudRuntimeSubmission {
-    /// Gas asset definition id used for runtime-originated control-plane submissions.
-    pub gas_asset_id: Option<String>,
+    /// Exact fee payer used for runtime-originated control-plane submissions.
+    pub fee_payer: SoracloudRuntimeFeePayer,
+}
+
+/// Signature-bound fee source for runtime-originated Soracloud transactions.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SoracloudRuntimeFeePayer {
+    /// Debit the validator authority after deterministic quoting.
+    #[default]
+    Authority,
+    /// Debit one exact immutable sponsor-program revision.
+    Sponsor {
+        /// Canonical sponsor/program identifier.
+        program_id: FeeSponsorProgramId,
+        /// Exact immutable program revision.
+        program_revision: u64,
+    },
+}
+
+impl SoracloudRuntimeSubmission {
+    /// Build the empty-limit fee intent that Core must quote before signing.
+    #[must_use]
+    pub fn fee_payment_intent(&self) -> FeePaymentIntent {
+        match &self.fee_payer {
+            SoracloudRuntimeFeePayer::Authority => FeePaymentIntent::authority(Vec::new(), None),
+            SoracloudRuntimeFeePayer::Sponsor {
+                program_id,
+                program_revision,
+            } => FeePaymentIntent::sponsor(program_id.clone(), *program_revision, Vec::new(), None),
+        }
+    }
 }
 
 /// Outbound egress policy for embedded Soracloud runtimes.
@@ -442,10 +466,15 @@ impl Root {
     }
 
     /// Apply the bundled Sora Nexus profile (SoraFS + multi-lane defaults).
+    ///
+    /// SoraFS discovery is enabled only when configuration parsing produced a
+    /// complete admission trust policy. The profile never manufactures trust
+    /// roots on behalf of the operator.
     pub fn apply_sora_profile(&mut self) {
         self.nexus.enabled = true;
         self.torii.sorafs_storage.enabled = true;
-        self.torii.sorafs_discovery.discovery_enabled = true;
+        self.torii.sorafs_discovery.discovery_enabled =
+            self.torii.sorafs_discovery.admission.is_some();
         if self.tiered_state.da_store_root.is_none() {
             self.tiered_state.da_store_root =
                 Some(PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT));
@@ -837,6 +866,69 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     pub(super) fn minimal_root() -> Root {
         let table: Table = toml::from_str(MINIMAL_CONFIG).expect("parse minimal config table");
         Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
+    }
+
+    fn minimal_root_with_sorafs_admission() -> Root {
+        let config = format!(
+            r#"{MINIMAL_CONFIG}
+
+[sorafs.discovery.admission]
+envelopes_dir = "admission"
+trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
+signature_threshold = 1
+"#
+        );
+        let table: Table = toml::from_str(&config).expect("parse config with SoraFS admission");
+        Root::from_toml_source(TomlSource::inline(table))
+            .expect("load config with valid SoraFS admission")
+    }
+
+    #[test]
+    fn apply_sora_profile_leaves_discovery_disabled_without_admission() {
+        let mut root = minimal_root();
+
+        assert!(root.torii.sorafs_discovery.admission.is_none());
+        assert!(!root.torii.sorafs_discovery.discovery_enabled);
+
+        root.apply_sora_profile();
+
+        assert!(root.nexus.enabled, "Sora profile must still enable Nexus");
+        assert!(
+            root.torii.sorafs_storage.enabled,
+            "Sora profile must still enable SoraFS storage"
+        );
+        assert!(
+            !root.torii.sorafs_discovery.discovery_enabled,
+            "discovery must remain fail-closed without an admission trust policy"
+        );
+    }
+
+    #[test]
+    fn apply_sora_profile_enables_discovery_with_parsed_admission() {
+        let mut root = minimal_root_with_sorafs_admission();
+        let trusted_council_keys = root
+            .torii
+            .sorafs_discovery
+            .admission
+            .as_ref()
+            .expect("parsed admission policy")
+            .trusted_council_keys
+            .clone();
+
+        assert!(!root.torii.sorafs_discovery.discovery_enabled);
+
+        root.apply_sora_profile();
+
+        let admission = root
+            .torii
+            .sorafs_discovery
+            .admission
+            .as_ref()
+            .expect("profile must preserve parsed admission policy");
+        assert!(root.torii.sorafs_discovery.discovery_enabled);
+        assert_eq!(admission.trusted_council_keys, trusted_council_keys);
+        assert_eq!(admission.signature_threshold.get(), 1);
+        assert_eq!(admission.envelopes_dir, PathBuf::from("admission"));
     }
 
     #[test]
@@ -1695,8 +1787,10 @@ pub struct Network {
     pub deferred_send_ttl: Duration,
     /// Maximum deferred outbound frames retained per peer while session is missing.
     pub deferred_send_max_per_peer: usize,
-    /// Maximum encoded deferred outbound frame bytes retained per peer while session is missing.
+    /// Maximum stream-wire bytes retained per peer by deferred outbound frames.
     pub deferred_send_max_bytes_per_peer: usize,
+    /// Maximum stream-wire bytes retained across every deferred outbound peer queue.
+    pub deferred_send_max_bytes_total: usize,
     /// Interval between peer gossip batches.
     pub peer_gossip_period: Duration,
     /// Maximum interval between peer gossip batches (idle backoff ceiling).
@@ -1751,9 +1845,9 @@ pub struct Network {
     pub quic_datagrams_enabled: bool,
     /// Upper bound (bytes) for QUIC datagram payloads.
     pub quic_datagram_max_payload_bytes: usize,
-    /// Total receive buffer reserved for QUIC datagrams (bytes).
+    /// Receive buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     pub quic_datagram_receive_buffer_bytes: usize,
-    /// Total send buffer reserved for QUIC datagrams (bytes).
+    /// Send buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     pub quic_datagram_send_buffer_bytes: usize,
     /// SCION guided dialing options for outbound peer connections.
     pub scion: ScionConfig,
@@ -1788,9 +1882,14 @@ pub struct Network {
     pub p2p_queue_cap_low: NonZeroUsize,
     /// Capacity for the per-peer post queue (bounded mode only).
     pub p2p_post_queue_cap: NonZeroUsize,
-    /// Maximum encrypted high-priority outbound frame bytes retained per peer.
+    /// Maximum high-priority stream wire bytes (prefix plus AEAD body) retained by each
+    /// connected sender queue and by the process-wide connected-post owner, and the
+    /// ordinary-high actor byte subcap. The actor adds disjoint maximum safety and route-qualified
+    /// semantic-progress frame charges; each authenticated peer separately gets one such progress
+    /// charge, bounded by `max_total_connections` and shared by replacement sessions.
     pub p2p_outbound_frame_queue_max_high_bytes: NonZeroUsize,
-    /// Maximum encrypted low-priority outbound frame bytes retained per peer.
+    /// Maximum low-priority stream wire bytes retained by each connected sender queue and by
+    /// the process-wide connected-post owner, including frame prefixes.
     pub p2p_outbound_frame_queue_max_low_bytes: NonZeroUsize,
     /// Maximum encrypted high-priority outbound frames retained per peer.
     pub p2p_outbound_frame_queue_max_high_frames: NonZeroUsize,
@@ -1828,7 +1927,8 @@ pub struct Network {
     /// When `None`, incoming connections are not capped by count.
     pub max_incoming: Option<NonZeroUsize>,
     /// Maximum total number of connections (incoming + outgoing + in-flight accepts).
-    /// When `None`, total connections are not capped by count.
+    /// The P2P runtime interprets `None` as the core-profile hard cap so its
+    /// per-peer progress-frame assembly reserve remains process-bounded.
     pub max_total_connections: Option<NonZeroUsize>,
     /// Optional per-IP(/24 for IPv4, /64 for IPv6) accept throttle, in accepts per second.
     /// When `None`, per-IP throttling is disabled.
@@ -1868,7 +1968,7 @@ pub struct Network {
     pub deny_cidrs: Vec<String>,
     /// Disconnect on per-peer post overflow (bounded per-topic channels)
     pub disconnect_on_post_overflow: bool,
-    /// Maximum allowed frame size (bytes) for P2P messages
+    /// Maximum encrypted P2P frame-body size in bytes (at most 2,147,483,643).
     pub max_frame_bytes: usize,
     /// `TCP_NODELAY` setting for TCP sockets
     pub tcp_nodelay: bool,
@@ -2470,7 +2570,8 @@ pub struct Genesis {
     pub bootstrap_request_timeout: Duration,
     /// Backoff between bootstrap attempts.
     pub bootstrap_retry_interval: Duration,
-    /// Maximum bootstrap attempts before failing.
+    /// Request windows per retry cycle before backoff resets and a warning is emitted.
+    /// Enabled bootstrap continues across cycles until success or a permanent validation error.
     pub bootstrap_max_attempts: u32,
     /// Whether to attempt bootstrap when local genesis is missing.
     pub bootstrap_enabled: bool,
@@ -2575,20 +2676,8 @@ pub struct NexusFees {
     pub per_instruction_fee: Quantity,
     /// Per-gas-unit fee multiplier applied to measured gas usage.
     pub per_gas_unit_fee: Quantity,
-    /// Whether fee sponsorship is permitted.
-    pub sponsorship_enabled: bool,
-    /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
-    pub sponsor_max_fee: Quantity,
-    /// Minimum verified sponsor balance left unused by lane-relay-burn admission.
-    pub sponsor_verified_balance_safety_floor: Quantity,
-    /// Canonical sponsor account required by activated lane-relay-burn fee settlement.
-    pub canonical_sponsor_account_id: Option<String>,
-    /// First block height whose lane commitments include Nexus fee receipts.
-    pub fee_receipts_activation_height: u64,
-    /// Whether sponsored fees are settled by an external public-Nexus reconciler instead of local WSV asset debits.
-    pub external_settlement_enabled: bool,
-    /// Retained for configuration compatibility; direct Nexus fee settlement burns immediately.
-    pub burn_from_unix_timestamp_ms: u64,
+    /// Protocol account that physically custodies isolated sponsor-program vault assets.
+    pub sponsor_vault_custody_account_id: AccountId,
     /// How fees are settled after they are computed.
     pub settlement_mode: NexusFeeSettlementMode,
     /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
@@ -2604,15 +2693,6 @@ pub enum NexusFeeSettlementMode {
     LaneRelayBurn,
 }
 
-impl NexusFees {
-    /// Whether the asynchronous lane-relay-burn receipt path is active for `block_height`.
-    #[must_use]
-    pub fn lane_relay_burn_receipts_active_at(&self, block_height: u64) -> bool {
-        self.settlement_mode == NexusFeeSettlementMode::LaneRelayBurn
-            && block_height >= self.fee_receipts_activation_height
-    }
-}
-
 impl Default for NexusFees {
     fn default() -> Self {
         Self {
@@ -2622,15 +2702,8 @@ impl Default for NexusFees {
             per_byte_fee: defaults::nexus::fees::per_byte_fee(),
             per_instruction_fee: defaults::nexus::fees::per_instruction_fee(),
             per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
-            sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
-            sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
-            sponsor_verified_balance_safety_floor:
-                defaults::nexus::fees::sponsor_verified_balance_safety_floor(),
-            canonical_sponsor_account_id: defaults::nexus::fees::CANONICAL_SPONSOR_ACCOUNT_ID
-                .map(str::to_owned),
-            fee_receipts_activation_height: defaults::nexus::fees::FEE_RECEIPTS_ACTIVATION_HEIGHT,
-            external_settlement_enabled: defaults::nexus::fees::EXTERNAL_SETTLEMENT_ENABLED,
-            burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
+            sponsor_vault_custody_account_id:
+                defaults::nexus::fees::sponsor_vault_custody_account_id(),
             settlement_mode: NexusFeeSettlementMode::Direct,
             successful_claim_fee_exempt_authorities: Vec::new(),
         }
@@ -2650,8 +2723,6 @@ pub struct NexusRelayWorker {
     pub retry_backoff: Duration,
     /// Maximum proof/submission attempts before local worker retry stops.
     pub max_retry_attempts: NonZeroU32,
-    /// Block interval between sponsor budget proof refreshes.
-    pub budget_refresh_interval_blocks: NonZeroU64,
 }
 
 impl Default for NexusRelayWorker {
@@ -2667,10 +2738,6 @@ impl Default for NexusRelayWorker {
             retry_backoff: Duration::from_millis(defaults::nexus::relay_worker::RETRY_BACKOFF_MS),
             max_retry_attempts: NonZeroU32::new(defaults::nexus::relay_worker::MAX_RETRY_ATTEMPTS)
                 .expect("default Nexus relay worker max_retry_attempts is non-zero"),
-            budget_refresh_interval_blocks: NonZeroU64::new(
-                defaults::nexus::relay_worker::BUDGET_REFRESH_INTERVAL_BLOCKS,
-            )
-            .expect("default Nexus relay worker budget refresh interval is non-zero"),
         }
     }
 }
@@ -3058,10 +3125,8 @@ pub struct Nexus {
     pub lane_config: LaneConfig,
     /// Validated data-space catalog.
     pub dataspace_catalog: DataSpaceCatalog,
-    /// Default fee sponsor account literal for each data space.
-    pub dataspace_fee_sponsors: BTreeMap<DataSpaceId, String>,
-    /// Default fee sponsor policy name for each data space.
-    pub dataspace_fee_sponsor_policies: BTreeMap<DataSpaceId, Name>,
+    /// Default fee sponsor program for each data space.
+    pub dataspace_fee_sponsor_program_ids: BTreeMap<DataSpaceId, FeeSponsorProgramId>,
     /// Lane routing policy.
     pub routing_policy: LaneRoutingPolicy,
     /// Lane manifest registry configuration.
@@ -3098,8 +3163,7 @@ impl Default for Nexus {
             configured_lane_catalog: LaneCatalog::default(),
             lane_config: LaneConfig::default(),
             dataspace_catalog: DataSpaceCatalog::default(),
-            dataspace_fee_sponsors: BTreeMap::new(),
-            dataspace_fee_sponsor_policies: BTreeMap::new(),
+            dataspace_fee_sponsor_program_ids: BTreeMap::new(),
             routing_policy: LaneRoutingPolicy::default(),
             registry: LaneRegistry::default(),
             governance: GovernanceCatalog::default(),
@@ -3135,8 +3199,7 @@ impl Nexus {
     pub fn has_lane_overrides(&self) -> bool {
         self.lane_catalog != LaneCatalog::default()
             || self.dataspace_catalog != DataSpaceCatalog::default()
-            || !self.dataspace_fee_sponsors.is_empty()
-            || !self.dataspace_fee_sponsor_policies.is_empty()
+            || !self.dataspace_fee_sponsor_program_ids.is_empty()
             || self.routing_policy != LaneRoutingPolicy::default()
     }
 }
@@ -3181,8 +3244,7 @@ struct NexusConsensusPolicyPreimageV1 {
     enabled: bool,
     configured_lane_catalog_hash: [u8; 32],
     dataspaces: Vec<NexusConsensusDataspaceV1>,
-    dataspace_fee_sponsors: Vec<(u64, String)>,
-    dataspace_fee_sponsor_policies: Vec<(u64, String)>,
+    dataspace_fee_sponsor_program_ids: Vec<(u64, FeeSponsorProgramId)>,
     routing: NexusConsensusRoutingV1,
     staking: NexusConsensusStakingV1,
     fees: NexusConsensusFeesV1,
@@ -3253,13 +3315,7 @@ struct NexusConsensusFeesV1 {
     per_byte_fee: Quantity,
     per_instruction_fee: Quantity,
     per_gas_unit_fee: Quantity,
-    sponsorship_enabled: bool,
-    sponsor_max_fee: Quantity,
-    sponsor_verified_balance_safety_floor: Quantity,
-    canonical_sponsor_account_id: Option<String>,
-    fee_receipts_activation_height: u64,
-    external_settlement_enabled: bool,
-    burn_from_unix_timestamp_ms: u64,
+    sponsor_vault_custody_account_id: AccountId,
     settlement_mode: u8,
     successful_claim_fee_exempt_authorities: Vec<String>,
 }
@@ -3484,15 +3540,10 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         })
         .collect::<Vec<_>>();
     dataspaces.sort_unstable_by_key(|entry| entry.id);
-    let dataspace_fee_sponsors = nexus
-        .dataspace_fee_sponsors
+    let dataspace_fee_sponsor_program_ids = nexus
+        .dataspace_fee_sponsor_program_ids
         .iter()
-        .map(|(id, sponsor)| (id.as_u64(), sponsor.clone()))
-        .collect();
-    let dataspace_fee_sponsor_policies = nexus
-        .dataspace_fee_sponsor_policies
-        .iter()
-        .map(|(id, policy)| (id.as_u64(), policy.as_ref().to_owned()))
+        .map(|(id, program_id)| (id.as_u64(), program_id.clone()))
         .collect();
     let mut successful_claim_fee_exempt_authorities =
         nexus.fees.successful_claim_fee_exempt_authorities.clone();
@@ -3527,8 +3578,7 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         ])
         .into(),
         dataspaces,
-        dataspace_fee_sponsors,
-        dataspace_fee_sponsor_policies,
+        dataspace_fee_sponsor_program_ids,
         routing: NexusConsensusRoutingV1 {
             default_lane: nexus.routing_policy.default_lane.as_u32(),
             default_dataspace: nexus.routing_policy.default_dataspace.as_u64(),
@@ -3556,16 +3606,7 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             per_byte_fee: nexus.fees.per_byte_fee.clone(),
             per_instruction_fee: nexus.fees.per_instruction_fee.clone(),
             per_gas_unit_fee: nexus.fees.per_gas_unit_fee.clone(),
-            sponsorship_enabled: nexus.fees.sponsorship_enabled,
-            sponsor_max_fee: nexus.fees.sponsor_max_fee.clone(),
-            sponsor_verified_balance_safety_floor: nexus
-                .fees
-                .sponsor_verified_balance_safety_floor
-                .clone(),
-            canonical_sponsor_account_id: nexus.fees.canonical_sponsor_account_id.clone(),
-            fee_receipts_activation_height: nexus.fees.fee_receipts_activation_height,
-            external_settlement_enabled: nexus.fees.external_settlement_enabled,
-            burn_from_unix_timestamp_ms: nexus.fees.burn_from_unix_timestamp_ms,
+            sponsor_vault_custody_account_id: nexus.fees.sponsor_vault_custody_account_id.clone(),
             settlement_mode: nexus_fee_settlement_mode_tag(nexus.fees.settlement_mode),
             successful_claim_fee_exempt_authorities,
         },
@@ -4772,38 +4813,8 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     );
     append(
         &mut preimage,
-        "nexus.fees.sponsorship_enabled",
-        &nexus.fees.sponsorship_enabled,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.sponsor_max_fee",
-        &nexus.fees.sponsor_max_fee,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.sponsor_balance_floor",
-        &nexus.fees.sponsor_verified_balance_safety_floor,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.canonical_sponsor",
-        &nexus.fees.canonical_sponsor_account_id,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.receipts_activation_height",
-        &nexus.fees.fee_receipts_activation_height,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.external_settlement_enabled",
-        &nexus.fees.external_settlement_enabled,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.burn_from_unix_timestamp_ms",
-        &nexus.fees.burn_from_unix_timestamp_ms,
+        "nexus.fees.sponsor_vault_custody_account_id",
+        &nexus.fees.sponsor_vault_custody_account_id,
     );
     let settlement_mode = match nexus.fees.settlement_mode {
         NexusFeeSettlementMode::Direct => 0_u8,
@@ -4821,13 +4832,8 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     );
     append(
         &mut preimage,
-        "nexus.dataspace_fee_sponsors",
-        &nexus.dataspace_fee_sponsors,
-    );
-    append(
-        &mut preimage,
-        "nexus.dataspace_fee_sponsor_policies",
-        &nexus.dataspace_fee_sponsor_policies,
+        "nexus.dataspace_fee_sponsor_program_ids",
+        &nexus.dataspace_fee_sponsor_program_ids,
     );
 
     append(
@@ -5619,13 +5625,24 @@ impl Default for SumeragiBlock {
     }
 }
 
-/// Bounded asynchronous adapter queues around the serialized reducer.
+/// Bounded asynchronous adapter queues and outer-ingress byte budgets around
+/// the serialized reducer.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiQueues {
     /// Serialized reducer command FIFO capacity.
     pub commands: NonZeroUsize,
+    /// Maximum simultaneously materialized authenticated non-validator fair-ingress lanes.
+    pub authenticated_non_validator_sources: NonZeroUsize,
     /// Certified-body and block-sync ingress capacity.
     pub bodies: NonZeroUsize,
+    /// Aggregate canonical outer-ingress wire bytes retained across all sources.
+    pub body_bytes: NonZeroUsize,
+    /// Per-ingress-source canonical wire-byte partition. Validator partitions
+    /// isolate ordinary traffic, payload completions, and timeout votes;
+    /// authenticated non-validator and anonymous partitions do not spend the
+    /// timeout reserve. Lane progress and executable-payload recovery impose
+    /// fixed one-MiB and four-MiB minima on ordinary and completion regions.
+    pub body_source_bytes: NonZeroUsize,
     /// Payload-chunk ingress and orphan-buffer capacity.
     pub chunks: NonZeroUsize,
     /// Reconstructed bodies waiting for reducer delivery.
@@ -5636,7 +5653,11 @@ impl Default for SumeragiQueues {
     fn default() -> Self {
         Self {
             commands: defaults::sumeragi::QUEUE_COMMAND_CAPACITY,
+            authenticated_non_validator_sources:
+                defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY,
             bodies: defaults::sumeragi::QUEUE_BODY_CAPACITY,
+            body_bytes: defaults::sumeragi::QUEUE_BODY_BYTES,
+            body_source_bytes: defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES,
             chunks: defaults::sumeragi::QUEUE_CHUNK_CAPACITY,
             ready_bodies: defaults::sumeragi::QUEUE_READY_BODY_CAPACITY,
         }
@@ -5749,7 +5770,10 @@ impl Sumeragi {
             });
         }
         let runtime_progress_reserve = (runtime_command_capacity / 8).max(1);
-        let runtime_completion_reserve = (runtime_command_capacity / 4).max(1);
+        let runtime_completion_reserve = (runtime_command_capacity
+            / u64::try_from(defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+                .expect("static completion-reserve divisor fits u64"))
+        .max(1);
         if runtime_progress_reserve
             .checked_add(runtime_completion_reserve)
             .is_none_or(|reserved| reserved >= runtime_command_capacity)
@@ -5759,6 +5783,89 @@ impl Sumeragi {
 
         let body_queue_capacity =
             canonical_size("sumeragi.queues.bodies", self.queues.bodies.get())?;
+        let authenticated_non_validator_source_capacity = canonical_size(
+            "sumeragi.queues.authenticated_non_validator_sources",
+            self.queues.authenticated_non_validator_sources.get(),
+        )?;
+        let minimum_body_queue_capacity = authenticated_non_validator_source_capacity
+            .checked_mul(2)
+            .and_then(|hubs| hubs.checked_add(6))
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
+            ))?;
+        if body_queue_capacity < minimum_body_queue_capacity {
+            return Err(SumeragiV2ConfigError::BodyQueueTooSmall {
+                actual: body_queue_capacity,
+                minimum: minimum_body_queue_capacity,
+                authenticated_non_validator_sources: authenticated_non_validator_source_capacity,
+            });
+        }
+        let body_bytes =
+            canonical_size("sumeragi.queues.body_bytes", self.queues.body_bytes.get())?;
+        let body_source_bytes = canonical_size(
+            "sumeragi.queues.body_source_bytes",
+            self.queues.body_source_bytes.get(),
+        )?;
+        let envelope_headroom = u64::try_from(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES)
+            .expect("static body-envelope headroom fits u64");
+        let manifest_wire_bytes =
+            u64::try_from(defaults::sumeragi::TRANSPORT_COMPLETION_RECOMMENDED_MANIFEST_WIRE_BYTES)
+                .expect("static recommended transport-completion manifest fits u64");
+        let timeout_vote_reserve = u64::try_from(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES)
+            .expect("static timeout-vote reserve fits u64");
+        let lane_progress_bytes = u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES)
+            .expect("static certified lane-source limit fits u64");
+        let lane_completion_bytes = u64::try_from(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
+            .expect("static complete lane-source limit fits u64");
+        let ordinary_bytes = max_payload_bytes
+            .checked_add(envelope_headroom)
+            .map(|ordinary| ordinary.max(lane_progress_bytes))
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 ordinary outer-ingress wire-byte minimum",
+            ))?;
+        let completion_bytes = max_payload_bytes
+            .checked_add(envelope_headroom)
+            .and_then(|completion| completion.checked_add(manifest_wire_bytes))
+            .map(|completion| completion.max(lane_completion_bytes))
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 completion outer-ingress wire-byte minimum",
+            ))?;
+        let minimum_body_source_bytes = ordinary_bytes
+            .checked_add(completion_bytes)
+            .and_then(|minimum| minimum.checked_add(timeout_vote_reserve))
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 per-source canonical outer-ingress wire-byte minimum",
+            ))?;
+        if body_source_bytes < minimum_body_source_bytes {
+            return Err(SumeragiV2ConfigError::BodySourceBytesTooSmall {
+                actual: body_source_bytes,
+                minimum: minimum_body_source_bytes,
+                max_payload_bytes,
+                envelope_headroom,
+                manifest_wire_bytes,
+                timeout_vote_reserve,
+                lane_progress_bytes,
+                lane_completion_bytes,
+            });
+        }
+        let minimum_body_sources = authenticated_non_validator_source_capacity
+            .checked_add(2)
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 authenticated-source outer-ingress partition count",
+            ))?;
+        let minimum_body_bytes = body_source_bytes.checked_mul(minimum_body_sources).ok_or(
+            SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 aggregate canonical outer-ingress wire-byte minimum",
+            ),
+        )?;
+        if body_bytes < minimum_body_bytes {
+            return Err(SumeragiV2ConfigError::BodyBytesTooSmall {
+                actual: body_bytes,
+                minimum: minimum_body_bytes,
+                body_source_bytes,
+                minimum_sources: minimum_body_sources,
+            });
+        }
         let chunk_queue_capacity =
             canonical_size("sumeragi.queues.chunks", self.queues.chunks.get())?;
         let ready_body_capacity = canonical_size(
@@ -5805,8 +5912,15 @@ impl Sumeragi {
                 runtime_progress_reserve,
                 runtime_completion_reserve,
                 body_queue_capacity,
+                authenticated_non_validator_source_capacity,
+                body_bytes,
+                body_source_bytes,
                 chunk_queue_capacity,
-                effect_work_capacity: runtime_command_capacity,
+                // Every outstanding asynchronous effect can mint at most one
+                // trusted runtime completion. Keep the producer bound within
+                // the FIFO's reserved completion capacity so a finite worker
+                // burst cannot turn valid protocol work into a fatal overflow.
+                effect_work_capacity: runtime_completion_reserve,
                 ready_body_capacity,
                 ready_body_bytes,
                 certified_request_capacity: body_queue_capacity,
@@ -5823,7 +5937,11 @@ impl Sumeragi {
     }
 }
 /// Version of the canonical Norito shared-config projection.
-pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 1;
+///
+/// Version 3 additionally binds the authenticated non-validator fair-ingress geometry.
+/// Nodes with incompatible source isolation or the retired fixed pacemaker
+/// deadline therefore derive a different handshake fingerprint.
+pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 3;
 
 const SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:shared-config-fingerprint\0";
@@ -5850,8 +5968,11 @@ pub struct SumeragiV2Config {
     pub key_policy: SumeragiV2KeyPolicy,
 }
 
-/// Derive the first-release absolute round deadline and retransmission interval
+/// Derive the first-release view-zero round deadline and retransmission interval
 /// from the signed block cadence.
+///
+/// The authoritative runtime applies deterministic linear backoff to the base
+/// deadline for later certified views. The retransmission interval stays fixed.
 ///
 /// # Errors
 ///
@@ -5863,7 +5984,7 @@ pub fn sumeragi_v2_timing_ms(
     if block_cadence_ms == 0 {
         return Err(SumeragiV2ConfigError::NonPositive("block cadence"));
     }
-    let round_timeout_ms = block_cadence_ms
+    let base_round_timeout_ms = block_cadence_ms
         .checked_mul(u64::from(
             defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER,
         ))
@@ -5871,9 +5992,9 @@ pub fn sumeragi_v2_timing_ms(
             "derived Sumeragi v2 round timeout",
         ))?;
     let retransmit_interval_ms =
-        round_timeout_ms / u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR);
+        base_round_timeout_ms / u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR);
     debug_assert!(retransmit_interval_ms > 0);
-    Ok((round_timeout_ms, retransmit_interval_ms))
+    Ok((base_round_timeout_ms, retransmit_interval_ms))
 }
 
 impl SumeragiV2Config {
@@ -5908,9 +6029,16 @@ pub struct SumeragiV2Limits {
     pub runtime_completion_reserve: u64,
     /// Capacity for certified bodies and block-sync ingress.
     pub body_queue_capacity: u64,
+    /// Maximum simultaneously materialized authenticated non-validator fair-ingress lanes.
+    pub authenticated_non_validator_source_capacity: u64,
+    /// Aggregate canonical outer-ingress wire bytes retained across all sources.
+    pub body_bytes: u64,
+    /// Per-ingress-source canonical outer-ingress wire-byte partition.
+    pub body_source_bytes: u64,
     /// Capacity for payload chunk ingress and orphan buffering.
     pub chunk_queue_capacity: u64,
-    /// Maximum outstanding asynchronous reducer effects.
+    /// Maximum outstanding asynchronous reducer effects; never greater than
+    /// [`Self::runtime_completion_reserve`].
     pub effect_work_capacity: u64,
     /// Maximum reconstructed bodies waiting for reducer delivery.
     pub ready_body_capacity: u64,
@@ -5937,6 +6065,75 @@ pub struct SumeragiV2KeyPolicy {
     pub allowed_hsm_providers: Vec<String>,
 }
 
+/// Invalid bounded geometry for the Sumeragi v2 exact-output corridor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SumeragiV2ExactOutputGeometryError {
+    /// Adding the two asynchronous producer bounds and one reducer batch overflowed.
+    #[error("Sumeragi v2 outbound shared capacity overflowed")]
+    SharedCapacityOverflow,
+    /// A maximum fanout must contain at least one source.
+    #[error("Sumeragi v2 maximum fanout source capacity must be non-zero")]
+    ZeroSourceCapacity,
+    /// Multiplying source capacity by the exact output-class count overflowed.
+    #[error("Sumeragi v2 maximum fanout ownership overflowed")]
+    MaximumFanoutOverflow,
+    /// The shared owner cannot retain one complete maximum fanout.
+    #[error(
+        "Sumeragi v2 outbound shared ownership capacity {actual} is below one maximum fanout {minimum}"
+    )]
+    CapacityTooSmall {
+        /// Available shared target/class ownership units.
+        actual: usize,
+        /// Required units for one maximum source fanout across every class.
+        minimum: usize,
+    },
+}
+
+/// Derive the exact shared ownership-unit capacity used by production output.
+///
+/// The two arguments are the bounded asynchronous effect and certified-request
+/// producer counts. One full serialized reducer effect batch is added with
+/// checked arithmetic.
+///
+/// # Errors
+///
+/// Returns [`SumeragiV2ExactOutputGeometryError::SharedCapacityOverflow`] when
+/// the complete producer bound is not representable.
+pub fn sumeragi_v2_exact_output_shared_ownership_capacity(
+    effect_work_capacity: usize,
+    certified_request_capacity: usize,
+) -> core::result::Result<usize, SumeragiV2ExactOutputGeometryError> {
+    effect_work_capacity
+        .checked_add(certified_request_capacity)
+        .and_then(|capacity| capacity.checked_add(defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP))
+        .ok_or(SumeragiV2ExactOutputGeometryError::SharedCapacityOverflow)
+}
+
+/// Require one complete source fanout to fit the exact-output shared owner.
+///
+/// # Errors
+///
+/// Returns an exact geometry error for a zero source bound, multiplication
+/// overflow, or insufficient shared capacity.
+pub fn validate_sumeragi_v2_exact_output_geometry(
+    shared_ownership_unit_capacity: usize,
+    max_sources_per_fanout: usize,
+) -> core::result::Result<(), SumeragiV2ExactOutputGeometryError> {
+    if max_sources_per_fanout == 0 {
+        return Err(SumeragiV2ExactOutputGeometryError::ZeroSourceCapacity);
+    }
+    let minimum = max_sources_per_fanout
+        .checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)
+        .ok_or(SumeragiV2ExactOutputGeometryError::MaximumFanoutOverflow)?;
+    if shared_ownership_unit_capacity < minimum {
+        return Err(SumeragiV2ExactOutputGeometryError::CapacityTooSmall {
+            actual: shared_ownership_unit_capacity,
+            minimum,
+        });
+    }
+    Ok(())
+}
+
 /// Invalid or non-canonical Sumeragi v2 runtime configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SumeragiV2ConfigError {
@@ -5960,6 +6157,55 @@ pub enum SumeragiV2ConfigError {
     /// Reserved reducer FIFO capacity consumed the whole queue.
     #[error("Sumeragi v2 reducer queue reserves leave no normal-ingress capacity")]
     InvalidQueueAllocation,
+    /// Outer ingress cannot retain one validator, every non-validator source lane, and anonymous work.
+    #[error(
+        "Sumeragi v2 body queue capacity {actual} is below minimum {minimum} for {authenticated_non_validator_sources} authenticated non-validator source lanes"
+    )]
+    BodyQueueTooSmall {
+        /// Configured message capacity.
+        actual: u64,
+        /// Required message capacity.
+        minimum: u64,
+        /// Configured independent non-validator source lanes.
+        authenticated_non_validator_sources: u64,
+    },
+    /// The per-source canonical wire-byte budget cannot isolate ordinary and
+    /// payload-completion envelopes plus one timeout vote.
+    #[error(
+        "Sumeragi v2 per-source canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} for max payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest wire bytes, {lane_progress_bytes} bytes of lane progress, {lane_completion_bytes} bytes of lane completion, and {timeout_vote_reserve} reserved timeout-vote bytes"
+    )]
+    BodySourceBytesTooSmall {
+        /// Configured per-source capacity.
+        actual: u64,
+        /// Required per-source capacity.
+        minimum: u64,
+        /// Configured maximum canonical body size.
+        max_payload_bytes: u64,
+        /// Fixed wire-envelope headroom.
+        envelope_headroom: u64,
+        /// Recommended manifest wire bytes included in the completion partition.
+        manifest_wire_bytes: u64,
+        /// Fixed bytes isolated from ordinary traffic for a timeout vote.
+        timeout_vote_reserve: u64,
+        /// Minimum ordinary region required by an atomic lane certificate.
+        lane_progress_bytes: u64,
+        /// Minimum completion region required by a lane source bundle.
+        lane_completion_bytes: u64,
+    },
+    /// The aggregate canonical wire-byte budget cannot isolate all minimum source quotas.
+    #[error(
+        "Sumeragi v2 aggregate canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} required for {minimum_sources} per-source budgets of {body_source_bytes} bytes"
+    )]
+    BodyBytesTooSmall {
+        /// Configured aggregate capacity.
+        actual: u64,
+        /// Required aggregate capacity.
+        minimum: u64,
+        /// Configured per-source capacity.
+        body_source_bytes: u64,
+        /// Minimum isolated source partitions.
+        minimum_sources: u64,
+    },
     /// The signing policy did not admit BLS-Normal.
     #[error("Sumeragi v2 consensus key policy must include BlsNormal")]
     MissingBlsNormal,
@@ -6488,8 +6734,8 @@ pub struct Torii {
     pub cors: ToriiCors,
     /// Proof endpoint DoS/backpressure policy.
     pub proof_api: ProofApi,
-    /// Optional UAID onboarding authority configuration.
-    pub onboarding: Option<ToriiOnboarding>,
+    /// Optional account-onboarding authority configuration.
+    pub account_onboarding: Option<AccountOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
     /// Optional Kagemusha command-submission authority.
@@ -6542,6 +6788,10 @@ pub struct ToriiTxHistoryJwt {
 /// Retail recipient lookup route configuration for Torii app API.
 #[derive(Debug, Clone)]
 pub struct ToriiRecipientLookup {
+    /// Governed FX corridor policy used to authorize retail recipient reads.
+    pub policy_id: iroha_data_model::name::Name,
+    /// Maximum route/lookup requests accepted per signer each minute.
+    pub requests_per_minute: u32,
     /// HTTP request timeout applied to upstream bank Core API calls.
     pub request_timeout: Duration,
     /// Configured bank Core API routes keyed by canonical FI id.
@@ -6551,6 +6801,10 @@ pub struct ToriiRecipientLookup {
 impl Default for ToriiRecipientLookup {
     fn default() -> Self {
         Self {
+            policy_id: defaults::torii::recipient_lookup::POLICY_ID
+                .parse()
+                .expect("default retail recipient policy id must be valid"),
+            requests_per_minute: defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE,
             request_timeout: Duration::from_millis(
                 defaults::torii::recipient_lookup::REQUEST_TIMEOUT_MS,
             ),
@@ -7099,29 +7353,60 @@ impl From<user::ToriiNoritoRpcTransport> for NoritoRpcTransport {
     }
 }
 
-/// UAID onboarding authority wiring exposed to Torii.
+/// Account-onboarding authority wiring exposed to Torii.
 #[derive(Debug, Clone)]
-pub struct ToriiOnboarding {
+pub struct AccountOnboarding {
     /// Account identifier that signs onboarding transactions.
     pub authority: AccountId,
-    /// Private key corresponding to the onboarding authority.
-    pub private_key: ExposedPrivateKey,
-    /// Permission names that onboarding may grant to newly registered accounts.
-    pub allowed_permissions: Vec<String>,
-    /// Optional sponsor account granted via `CanUseFeeSponsor`.
-    pub fee_sponsor_account: Option<AccountId>,
+    /// Runtime-only file from which the onboarding signer was loaded.
+    pub private_key_file: PathBuf,
+    /// Validated signer corresponding exactly to `authority`.
+    pub signer: KeyPair,
+    /// API credentials accepted by sponsored onboarding.
+    pub credentials: Vec<AccountOnboardingCredential>,
+    /// Permission names that onboarding may additionally grant to new accounts.
+    pub additional_permissions: Vec<Name>,
+    /// Optional exact sponsor program enrolled for each newly onboarded account.
+    pub fee_sponsor_program_id: Option<FeeSponsorProgramId>,
     /// Default alias lease term applied during onboarding.
-    pub alias_lease_term_years: u8,
-    /// Whether onboarding should create a default auto-renew subscription.
-    ///
-    /// Defaults to disabled until `alias_auto_renew_subscription_domain` is configured.
-    pub alias_auto_renew_enabled: bool,
-    /// Retry delay for alias auto-renew after a failed charge.
-    pub alias_auto_renew_retry_backoff_ms: u64,
-    /// Maximum consecutive alias auto-renew failures before suspension.
-    pub alias_auto_renew_max_failures: u32,
-    /// Existing domain used to store internal alias auto-renew subscription NFTs.
-    pub alias_auto_renew_subscription_domain: Option<DomainId>,
+    pub lease_term_years: NonZeroU8,
+    /// Optional native deterministic alias auto-renew configuration.
+    pub auto_renew: Option<AccountOnboardingAutoRenew>,
+}
+
+/// One header-token credential accepted by sponsored onboarding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountOnboardingCredential {
+    /// Stable operator-facing credential identifier.
+    pub id: Name,
+    /// Exact domain or dataspace to which the credential is confined.
+    pub scope: AccountOnboardingCredentialScope,
+    /// BLAKE3 digest of the runtime-only token.
+    pub token_hash: [u8; 32],
+}
+
+/// Exact textual scope attached to an onboarding API credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountOnboardingCredentialScope {
+    /// One fully-qualified domain.
+    Domain(DomainId),
+    /// One textual dataspace name, resolved against static and live catalogs later.
+    Dataspace(Name),
+}
+
+/// Native deterministic auto-renew defaults configured for onboarded aliases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountOnboardingAutoRenew {
+    /// Lease term requested by each renewal.
+    pub term_years: NonZeroU8,
+    /// Maximum amount the owner authorizes per renewal.
+    pub max_amount: Numeric,
+    /// How far before expiry native block processing begins attempting renewal.
+    pub renew_before_expiry: Duration,
+    /// Deterministic retry delay after an insufficient-funds failure.
+    pub retry_backoff: Duration,
+    /// Consecutive failure limit before native processing suspends auto-renew.
+    pub max_failures: NonZeroU32,
 }
 
 /// App-facing faucet configuration exposed to Torii.
@@ -7129,8 +7414,10 @@ pub struct ToriiOnboarding {
 pub struct ToriiFaucet {
     /// Account identifier that signs faucet transfers.
     pub authority: AccountId,
-    /// Private key corresponding to the faucet authority.
-    pub private_key: ExposedPrivateKey,
+    /// Runtime-only file from which the faucet signer was loaded.
+    pub private_key_file: PathBuf,
+    /// Validated signer corresponding exactly to `authority`.
+    pub signer: KeyPair,
     /// Asset definition selector distributed by the faucet.
     ///
     /// This may be either a canonical Base58 asset definition identifier or an
@@ -7165,6 +7452,8 @@ pub struct ToriiKagemushaCommands {
     pub authority: AccountId,
     /// Key pair used only to submit typed Kagemusha instructions.
     pub key_pair: KeyPair,
+    /// Minimum live XOR balance required for the self-funded command authority.
+    pub minimum_xor_balance: Quantity,
     /// Maximum value accepted for one Kagemusha command.
     pub max_tx_value: Quantity,
     /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
@@ -7725,7 +8014,23 @@ impl SorafsGovernanceDagServiceView {
     ///
     /// Returns [`FromTomlSourceError`] when the dedicated view cannot be read
     /// or its conditional service requirements are invalid.
-    pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
+    pub fn from_toml_source(mut src: TomlSource) -> Result<Self, FromTomlSourceError> {
+        let root = src.table_mut();
+        root.retain(|key, _| key == "sorafs");
+        if let Some(sorafs) = root
+            .get_mut("sorafs")
+            .and_then(|value| value.as_table_mut())
+        {
+            sorafs.retain(|key, _| key == "storage");
+            if let Some(storage) = sorafs
+                .get_mut("storage")
+                .and_then(|value| value.as_table_mut())
+            {
+                storage.retain(|key, _| {
+                    matches!(key, "governance_dag_dir" | "governance_dag_service")
+                });
+            }
+        }
         ConfigReader::new()
             .with_toml_source(src)
             .read_and_complete::<user::SorafsGovernanceDagServiceRoot>()
@@ -9313,10 +9618,10 @@ pub struct Offline {
     pub escrow_required: bool,
     /// Escrow accounts keyed by Kagemusha asset definition.
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
-    /// Whether Kagemusha shielded offline-offline payments are active.
-    ///
-    /// Chain execution enforces this gate before any Kagemusha mutation.
-    pub kagemusha_enabled: bool,
+    /// Canonical Norito policy authenticating promoted Kagemusha releases.
+    pub kagemusha_release_policy_path: Option<PathBuf>,
+    /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
+    pub kagemusha_artifact_dir: Option<PathBuf>,
 }
 
 impl Default for Offline {
@@ -9324,7 +9629,9 @@ impl Default for Offline {
         Self {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
-            kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_release_policy_path:
+                defaults::settlement::offline::kagemusha_release_policy_path(),
+            kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
         }
     }
 }
@@ -10786,12 +11093,10 @@ mod tests {
     }
 
     #[test]
-    fn offline_defaults_keep_kagemusha_enabled() {
+    fn offline_defaults_leave_kagemusha_release_unconfigured() {
         let offline = Offline::default();
-        assert!(
-            offline.kagemusha_enabled,
-            "Kagemusha must remain enabled by default"
-        );
+        assert!(offline.kagemusha_release_policy_path.is_none());
+        assert!(offline.kagemusha_artifact_dir.is_none());
     }
 
     #[test]
@@ -10831,6 +11136,34 @@ mod tests {
     }
 
     #[test]
+    fn sumeragi_v2_exact_output_geometry_checks_every_arithmetic_boundary() {
+        assert_eq!(
+            sumeragi_v2_exact_output_shared_ownership_capacity(256, 130),
+            Ok(394),
+        );
+        assert_eq!(validate_sumeragi_v2_exact_output_geometry(394, 131), Ok(()));
+        assert_eq!(
+            validate_sumeragi_v2_exact_output_geometry(394, 132),
+            Err(SumeragiV2ExactOutputGeometryError::CapacityTooSmall {
+                actual: 394,
+                minimum: 396,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_exact_output_shared_ownership_capacity(usize::MAX, 1),
+            Err(SumeragiV2ExactOutputGeometryError::SharedCapacityOverflow),
+        );
+        assert_eq!(
+            validate_sumeragi_v2_exact_output_geometry(1, 0),
+            Err(SumeragiV2ExactOutputGeometryError::ZeroSourceCapacity),
+        );
+        assert_eq!(
+            validate_sumeragi_v2_exact_output_geometry(usize::MAX, usize::MAX),
+            Err(SumeragiV2ExactOutputGeometryError::MaximumFanoutOverflow),
+        );
+    }
+
+    #[test]
     fn sumeragi_v2_shared_config_defaults_are_finite_and_deterministic() {
         let config = default_v2_sumeragi();
         let shared = config
@@ -10841,6 +11174,7 @@ mod tests {
             .expect("default v2 config");
 
         assert_eq!(shared.protocol_version, consensus_v2::PROTOCOL_VERSION);
+        assert_eq!(shared.format_version, SUMERAGI_V2_CONFIG_FORMAT_VERSION);
         assert_eq!(shared.block_cadence_ms, 1_000);
         assert_eq!(
             sumeragi_v2_timing_ms(shared.block_cadence_ms),
@@ -10849,6 +11183,17 @@ mod tests {
         assert_eq!(shared.limits.max_transactions, 512);
         assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
         assert_eq!(shared.limits.max_queue_scan, 2_048);
+        assert_eq!(shared.limits.authenticated_non_validator_source_capacity, 2);
+        assert_eq!(shared.limits.body_bytes, 231 * 1024 * 1024);
+        assert_eq!(shared.limits.body_source_bytes, 33 * 1024 * 1024);
+        assert_eq!(
+            shared.limits.effect_work_capacity, shared.limits.runtime_completion_reserve,
+            "outstanding effect work must fit the trusted completion reserve",
+        );
+        assert!(
+            shared.limits.effect_work_capacity < shared.limits.runtime_command_capacity,
+            "normal/progress traffic must retain a disjoint bounded allocation",
+        );
         assert_eq!(
             shared,
             config
@@ -10857,6 +11202,26 @@ mod tests {
                     consensus_v2::ConsensusMode::Permissioned,
                 )
                 .expect("same input")
+        );
+    }
+
+    #[test]
+    fn sumeragi_v2_config_format_changes_the_handshake_fingerprint() {
+        let config = default_v2_sumeragi();
+        let current = config
+            .v2_config(
+                Duration::from_secs(1),
+                consensus_v2::ConsensusMode::Permissioned,
+            )
+            .expect("current v2 config");
+        let mut retired_fixed_timeout = current.clone();
+        retired_fixed_timeout.format_version = 1;
+
+        assert_eq!(current.format_version, SUMERAGI_V2_CONFIG_FORMAT_VERSION);
+        assert_ne!(
+            current.fingerprint(),
+            retired_fixed_timeout.fingerprint(),
+            "incompatible config projections must not share a handshake fingerprint",
         );
     }
 
@@ -10895,6 +11260,21 @@ mod tests {
         assert_config_change!("body queue", |config: &mut Sumeragi| {
             config.queues.bodies =
                 NonZeroUsize::new(config.queues.bodies.get() + 1).expect("non-zero");
+        });
+        assert_config_change!(
+            "authenticated non-validator sources",
+            |config: &mut Sumeragi| {
+                config.queues.authenticated_non_validator_sources =
+                    NonZeroUsize::new(1).expect("non-zero");
+            }
+        );
+        assert_config_change!("aggregate body bytes", |config: &mut Sumeragi| {
+            config.queues.body_bytes =
+                NonZeroUsize::new(config.queues.body_bytes.get() + 1).expect("non-zero");
+        });
+        assert_config_change!("per-source body bytes", |config: &mut Sumeragi| {
+            config.queues.body_source_bytes =
+                NonZeroUsize::new(config.queues.body_source_bytes.get() + 1).expect("non-zero");
         });
         assert_config_change!("chunk queue", |config: &mut Sumeragi| {
             config.queues.chunks =
@@ -10974,6 +11354,72 @@ mod tests {
             SumeragiV2ConfigError::CommandQueueTooSmall {
                 actual: 4,
                 minimum: 8,
+            },
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.queues.body_source_bytes = NonZeroUsize::new(16 * 1024 * 1024).expect("non-zero");
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::BodySourceBytesTooSmall {
+                actual: 16 * 1024 * 1024,
+                minimum: 2 * 16 * 1024 * 1024 + 230_408,
+                max_payload_bytes: 16 * 1024 * 1024,
+                envelope_headroom: 64 * 1024,
+                manifest_wire_bytes: 33_800,
+                timeout_vote_reserve: 64 * 1024,
+                lane_progress_bytes: 1024 * 1024,
+                lane_completion_bytes: 4 * 1024 * 1024,
+            },
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.block.max_payload_bytes = NonZeroUsize::new(1).expect("non-zero");
+        let lane_minimum: usize = 5 * 1024 * 1024 + 64 * 1024;
+        config.queues.body_source_bytes = NonZeroUsize::new(lane_minimum - 1).expect("non-zero");
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::BodySourceBytesTooSmall {
+                actual: u64::try_from(lane_minimum - 1).expect("fixture fits u64"),
+                minimum: u64::try_from(lane_minimum).expect("fixture fits u64"),
+                max_payload_bytes: 1,
+                envelope_headroom: 64 * 1024,
+                manifest_wire_bytes: 33_800,
+                timeout_vote_reserve: 64 * 1024,
+                lane_progress_bytes: 1024 * 1024,
+                lane_completion_bytes: 4 * 1024 * 1024,
+            },
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.queues.bodies = NonZeroUsize::new(9).expect("non-zero");
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::BodyQueueTooSmall {
+                actual: 9,
+                minimum: 10,
+                authenticated_non_validator_sources: 2,
+            },
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.queues.authenticated_non_validator_sources = NonZeroUsize::MAX;
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
+            ),
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.queues.body_bytes = NonZeroUsize::new(132 * 1024 * 1024 - 1).expect("non-zero");
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::BodyBytesTooSmall {
+                actual: 132 * 1024 * 1024 - 1,
+                minimum: 132 * 1024 * 1024,
+                body_source_bytes: 33 * 1024 * 1024,
+                minimum_sources: 4,
             },
         );
 
@@ -11059,7 +11505,7 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "6611cdc66348bebfbd583f888864a747dcc828c5fe84f58dfb0346cca27abaf3",
+            "ea6a4cf07d275f1efd034fc82449967713410c6c13dff7cd1babb51f38c8705b",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -11130,18 +11576,23 @@ mod tests {
         assert_nexus_change("staking policy", changed);
 
         let mut changed = nexus.clone();
-        changed.fees.sponsorship_enabled = !changed.fees.sponsorship_enabled;
-        assert_nexus_change("fee policy", changed);
+        changed.fees.sponsor_vault_custody_account_id = AccountId::new(
+            KeyPair::try_from_seed(vec![0xF5; 32], Algorithm::Ed25519)
+                .expect("deterministic sponsor vault test key")
+                .public_key()
+                .clone(),
+        );
+        assert_nexus_change("fee sponsor vault custody", changed);
 
         let mut changed = nexus.clone();
-        changed.fees.burn_from_unix_timestamp_ms += 1;
-        assert_nexus_change("fee settlement activation", changed);
-
-        let mut changed = nexus.clone();
-        changed
-            .dataspace_fee_sponsors
-            .insert(DataSpaceId::UNIVERSAL, "sponsor".to_owned());
-        assert_nexus_change("dataspace sponsor policy", changed);
+        changed.dataspace_fee_sponsor_program_ids.insert(
+            DataSpaceId::UNIVERSAL,
+            FeeSponsorProgramId::new(
+                changed.fees.sponsor_vault_custody_account_id.clone(),
+                "default".parse().expect("valid sponsor program name"),
+            ),
+        );
+        assert_nexus_change("dataspace sponsor program", changed);
 
         let mut changed = nexus.clone();
         changed.axt.max_clock_skew_ms += 1;

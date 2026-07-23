@@ -35,7 +35,13 @@
     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
     "contract_alias": "argument-record-fixture::universal",
     "entrypoint": "quote",
-    "gas_limit": 1500000,
+    "fee_payment": {
+      "payer": "authority",
+      "value": {
+        "charge_limits": [],
+        "gas_limit": 1500000
+      }
+    },
     "payload": {
       "active": true,
       "count": "-7",

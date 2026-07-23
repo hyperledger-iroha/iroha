@@ -1150,7 +1150,10 @@ mod tests {
         assert_eq!(outcome.expired_order_ids, vec![expired_order_id]);
         assert_eq!(outcome.open_order_count, 1);
         assert_eq!(
-            runtime.snapshot(1_800_000_101).expired_order_ids,
+            runtime
+                .snapshot(1_800_000_101)
+                .expect("snapshot remains valid")
+                .expired_order_ids,
             vec![expired_order_id]
         );
     }

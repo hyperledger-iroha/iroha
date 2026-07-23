@@ -28,19 +28,25 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus_v2::{ConsensusMessageV2Payload, GlobalPhase},
+        consensus_v2::{
+            BlockSubject, ConsensusMessageV2Payload, ExecutionCommitment, GlobalPhase,
+            MAX_VALIDATORS_PER_HEIGHT, ValidatorIndex,
+        },
     },
-    peer::PeerId,
+    peer::{Peer, PeerId},
 };
-use iroha_p2p::Peer;
-use norito::json::{Map, Value};
+use iroha_p2p::network::NetworkReplyRoute;
+use norito::{
+    codec::Encode,
+    json::{Map, Value},
+};
 
 /// Environment variable consumed only by the feature-isolated test daemon.
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
-const FORMAT_VERSION: u64 = 1;
+const FORMAT_VERSION: u64 = 3;
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
 const MAX_RULES: usize = 256;
@@ -140,15 +146,22 @@ impl MessageKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MessageMeta {
     sender: PeerId,
+    authenticated_via: PeerId,
     kind: MessageKind,
     height: Option<u64>,
     view: Option<u64>,
     block_hash: Option<HashOf<BlockHeader>>,
+    subject: Option<BlockSubject>,
+    execution_commitment: Option<ExecutionCommitment>,
+    signer: Option<ValidatorIndex>,
+    certificate_signers: Vec<ValidatorIndex>,
+    envelope_digest: Hash,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Rule {
     sender: PeerId,
+    authenticated_via: PeerId,
     kind: MessageKind,
     height: u64,
     view: u64,
@@ -159,6 +172,7 @@ struct Rule {
 impl Rule {
     fn matches(&self, meta: &MessageMeta) -> bool {
         self.sender == meta.sender
+            && self.authenticated_via == meta.authenticated_via
             && self.kind == meta.kind
             && Some(self.height) == meta.height
             && Some(self.view) == meta.view
@@ -185,36 +199,58 @@ struct HeldDescriptor {
     size_bytes: usize,
 }
 
-pub(crate) struct HeldMessage {
+pub(crate) struct HeldMessage<R = NetworkReplyRoute, O = ()> {
     pub(crate) sequence: u64,
     pub(crate) peer: Peer,
+    pub(crate) authenticated_via: PeerId,
     pub(crate) message: NetworkMessage,
     pub(crate) size_bytes: usize,
+    pub(crate) reply_route: Option<R>,
+    /// Exact local-only ownership retained with the controlled occurrence.
+    pub(crate) ownership: Option<O>,
 }
 
-struct HeldEntry {
+struct HeldEntry<R, O> {
     descriptor: HeldDescriptor,
     peer: Peer,
+    authenticated_via: PeerId,
     message: NetworkMessage,
+    reply_route: Option<R>,
+    ownership: Option<O>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Admission {
     Pass,
+    /// The controller atomically retained the complete local occurrence.
+    Held,
     Consumed,
 }
 
-struct State {
+/// Terminal disposition of one exact controlled release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReleaseOutcome {
+    /// Ordinary ingress accepted, coalesced, or found the occurrence obsolete.
+    Delivered,
+    /// The exact reply authority retired before ordinary ingress succeeded.
+    Retired,
+    /// The release could not reach a successful terminal state.
+    Failed,
+}
+
+struct State<R = NetworkReplyRoute, O = ()> {
     revision: u64,
     command_digest: Option<Hash>,
     last_seen_digest: Option<Hash>,
     rules: Vec<Rule>,
     queue_capacity: usize,
-    held: BTreeMap<u64, HeldEntry>,
+    held: BTreeMap<u64, HeldEntry<R, O>>,
     held_bytes: usize,
     release_pending: VecDeque<u64>,
     in_flight: Option<u64>,
+    in_flight_bytes: usize,
     delivered: Vec<u64>,
+    retired: Vec<u64>,
     next_sequence: u64,
     dropped: u64,
     overflowed: u64,
@@ -225,7 +261,7 @@ struct State {
     drain_fence: Option<u64>,
 }
 
-impl Default for State {
+impl<R, O> Default for State<R, O> {
     fn default() -> Self {
         Self {
             revision: 0,
@@ -237,7 +273,9 @@ impl Default for State {
             held_bytes: 0,
             release_pending: VecDeque::new(),
             in_flight: None,
+            in_flight_bytes: 0,
             delivered: Vec::new(),
+            retired: Vec::new(),
             next_sequence: 1,
             dropped: 0,
             overflowed: 0,
@@ -259,14 +297,14 @@ struct RootIdentity {
 }
 
 /// Feature-only controller shared by relay workers and its file watcher.
-pub(crate) struct Controller {
+pub(crate) struct Controller<R = NetworkReplyRoute, O = ()> {
     root: PathBuf,
     root_identity: RootIdentity,
-    state: Mutex<State>,
+    state: Mutex<State<R, O>>,
     ack_publish: Mutex<()>,
 }
 
-impl Controller {
+impl<O> Controller<NetworkReplyRoute, O> {
     /// Open and pin the explicitly configured private control directory.
     pub(crate) fn from_env() -> Result<Option<Self>, ControlError> {
         let Some(raw) = env::var_os(CONTROL_DIR_ENV) else {
@@ -303,6 +341,34 @@ impl Controller {
         controller.publish_ack()?;
         Ok(Some(controller))
     }
+}
+
+impl<R, O> Controller<R, O> {
+    /// Construct an isolated controller for daemon boundary tests.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> (tempfile::TempDir, Self) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent = tempfile::tempdir().expect("temporary parent");
+        let root = parent.path().join("control");
+        fs::create_dir(&root).expect("create control root");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("chmod control root");
+        let metadata = fs::symlink_metadata(&root).expect("control metadata");
+        let controller = Self {
+            root,
+            root_identity: root_identity(&metadata),
+            state: Mutex::new(State::default()),
+            ack_publish: Mutex::new(()),
+        };
+        (parent, controller)
+    }
+
+    /// Hold and FIFO-release every subsequently admitted message in tests.
+    #[cfg(test)]
+    pub(crate) fn drain_subsequent_messages_for_tests(&self) {
+        let mut state = self.state.lock().expect("message control state poisoned");
+        state.drain_next_rules = Some(Vec::new());
+    }
 
     fn validate_root(&self) -> Result<(), ControlError> {
         let metadata = fs::symlink_metadata(&self.root).map_err(ControlError::Io)?;
@@ -328,6 +394,9 @@ impl Controller {
         let digest = Hash::new(&bytes);
         {
             let state = self.state.lock().expect("message control state poisoned");
+            if state.fatal {
+                return Err(ControlError::ControllerFatal);
+            }
             if state.last_seen_digest == Some(digest) {
                 return Ok(());
             }
@@ -351,11 +420,87 @@ impl Controller {
     pub(crate) fn admit(
         &self,
         peer: Peer,
+        authenticated_via: &PeerId,
         message: NetworkMessage,
         size_bytes: usize,
     ) -> Result<(Admission, Option<(Peer, NetworkMessage, usize)>), ControlError> {
-        let Some(meta) = message_meta(&peer, &message) else {
-            return Ok((Admission::Pass, Some((peer, message, size_bytes))));
+        self.admit_with_reply_route(peer, authenticated_via, message, size_bytes, None)
+            .map(|(admission, message)| {
+                (
+                    admission,
+                    message.map(|(peer, message, size_bytes, reply_route)| {
+                        debug_assert!(reply_route.is_none());
+                        (peer, message, size_bytes)
+                    }),
+                )
+            })
+    }
+
+    /// Apply one rule while retaining an exact local-only reply authority.
+    pub(crate) fn admit_with_reply_route(
+        &self,
+        peer: Peer,
+        authenticated_via: &PeerId,
+        message: NetworkMessage,
+        size_bytes: usize,
+        reply_route: Option<R>,
+    ) -> Result<(Admission, Option<(Peer, NetworkMessage, usize, Option<R>)>), ControlError> {
+        self.admit_with_reply_route_and_ownership(
+            peer,
+            authenticated_via,
+            message,
+            size_bytes,
+            reply_route,
+            None,
+        )
+        .map(|(admission, message)| {
+            (
+                admission,
+                message.map(|(peer, message, size_bytes, reply_route, ownership)| {
+                    debug_assert!(ownership.is_none());
+                    (peer, message, size_bytes, reply_route)
+                }),
+            )
+        })
+    }
+
+    /// Apply one rule while atomically retaining reply authority and ownership.
+    ///
+    /// `ownership` is an opaque process-local token. A held occurrence stores it
+    /// in the same map entry as its semantic payload and exact reply route, then
+    /// returns it only from [`Self::next_release`]. This avoids a side-map race
+    /// or a release-time reacquisition window.
+    pub(crate) fn admit_with_reply_route_and_ownership(
+        &self,
+        peer: Peer,
+        authenticated_via: &PeerId,
+        message: NetworkMessage,
+        size_bytes: usize,
+        reply_route: Option<R>,
+        ownership: Option<O>,
+    ) -> Result<
+        (
+            Admission,
+            Option<(Peer, NetworkMessage, usize, Option<R>, Option<O>)>,
+        ),
+        ControlError,
+    > {
+        let meta = match message_meta(&peer, authenticated_via, &message) {
+            Ok(Some(meta)) => meta,
+            Ok(None) => {
+                return Ok((
+                    Admission::Pass,
+                    Some((peer, message, size_bytes, reply_route, ownership)),
+                ));
+            }
+            Err(error) => {
+                let mut state = self.state.lock().expect("message control state poisoned");
+                state.fatal = true;
+                state.last_error = Some(error.code().to_owned());
+                drop(state);
+                self.publish_ack()?;
+                return Err(error);
+            }
         };
         let mut state = self.state.lock().expect("message control state poisoned");
         if state.fatal {
@@ -372,11 +517,20 @@ impl Controller {
         {
             action
         } else {
-            return Ok((Admission::Pass, Some((peer, message, size_bytes))));
+            return Ok((
+                Admission::Pass,
+                Some((peer, message, size_bytes, reply_route, ownership)),
+            ));
         };
         match action {
             Action::Drop => {
                 state.dropped = state.dropped.saturating_add(1);
+                drop(state);
+                self.publish_ack()?;
+                return Ok((
+                    Admission::Consumed,
+                    Some((peer, message, size_bytes, reply_route, ownership)),
+                ));
             }
             Action::Hold => {
                 if !hold_capacity_available(&state, size_bytes) {
@@ -404,7 +558,10 @@ impl Controller {
                         HeldEntry {
                             descriptor,
                             peer,
+                            authenticated_via: authenticated_via.clone(),
                             message,
+                            reply_route,
+                            ownership,
                         },
                     );
                     state.held_bytes = state
@@ -419,11 +576,11 @@ impl Controller {
         }
         drop(state);
         self.publish_ack()?;
-        Ok((Admission::Consumed, None))
+        Ok((Admission::Held, None))
     }
 
     /// Take the next prevalidated release entry in exact ingress order.
-    pub(crate) fn next_release(&self) -> Result<Option<HeldMessage>, ControlError> {
+    pub(crate) fn next_release(&self) -> Result<Option<HeldMessage<R, O>>, ControlError> {
         let mut state = self.state.lock().expect("message control state poisoned");
         if state.fatal || state.in_flight.is_some() {
             return Ok(None);
@@ -440,13 +597,17 @@ impl Controller {
             .checked_sub(entry.descriptor.size_bytes)
             .ok_or(ControlError::HeldBytesUnderflow)?;
         state.in_flight = Some(sequence);
+        state.in_flight_bytes = entry.descriptor.size_bytes;
         drop(state);
         self.publish_ack()?;
         Ok(Some(HeldMessage {
             sequence,
             peer: entry.peer,
+            authenticated_via: entry.authenticated_via,
             message: entry.message,
             size_bytes: entry.descriptor.size_bytes,
+            reply_route: entry.reply_route,
+            ownership: entry.ownership,
         }))
     }
 
@@ -454,7 +615,7 @@ impl Controller {
     pub(crate) fn complete_release(
         &self,
         sequence: u64,
-        delivered: bool,
+        outcome: ReleaseOutcome,
     ) -> Result<(), ControlError> {
         let mut state = self.state.lock().expect("message control state poisoned");
         if state.in_flight != Some(sequence) {
@@ -465,16 +626,24 @@ impl Controller {
             return Err(ControlError::ReleaseCompletionMismatch);
         }
         state.in_flight = None;
-        if delivered {
-            state.delivered.push(sequence);
-            finish_drain_if_empty(&mut state);
-        } else {
-            state.fatal = true;
-            state.last_error = Some("downstream_delivery_failed".to_owned());
+        state.in_flight_bytes = 0;
+        match outcome {
+            ReleaseOutcome::Delivered => {
+                state.delivered.push(sequence);
+                finish_drain_if_empty(&mut state);
+            }
+            ReleaseOutcome::Retired => {
+                state.retired.push(sequence);
+                finish_drain_if_empty(&mut state);
+            }
+            ReleaseOutcome::Failed => {
+                state.fatal = true;
+                state.last_error = Some("downstream_delivery_failed".to_owned());
+            }
         }
         drop(state);
         self.publish_ack()?;
-        if delivered {
+        if outcome != ReleaseOutcome::Failed {
             Ok(())
         } else {
             Err(ControlError::DownstreamDeliveryFailed)
@@ -489,7 +658,7 @@ impl Controller {
         self.validate_root()?;
         let bytes = {
             let state = self.state.lock().expect("message control state poisoned");
-            canonical_json(&ack_value(&state))?
+            canonical_json(&ack_value(&state)?)?
         };
         if bytes.len() > MAX_ACK_BYTES {
             return Err(ControlError::AckTooLarge);
@@ -499,21 +668,30 @@ impl Controller {
     }
 }
 
-fn hold_capacity_available(state: &State, incoming_bytes: usize) -> bool {
-    state.held.len() < state.queue_capacity
+fn hold_capacity_available<R, O>(state: &State<R, O>, incoming_bytes: usize) -> bool {
+    state
+        .held
+        .len()
+        .checked_add(if state.in_flight.is_some() { 1 } else { 0 })
+        .is_some_and(|count| count < state.queue_capacity)
         && state
             .held_bytes
-            .checked_add(incoming_bytes)
+            .checked_add(state.in_flight_bytes)
+            .and_then(|bytes| bytes.checked_add(incoming_bytes))
             .is_some_and(|bytes| bytes <= MAX_HELD_BYTES)
 }
 
-fn fail_hold_overflow(state: &mut State) {
+fn fail_hold_overflow<R, O>(state: &mut State<R, O>) {
     state.overflowed = state.overflowed.saturating_add(1);
     state.fatal = true;
     state.last_error = Some("hold_queue_overflow".to_owned());
 }
 
-fn apply_command(state: &mut State, command: Command, digest: Hash) -> Result<(), ControlError> {
+fn apply_command<R, O>(
+    state: &mut State<R, O>,
+    command: Command,
+    digest: Hash,
+) -> Result<(), ControlError> {
     if state.fatal {
         return Err(ControlError::ControllerFatal);
     }
@@ -523,7 +701,12 @@ fn apply_command(state: &mut State, command: Command, digest: Hash) -> Result<()
     if state.in_flight.is_some() || !state.release_pending.is_empty() {
         return Err(ControlError::ReleaseBusy);
     }
-    if command.queue_capacity < state.held.len() {
+    if command.queue_capacity
+        < state
+            .held
+            .len()
+            .saturating_add(if state.in_flight.is_some() { 1 } else { 0 })
+    {
         return Err(ControlError::QueueCapacityBelowHeld);
     }
     if command.drain && !command.release.is_empty() {
@@ -535,6 +718,7 @@ fn apply_command(state: &mut State, command: Command, digest: Hash) -> Result<()
     state.command_digest = Some(digest);
     state.queue_capacity = command.queue_capacity;
     state.delivered.clear();
+    state.retired.clear();
     state.last_error = None;
     if command.drain {
         state.drain_fence = Some(command.revision);
@@ -549,8 +733,8 @@ fn apply_command(state: &mut State, command: Command, digest: Hash) -> Result<()
 }
 
 /// Activate post-drain rules at the same linearization point that observes all
-/// retained and in-flight messages delivered.
-fn finish_drain_if_empty(state: &mut State) {
+/// retained and in-flight messages successfully delivered or retired.
+fn finish_drain_if_empty<R, O>(state: &mut State<R, O>) {
     if state.held.is_empty()
         && state.release_pending.is_empty()
         && state.in_flight.is_none()
@@ -626,6 +810,7 @@ fn parse_command(bytes: &[u8]) -> Result<Command, ControlError> {
         let rule = parse_rule(value)?;
         if rules.iter().any(|prior: &Rule| {
             prior.sender == rule.sender
+                && prior.authenticated_via == rule.authenticated_via
                 && prior.kind == rule.kind
                 && prior.height == rule.height
                 && prior.view == rule.view
@@ -664,7 +849,15 @@ fn parse_command(bytes: &[u8]) -> Result<Command, ControlError> {
 fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
     let object = exact_object(
         value,
-        &["action", "block_hash", "height", "kind", "sender", "view"],
+        &[
+            "action",
+            "authenticated_via",
+            "block_hash",
+            "height",
+            "kind",
+            "sender",
+            "view",
+        ],
     )?;
     let sender_literal = object
         .get("sender")
@@ -678,6 +871,19 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
         .map_err(|_| ControlError::InvalidField("sender"))?;
     if sender.to_string() != sender_literal {
         return Err(ControlError::NonCanonicalField("sender"));
+    }
+    let authenticated_via_literal = object
+        .get("authenticated_via")
+        .and_then(Value::as_str)
+        .ok_or(ControlError::InvalidField("authenticated_via"))?;
+    if authenticated_via_literal.is_empty() || authenticated_via_literal.len() > MAX_SENDER_BYTES {
+        return Err(ControlError::FieldTooLarge("authenticated_via"));
+    }
+    let authenticated_via = authenticated_via_literal
+        .parse::<PeerId>()
+        .map_err(|_| ControlError::InvalidField("authenticated_via"))?;
+    if authenticated_via.to_string() != authenticated_via_literal {
+        return Err(ControlError::NonCanonicalField("authenticated_via"));
     }
     let block_hash = match object.get("block_hash") {
         Some(Value::Null) => None,
@@ -711,6 +917,7 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
     }
     Ok(Rule {
         sender,
+        authenticated_via,
         kind,
         height: {
             let height = required_u64(object, "height")?;
@@ -750,12 +957,12 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>, ControlError> {
         .map_err(|_| ControlError::JsonEncode)
 }
 
-fn ack_value(state: &State) -> Value {
+fn ack_value<R, O>(state: &State<R, O>) -> Result<Value, ControlError> {
     let held = state
         .held
         .values()
         .map(|entry| descriptor_value(&entry.descriptor))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let rules = state.rules.iter().map(rule_value).collect::<Vec<_>>();
     let release_pending = state
         .release_pending
@@ -769,7 +976,13 @@ fn ack_value(state: &State) -> Value {
         .copied()
         .map(Value::from)
         .collect::<Vec<_>>();
-    object_value([
+    let retired = state
+        .retired
+        .iter()
+        .copied()
+        .map(Value::from)
+        .collect::<Vec<_>>();
+    Ok(object_value([
         (
             "command_digest",
             state
@@ -794,6 +1007,12 @@ fn ack_value(state: &State) -> Value {
             state.in_flight.map_or(Value::Null, Value::from),
         ),
         (
+            "in_flight_bytes",
+            Value::from(
+                u64::try_from(state.in_flight_bytes).expect("in-flight byte bound fits u64"),
+            ),
+        ),
+        (
             "last_error",
             state
                 .last_error
@@ -807,14 +1026,42 @@ fn ack_value(state: &State) -> Value {
         ),
         ("rejected_commands", Value::from(state.rejected_commands)),
         ("release_pending", Value::Array(release_pending)),
+        ("retired", Value::Array(retired)),
         ("revision", Value::from(state.revision)),
         ("rules", Value::Array(rules)),
         ("version", Value::from(FORMAT_VERSION)),
-    ])
+    ]))
 }
 
-fn descriptor_value(descriptor: &HeldDescriptor) -> Value {
-    object_value([
+fn descriptor_value(descriptor: &HeldDescriptor) -> Result<Value, ControlError> {
+    let subject = descriptor
+        .meta
+        .subject
+        .as_ref()
+        .map(norito::json::to_value)
+        .transpose()
+        .map_err(|_| ControlError::JsonEncode)?
+        .unwrap_or(Value::Null);
+    let execution_commitment = descriptor
+        .meta
+        .execution_commitment
+        .as_ref()
+        .map(norito::json::to_value)
+        .transpose()
+        .map_err(|_| ControlError::JsonEncode)?
+        .unwrap_or(Value::Null);
+    let certificate_signers = descriptor
+        .meta
+        .certificate_signers
+        .iter()
+        .copied()
+        .map(|signer| Value::from(u64::from(signer)))
+        .collect::<Vec<_>>();
+    Ok(object_value([
+        (
+            "authenticated_via",
+            Value::from(descriptor.meta.authenticated_via.to_string()),
+        ),
         (
             "block_hash",
             descriptor
@@ -823,6 +1070,12 @@ fn descriptor_value(descriptor: &HeldDescriptor) -> Value {
                 .as_ref()
                 .map_or(Value::Null, |hash| Value::from(hash.to_string())),
         ),
+        ("certificate_signers", Value::Array(certificate_signers)),
+        (
+            "envelope_digest",
+            Value::from(descriptor.meta.envelope_digest.to_string()),
+        ),
+        ("execution_commitment", execution_commitment),
         (
             "height",
             descriptor.meta.height.map_or(Value::Null, Value::from),
@@ -831,19 +1084,31 @@ fn descriptor_value(descriptor: &HeldDescriptor) -> Value {
         ("sender", Value::from(descriptor.meta.sender.to_string())),
         ("sequence", Value::from(descriptor.sequence)),
         (
+            "signer",
+            descriptor
+                .meta
+                .signer
+                .map_or(Value::Null, |signer| Value::from(u64::from(signer))),
+        ),
+        (
             "size_bytes",
             Value::from(u64::try_from(descriptor.size_bytes).unwrap_or(u64::MAX)),
         ),
+        ("subject", subject),
         (
             "view",
             descriptor.meta.view.map_or(Value::Null, Value::from),
         ),
-    ])
+    ]))
 }
 
 fn rule_value(rule: &Rule) -> Value {
     object_value([
         ("action", Value::from(rule.action.as_str())),
+        (
+            "authenticated_via",
+            Value::from(rule.authenticated_via.to_string()),
+        ),
         (
             "block_hash",
             rule.block_hash
@@ -865,87 +1130,247 @@ fn object_value<const N: usize>(entries: [(&str, Value); N]) -> Value {
     Value::Object(object)
 }
 
-fn message_meta(peer: &Peer, message: &NetworkMessage) -> Option<MessageMeta> {
+fn message_meta(
+    peer: &Peer,
+    authenticated_via: &PeerId,
+    message: &NetworkMessage,
+) -> Result<Option<MessageMeta>, ControlError> {
     let NetworkMessage::SumeragiBlock(block) = message else {
-        return None;
+        return Ok(None);
     };
     let iroha_core::sumeragi::message::BlockMessage::V2(message) = block.as_ref().as_ref() else {
-        return None;
+        return Ok(None);
     };
     let sender = peer.id().clone();
-    let (kind, round, block_hash) = match &message.payload {
-        ConsensusMessageV2Payload::Proposal(value) => (
-            MessageKind::Proposal,
-            Some(value.round),
-            Some(value.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::Vote(value) => (
-            match value.phase {
-                GlobalPhase::Prepare => MessageKind::PrepareVote,
-                GlobalPhase::Commit => MessageKind::CommitVote,
-            },
-            Some(value.round),
-            Some(value.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::QuorumCertificate(value) => (
-            match value.phase {
-                GlobalPhase::Prepare => MessageKind::PrepareCertificate,
-                GlobalPhase::Commit => MessageKind::CommitCertificate,
-            },
-            Some(value.round),
-            Some(value.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::TimeoutVote(value) => (
-            MessageKind::TimeoutVote,
-            Some(value.round),
-            value
-                .highest_prepare_qc
-                .as_ref()
-                .map(|qc| qc.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::TimeoutCertificate(value) => (
-            MessageKind::TimeoutCertificate,
-            Some(value.round),
-            value.highest_prepare_qc().map(|qc| qc.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::PayloadManifest(value) => (
-            MessageKind::PayloadManifest,
-            Some(value.round),
-            Some(value.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::PayloadChunk(_) => (MessageKind::PayloadChunk, None, None),
-        ConsensusMessageV2Payload::CertifiedBodyRequest(value) => (
-            MessageKind::CertifiedBodyRequest,
-            Some(value.round),
-            Some(value.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::CertifiedBodyResponse(value) => (
-            MessageKind::CertifiedBodyResponse,
-            Some(value.manifest.round),
-            Some(value.manifest.subject.block_hash),
-        ),
-        ConsensusMessageV2Payload::CommitCertificateRequest(value) => {
-            return Some(MessageMeta {
-                sender,
-                kind: MessageKind::CommitCertificateRequest,
-                height: Some(value.height),
-                view: None,
-                block_hash: None,
-            });
-        }
-        ConsensusMessageV2Payload::CommitCertificateResponse(value) => (
-            MessageKind::CommitCertificateResponse,
-            Some(value.certificate.round),
-            Some(value.certificate.subject.block_hash),
-        ),
-    };
-    Some(MessageMeta {
+    let envelope_digest = Hash::new(message.encode());
+    let (kind, round, subject, execution_commitment, signer, certificate_signers) =
+        match &message.payload {
+            ConsensusMessageV2Payload::Proposal(value) => (
+                MessageKind::Proposal,
+                Some(value.round),
+                Some(value.subject),
+                None,
+                Some(value.proposer),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::Vote(value) => (
+                match value.phase {
+                    GlobalPhase::Prepare => MessageKind::PrepareVote,
+                    GlobalPhase::Commit => MessageKind::CommitVote,
+                },
+                Some(value.round),
+                Some(value.subject),
+                Some(value.execution_commitment),
+                Some(value.signer),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::QuorumCertificate(value) => (
+                match value.phase {
+                    GlobalPhase::Prepare => MessageKind::PrepareCertificate,
+                    GlobalPhase::Commit => MessageKind::CommitCertificate,
+                },
+                Some(value.round),
+                Some(value.subject),
+                Some(value.execution_commitment),
+                None,
+                value.signers.clone(),
+            ),
+            ConsensusMessageV2Payload::TimeoutVote(value) => (
+                MessageKind::TimeoutVote,
+                Some(value.round),
+                value.highest_prepare_qc.as_ref().map(|qc| qc.subject),
+                value
+                    .highest_prepare_qc
+                    .as_ref()
+                    .map(|qc| qc.execution_commitment),
+                Some(value.signer),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::TimeoutCertificate(value) => {
+                let highest = value.highest_prepare_qc();
+                let mut signers = value
+                    .groups
+                    .iter()
+                    .flat_map(|group| group.signers.iter().copied())
+                    .collect::<Vec<_>>();
+                signers.sort_unstable();
+                (
+                    MessageKind::TimeoutCertificate,
+                    Some(value.round),
+                    highest.map(|qc| qc.subject),
+                    highest.map(|qc| qc.execution_commitment),
+                    None,
+                    signers,
+                )
+            }
+            ConsensusMessageV2Payload::PayloadManifest(value) => (
+                MessageKind::PayloadManifest,
+                Some(value.round),
+                Some(value.subject),
+                None,
+                None,
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::PayloadChunk(value) => (
+                MessageKind::PayloadChunk,
+                None,
+                None,
+                None,
+                Some(value.sender),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::CertifiedBodyRequest(value) => (
+                MessageKind::CertifiedBodyRequest,
+                Some(value.round),
+                Some(value.subject),
+                Some(value.certificate.execution_commitment),
+                None,
+                value.certificate.signers.clone(),
+            ),
+            ConsensusMessageV2Payload::CertifiedBodyResponse(value) => (
+                MessageKind::CertifiedBodyResponse,
+                Some(value.manifest.round),
+                Some(value.manifest.subject),
+                None,
+                Some(value.responder),
+                Vec::new(),
+            ),
+            ConsensusMessageV2Payload::CommitCertificateRequest(value) => {
+                let meta = MessageMeta {
+                    sender,
+                    authenticated_via: authenticated_via.clone(),
+                    kind: MessageKind::CommitCertificateRequest,
+                    height: Some(value.height),
+                    view: None,
+                    block_hash: None,
+                    subject: None,
+                    execution_commitment: None,
+                    signer: None,
+                    certificate_signers: Vec::new(),
+                    envelope_digest,
+                };
+                validate_message_meta(&meta)?;
+                return Ok(Some(meta));
+            }
+            ConsensusMessageV2Payload::CommitCertificateResponse(value) => (
+                MessageKind::CommitCertificateResponse,
+                Some(value.certificate.round),
+                Some(value.certificate.subject),
+                Some(value.certificate.execution_commitment),
+                None,
+                value.certificate.signers.clone(),
+            ),
+        };
+    let meta = MessageMeta {
         sender,
+        authenticated_via: authenticated_via.clone(),
         kind,
         height: round.map(|round| round.height),
         view: round.map(|round| round.view),
-        block_hash,
-    })
+        block_hash: subject.map(|subject| subject.block_hash),
+        subject,
+        execution_commitment,
+        signer,
+        certificate_signers,
+        envelope_digest,
+    };
+    validate_message_meta(&meta)?;
+    Ok(Some(meta))
+}
+
+/// Validate the exact JSON descriptor contract before a controlled message can
+/// enter the hold queue.
+///
+/// This is intentionally structural rather than a substitute for ordinary
+/// consensus authentication. The controller runs before reducer ingress, but
+/// every descriptor it publishes must still be parseable by the independent
+/// test-network client. Invalid traffic therefore fails the controller closed
+/// without poisoning its acknowledgement with an unrepresentable entry.
+fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
+    if meta.height == Some(0)
+        || meta
+            .execution_commitment
+            .as_ref()
+            .is_some_and(|commitment| commitment.validate().is_err())
+        || meta.certificate_signers.len() > MAX_VALIDATORS_PER_HEIGHT
+        || meta
+            .certificate_signers
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || meta.block_hash != meta.subject.map(|subject| subject.block_hash)
+        || meta.execution_commitment.is_some() && meta.subject.is_none()
+    {
+        return Err(ControlError::InvalidMessageDescriptor);
+    }
+
+    let has_subject_and_execution = meta.subject.is_some() && meta.execution_commitment.is_some();
+    let has_no_subject_or_execution = meta.subject.is_none() && meta.execution_commitment.is_none();
+    let has_single_signer = meta.signer.is_some();
+    let has_certificate_signers = !meta.certificate_signers.is_empty();
+    let has_round = meta.height.is_some() && meta.view.is_some();
+    let valid = match meta.kind {
+        MessageKind::Proposal => {
+            has_round
+                && meta.subject.is_some()
+                && meta.execution_commitment.is_none()
+                && has_single_signer
+                && !has_certificate_signers
+        }
+        MessageKind::PrepareVote | MessageKind::CommitVote => {
+            has_round && has_subject_and_execution && has_single_signer && !has_certificate_signers
+        }
+        MessageKind::PrepareCertificate
+        | MessageKind::CommitCertificate
+        | MessageKind::CertifiedBodyRequest
+        | MessageKind::CommitCertificateResponse => {
+            has_round && has_subject_and_execution && !has_single_signer && has_certificate_signers
+        }
+        MessageKind::TimeoutVote => {
+            has_round
+                && (has_subject_and_execution || has_no_subject_or_execution)
+                && has_single_signer
+                && !has_certificate_signers
+        }
+        MessageKind::TimeoutCertificate => {
+            has_round
+                && (has_subject_and_execution || has_no_subject_or_execution)
+                && !has_single_signer
+                && has_certificate_signers
+        }
+        MessageKind::PayloadManifest => {
+            has_round
+                && meta.subject.is_some()
+                && meta.execution_commitment.is_none()
+                && !has_single_signer
+                && !has_certificate_signers
+        }
+        MessageKind::PayloadChunk => {
+            meta.height.is_none()
+                && meta.view.is_none()
+                && has_no_subject_or_execution
+                && has_single_signer
+                && !has_certificate_signers
+        }
+        MessageKind::CertifiedBodyResponse => {
+            has_round
+                && meta.subject.is_some()
+                && meta.execution_commitment.is_none()
+                && has_single_signer
+                && !has_certificate_signers
+        }
+        MessageKind::CommitCertificateRequest => {
+            meta.height.is_some()
+                && meta.view.is_none()
+                && has_no_subject_or_execution
+                && !has_single_signer
+                && !has_certificate_signers
+        }
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ControlError::InvalidMessageDescriptor)
+    }
 }
 
 fn read_stable_private_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ControlError> {
@@ -981,7 +1406,7 @@ fn read_stable_private_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, Co
             .unwrap_or(max_bytes)
             .min(max_bytes),
     );
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(u64::try_from(max_bytes).expect("command bound fits u64") + 1)
         .read_to_end(&mut bytes)
         .map_err(ControlError::Io)?;
@@ -990,7 +1415,7 @@ fn read_stable_private_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, Co
     }
     file.seek(SeekFrom::Start(0)).map_err(ControlError::Io)?;
     let mut confirmation = Vec::with_capacity(bytes.len());
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(u64::try_from(max_bytes).expect("command bound fits u64") + 1)
         .read_to_end(&mut confirmation)
         .map_err(ControlError::Io)?;
@@ -1155,6 +1580,7 @@ pub(crate) enum ControlError {
     HeldBytesOverflow,
     HeldBytesUnderflow,
     HoldQueueOverflow,
+    InvalidMessageDescriptor,
 }
 
 impl ControlError {
@@ -1197,6 +1623,7 @@ impl ControlError {
             Self::HeldBytesOverflow => "held_bytes_overflow",
             Self::HeldBytesUnderflow => "held_bytes_underflow",
             Self::HoldQueueOverflow => "hold_queue_overflow",
+            Self::InvalidMessageDescriptor => "invalid_message_descriptor",
         }
     }
 }
@@ -1219,6 +1646,8 @@ impl std::error::Error for ControlError {}
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use iroha_core::sumeragi::message::{BlockMessage, BlockMessageWire};
     use iroha_crypto::{Algorithm, KeyPair};
@@ -1237,6 +1666,74 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::prehashed([marker; Hash::LENGTH]))
     }
 
+    fn subject(marker: u8) -> BlockSubject {
+        BlockSubject {
+            parent_block_hash: Some(hash(marker.wrapping_add(1))),
+            block_hash: hash(marker),
+            payload_hash: Hash::new([marker, 0xA5]),
+        }
+    }
+
+    fn execution_commitment(marker: u8) -> ExecutionCommitment {
+        ExecutionCommitment::without_topups(
+            Hash::new([marker, 1]),
+            Hash::new([marker, 2]),
+            Hash::new([marker, 3]),
+            Hash::new([marker, 4]),
+        )
+    }
+
+    fn valid_meta(kind: MessageKind) -> MessageMeta {
+        let sender = peer(42);
+        let subject = subject(7);
+        let (height, view, subject, execution_commitment, signer, certificate_signers) = match kind
+        {
+            MessageKind::Proposal => (Some(9), Some(2), Some(subject), None, Some(0), Vec::new()),
+            MessageKind::PrepareVote | MessageKind::CommitVote => (
+                Some(9),
+                Some(2),
+                Some(subject),
+                Some(execution_commitment(7)),
+                Some(0),
+                Vec::new(),
+            ),
+            MessageKind::PrepareCertificate
+            | MessageKind::CommitCertificate
+            | MessageKind::CertifiedBodyRequest
+            | MessageKind::CommitCertificateResponse => (
+                Some(9),
+                Some(2),
+                Some(subject),
+                Some(execution_commitment(7)),
+                None,
+                vec![0, 1, 2],
+            ),
+            MessageKind::TimeoutVote => (Some(9), Some(2), None, None, Some(0), Vec::new()),
+            MessageKind::TimeoutCertificate => (Some(9), Some(2), None, None, None, vec![0, 1, 2]),
+            MessageKind::PayloadManifest => {
+                (Some(9), Some(2), Some(subject), None, None, Vec::new())
+            }
+            MessageKind::PayloadChunk => (None, None, None, None, Some(0), Vec::new()),
+            MessageKind::CertifiedBodyResponse => {
+                (Some(9), Some(2), Some(subject), None, Some(0), Vec::new())
+            }
+            MessageKind::CommitCertificateRequest => (Some(9), None, None, None, None, Vec::new()),
+        };
+        MessageMeta {
+            sender: sender.clone(),
+            authenticated_via: sender,
+            kind,
+            height,
+            view,
+            block_hash: subject.map(|subject| subject.block_hash),
+            subject,
+            execution_commitment,
+            signer,
+            certificate_signers,
+            envelope_digest: Hash::new([kind as u8, 0x5A]),
+        }
+    }
+
     fn transport_peer(marker: u8) -> Peer {
         let key = KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
             .expect("deterministic transport key");
@@ -1247,7 +1744,7 @@ mod tests {
     }
 
     fn chunk_message(marker: u8) -> NetworkMessage {
-        NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(BlockMessage::V2(
+        NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(BlockMessage::V2(
             ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
                 manifest_hash: HashOf::<PayloadManifest>::from_untyped_unchecked(Hash::new(&[
                     marker,
@@ -1261,24 +1758,12 @@ mod tests {
     }
 
     fn test_controller() -> (tempfile::TempDir, Controller) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let parent = tempdir().expect("temporary parent");
-        let root = parent.path().join("control");
-        fs::create_dir(&root).expect("create control root");
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("chmod control root");
-        let metadata = fs::symlink_metadata(&root).expect("control metadata");
-        let controller = Controller {
-            root,
-            root_identity: root_identity(&metadata),
-            state: Mutex::new(State::default()),
-            ack_publish: Mutex::new(()),
-        };
-        (parent, controller)
+        Controller::for_tests()
     }
 
     fn rule(sender: PeerId, kind: MessageKind, height: u64, view: u64) -> Rule {
         Rule {
+            authenticated_via: sender.clone(),
             sender,
             kind,
             height,
@@ -1289,20 +1774,30 @@ mod tests {
     }
 
     #[test]
-    fn matcher_is_exact_across_every_authenticated_dimension() {
+    fn matcher_is_exact_across_every_rule_dimension() {
         let peer_a = peer(1);
         let rule = rule(peer_a.clone(), MessageKind::PrepareVote, 9, 3);
         let exact = MessageMeta {
-            sender: peer_a,
+            sender: peer_a.clone(),
+            authenticated_via: peer_a,
             kind: MessageKind::PrepareVote,
             height: Some(9),
             view: Some(3),
             block_hash: Some(hash(1)),
+            subject: None,
+            execution_commitment: None,
+            signer: Some(0),
+            certificate_signers: Vec::new(),
+            envelope_digest: Hash::new(b"exact-envelope"),
         };
         assert!(rule.matches(&exact));
         for changed in [
             MessageMeta {
                 sender: peer(2),
+                ..exact.clone()
+            },
+            MessageMeta {
+                authenticated_via: peer(2),
                 ..exact.clone()
             },
             MessageMeta {
@@ -1323,6 +1818,80 @@ mod tests {
             },
         ] {
             assert!(!rule.matches(&changed));
+        }
+    }
+
+    #[test]
+    fn descriptor_contract_accepts_every_v2_payload_shape() {
+        for kind in [
+            MessageKind::Proposal,
+            MessageKind::PrepareVote,
+            MessageKind::CommitVote,
+            MessageKind::PrepareCertificate,
+            MessageKind::CommitCertificate,
+            MessageKind::TimeoutVote,
+            MessageKind::TimeoutCertificate,
+            MessageKind::PayloadManifest,
+            MessageKind::PayloadChunk,
+            MessageKind::CertifiedBodyRequest,
+            MessageKind::CertifiedBodyResponse,
+            MessageKind::CommitCertificateRequest,
+            MessageKind::CommitCertificateResponse,
+        ] {
+            let meta = valid_meta(kind);
+            validate_message_meta(&meta)
+                .unwrap_or_else(|error| panic!("valid {kind:?} descriptor failed: {error}"));
+            descriptor_value(&HeldDescriptor {
+                sequence: 1,
+                meta,
+                size_bytes: 1,
+            })
+            .unwrap_or_else(|error| panic!("valid {kind:?} descriptor did not encode: {error}"));
+        }
+    }
+
+    #[test]
+    fn descriptor_contract_rejects_unparseable_adversarial_shapes() {
+        let mut cases = Vec::new();
+
+        let mut zero_height = valid_meta(MessageKind::PrepareVote);
+        zero_height.height = Some(0);
+        cases.push(zero_height);
+
+        let mut invalid_commitment = valid_meta(MessageKind::PrepareVote);
+        invalid_commitment
+            .execution_commitment
+            .as_mut()
+            .expect("vote commitment")
+            .topup_anchor_count = 1;
+        cases.push(invalid_commitment);
+
+        let mut mismatched_hash = valid_meta(MessageKind::PrepareVote);
+        mismatched_hash.block_hash = Some(hash(99));
+        cases.push(mismatched_hash);
+
+        let mut duplicate_signers = valid_meta(MessageKind::PrepareCertificate);
+        duplicate_signers.certificate_signers = vec![0, 1, 1];
+        cases.push(duplicate_signers);
+
+        let mut empty_certificate = valid_meta(MessageKind::PrepareCertificate);
+        empty_certificate.certificate_signers.clear();
+        cases.push(empty_certificate);
+
+        let mut invented_chunk_round = valid_meta(MessageKind::PayloadChunk);
+        invented_chunk_round.height = Some(9);
+        invented_chunk_round.view = Some(2);
+        cases.push(invented_chunk_round);
+
+        let mut missing_vote_signer = valid_meta(MessageKind::PrepareVote);
+        missing_vote_signer.signer = None;
+        cases.push(missing_vote_signer);
+
+        for meta in cases {
+            assert!(matches!(
+                validate_message_meta(&meta),
+                Err(ControlError::InvalidMessageDescriptor)
+            ));
         }
     }
 
@@ -1373,7 +1942,13 @@ mod tests {
             parse_command(&command(vec![rule_value(&wildcard), rule_value(&specific)])),
             Err(ControlError::AmbiguousRule)
         ));
-        let mut zero_height = specific;
+        let mut relayed = specific.clone();
+        relayed.authenticated_via = peer(4);
+        assert!(
+            parse_command(&command(vec![rule_value(&specific), rule_value(&relayed)])).is_ok(),
+            "independent authenticated relays are distinct rule dimensions"
+        );
+        let mut zero_height = specific.clone();
         zero_height.height = 0;
         assert!(matches!(
             parse_command(&command(vec![rule_value(&zero_height)])),
@@ -1388,10 +1963,19 @@ mod tests {
             parse_command(&command(vec![invalid_sender])),
             Err(ControlError::InvalidField("sender"))
         ));
+        let mut invalid_via = rule_value(&wildcard);
+        invalid_via
+            .as_object_mut()
+            .expect("rule object")
+            .insert("authenticated_via".to_owned(), Value::from("not-a-peer"));
+        assert!(matches!(
+            parse_command(&command(vec![invalid_via])),
+            Err(ControlError::InvalidField("authenticated_via"))
+        ));
         let mut uppercase_hash = rule_value(&specific);
         uppercase_hash.as_object_mut().expect("rule object").insert(
             "block_hash".to_owned(),
-            Value::from(hash(1).to_string().to_ascii_uppercase()),
+            Value::from(hash(0xAB).to_string().to_ascii_uppercase()),
         );
         assert!(matches!(
             parse_command(&command(vec![uppercase_hash])),
@@ -1401,7 +1985,7 @@ mod tests {
 
     #[test]
     fn stale_duplicate_reordered_and_unknown_releases_are_atomic() {
-        let mut state = State::default();
+        let mut state = State::<NetworkReplyRoute>::default();
         state.revision = 4;
         let original_rules = state.rules.clone();
         assert!(matches!(
@@ -1428,7 +2012,7 @@ mod tests {
 
     #[test]
     fn hold_capacity_is_bounded_by_count_bytes_and_checked_arithmetic() {
-        let mut state = State::default();
+        let mut state = State::<NetworkReplyRoute>::default();
         state.queue_capacity = 2;
         state.held_bytes = MAX_HELD_BYTES - 4;
         assert!(hold_capacity_available(&state, 4));
@@ -1438,6 +2022,22 @@ mod tests {
         state.queue_capacity = 0;
         state.held_bytes = 0;
         assert!(!hold_capacity_available(&state, 0));
+
+        state.queue_capacity = 1;
+        state.in_flight = Some(1);
+        state.in_flight_bytes = 4;
+        assert!(
+            !hold_capacity_available(&state, 0),
+            "an in-flight release retains its count slot"
+        );
+        state.queue_capacity = 2;
+        state.in_flight_bytes = MAX_HELD_BYTES;
+        assert!(
+            !hold_capacity_available(&state, 1),
+            "an in-flight release retains its exact byte charge"
+        );
+        state.in_flight = None;
+        state.in_flight_bytes = 0;
         fail_hold_overflow(&mut state);
         assert!(state.fatal);
         assert_eq!(state.overflowed, 1);
@@ -1445,9 +2045,100 @@ mod tests {
     }
 
     #[test]
+    fn retired_release_finishes_drain_without_claiming_delivery() {
+        let (_parent, controller) = test_controller();
+        let sender = transport_peer(31);
+        let authenticated_via = sender.id().clone();
+        controller.drain_subsequent_messages_for_tests();
+        controller
+            .admit(sender, &authenticated_via, chunk_message(1), 101)
+            .expect("hold one drain occurrence");
+
+        let released = controller
+            .next_release()
+            .expect("take release")
+            .expect("held occurrence is releasable");
+        {
+            let state = controller.state.lock().expect("control state");
+            assert_eq!(state.held_bytes, 0);
+            assert_eq!(state.in_flight, Some(released.sequence));
+            assert_eq!(state.in_flight_bytes, 101);
+        }
+        controller
+            .complete_release(released.sequence, ReleaseOutcome::Retired)
+            .expect("retirement is a successful terminal release");
+        let state = controller.state.lock().expect("control state");
+        assert!(!state.fatal);
+        assert!(state.delivered.is_empty());
+        assert_eq!(state.retired, vec![released.sequence]);
+        assert_eq!(state.in_flight, None);
+        assert_eq!(state.in_flight_bytes, 0);
+        assert!(state.drain_next_rules.is_none());
+    }
+
+    #[test]
+    fn failed_release_clears_in_flight_ownership_and_latches_fatal() {
+        let (_parent, controller) = test_controller();
+        let sender = transport_peer(32);
+        let authenticated_via = sender.id().clone();
+        controller.drain_subsequent_messages_for_tests();
+        controller
+            .admit(sender, &authenticated_via, chunk_message(1), 202)
+            .expect("hold one failing occurrence");
+        let released = controller
+            .next_release()
+            .expect("take release")
+            .expect("held occurrence is releasable");
+
+        assert!(matches!(
+            controller.complete_release(released.sequence, ReleaseOutcome::Failed),
+            Err(ControlError::DownstreamDeliveryFailed)
+        ));
+        let state = controller.state.lock().expect("control state");
+        assert!(state.fatal);
+        assert!(state.delivered.is_empty());
+        assert!(state.retired.is_empty());
+        assert_eq!(state.in_flight, None);
+        assert_eq!(state.in_flight_bytes, 0);
+        assert!(state.drain_next_rules.is_some());
+    }
+
+    #[test]
+    fn fatal_controller_rejects_an_unchanged_command_poll() {
+        let (_control_dir, controller) = test_controller();
+        let bytes = canonical_json(&object_value([
+            ("drain", Value::from(false)),
+            ("queue_capacity", Value::from(1_u64)),
+            ("release", Value::Array(Vec::new())),
+            ("revision", Value::from(1_u64)),
+            ("rules", Value::Array(Vec::new())),
+            ("version", Value::from(FORMAT_VERSION)),
+        ]))
+        .expect("canonical command");
+        write_atomic_private_file(&controller.root, CONTROL_FILE, &bytes)
+            .expect("install private command");
+        controller.poll_command().expect("initial command poll");
+
+        {
+            let mut state = controller
+                .state
+                .lock()
+                .expect("message control state poisoned");
+            state.fatal = true;
+            state.last_error = Some("test_fatal".to_owned());
+        }
+
+        assert!(matches!(
+            controller.poll_command(),
+            Err(ControlError::ControllerFatal)
+        ));
+    }
+
+    #[test]
     fn drain_fence_holds_racing_chunks_fifo_until_atomic_cutover() {
         let (_parent, controller) = test_controller();
         let sender = transport_peer(11);
+        let authenticated_via = sender.id().clone();
 
         // Seed one retained pre-fence chunk. Compact chunks deliberately have
         // no fabricated height/view metadata.
@@ -1457,19 +2148,27 @@ mod tests {
         }
         assert_eq!(
             controller
-                .admit(sender.clone(), chunk_message(1), 101)
+                .admit(sender.clone(), &authenticated_via, chunk_message(1), 101,)
                 .expect("seed retained chunk")
                 .0,
-            Admission::Consumed
+            Admission::Held
         );
         {
             let mut state = controller.state.lock().expect("control state");
+            let descriptor = &state.held.get(&1).expect("seed descriptor").descriptor;
+            assert_eq!(descriptor.meta.sender, authenticated_via);
+            assert_eq!(descriptor.meta.authenticated_via, authenticated_via);
+            assert_eq!(descriptor.meta.signer, Some(0));
+            assert!(descriptor.meta.subject.is_none());
+            assert!(descriptor.meta.execution_commitment.is_none());
+            assert_ne!(descriptor.meta.envelope_digest, Hash::new(b""));
             state.drain_next_rules = None;
             state.release_pending.clear();
         }
 
         let next_rules = vec![Rule {
             sender: sender.id().clone(),
+            authenticated_via: sender.id().clone(),
             kind: MessageKind::PrepareVote,
             height: 9,
             view: 2,
@@ -1504,26 +2203,32 @@ mod tests {
             for marker in [2_u8, 3] {
                 let controller = &controller;
                 let sender = sender.clone();
+                let authenticated_via = authenticated_via.clone();
                 scope.spawn(move || {
                     assert_eq!(
                         controller
-                            .admit(sender, chunk_message(marker), 100 + usize::from(marker))
+                            .admit(
+                                sender,
+                                &authenticated_via,
+                                chunk_message(marker),
+                                100 + usize::from(marker),
+                            )
                             .expect("admit racing chunk")
                             .0,
-                        Admission::Consumed
+                        Admission::Held
                     );
                 });
             }
         });
         controller
-            .complete_release(first.sequence, true)
+            .complete_release(first.sequence, ReleaseOutcome::Delivered)
             .expect("complete first release");
 
         let mut released = vec![first.sequence];
         while let Some(message) = controller.next_release().expect("take drain release") {
             released.push(message.sequence);
             controller
-                .complete_release(message.sequence, true)
+                .complete_release(message.sequence, ReleaseOutcome::Delivered)
                 .expect("complete drain release");
         }
         assert_eq!(released, vec![1, 2, 3]);
@@ -1538,11 +2243,49 @@ mod tests {
         }
         assert_eq!(
             controller
-                .admit(sender, chunk_message(4), 104)
+                .admit(sender, &authenticated_via, chunk_message(4), 104)
                 .expect("post-fence admission")
                 .0,
             Admission::Pass
         );
+    }
+
+    #[test]
+    fn controlled_v2_admission_preserves_distinct_relay_identity() {
+        let (_parent, controller) = test_controller();
+        let semantic_sender = transport_peer(21);
+        let authenticated_via = peer(22);
+        {
+            let mut state = controller.state.lock().expect("control state");
+            state.drain_next_rules = Some(Vec::new());
+        }
+        let result = controller
+            .admit(
+                semantic_sender.clone(),
+                &authenticated_via,
+                chunk_message(1),
+                101,
+            )
+            .expect("relay-authenticated message must remain controllable");
+        assert_eq!(result.0, Admission::Held);
+        let state = controller.state.lock().expect("control state");
+        assert!(!state.fatal);
+        let held = state.held.get(&1).expect("relayed message is retained");
+        assert_eq!(held.descriptor.meta.sender, semantic_sender.id().clone());
+        assert_eq!(held.descriptor.meta.authenticated_via, authenticated_via);
+        assert_eq!(held.authenticated_via, authenticated_via);
+        drop(state);
+
+        let released = controller
+            .next_release()
+            .expect("take relayed message release")
+            .expect("relayed message remains releasable");
+        assert_eq!(released.peer, semantic_sender);
+        assert_eq!(released.authenticated_via, authenticated_via);
+        assert!(released.reply_route.is_none());
+        controller
+            .complete_release(released.sequence, ReleaseOutcome::Delivered)
+            .expect("complete relayed message release");
     }
 
     #[test]

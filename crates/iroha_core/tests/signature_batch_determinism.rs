@@ -204,9 +204,13 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
 
     // Build a few transactions where exactly one is signed by a wrong key
     let mk = |msg: &str, mismatched_sig: bool| {
-        let mut tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, msg.to_string())])
-            .sign(good.private_key());
+        let mut tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, msg.to_string())])
+        .sign(good.private_key());
         if mismatched_sig {
             let sig = TransactionSignature(checked_signature_of(bad.private_key(), tx.payload()));
             tx.set_signature(sig);
@@ -259,9 +263,13 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
         iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
 
     let mk = |msg: &str, mismatched_sig: bool| {
-        let mut tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, msg.to_string())])
-            .sign(good.private_key());
+        let mut tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, msg.to_string())])
+        .sign(good.private_key());
         if mismatched_sig {
             let sig = TransactionSignature(checked_signature_of(bad.private_key(), tx.payload()));
             tx.set_signature(sig);
@@ -313,9 +321,13 @@ fn bls_multimessage_batch_passes() {
         iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
 
     let mk = |msg: &str| {
-        TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, msg.to_string())])
-            .sign(signer.private_key())
+        TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, msg.to_string())])
+        .sign(signer.private_key())
     };
     let txs = vec![mk("m1"), mk("m2"), mk("m3"), mk("m4"), mk("m5")];
 
@@ -343,9 +355,13 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
         iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
 
     let mk = |msg: &str, mismatched_sig: bool| {
-        let mut tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, msg.to_string())])
-            .sign(good.private_key());
+        let mut tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, msg.to_string())])
+        .sign(good.private_key());
         if mismatched_sig {
             let sig = TransactionSignature(checked_signature_of(bad.private_key(), tx.payload()));
             tx.set_signature(sig);
@@ -399,9 +415,13 @@ fn bls_batch_permutation_finds_same_bad_sig() {
 
     // Use distinct messages to exercise multi-message aggregation path
     let mk = |msg: &str, mismatched_sig: bool| {
-        let mut tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, msg.to_string())])
-            .sign(good.private_key());
+        let mut tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, msg.to_string())])
+        .sign(good.private_key());
         if mismatched_sig {
             let sig = TransactionSignature(checked_signature_of(bad.private_key(), tx.payload()));
             tx.set_signature(sig);

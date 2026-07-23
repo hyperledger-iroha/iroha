@@ -20,6 +20,12 @@
       },
       "time_to_live_ms": 3500,
       "nonce": 17,
+      "fee_payment": {
+        "payer": "authority",
+        "value": {
+          "charge_limits": []
+        }
+      },
       "metadata": {}
     }
   },
@@ -44,6 +50,12 @@
       },
       "time_to_live_ms": 2000,
       "nonce": 19,
+      "fee_payment": {
+        "payer": "authority",
+        "value": {
+          "charge_limits": []
+        }
+      },
       "metadata": {}
     }
   },
@@ -68,6 +80,12 @@
       },
       "time_to_live_ms": 1800,
       "nonce": 23,
+      "fee_payment": {
+        "payer": "authority",
+        "value": {
+          "charge_limits": []
+        }
+      },
       "metadata": {}
     }
   }

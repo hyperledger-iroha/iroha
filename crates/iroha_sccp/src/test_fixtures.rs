@@ -21,12 +21,13 @@ use iroha_data_model::{
     block::{BlockHeader, BlockSignature, SignedBlock},
     bridge::{
         BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeSccpDestinationProofV1,
-        SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1,
-        SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1,
-        SccpEvmSourceEmitterV1, SccpGovernedRouteV1, SccpGroth16Bn254IcV1,
-        SccpGroth16Bn254SemanticCircuitV1, SccpGroth16Bn254VerifyingKeyV1, SccpLaneIdV1,
-        SccpNetworkV1, SccpOutboundMessageContextV1, SccpOutboundProofPolicyV1,
-        SccpRouteActivationV1, SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1,
+        SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+        SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
+        SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1,
+        SccpGovernedRouteV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
+        SccpGroth16Bn254VerifyingKeyV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
+        SccpOutboundProofPolicyV1, SccpPortableVerifyingKeyRefV1, SccpRouteActivationV1,
+        SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSoraOutboundExecutionPolicyV1,
         SccpSoraSettlementV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
         sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_sora_taira_chain_id_hash_v1,
         sccp_v1_taira_xor_asset_definition_id,
@@ -253,6 +254,23 @@ fn outbound_policy() -> SccpOutboundProofPolicyV1 {
     }
 }
 
+/// Build the deterministic proved burn-and-record policy used by SCCP tests.
+#[must_use]
+pub fn sccp_sora_outbound_execution_policy_test_fixture_v1() -> SccpSoraOutboundExecutionPolicyV1 {
+    SccpSoraOutboundExecutionPolicyV1 {
+        version: 1,
+        semantics: SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS.to_owned(),
+        contract_artifact_sha256: [0xb1; 32],
+        vk_ref: SccpPortableVerifyingKeyRefV1 {
+            backend: "stark/fri/v1".to_owned(),
+            name: "ivm-execution-v1".to_owned(),
+            version: 1,
+            commitment: [0xb2; 32],
+        },
+        gas_limit: 50_000_000,
+    }
+}
+
 /// Build one complete exact EVM-family governed route for downstream tests.
 ///
 /// # Panics
@@ -319,6 +337,7 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
             }),
         },
         destination,
+        sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
         settlement: SccpSoraSettlementV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
             custody_account_id: AccountId::new(custody),
@@ -479,9 +498,18 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
             | TransactionEntrypoint::PrivateKaigi(_)
             | TransactionEntrypoint::Time(_) => continue,
         };
-        let instructions: &[InstructionBox] = match transaction.instructions() {
-            Executable::Instructions(instructions) => instructions.as_ref(),
-            Executable::IvmProved(proved) => proved.overlay.as_ref(),
+        let instructions: Vec<&InstructionBox> = match transaction.instructions() {
+            Executable::Instructions(instructions) => instructions.iter().collect(),
+            Executable::IvmProved(proved) => proved.overlay.iter().collect(),
+            Executable::Batch(items) => items
+                .iter()
+                .filter_map(|item| match item {
+                    iroha_data_model::transaction::ExecutableBatchItem::Instruction(
+                        instruction,
+                    ) => Some(instruction),
+                    iroha_data_model::transaction::ExecutableBatchItem::ContractCall(_) => None,
+                })
+                .collect(),
             Executable::ContractCall(_) | Executable::Ivm(_) => continue,
         };
         for instruction in instructions {
@@ -644,14 +672,16 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         block_hash: block_header.hash(),
         payload_hash: exact_fixture_proposal_wire_hash(block),
     };
+    let round = ConsensusRound {
+        context_id: context.id(),
+        height,
+        // The finality artifact duplicates the finalized header's
+        // view-change index and must bind it exactly.
+        view: block_header.view_change_index(),
+    };
     let mut commit_qc = QuorumCertificate {
-        round: ConsensusRound {
-            context_id: context.id(),
-            height,
-            // The finality artifact duplicates the finalized header's
-            // view-change index and must bind it exactly.
-            view: block_header.view_change_index(),
-        },
+        round,
+        proposal_round: round,
         phase: GlobalPhase::Commit,
         subject,
         execution_commitment: ExecutionCommitment::without_topups(
@@ -713,8 +743,11 @@ fn exact_sccp_fixture_block(
     let transaction_key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519)
         .expect("exact SCCP fixture transaction key");
     let authority = AccountId::new(transaction_key.public_key().clone());
-    let mut transaction_builder =
-        TransactionBuilder::new(ChainId::from(SCCP_TAIRA_FINALITY_CHAIN_ID_V1), authority);
+    let mut transaction_builder = TransactionBuilder::new(
+        ChainId::from(SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
     transaction_builder.set_creation_time(Duration::from_millis(1_700_000_000_001));
     let transaction = transaction_builder
         .with_executable(Executable::IvmProved(IvmProved {

@@ -166,8 +166,13 @@ async fn verify_proof_emits_event(
     let verify: InstructionBox = iroha::data_model::isi::zk::VerifyProof::new(attachment).into();
     {
         let submit_client = client.clone();
-        let submit_result =
-            spawn_blocking(move || submit_client.submit_all_blocking([verify])).await?;
+        let submit_result = spawn_blocking(move || {
+            submit_client.submit_all_blocking(
+                [verify],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        })
+        .await?;
         if let Err(err) = submit_result {
             if is_tx_confirmation_timeout(&err) {
                 eprintln!(

@@ -86,6 +86,7 @@ class NexusTransferInput:
     source_asset_id: str
     quantity: QuantityLike
     destination_account_id: str
+    fee_payment: Mapping[str, Any]
     authority: Optional[str] = None
     metadata: Optional[Mapping[str, Any]] = None
     creation_time_ms: Optional[int] = None
@@ -386,6 +387,7 @@ class DefaultNexusTransactionCodec:
             TransactionConfig(
                 chain_id=str(payload_input["chain_id"]),
                 authority=str(payload_input["authority"]),
+                fee_payment=payload_input["fee_payment"],
                 creation_time_ms=payload_input.get("creation_time_ms"),
                 ttl_ms=payload_input.get("ttl_ms"),
                 nonce=payload_input.get("nonce"),
@@ -693,6 +695,7 @@ class NexusAppClient:
             "source_asset_id": input.source_asset_id,
             "quantity": quantity,
             "destination_account_id": input.destination_account_id,
+            "fee_payment": input.fee_payment,
             "metadata": input.metadata,
             "creation_time_ms": input.creation_time_ms,
             "ttl_ms": input.ttl_ms,

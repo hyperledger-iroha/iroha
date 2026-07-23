@@ -192,6 +192,61 @@ pub mod fixed_u64_limbs {
     }
 }
 
+/// Serialize fixed-size `u32` limb arrays as canonical JSON arrays.
+#[cfg(feature = "json")]
+#[allow(dead_code)]
+pub mod fixed_u32_limbs {
+    use super::*;
+
+    pub fn serialize<const N: usize>(limbs: &[u32; N], out: &mut String) {
+        out.push('[');
+        for (index, limb) in limbs.iter().enumerate() {
+            if index != 0 {
+                out.push(',');
+            }
+            JsonSerialize::json_serialize(limb, out);
+        }
+        out.push(']');
+    }
+
+    pub fn deserialize<const N: usize>(parser: &mut Parser<'_>) -> Result<[u32; N], json::Error> {
+        parser.expect(b'[')?;
+        let mut limbs = [0_u32; N];
+        if N == 0 {
+            parser.expect(b']')?;
+            return Ok(limbs);
+        }
+        for (index, limb) in limbs.iter_mut().enumerate() {
+            parser.skip_ws();
+            if parser.try_consume_char(b']')? {
+                return Err(json::Error::Message(format!(
+                    "expected exactly {N} u32 limbs, got {index}"
+                )));
+            }
+            *limb = u32::json_deserialize(parser)?;
+            if index + 1 < N {
+                if parser.try_consume_char(b']')? {
+                    return Err(json::Error::Message(format!(
+                        "expected exactly {N} u32 limbs, got {}",
+                        index + 1
+                    )));
+                }
+                parser.expect(b',')?;
+            }
+        }
+        if parser.try_consume_char(b']')? {
+            return Ok(limbs);
+        }
+        if parser.try_consume_char(b',')? {
+            return Err(json::Error::Message(format!(
+                "expected exactly {N} u32 limbs, got more than {N}"
+            )));
+        }
+        parser.expect(b']')?;
+        Ok(limbs)
+    }
+}
+
 /// Serialize and deserialize fixed-size byte arrays as hex strings.
 #[cfg(feature = "json")]
 #[allow(dead_code)]
@@ -412,6 +467,15 @@ mod tests {
         limbs: [u64; 4],
     }
 
+    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
+    struct FixedU32LimbsWrapper {
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_u32_limbs")
+        )]
+        limbs: [u32; 4],
+    }
+
     #[test]
     fn fixed_u64_limbs_roundtrip_and_reject_wrong_length() {
         let wrapper = FixedU64LimbsWrapper {
@@ -429,6 +493,29 @@ mod tests {
             error.to_string().contains("expected exactly 4 u64 limbs"),
             "unexpected fixed-limb error: {error}"
         );
+    }
+
+    #[test]
+    fn fixed_u32_limbs_stream_exact_length_and_type() {
+        let wrapper = FixedU32LimbsWrapper {
+            limbs: [0, 1, 42, u32::MAX],
+        };
+        let encoded = json::to_json(&wrapper).expect("serialize fixed u32 limbs");
+        assert_eq!(encoded, r#"{"limbs":[0,1,42,4294967295]}"#);
+        let decoded: FixedU32LimbsWrapper =
+            json::from_str(&encoded).expect("decode fixed u32 limbs");
+        assert_eq!(decoded, wrapper);
+
+        let short = json::from_str::<FixedU32LimbsWrapper>(r#"{"limbs":[1,2,3]}"#)
+            .expect_err("short fixed limb array must fail");
+        assert!(short.to_string().contains("expected exactly 4 u32 limbs"));
+
+        let long = json::from_str::<FixedU32LimbsWrapper>(r#"{"limbs":[1,2,3,4,5]}"#)
+            .expect_err("long fixed limb array must fail before parsing the fifth value");
+        assert!(long.to_string().contains("more than 4"));
+
+        json::from_str::<FixedU32LimbsWrapper>(r#"{"limbs":[1,2,-1,4]}"#)
+            .expect_err("non-u32 limb must fail");
     }
 
     #[test]

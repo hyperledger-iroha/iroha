@@ -243,7 +243,13 @@ pub fn reserve_matrix_report(options: ReserveMatrixOptions) -> Result<json::Valu
             for &duration in &options.durations {
                 for &capacity in &options.capacities_gib {
                     let quote = policy
-                        .quote(storage_class, capacity, duration, tier, options.reserve_balance)
+                        .quote(
+                            storage_class,
+                            capacity,
+                            duration,
+                            tier,
+                            options.reserve_balance.clone(),
+                        )
                         .map_err(|err| {
                             eyre!(
                                 "failed to compute reserve quote for storage_class={:?} tier={:?} duration={:?} capacity_gib={}: {err}",
@@ -258,7 +264,7 @@ pub fn reserve_matrix_report(options: ReserveMatrixOptions) -> Result<json::Valu
                         tier,
                         duration,
                         capacity,
-                        options.reserve_balance,
+                        &options.reserve_balance,
                         &quote,
                     )?;
                     matrix_entries.push(entry);
@@ -399,14 +405,23 @@ fn build_matrix_entry_value(
     tier: ReserveTier,
     duration: ReserveDuration,
     capacity_gib: u64,
-    reserve_balance: XorQuantity,
+    reserve_balance: &XorQuantity,
     quote: &ReserveQuote,
 ) -> Result<json::Value, Box<dyn Error>> {
     let inputs_value =
         matrix_inputs_value(storage_class, tier, duration, capacity_gib, reserve_balance)?;
     let quote_value = norito::json::to_value(quote)
         .map_err(|err| eyre!("failed to serialize reserve quote JSON: {err}"))?;
-    let projection_value = norito::json::to_value(&quote.ledger_projection())
+    let projection = quote.ledger_projection().map_err(|err| {
+        eyre!(
+            "failed to project reserve quote for storage_class={:?} tier={:?} duration={:?} capacity_gib={}: {err}",
+            storage_class,
+            tier,
+            duration,
+            capacity_gib
+        )
+    })?;
+    let projection_value = norito::json::to_value(&projection)
         .map_err(|err| eyre!("failed to serialize reserve ledger projection: {err}"))?;
     let mut entry = json::Map::new();
     entry.insert(
@@ -430,7 +445,7 @@ fn matrix_inputs_value(
     tier: ReserveTier,
     duration: ReserveDuration,
     capacity_gib: u64,
-    reserve_balance: XorQuantity,
+    reserve_balance: &XorQuantity,
 ) -> Result<json::Value, Box<dyn Error>> {
     let mut inputs = json::Map::new();
     inputs.insert(
@@ -443,7 +458,7 @@ fn matrix_inputs_value(
         json::Value::from(reserve_duration_label(duration)),
     );
     inputs.insert("capacity_gib".into(), json::Value::from(capacity_gib));
-    let reserve_value = norito::json::to_value(&reserve_balance)
+    let reserve_value = norito::json::to_value(reserve_balance)
         .map_err(|err| eyre!("failed to serialize reserve balance: {err}"))?;
     inputs.insert("reserve_balance".into(), reserve_value);
     Ok(json::Value::Object(inputs))
@@ -4839,7 +4854,7 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
 
     let stake_pointer = StakePointer {
         pool_id: stake_pool_id,
-        stake_amount: 7_500,
+        stake_amount: XorQuantity::try_from_micro(7_500).expect("fixture stake is representable"),
     };
 
     let proposal = ProviderAdmissionProposalV1 {
@@ -4847,7 +4862,7 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         provider_id,
         profile_id: canonical_handle.clone(),
         profile_aliases: Some(profile_aliases.clone()),
-        stake: stake_pointer,
+        stake: stake_pointer.clone(),
         capabilities: capabilities.clone(),
         endpoints: endpoints.clone(),
         advert_key: provider_public,

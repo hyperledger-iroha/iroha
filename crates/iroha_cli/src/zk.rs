@@ -29,7 +29,7 @@ use iroha::data_model::prelude::{Executable, InstructionBox};
 use iroha_crypto::Hash as CryptoHash;
 use iroha_zkp_halo2::OpenVerifyEnvelope as Halo2Envelope;
 
-use crate::{CliOutputFormat, Run, RunContext, json_utils};
+use crate::{CliOutputFormat, Run, RunContext, json_utils, quote_and_sign_transaction};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -2360,34 +2360,27 @@ mod tests {
     }
 
     #[test]
-    fn vk_register_update_checked_transaction_helpers_verify() {
+    fn vk_submission_key_must_match_exact_authority() {
         let key_pair = iroha_crypto::KeyPair::try_from_seed(
             vec![71, 72, 73, 74],
             iroha_crypto::Algorithm::Ed25519,
         )
         .expect("nonzero deterministic test key");
-        let chain =
-            iroha::data_model::prelude::ChainId::from("00000000-0000-0000-0000-000000000000");
+        let prepared = sample_prepared_vk_submission(&key_pair, "vk_register_checked");
+        let derived = vk_submission_key_pair(&prepared).expect("matching key should validate");
+        assert_eq!(derived.public_key(), key_pair.public_key());
 
-        let register_tx = signed_vk_register_transaction(
-            chain.clone(),
-            iroha::data_model::prelude::Metadata::default(),
-            sample_prepared_vk_submission(&key_pair, "vk_register_checked"),
+        let other = iroha_crypto::KeyPair::try_from_seed(
+            vec![75, 76, 77, 78],
+            iroha_crypto::Algorithm::Ed25519,
         )
-        .expect("register transaction signs through checked helper");
-        register_tx
-            .verify_signature()
-            .expect("register transaction signature verifies");
-
-        let update_tx = signed_vk_update_transaction(
-            chain,
-            iroha::data_model::prelude::Metadata::default(),
-            sample_prepared_vk_submission(&key_pair, "vk_update_checked"),
-        )
-        .expect("update transaction signs through checked helper");
-        update_tx
-            .verify_signature()
-            .expect("update transaction signature verifies");
+        .expect("second deterministic key");
+        let mut mismatched = sample_prepared_vk_submission(&key_pair, "vk_update_checked");
+        mismatched.authority =
+            iroha::data_model::account::AccountId::new(other.public_key().clone());
+        let error = vk_submission_key_pair(&mismatched)
+            .expect_err("mismatched private key and authority must fail");
+        assert!(error.to_string().contains("does not match authority"));
     }
 
     #[test]
@@ -2586,41 +2579,64 @@ struct PreparedVkSubmission {
 }
 
 fn signed_vk_register_transaction(
-    chain: iroha::data_model::prelude::ChainId,
+    client: &Client,
     metadata: iroha::data_model::prelude::Metadata,
     prepared: PreparedVkSubmission,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 ) -> Result<iroha::data_model::prelude::SignedTransaction> {
-    use iroha::data_model::{isi::verifying_keys, prelude::TransactionBuilder};
+    use iroha::data_model::{isi::verifying_keys, transaction::Executable};
 
-    TransactionBuilder::new(chain, prepared.authority.into())
-        .with_metadata(metadata)
-        .with_instructions(core::iter::once(InstructionBox::from(
-            verifying_keys::RegisterVerifyingKey {
-                id: prepared.id,
-                record: prepared.record,
-            },
-        )))
-        .try_sign(&prepared.private_key.0)
-        .wrap_err("failed to sign VK register transaction")
+    let workflow_client = vk_submission_client(client, &prepared)?;
+    let executable = Executable::Instructions(
+        vec![InstructionBox::from(verifying_keys::RegisterVerifyingKey {
+            id: prepared.id,
+            record: prepared.record,
+        })]
+        .into(),
+    );
+    quote_and_sign_transaction(&workflow_client, executable, fee_payment, metadata)
+        .map(|(transaction, _)| transaction)
+        .wrap_err("failed to quote and sign VK register transaction")
 }
 
 fn signed_vk_update_transaction(
-    chain: iroha::data_model::prelude::ChainId,
+    client: &Client,
     metadata: iroha::data_model::prelude::Metadata,
     prepared: PreparedVkSubmission,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 ) -> Result<iroha::data_model::prelude::SignedTransaction> {
-    use iroha::data_model::{isi::verifying_keys, prelude::TransactionBuilder};
+    use iroha::data_model::{isi::verifying_keys, transaction::Executable};
 
-    TransactionBuilder::new(chain, prepared.authority.into())
-        .with_metadata(metadata)
-        .with_instructions(core::iter::once(InstructionBox::from(
-            verifying_keys::UpdateVerifyingKey {
-                id: prepared.id,
-                record: prepared.record,
-            },
-        )))
-        .try_sign(&prepared.private_key.0)
-        .wrap_err("failed to sign VK update transaction")
+    let workflow_client = vk_submission_client(client, &prepared)?;
+    let executable = Executable::Instructions(
+        vec![InstructionBox::from(verifying_keys::UpdateVerifyingKey {
+            id: prepared.id,
+            record: prepared.record,
+        })]
+        .into(),
+    );
+    quote_and_sign_transaction(&workflow_client, executable, fee_payment, metadata)
+        .map(|(transaction, _)| transaction)
+        .wrap_err("failed to quote and sign VK update transaction")
+}
+
+fn vk_submission_client(client: &Client, prepared: &PreparedVkSubmission) -> Result<Client> {
+    let key_pair = vk_submission_key_pair(prepared)?;
+    let mut workflow_client = client.clone();
+    workflow_client.account = prepared.authority.clone();
+    workflow_client.key_pair = key_pair;
+    Ok(workflow_client)
+}
+
+fn vk_submission_key_pair(prepared: &PreparedVkSubmission) -> Result<iroha::crypto::KeyPair> {
+    let key_pair = iroha::crypto::KeyPair::from_private_key(prepared.private_key.0.clone())
+        .wrap_err("failed to derive VK submission public key")?;
+    let derived_authority =
+        iroha::data_model::account::AccountId::new(key_pair.public_key().clone());
+    if derived_authority != prepared.authority {
+        eyre::bail!("VK submission private_key does not match authority");
+    }
+    Ok(key_pair)
 }
 
 fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
@@ -2777,8 +2793,8 @@ impl Run for VkRegisterArgs {
         let client: Client = context.client_from_config();
         let prepared = load_vk_submission(&self.json)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
-        let tx =
-            signed_vk_register_transaction(context.config().chain.clone(), metadata, prepared)?;
+        let fee_payment = context.transaction_fee_payment()?;
+        let tx = signed_vk_register_transaction(&client, metadata, prepared, fee_payment)?;
         let hash = tx.hash();
         client
             .submit_transaction(&tx)
@@ -2802,7 +2818,8 @@ impl Run for VkUpdateArgs {
         let client: Client = context.client_from_config();
         let prepared = load_vk_submission(&self.json)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
-        let tx = signed_vk_update_transaction(context.config().chain.clone(), metadata, prepared)?;
+        let fee_payment = context.transaction_fee_payment()?;
+        let tx = signed_vk_update_transaction(&client, metadata, prepared, fee_payment)?;
         let hash = tx.hash();
         client
             .submit_transaction(&tx)

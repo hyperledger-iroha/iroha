@@ -200,10 +200,11 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     let block_hashes: Vec<HashOf<BlockHeader>> = state.block_hashes().iter().copied().collect();
     let commit_topology = state.commit_topology.to_vec();
     let prev_commit_topology = state.prev_commit_topology.to_vec();
-    let nexus_runtime = SnapshotNexusRuntime::from_nexus(
+    let nexus_runtime = SnapshotNexusRuntime::from_nexus_with_autoscale_history(
         &state.nexus,
         &state.lane_incarnations,
         &state.lane_incarnation_activation_heights,
+        state.autoscale_sample_history_for_snapshot(),
         state.lane_incarnation_lineage_for_snapshot(),
     );
     let public_lane_validators: Vec<_> = world
@@ -3471,56 +3472,6 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     world.remove("vrf_epochs");
 }
 
-#[cfg(test)]
-pub(crate) fn canonical_state_snapshot_component_hashes(
-    state: &State,
-) -> Vec<(String, iroha_crypto::Hash)> {
-    fn component_hash(
-        name: impl Into<String>,
-        value: &json::Value,
-    ) -> (String, iroha_crypto::Hash) {
-        let mut out = String::new();
-        json::JsonSerialize::json_serialize(value, &mut out);
-        (name.into(), iroha_crypto::Hash::new(out.into_bytes()))
-    }
-
-    let value = canonical_state_snapshot_value(state);
-    let mut components = Vec::new();
-    let Some(state_map) = value.as_object() else {
-        return components;
-    };
-    for (key, value) in state_map {
-        components.push(component_hash(key.clone(), value));
-    }
-    if let Some(world) = state_map.get("world").and_then(json::Value::as_object) {
-        for (key, value) in world {
-            components.push(component_hash(format!("world.{key}"), value));
-            if key == "parameters" {
-                push_nested_component_hashes(format!("world.{key}"), value, &mut components);
-            }
-        }
-    }
-    components
-}
-
-#[cfg(test)]
-fn push_nested_component_hashes(
-    prefix: String,
-    value: &json::Value,
-    components: &mut Vec<(String, iroha_crypto::Hash)>,
-) {
-    let Some(map) = value.as_object() else {
-        return;
-    };
-    for (key, value) in map {
-        let name = format!("{prefix}.{key}");
-        let mut out = String::new();
-        json::JsonSerialize::json_serialize(value, &mut out);
-        components.push((name.clone(), iroha_crypto::Hash::new(out.into_bytes())));
-        push_nested_component_hashes(name, value, components);
-    }
-}
-
 /// Canonical hash for the legacy checkpoint surface used before Space Directory manifests
 /// were included in durable snapshots.
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -3782,14 +3733,20 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
     use iroha_data_model::{
-        ChainId, Level,
-        account::{AccountDetails, AccountId, AccountValue},
+        ChainId, Level, Registrable,
+        account::{
+            AccountAlias, AccountAliasDomain, AccountDetails, AccountId, AccountRekeyRecord,
+            AccountValue,
+        },
+        asset::{AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
         block::{BlockHeader, SignedBlock},
         consensus::{ConsensusKeyStatus, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+        domain::DomainId,
         isi::{Log, space_directory::PublishSpaceDirectoryManifest},
         metadata::Metadata,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
         peer::PeerId,
+        smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress, ContractAlias},
         transaction::TransactionBuilder,
     };
     use nonzero_ext::nonzero;
@@ -3800,7 +3757,9 @@ mod tests {
     use crate::{
         block::BlockBuilder,
         query::store::LiveQueryStore,
-        state::derive_validator_key_id,
+        state::{
+            AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord, derive_validator_key_id,
+        },
         sumeragi::consensus::{
             PERMISSIONED_TAG, Phase, Vote, default_chain_order_hash, vote_preimage,
         },
@@ -3981,12 +3940,14 @@ mod tests {
             execution_commitment.executed_block_wire_hash = block
                 .executed_block_wire_hash()
                 .expect("canonical snapshot executed block wire");
+            let round = ConsensusRound {
+                context_id: context.id(),
+                height,
+                view: block.header().view_change_index(),
+            };
             let mut commit_qc = QuorumCertificate {
-                round: ConsensusRound {
-                    context_id: context.id(),
-                    height,
-                    view: block.header().view_change_index(),
-                },
+                round,
+                proposal_round: round,
                 phase: GlobalPhase::Commit,
                 subject,
                 execution_commitment,
@@ -4375,6 +4336,7 @@ mod tests {
         let transaction = TransactionBuilder::new(
             ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
             authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(iroha_data_model::transaction::Executable::IvmProved(
             iroha_data_model::transaction::IvmProved {
@@ -4850,20 +4812,28 @@ mod tests {
     fn accepted_manifest_transaction() -> AcceptedTransaction<'static> {
         let key_pair = checked_seeded_keypair(0x31, Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
-        let transaction = TransactionBuilder::new(ChainId::from(TEST_CHAIN_ID), authority)
-            .with_instructions([PublishSpaceDirectoryManifest {
-                manifest: sample_space_directory_manifest(),
-            }])
-            .sign(key_pair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from(TEST_CHAIN_ID),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([PublishSpaceDirectoryManifest {
+            manifest: sample_space_directory_manifest(),
+        }])
+        .sign(key_pair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
     }
 
     fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
         let key_pair = checked_seeded_keypair(0x32, Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
-        let transaction = TransactionBuilder::new(ChainId::from(TEST_CHAIN_ID), authority)
-            .with_instructions([Log::new(Level::INFO, message.to_owned())])
-            .sign(key_pair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from(TEST_CHAIN_ID),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, message.to_owned())])
+        .sign(key_pair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
     }
 
@@ -4897,26 +4867,6 @@ mod tests {
         let mut payload = String::new();
         serialize_state_snapshot(state, &mut payload, true);
         payload.into_bytes()
-    }
-
-    fn snapshot_bytes_without_world_field(state: &State, field: &str) -> Vec<u8> {
-        let mut payload = String::new();
-        serialize_state_snapshot(state, &mut payload, true);
-        let mut value: json::Value =
-            json::from_slice(payload.as_bytes()).expect("snapshot JSON should parse");
-        let json::Value::Object(root) = &mut value else {
-            panic!("snapshot root should be an object");
-        };
-        let Some(json::Value::Object(world)) = root.get_mut("world") else {
-            panic!("snapshot world should be an object");
-        };
-        assert!(
-            world.remove(field).is_some(),
-            "snapshot world field {field} should be present before removal"
-        );
-        let mut bytes = Vec::new();
-        json::to_writer(&mut bytes, &value).expect("write legacy snapshot JSON");
-        bytes
     }
 
     fn publish_test_snapshot_generation(
@@ -5129,6 +5079,154 @@ mod tests {
             canonical_state_snapshot_bytes_for_tests(&state),
             "snapshot roundtrip must preserve canonical WSV bytes"
         );
+    }
+
+    #[test]
+    async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
+        let tmp_root = tempdir().expect("snapshot tempdir");
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let owner = {
+            let accounts = state.world.accounts.view();
+            accounts
+                .iter()
+                .next()
+                .map(|(account_id, _)| account_id.clone())
+                .expect("fixture account")
+        };
+
+        let account_alias = AccountAlias::new(
+            "restart_alias".parse().expect("account alias label"),
+            Some(AccountAliasDomain::new(
+                "wonderland".parse().expect("account alias domain"),
+            )),
+            DataSpaceId::UNIVERSAL,
+        );
+        let account_rekey_record = AccountRekeyRecord::new(account_alias.clone(), owner.clone());
+        {
+            let mut aliases = state.world.account_aliases.block();
+            assert!(
+                aliases
+                    .insert(account_alias.clone(), owner.clone())
+                    .is_none()
+            );
+            aliases.commit();
+        }
+        {
+            let mut records = state.world.account_rekey_records.block();
+            assert!(
+                records
+                    .insert(account_alias.clone(), account_rekey_record)
+                    .is_none()
+            );
+            records.commit();
+        }
+
+        let definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("asset domain"),
+            "restart_asset".parse().expect("asset name"),
+        );
+        let definition = AssetDefinition::numeric(definition_id.clone())
+            .with_name("restart asset".to_owned())
+            .build(&owner);
+        let definition_alias: AssetDefinitionAlias =
+            "restart_asset#universal".parse().expect("asset alias");
+        let definition_binding = AssetDefinitionAliasBindingRecord {
+            alias: definition_alias,
+            lease_expiry_ms: None,
+            grace_until_ms: None,
+            bound_at_ms: 1,
+        };
+        {
+            let mut definitions = state.world.asset_definitions.block();
+            assert!(
+                definitions
+                    .insert(definition_id.clone(), definition)
+                    .is_none()
+            );
+            definitions.commit();
+        }
+        {
+            let mut bindings = state.world.asset_definition_alias_bindings.block();
+            assert!(
+                bindings
+                    .insert(definition_id.clone(), definition_binding)
+                    .is_none()
+            );
+            bindings.commit();
+        }
+
+        let contract_address = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &owner,
+            17,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let contract_alias: ContractAlias =
+            "restart_router::universal".parse().expect("contract alias");
+        let contract_binding = ContractAliasBindingRecord {
+            alias: contract_alias,
+            lease_expiry_ms: None,
+            grace_until_ms: None,
+            bound_at_ms: 1,
+        };
+        {
+            let mut bindings = state.world.contract_alias_bindings.block();
+            assert!(
+                bindings
+                    .insert(contract_address.clone(), contract_binding)
+                    .is_none()
+            );
+            bindings.commit();
+        }
+
+        let key_pair = checked_random_snapshot_keypair();
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
+            .expect("write signed snapshot with authoritative alias revert maps");
+        let payload = std::fs::read(current_generation_artifact(&store_dir, SNAPSHOT_FILE_NAME))
+            .expect("read signed snapshot payload");
+        let kura = Kura::blank_kura_for_testing();
+        let restored = try_read_snapshot(
+            &store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            BlockCount(0),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            &crate::state::default_zk_config(),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("read signed snapshot without canonical payload drift");
+
+        let mut roundtrip = String::new();
+        serialize_state_snapshot(&restored, &mut roundtrip, true);
+        assert_eq!(
+            roundtrip.as_bytes(),
+            payload,
+            "restoring derived alias indexes must not alter authoritative snapshot bytes"
+        );
+
+        let aliases = restored.world.account_aliases.block_and_revert();
+        assert!(aliases.get(&account_alias).is_none());
+        aliases.commit();
+        let records = restored.world.account_rekey_records.block_and_revert();
+        assert!(records.get(&account_alias).is_none());
+        records.commit();
+        let definitions = restored.world.asset_definitions.block_and_revert();
+        assert!(definitions.get(&definition_id).is_none());
+        definitions.commit();
+        let definition_bindings = restored
+            .world
+            .asset_definition_alias_bindings
+            .block_and_revert();
+        assert!(definition_bindings.get(&definition_id).is_none());
+        definition_bindings.commit();
+        let contract_bindings = restored.world.contract_alias_bindings.block_and_revert();
+        assert!(contract_bindings.get(&contract_address).is_none());
+        contract_bindings.commit();
     }
 
     #[test]
@@ -5671,6 +5769,9 @@ mod tests {
             iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(_) => {
                 unreachable!("snapshot fixture is an EVM route")
             }
+            iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(_) => {
+                unreachable!("snapshot fixture is an EVM route")
+            }
         };
         // (1, 1) is a canonical BN254 field encoding but is not on
         // y^2 = x^3 + 3.  Recompute the embedded key commitment so only the
@@ -5700,6 +5801,9 @@ mod tests {
                 emitter.route_config_hash = route_configuration_hash;
             }
             iroha_data_model::bridge::SccpSourceEmitterV1::Tron(_) => {
+                unreachable!("snapshot fixture is an EVM route")
+            }
+            iroha_data_model::bridge::SccpSourceEmitterV1::Solana(_) => {
                 unreachable!("snapshot fixture is an EVM route")
             }
         }

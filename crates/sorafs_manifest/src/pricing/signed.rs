@@ -796,9 +796,8 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     value: &T,
     max_bytes: usize,
 ) -> Result<Vec<u8>, GovernedPricingError> {
-    let exact = value
-        .encoded_len_exact()
-        .ok_or(GovernedPricingError::EncodedLengthUnavailable { payload })?;
+    let exact = norito::core::encoded_frame_len(value)
+        .map_err(|error| GovernedPricingError::Encoding(error.to_string()))?;
     if exact > max_bytes {
         return Err(GovernedPricingError::EncodedPayloadTooLarge {
             payload,
@@ -1027,12 +1026,17 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     use super::*;
+    use crate::XorQuantity;
     use crate::pricing::{
         BondPolicyV1, CreditPolicyV1, PRICING_MANIFEST_VERSION_V1, PricingMicropaymentPolicyV1,
         PricingTierV1,
     };
 
     const ADMITTED_AT: u64 = 1_800_000_000;
+
+    fn xor(value: &str) -> XorQuantity {
+        value.parse().expect("canonical XOR quantity")
+    }
 
     fn keys() -> [SigningKey; 3] {
         [
@@ -1073,15 +1077,15 @@ mod tests {
             tiers: vec![
                 PricingTierV1 {
                     tier_id: "hot".into(),
-                    storage_price_milliu_per_gib_hour: 500,
-                    egress_price_milliu_per_gib: 50,
+                    storage_price_per_gib_hour: xor("0.5"),
+                    egress_price_per_gib: xor("0.05"),
                     min_collateral_ratio_bps: Some(15_000),
                     notes: None,
                 },
                 PricingTierV1 {
                     tier_id: "warm".into(),
-                    storage_price_milliu_per_gib_hour: 200,
-                    egress_price_milliu_per_gib: 20,
+                    storage_price_per_gib_hour: xor("0.2"),
+                    egress_price_per_gib: xor("0.02"),
                     min_collateral_ratio_bps: None,
                     notes: None,
                 },
@@ -1096,7 +1100,7 @@ mod tests {
             },
             micropayment_policy: Some(PricingMicropaymentPolicyV1 {
                 payout_probability_bps: 100,
-                max_voucher_value_nanos: 5_000_000_000,
+                max_voucher_value: xor("5"),
                 notes: None,
             }),
         }
@@ -1150,7 +1154,10 @@ mod tests {
         let governed = signed_manifest(&policy, ADMITTED_AT + 100, None, &[0, 1]);
 
         let mut tampered = governed.clone();
-        tampered.manifest.tiers[0].storage_price_milliu_per_gib_hour += 1;
+        tampered.manifest.tiers[0].storage_price_per_gib_hour = tampered.manifest.tiers[0]
+            .storage_price_per_gib_hour
+            .checked_add(&xor("0.001"))
+            .expect("tampered storage price remains representable");
         assert!(matches!(
             tampered.verify(&policy, ADMITTED_AT),
             Err(GovernedPricingError::PricingIdMismatch)
@@ -1406,7 +1413,11 @@ mod tests {
         ));
 
         let mut tampered = series;
-        tampered.admissions[1].governed.manifest.tiers[0].egress_price_milliu_per_gib += 1;
+        tampered.admissions[1].governed.manifest.tiers[0].egress_price_per_gib =
+            tampered.admissions[1].governed.manifest.tiers[0]
+                .egress_price_per_gib
+                .checked_add(&xor("0.001"))
+                .expect("tampered egress price remains representable");
         assert!(matches!(
             tampered.validate(&policy),
             Err(GovernedPricingError::PricingIdMismatch)

@@ -15,13 +15,14 @@ internal object FixtureGeneratorRunner {
         val repoRoot = locateRepoRoot()
         val targetDir = java.io.File(repoRoot, "target/kotlin-fixture-gen-test")
         val binary = java.io.File(targetDir, "debug/kotlin-fixture-gen")
-        if (!built || !binary.exists()) {
+        if (!built) {
             synchronized(buildLock) {
-                if (!built || !binary.exists()) {
+                if (!built) {
                     withCargoBuildLock(repoRoot) {
-                        if (!binary.exists()) {
-                            buildFixtureGenerator(repoRoot, targetDir)
-                        }
+                        // Always ask Cargo to refresh the generator once per test JVM.
+                        // Merely finding a previous binary can otherwise compare the SDK
+                        // against stale Rust wire types after an ABI cutover.
+                        buildFixtureGenerator(repoRoot, targetDir)
                         built = true
                     }
                 }

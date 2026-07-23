@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.Base64;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sccp.SccpV1;
@@ -119,7 +120,10 @@ final class SccpSubmitEncoding {
   }
 
   static String normalizeOptionalTransactionPayload(
-      final String value, final Long creationTimeMs, final String expectedAuthority) {
+      final String value,
+      final Long creationTimeMs,
+      final String expectedAuthority,
+      final FeePaymentIntent expectedFeePayment) {
     if (value == null) return null;
     final byte[] bytes = canonicalBase64(
         value, "transaction_payload_b64", MAX_TRANSACTION_PAYLOAD_BYTES);
@@ -138,6 +142,10 @@ final class SccpSubmitEncoding {
     if (!sameCanonicalAccountId(payload.authority(), expectedAuthority)) {
       throw new IllegalArgumentException(
           "transaction payload authority does not match authority");
+    }
+    if (!expectedFeePayment.hasSamePayerAndGasBound(payload.feePayment())) {
+      throw new IllegalArgumentException(
+          "transaction payload changed the requested payer, sponsor revision, or gas bound");
     }
     if (creationTimeMs != null && payload.creationTimeMs() != creationTimeMs) {
       throw new IllegalArgumentException(

@@ -574,8 +574,11 @@ async fn submit_progress_log(
     message: String,
 ) -> eyre::Result<()> {
     let candidate_indices = submit_peer_indices_for_network(network, probe);
-    let transaction =
-        probe.build_transaction_from_items([Log::new(Level::INFO, message)], Metadata::default());
+    let transaction = probe.build_transaction_from_items(
+        [Log::new(Level::INFO, message)],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
 
     let mut accepted = false;
     let mut errors = Vec::new();
@@ -622,7 +625,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     npos.epoch_length_blocks = EPOCH_LEN;
     npos.vrf_commit_window_blocks = 2;
     npos.vrf_reveal_window_blocks = 4;
-    npos.min_self_bond = MIN_SELF_BOND;
+    npos.min_self_bond = MIN_SELF_BOND.into();
     npos.finality_margin_blocks = FINALITY_MARGIN;
 
     let builder = NetworkBuilder::new()
@@ -796,7 +799,7 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     npos.epoch_length_blocks = EPOCH_LEN;
     npos.vrf_commit_window_blocks = 2;
     npos.vrf_reveal_window_blocks = 4;
-    npos.min_self_bond = MIN_SELF_BOND;
+    npos.min_self_bond = MIN_SELF_BOND.into();
     npos.max_entity_correlation_pct = 50;
     npos.finality_margin_blocks = FINALITY_MARGIN;
 

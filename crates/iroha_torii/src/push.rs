@@ -23,10 +23,7 @@ use iroha_data_model::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox},
     },
-    transaction::{
-        executable::Executable,
-        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
-    },
+    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
 use jsonwebtoken::{Algorithm, EncodingKey};
 #[cfg(test)]
@@ -457,11 +454,10 @@ impl PushBridge {
             if result.is_err() {
                 continue;
             }
-            let Executable::Instructions(instructions) = tx.instructions() else {
-                continue;
-            };
             let tx_hash = entrypoint_hash.to_string();
-            for (instruction_index, instruction) in instructions.iter().enumerate() {
+            for (instruction_index, instruction) in
+                tx.instructions().explicit_instructions().enumerate()
+            {
                 let activity_kind = crate::explorer::instruction_kind(instruction).as_str();
                 for activity in crate::account_activity::instruction_account_activities(instruction)
                 {

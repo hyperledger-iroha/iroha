@@ -17,7 +17,7 @@ The `mochi-integration` crate provides lightweight Torii mocks and supervisor sm
 For the desktop shell itself, the quickest happy path is:
 
 ```sh
-cargo run -p mochi-ui -- --profile single-peer --build-binaries
+cargo run -p mochi-ui --features gui --bin mochi -- --profile single-peer --build-binaries
 ```
 
 Use `--profile four-peer-bft` when you want a closer validator/quorum rehearsal.
@@ -56,8 +56,10 @@ By default the helper uses the current directory as `MOCHI_WORKSPACE_ROOT` and s
 `single-peer` preset. Set `MOCHI_PROFILE=four-peer-bft` for the four-validator rehearsal, or
 set `MOCHI_WORKSPACE_ROOT=/path/to/app` when the current shell is not already in the target app
 workspace.
+Set `MOCHI_PYTHON=/absolute/path/to/python3` when you need to select a specific validated
+interpreter; the helper uses that one interpreter for every Python step.
 
-`up` launches `cargo run -p mochi-ui -- sandbox serve` in a detached process group, waits for Torii
+`up` launches `cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve` in a detached process group, waits for Torii
 readiness, runs a local smoke transaction, validates the local MCP surface, writes
 `<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes `.env.local` plus
 `.mochi/generated/*` under the workspace. The helper records the long-lived Mochi process in
@@ -70,11 +72,19 @@ The generated local Torii config enables both the curated `/v1/mcp` endpoint and
 transport (`stage = "ga"`, no mTLS) so the same sandbox works for Codex MCP clients and local SDK
 smoke tests without extra hand-edited config.
 
-Generated local validator configs now pin the runtime-critical defaults Mochi depends on:
-`nexus.enabled = false` unless explicitly enabled, `confidential.enabled = true`, and
-`sumeragi.consensus_mode` always matches the genesis block consensus mode that Mochi asked Kagami to
-generate. If you do enable Nexus, Mochi now fails fast unless the profile uses
-`sumeragi.consensus_mode = "npos"`.
+Generated local validator configs pin the runtime-critical local defaults Mochi depends on:
+`nexus.enabled = false` unless explicitly enabled and `confidential.enabled = true`. Consensus mode
+is carried by the signed genesis/height context, so Mochi does not emit the retired mutable
+`sumeragi.consensus_mode` setting. If you enable Nexus, Mochi fails fast unless the selected profile
+generates an NPoS signed genesis.
+
+Each peer keeps its runtime data under `peers/<alias>/storage`, with independent `kura`, `snapshot`,
+and `torii` children. Kura receives the dedicated `storage/kura` root so it can establish and
+authenticate its configured-catalog baseline without unrelated runtime files in that directory.
+Mochi initializes `storage/snapshot/generations` whenever it creates the explicit snapshot root,
+matching the snapshot reader's authenticated directory contract.
+Snapshot metadata pins this as `storage_layout = "kura-subdirectory-v1"`; restore rejects older
+unmarked aggregate-layout snapshots because their Kura data cannot be relocated safely by inference.
 
 ## Repo-Shared Skill
 

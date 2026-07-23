@@ -2,7 +2,6 @@ package org.hyperledger.iroha.sdk.connect.error
 
 import java.io.EOFException
 import java.io.UncheckedIOException
-import java.lang.reflect.UndeclaredThrowableException
 import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.PortUnreachableException
@@ -77,7 +76,6 @@ object ConnectErrors {
                 current is CompletionException && current.cause != null -> current.cause
                 current is ExecutionException && current.cause != null -> current.cause
                 current is UncheckedIOException && current.cause != null -> current.cause
-                current is UndeclaredThrowableException && current.cause != null -> current.cause
                 else -> return current
             }
         }

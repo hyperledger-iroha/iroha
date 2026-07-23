@@ -306,10 +306,7 @@ impl CapacityFeeLedgerEntry {
     /// Returns [`CapacityLedgerMutationError`] without mutation when the window
     /// is stale/overlapping, a nonce is replayed, a counter would overflow, or
     /// fee/utilisation conservation would be violated.
-    pub fn accrue(
-        &mut self,
-        accrual: &CapacityAccrual,
-    ) -> Result<(), CapacityLedgerMutationError> {
+    pub fn accrue(&mut self, accrual: &CapacityAccrual) -> Result<(), CapacityLedgerMutationError> {
         if accrual.window_end_epoch <= accrual.window_start_epoch {
             return Err(CapacityLedgerMutationError::InvalidWindow {
                 start: accrual.window_start_epoch,

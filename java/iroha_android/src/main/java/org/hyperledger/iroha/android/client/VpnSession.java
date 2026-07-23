@@ -19,7 +19,7 @@ public final class VpnSession {
   private final String feeAssetId;
   private final String escrowAccountId;
   private final String operatorAccountId;
-  private final long leaseFeeNanos;
+  private final String leaseFee;
   private final int flowLabelBits;
   private final int paddingBudgetMs;
   private final String relayTlsSpkiSha256Hex;
@@ -48,7 +48,7 @@ public final class VpnSession {
       final String feeAssetId,
       final String escrowAccountId,
       final String operatorAccountId,
-      final long leaseFeeNanos,
+      final String leaseFee,
       final int flowLabelBits,
       final int paddingBudgetMs,
       final String relayTlsSpkiSha256Hex,
@@ -75,7 +75,7 @@ public final class VpnSession {
     this.feeAssetId = Objects.requireNonNull(feeAssetId, "feeAssetId");
     this.escrowAccountId = Objects.requireNonNull(escrowAccountId, "escrowAccountId");
     this.operatorAccountId = Objects.requireNonNull(operatorAccountId, "operatorAccountId");
-    this.leaseFeeNanos = leaseFeeNanos;
+    this.leaseFee = Objects.requireNonNull(leaseFee, "leaseFee");
     this.flowLabelBits = flowLabelBits;
     this.paddingBudgetMs = paddingBudgetMs;
     this.relayTlsSpkiSha256Hex = relayTlsSpkiSha256Hex;
@@ -104,7 +104,7 @@ public final class VpnSession {
   public String feeAssetId() { return feeAssetId; }
   public String escrowAccountId() { return escrowAccountId; }
   public String operatorAccountId() { return operatorAccountId; }
-  public long leaseFeeNanos() { return leaseFeeNanos; }
+  public String leaseFee() { return leaseFee; }
   public int flowLabelBits() { return flowLabelBits; }
   public int paddingBudgetMs() { return paddingBudgetMs; }
   public String relayTlsSpkiSha256Hex() { return relayTlsSpkiSha256Hex; }

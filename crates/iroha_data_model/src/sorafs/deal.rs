@@ -222,7 +222,7 @@ pub enum DealTermsValidationError {
 }
 
 /// Errors raised while computing charges from validated deal terms.
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum DealComputationError {
     /// The deal terms are structurally invalid.
     #[error("invalid deal terms: {0}")]

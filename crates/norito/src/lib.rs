@@ -9400,7 +9400,7 @@ where
             }
         }
         Compression::Zstd => {
-            #[cfg(feature = "compression")]
+            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
             {
                 let mut decoder = zstd::Decoder::new(reader)?;
                 let mut buf = [0u8; 64 * 1024];
@@ -9418,7 +9418,7 @@ where
                     return Err(Error::LengthMismatch);
                 }
             }
-            #[cfg(not(feature = "compression"))]
+            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
             {
                 let _ = reader;
                 return Err(std::io::Error::other("compression support disabled").into());
@@ -9950,11 +9950,11 @@ where
     let boxed: Box<dyn Read> = match header.compression {
         Compression::None => Box::new(reader),
         Compression::Zstd => {
-            #[cfg(feature = "compression")]
+            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
             {
                 Box::new(zstd::Decoder::new(reader)?)
             }
-            #[cfg(not(feature = "compression"))]
+            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
             {
                 return Err(std::io::Error::other("compression support disabled").into());
             }
@@ -10522,11 +10522,11 @@ where
         let boxed: Box<dyn Read> = match header.compression {
             Compression::None => Box::new(reader),
             Compression::Zstd => {
-                #[cfg(feature = "compression")]
+                #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
                 {
                     Box::new(zstd::Decoder::new(reader)?)
                 }
-                #[cfg(not(feature = "compression"))]
+                #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
                 {
                     return Err(std::io::Error::other("compression support disabled").into());
                 }
@@ -10920,11 +10920,11 @@ where
         let mut r: Box<dyn Read> = match header.compression {
             Compression::None => Box::new(reader),
             Compression::Zstd => {
-                #[cfg(feature = "compression")]
+                #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
                 {
                     Box::new(zstd::Decoder::new(reader)?)
                 }
-                #[cfg(not(feature = "compression"))]
+                #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
                 {
                     return Err(std::io::Error::other("compression support disabled").into());
                 }

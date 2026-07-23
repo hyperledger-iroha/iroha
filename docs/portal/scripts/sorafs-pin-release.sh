@@ -1169,7 +1169,8 @@ fi
 log "Rendering gateway header template (${GATEWAY_HEADERS})"
 if [[ -z "${PRIMARY_ALIAS}" || -z "${DNS_HOSTNAME}" ]]; then
   log "warning: skipped gateway binding headers (missing --alias or --dns-hostname)"
-elif ! cargo xtask soradns-binding-template "${binding_args[@]}"; then
+elif ! cargo run --locked -p xtask --bin xtask -- \
+  soradns-binding-template "${binding_args[@]}"; then
   log "warning: failed to generate gateway binding headers"
 fi
 
@@ -1188,7 +1189,8 @@ if [[ -f "${GATEWAY_BINDING_JSON}" ]]; then
   if [[ -n "${ROUTE_PROOF_STATUS}" ]]; then
     verify_args+=( "--proof-status=${ROUTE_PROOF_STATUS}" )
   fi
-  cargo xtask soradns-verify-binding "${verify_args[@]}"
+  cargo run --locked -p xtask --bin xtask -- \
+    soradns-verify-binding "${verify_args[@]}"
 else
   log "warning: skipped gateway binding verification (missing ${GATEWAY_BINDING_JSON})"
 fi

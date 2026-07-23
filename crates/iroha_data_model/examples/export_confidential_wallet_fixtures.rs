@@ -144,7 +144,12 @@ fn build_shield_case(
         payload,
     ));
 
-    let mut builder = TransactionBuilder::new(chain, authority).with_instructions([instruction]);
+    let mut builder = TransactionBuilder::new(
+        chain,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction]);
     builder.set_creation_time(creation_time);
     builder.set_ttl(ttl);
     let signed = builder.try_sign(private_key)?;
@@ -171,7 +176,12 @@ fn build_zk_transfer_case(
         Some([0x44; 32]),
     ));
 
-    let mut builder = TransactionBuilder::new(chain, authority).with_instructions([instruction]);
+    let mut builder = TransactionBuilder::new(
+        chain,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction]);
     builder.set_creation_time(creation_time);
     builder.set_ttl(ttl);
     let signed = builder.try_sign(private_key)?;
@@ -198,7 +208,12 @@ fn build_unshield_case(
         None,
     ));
 
-    let mut builder = TransactionBuilder::new(chain, authority).with_instructions([instruction]);
+    let mut builder = TransactionBuilder::new(
+        chain,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction]);
     builder.set_creation_time(creation_time);
     builder.set_ttl(ttl);
     let signed = builder.try_sign(private_key)?;

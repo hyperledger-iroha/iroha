@@ -106,11 +106,17 @@ fn nft_lifecycle_scenarios() -> Result<()> {
         let bob_id = BOB_ID.clone();
         let nft_id = NftId::new(wonderland.clone(), "nft_transfer".parse()?);
 
-        client.submit_blocking(Register::nft(Nft::new(nft_id.clone(), Metadata::default())))?;
+        client.submit_blocking(
+            Register::nft(Nft::new(nft_id.clone(), Metadata::default())),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         wait_for_nft_owner(&client, &nft_id, &alice_id, "nft registration");
 
-        client.submit_blocking(Transfer::nft(alice_id, nft_id.clone(), bob_id.clone()))?;
+        client.submit_blocking(
+            Transfer::nft(alice_id, nft_id.clone(), bob_id.clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         wait_for_nft_owner(&client, &nft_id, &bob_id, "nft transfer");
     }
@@ -122,7 +128,10 @@ fn nft_lifecycle_scenarios() -> Result<()> {
         metadata.insert("key".parse()?, 1u32);
         let register_nft = Register::nft(Nft::new(nft_id.clone(), metadata.clone()));
 
-        client.submit_blocking(register_nft.clone())?;
+        client.submit_blocking(
+            register_nft.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let nft = wait_for_nft(
             &client,
@@ -132,7 +141,14 @@ fn nft_lifecycle_scenarios() -> Result<()> {
         );
         assert_eq!(*nft.content(), metadata);
 
-        assert!(client.submit_blocking(register_nft).is_err());
+        assert!(
+            client
+                .submit_blocking(
+                    register_nft,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
+                )
+                .is_err()
+        );
     }
 
     // unregister_nft_should_remove_nft_from_account
@@ -141,7 +157,10 @@ fn nft_lifecycle_scenarios() -> Result<()> {
         let register_nft = Register::nft(Nft::new(nft_id.clone(), Metadata::default()));
         let unregister_nft = Unregister::nft(nft_id.clone());
 
-        client.submit_blocking(register_nft)?;
+        client.submit_blocking(
+            register_nft,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         wait_for_nft(
             &client,
             &nft_id,
@@ -149,7 +168,10 @@ fn nft_lifecycle_scenarios() -> Result<()> {
             "nft unregister registration seed",
         );
 
-        client.submit_blocking(unregister_nft)?;
+        client.submit_blocking(
+            unregister_nft,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         wait_for_nft_absent(&client, &nft_id, "nft unregister");
     }
 
@@ -159,22 +181,38 @@ fn nft_lifecycle_scenarios() -> Result<()> {
         let nft_id = NftId::new(wonderland.clone(), "nft_owner_modify".parse()?);
 
         let create_account = Register::account(Account::new(account_id.clone()));
-        client.submit_blocking(create_account)?;
+        client.submit_blocking(
+            create_account,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let register_nft = Register::nft(Nft::new(nft_id.clone(), Metadata::default()));
-        client.submit_blocking(register_nft)?;
+        client.submit_blocking(
+            register_nft,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let transfer_nft = Transfer::nft(ALICE_ID.clone(), nft_id.clone(), account_id.clone());
-        client.submit_blocking(transfer_nft)?;
+        client.submit_blocking(
+            transfer_nft,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let modify_nft = SetKeyValue::nft(nft_id.clone(), "foo".parse()?, "value");
         client
-            .submit_blocking(modify_nft.clone())
+            .submit_blocking(
+                modify_nft.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .expect("Owner of `nft.domain` can modify NFT");
 
-        let modify_nft_tx = TransactionBuilder::new(network.chain_id(), account_id.clone())
-            .with_instructions([modify_nft])
-            .sign(account_keypair.private_key());
+        let modify_nft_tx = TransactionBuilder::new(
+            network.chain_id(),
+            account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([modify_nft])
+        .sign(account_keypair.private_key());
         let _ = client
             .submit_transaction_blocking(&modify_nft_tx)
             .expect_err("Owner of NFT can't modify NFT");
@@ -186,18 +224,31 @@ fn nft_lifecycle_scenarios() -> Result<()> {
         let nft_id = NftId::new(wonderland.clone(), "nft_owner_transfer".parse()?);
 
         let create_account = Register::account(Account::new(account_id.clone()));
-        client.submit_blocking(create_account)?;
+        client.submit_blocking(
+            create_account,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let register_nft = Register::nft(Nft::new(nft_id.clone(), Metadata::default()));
-        client.submit_blocking(register_nft)?;
+        client.submit_blocking(
+            register_nft,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let transfer_nft1 = Transfer::nft(ALICE_ID.clone(), nft_id.clone(), account_id.clone());
-        client.submit_blocking(transfer_nft1)?;
+        client.submit_blocking(
+            transfer_nft1,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let transfer_nft2 = Transfer::nft(account_id.clone(), nft_id.clone(), ALICE_ID.clone());
-        let transfer_nft2_tx = TransactionBuilder::new(network.chain_id(), account_id.clone())
-            .with_instructions([transfer_nft2])
-            .sign(account_keypair.private_key());
+        let transfer_nft2_tx = TransactionBuilder::new(
+            network.chain_id(),
+            account_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([transfer_nft2])
+        .sign(account_keypair.private_key());
         client
             .submit_transaction_blocking(&transfer_nft2_tx)
             .expect("Owner of NFT can transfer NFT");

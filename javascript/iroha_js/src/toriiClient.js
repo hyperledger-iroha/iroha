@@ -9,9 +9,11 @@ import { getNativeBinding } from "./native.js";
 import {
   canonicalizeMultihashHex,
   ensureCanonicalAccountId,
+  normalizeAccountAliasFqn,
   normalizeAccountAliasLiteral,
   normalizeAccountId,
   normalizeAccountIdOrAliasLiteral,
+  normalizeAssetDefinitionId,
   normalizeAssetId,
   normalizeAssetHoldingId,
   normalizeIdentifierInput,
@@ -45,7 +47,10 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
-import { buildCanonicalRequestHeaders } from "./canonicalRequest.js";
+import {
+  buildCanonicalRequestHeaders,
+  requireCanonicalAuthAccount,
+} from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
 import { NumericV1, NumericV1Error } from "./numericV1.js";
 import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto.js";
@@ -65,12 +70,23 @@ import {
   normalizeSccpProofRequest,
   normalizeSccpRecentMessages,
   normalizeSccpRegistry,
+  normalizeSccpSoraOutboundMaterial,
   normalizeSccpRouteGovernanceAction,
   parseSccpJsonObject,
   parseSccpBridgeSubmitResponseJson,
 } from "./sccp.js";
 import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
+import {
+  normalizeKagemushaAssetSelector,
+  normalizeKagemushaOperationId,
+  normalizeKagemushaOperationReference,
+  normalizeKagemushaOperationStatus,
+  normalizeKagemushaRedeemRequestV4,
+  normalizeKagemushaReadinessV4,
+  normalizeKagemushaTopUpRequestV4,
+  requireKagemushaJsonContentType,
+} from "./kagemushaOffline.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 const VALIDATION_FEE_VERIFICATION_CONTEXTS = new WeakMap();
@@ -230,7 +246,7 @@ const SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME =
   "iroha_sccp::TairaSccpMessageProofV1";
 const SCCP_PROOF_REQUEST_NORITO_TYPE_NAME =
   "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
-const EXPECTED_DATA_MODEL_VERSION = 1;
+const EXPECTED_DATA_MODEL_VERSION = 3;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -243,8 +259,6 @@ const MAX_NUMERIC_TEXT_LENGTH = 185;
 const MIN_NUMERIC_MANTISSA = -(1n << BigInt(MAX_NUMERIC_BITS - 1));
 const MAX_NUMERIC_MANTISSA = (1n << BigInt(MAX_NUMERIC_BITS - 1)) - 1n;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
-const RAW_UTF8_HEADERS_INIT_KEY = "__irohaRawUtf8Headers";
-const RAW_UTF8_HEADER_SUPPORT_FLAG = "__irohaSupportsRawUtf8Headers";
 const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
 const NORITO_COMPACT_LEN_FLAG = 0x02;
@@ -311,6 +325,32 @@ const RETAIL_RECIPIENT_LOOKUP_REQUEST_KEYS = new Set([
   "account_id",
   "aliasFqn",
   "alias_fqn",
+]);
+const RETAIL_RECIPIENT_LOOKUP_RESPONSE_KEYS = new Set([
+  "resolved",
+  "account_id",
+  "alias_fqn",
+  "fi_id",
+  "full_name",
+]);
+const RETAIL_RECIPIENT_ROUTE_RESPONSE_KEYS = new Set([
+  "account_id",
+  "alias_fqn",
+  "fi_id",
+]);
+const FEE_SPONSOR_PROGRAM_RESPONSE_KEYS = new Set([
+  "id",
+  "lifecycle",
+  "active_revision",
+  "staged_revision",
+  "scheduled_activation",
+]);
+const FEE_QUOTE_RESPONSE_KEYS = new Set([
+  "intent",
+  "observation",
+  "components",
+  "capacities",
+  "decision",
 ]);
 const ISO_NON_TERMINAL_STATUS_VALUES = new Set(["pending", "accepted"]);
 const ISO_STATUS_VALUES = new Map([
@@ -1651,6 +1691,111 @@ export class ToriiClient {
     }
   }
 
+  /** Fetch the transport-only ABI-21/V4 Kagemusha readiness projection. */
+  async getKagemushaReadinessV4(assetDefinitionId, options = {}) {
+    const selector = normalizeKagemushaAssetSelector(assetDefinitionId);
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getKagemushaReadinessV4",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaReadinessV4 options");
+    const response = await this._request("GET", "/v1/offline/readiness", {
+      params: { asset_definition_id: selector },
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    requireKagemushaJsonContentType(
+      this._getHeader(response, "content-type"),
+      "Kagemusha readiness response",
+    );
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new TypeError("Kagemusha readiness response must contain JSON");
+    }
+    return normalizeKagemushaReadinessV4(payload, selector);
+  }
+
+  /** Submit an externally produced manifest-V4 top-up Norito archive. */
+  submitKagemushaTopUpV4(request, options = {}) {
+    return this._submitKagemushaCommandV4(
+      "/v1/offline/top-up",
+      "top_up",
+      request,
+      options,
+      "submitKagemushaTopUpV4",
+    );
+  }
+
+  /** Submit an externally produced manifest-V4 redemption Norito archive. */
+  submitKagemushaRedeemV4(request, options = {}) {
+    return this._submitKagemushaCommandV4(
+      "/v1/offline/redeem",
+      "redeem",
+      request,
+      options,
+      "submitKagemushaRedeemV4",
+    );
+  }
+
+  /** Poll one Kagemusha operation through the unchanged operation route. */
+  async getKagemushaOperationStatus(operationId, options = {}) {
+    const canonicalId = normalizeKagemushaOperationId(operationId);
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getKagemushaOperationStatus",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaOperationStatus options");
+    const response = await this._request(
+      "GET",
+      `/v1/offline/operations/${canonicalId}`,
+      { headers: JSON_ACCEPT_HEADERS, signal },
+    );
+    await this._expectStatus(response, [200]);
+    requireKagemushaJsonContentType(
+      this._getHeader(response, "content-type"),
+      "Kagemusha operation status response",
+    );
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new TypeError("Kagemusha operation status response must contain JSON");
+    }
+    return normalizeKagemushaOperationStatus(payload, canonicalId);
+  }
+
+  async _submitKagemushaCommandV4(path, kind, request, options, context) {
+    const normalizeRequest = kind === "top_up"
+      ? normalizeKagemushaTopUpRequestV4
+      : normalizeKagemushaRedeemRequestV4;
+    const normalized = normalizeRequest(request, `${context} request`);
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, context);
+    assertSupportedOptionKeys(rest, new Set([]), `${context} options`);
+    const response = await this._request("POST", path, {
+      headers: {
+        Accept: APPLICATION_JSON,
+        "Content-Type": "application/x-norito",
+        "Idempotency-Key": normalized.operationId,
+      },
+      body: Buffer.from(normalized.norito),
+      signal,
+    });
+    await this._expectStatus(response, [202]);
+    requireKagemushaJsonContentType(
+      this._getHeader(response, "content-type"),
+      "Kagemusha operation reference response",
+    );
+    const location = this._getHeader(response, "location");
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new TypeError("Kagemusha operation reference response must contain JSON");
+    }
+    return normalizeKagemushaOperationReference(payload, {
+      expectedOperationId: normalized.operationId,
+      expectedKind: kind,
+      location,
+    });
+  }
+
   /**
    * List accounts (`GET /v1/accounts`).
    * @param {IterableListOptions} [options]
@@ -2545,7 +2690,8 @@ export class ToriiClient {
   }
 
   /**
-   * List permission tokens granted directly to an account (`GET /v1/accounts/{accountId}/permissions`).
+   * List effective permission tokens for an account, including grants inherited from assigned roles
+   * (`GET /v1/accounts/{accountId}/permissions`).
    * @param {string} accountId
    * @param {{limit?: number, offset?: number, signal?: AbortSignal}} [options]
    * @returns {Promise<{items: Array<{name: string, payload: unknown}>, total: number}>}
@@ -2574,7 +2720,7 @@ export class ToriiClient {
   }
 
   /**
-   * Iterate permission tokens granted directly to an account.
+   * Iterate effective permission tokens, including grants inherited from assigned roles.
    * @param {string} accountId
    * @param {PaginationIteratorOptions} [options]
    * @returns {AsyncGenerator<{name: string, payload: unknown}, void, unknown>}
@@ -2619,7 +2765,7 @@ export class ToriiClient {
 
   /**
    * List stored attachments.
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ReadonlyArray<ToriiAttachmentMetadata>>}
    */
   async listAttachments(options = {}) {
@@ -2909,10 +3055,127 @@ export class ToriiClient {
   }
 
   /**
+   * Resolve the deterministic eligible FI route for an I105 recipient.
+   * @param {string} accountId
+   * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
+   * @returns {Promise<{account_id: string, alias_fqn: string, fi_id: "hbl.sbp" | "ubl.sbp"}>}
+   */
+  async routeRetailRecipient(accountId, options = {}) {
+    const normalizedAccountId = ToriiClient._requireAccountId(
+      accountId,
+      "routeRetailRecipient.accountId",
+    );
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "routeRetailRecipient",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      ALIAS_CANONICAL_AUTH_OPTION_KEYS,
+      "routeRetailRecipient options",
+    );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
+    const response = await this._request("POST", "/v1/retail/recipients/route", {
+      headers: JSON_REQUEST_HEADERS,
+      body: JSON.stringify({ account_id: normalizedAccountId }),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("retail recipient route endpoint returned no payload");
+    }
+    const route = normalizeRetailRecipientRouteResponse(
+      body,
+      "retail recipient route response",
+    );
+    if (route.account_id !== normalizedAccountId) {
+      throw new TypeError(
+        "retail recipient route response.account_id does not match the requested account",
+      );
+    }
+    return route;
+  }
+
+  /** Read one exact on-chain sponsor-program lifecycle record. */
+  async findFeeSponsorProgramById(programId, options = {}) {
+    const normalizedProgramId = normalizeFeeSponsorProgramId(
+      programId,
+      "findFeeSponsorProgramById.programId",
+    );
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      options,
+      "findFeeSponsorProgramById",
+    );
+    const response = await this._request("POST", "/v1/fee-sponsor-programs/by-id", {
+      headers: JSON_REQUEST_HEADERS,
+      body: JSON.stringify({ program_id: normalizedProgramId.literal }),
+      signal,
+      canonicalAuth,
+    });
+    if (response.status === 404) {
+      return null;
+    }
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("fee sponsor program endpoint returned no payload");
+    }
+    const program = normalizeFeeSponsorProgramResponse(body, "fee sponsor program response");
+    if (
+      program.id.sponsor !== normalizedProgramId.sponsor ||
+      program.id.name !== normalizedProgramId.name
+    ) {
+      throw new TypeError(
+        "fee sponsor program response.id does not match the requested exact program id",
+      );
+    }
+    return program;
+  }
+
+  /**
+   * Quote the exact unsigned payload that will subsequently be signed.
+   * The account in `canonicalAuth` must equal the payload authority.
+   */
+  async quoteFees(payloadOrDraft, options = {}) {
+    const candidate = payloadOrDraft?.payload ?? payloadOrDraft;
+    const payload = ensureRecord(candidate, "quoteFees payload");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      options,
+      "quoteFees",
+    );
+    const authority = ensureCanonicalAccountId(
+      payload.authority,
+      "quoteFees payload.authority",
+    );
+    if (payload.authority !== authority) {
+      throw new TypeError("quoteFees payload.authority must be an exact canonical I105 account id");
+    }
+    if (canonicalAuth.accountId !== authority) {
+      throw new TypeError(
+        "quoteFees canonicalAuth.accountId must equal the exact payload authority",
+      );
+    }
+    const response = await this._request("POST", "/v1/fees/quote", {
+      headers: JSON_REQUEST_HEADERS,
+      body: JSON.stringify({ payload }),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("fee quote endpoint returned no payload");
+    }
+    return normalizeFeeQuoteResponse(body, "fee quote response");
+  }
+
+  /**
    * Lookup a retail recipient name through Torii (`POST /v1/retail/recipients/lookup`).
    * @param {{accountId?: string, account_id?: string, aliasFqn?: string, alias_fqn?: string}} request
    * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
-   * @returns {Promise<{resolved: boolean, account_id?: string, alias_fqn?: string, fi_id?: string, full_name?: string}>}
+   * @returns {Promise<{resolved: boolean, account_id: string, alias_fqn: string, fi_id: "hbl.sbp" | "ubl.sbp", full_name?: string}>}
    */
   async lookupRetailRecipient(request, options = {}) {
     const requestRecord = ensureRecord(request, "lookupRetailRecipient request");
@@ -2921,14 +3184,39 @@ export class ToriiClient {
       RETAIL_RECIPIENT_LOOKUP_REQUEST_KEYS,
       "lookupRetailRecipient request",
     );
+    if (
+      Object.prototype.hasOwnProperty.call(requestRecord, "accountId") &&
+      Object.prototype.hasOwnProperty.call(requestRecord, "account_id") &&
+      requestRecord.accountId !== requestRecord.account_id
+    ) {
+      throw new TypeError(
+        "lookupRetailRecipient request accountId and account_id must match when both are supplied",
+      );
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(requestRecord, "aliasFqn") &&
+      Object.prototype.hasOwnProperty.call(requestRecord, "alias_fqn") &&
+      requestRecord.aliasFqn !== requestRecord.alias_fqn
+    ) {
+      throw new TypeError(
+        "lookupRetailRecipient request aliasFqn and alias_fqn must match when both are supplied",
+      );
+    }
     const accountId = ToriiClient._requireAccountId(
       requestRecord.accountId ?? requestRecord.account_id,
       "lookupRetailRecipient.accountId",
     );
-    const aliasFqn = requireNonEmptyString(
+    const requestedAliasFqn = requireNonEmptyString(
       requestRecord.aliasFqn ?? requestRecord.alias_fqn,
       "lookupRetailRecipient.aliasFqn",
     );
+    const aliasFqn = normalizeAccountAliasFqn(
+      requestedAliasFqn,
+      "lookupRetailRecipient.aliasFqn",
+    );
+    if (aliasFqn !== requestedAliasFqn) {
+      throw new TypeError("lookupRetailRecipient.aliasFqn must be canonical");
+    }
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
       "lookupRetailRecipient",
@@ -2953,7 +3241,16 @@ export class ToriiClient {
     if (!body) {
       throw new Error("retail recipient lookup endpoint returned no payload");
     }
-    return normalizeRetailRecipientLookupResponse(body, "retail recipient lookup response");
+    const result = normalizeRetailRecipientLookupResponse(
+      body,
+      "retail recipient lookup response",
+    );
+    if (result.account_id !== accountId || result.alias_fqn !== aliasFqn) {
+      throw new TypeError(
+        "retail recipient lookup response does not match the requested account and alias",
+      );
+    }
+    return result;
   }
 
   /**
@@ -5666,6 +5963,38 @@ export class ToriiClient {
   }
 
   /**
+   * Fetch the governance-derived SORA-side IVM material for one exact enabled
+   * route. The response is cryptographically bound to its artifact SHA-256 and
+   * to the requested route key; callers cannot select bytecode, VK, or gas.
+   * @param {{sourceProfile: string, routeId: string, assetKey: string, revision: number}} route
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getSccpSoraOutboundMaterial(route, options = {}) {
+    const exactRoute = normalizeSccpSoraOutboundMaterialRoute(
+      route,
+      "getSccpSoraOutboundMaterial.route",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "getSccpSoraOutboundMaterial");
+    const response = await this._request(
+      "GET",
+      `/v1/sccp/routes/${encodeURIComponent(exactRoute.sourceProfile)}/${encodeURIComponent(exactRoute.routeId)}/${encodeURIComponent(exactRoute.assetKey)}/${exactRoute.revision}/sora-outbound-material`,
+      { headers: JSON_ACCEPT_HEADERS, signal },
+    );
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_JSON_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP SORA outbound material",
+      signal,
+    });
+    return readSccpJsonResponse(
+      response,
+      (payload) => normalizeSccpSoraOutboundMaterial(payload, exactRoute),
+      "SCCP SORA outbound material",
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+    );
+  }
+
+  /**
    * Fetch one state-derived message/finality bundle by canonical message id.
    * Native responses are preflighted as canonical uncompressed Norito frames
    * bound to `TairaSccpMessageProofV1`. This lightweight client returns the
@@ -6172,7 +6501,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiVpnSession | null>}
    */
   async getVpnSession(sessionId, options) {
-    const normalizedSessionId = requireNonEmptyString(sessionId, "sessionId");
+    const normalizedSessionId = normalizeHex32String(sessionId, "sessionId");
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
       options,
       "getVpnSession",
@@ -6205,7 +6534,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiVpnReceipt | null>}
    */
   async deleteVpnSession(sessionId, options) {
-    const normalizedSessionId = requireNonEmptyString(sessionId, "sessionId");
+    const normalizedSessionId = normalizeHex32String(sessionId, "sessionId");
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
       options,
       "deleteVpnSession",
@@ -6259,7 +6588,7 @@ export class ToriiClient {
   /**
    * Fetch canonical Sora VPN receipt history for the authenticated account (`GET /v1/vpn/receipts`).
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<ReadonlyArray<ToriiVpnReceipt>>}
+   * @returns {Promise<ToriiVpnReceiptListResponse>}
    */
   async listVpnReceipts(options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
@@ -6346,140 +6675,6 @@ export class ToriiClient {
       throw new Error("sns registration endpoint returned no payload");
     }
     return normalizeSnsNameRecord(payload, "sns registration response");
-  }
-
-  /**
-   * Register a Sora Name Service name (`POST /v1/sns/names`).
-   * @param {SnsRegisterNameRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<SnsRegisterNameResponse>}
-  */
-  async registerSnsName(request, options = {}) {
-    const payload = normalizeSnsRegisterRequest(request, "registerSnsName");
-    const { signal } = normalizeSignalOnlyOption(options, "registerSnsName");
-    const response = await this._request("POST", "/v1/sns/names", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200, 201]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("sns registrations endpoint returned no payload");
-    }
-    return normalizeSnsRegisterResponse(body);
-  }
-
-  /**
-   * Renew a Sora Name Service registration (`POST /v1/sns/names/domain/{literal}/renew`).
-   * @param {string} selector
-   * @param {SnsRenewNameRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<SnsNameRecord>}
-   */
-  async renewSnsRegistration(selector, request, options = {}) {
-    const literal = this._normalizeSnsDomainSelector(selector, "renewSnsRegistration");
-    const payload = normalizeSnsRenewRequest(request, "renewSnsRegistration");
-    const { signal } = normalizeSignalOnlyOption(options, "renewSnsRegistration");
-    const response = await this._request(
-      "POST",
-      `/v1/sns/names/domain/${encodeURIComponent(literal)}/renew`,
-      {
-        headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(payload),
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("sns renewal endpoint returned no payload");
-    }
-    return normalizeSnsNameRecord(body, "sns renewal response");
-  }
-
-  /**
-   * Transfer ownership of a Sora Name Service registration (`POST /v1/sns/names/domain/{literal}/transfer`).
-   * @param {string} selector
-   * @param {SnsTransferNameRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<SnsNameRecord>}
-   */
-  async transferSnsRegistration(selector, request, options = {}) {
-    const literal = this._normalizeSnsDomainSelector(selector, "transferSnsRegistration");
-    const payload = normalizeSnsTransferRequest(request, "transferSnsRegistration");
-    const { signal } = normalizeSignalOnlyOption(options, "transferSnsRegistration");
-    const response = await this._request(
-      "POST",
-      `/v1/sns/names/domain/${encodeURIComponent(literal)}/transfer`,
-      {
-        headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(payload),
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("sns transfer endpoint returned no payload");
-    }
-    return normalizeSnsNameRecord(body, "sns transfer response");
-  }
-
-  /**
-   * Freeze a Sora Name Service registration (`POST /v1/sns/names/domain/{literal}/freeze`).
-   * @param {string} selector
-   * @param {SnsFreezeNameRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<SnsNameRecord>}
-  */
-  async freezeSnsRegistration(selector, request, options = {}) {
-    const literal = this._normalizeSnsDomainSelector(selector, "freezeSnsRegistration");
-    const payload = normalizeSnsFreezeRequest(request, "freezeSnsRegistration");
-    const { signal } = normalizeSignalOnlyOption(options, "freezeSnsRegistration");
-    const response = await this._request(
-      "POST",
-      `/v1/sns/names/domain/${encodeURIComponent(literal)}/freeze`,
-      {
-        headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(payload),
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("sns freeze endpoint returned no payload");
-    }
-    return normalizeSnsNameRecord(body, "sns freeze response");
-  }
-
-  /**
-   * Remove a freeze from a Sora Name Service registration (`DELETE /v1/sns/names/domain/{literal}/freeze`).
-   * @param {string} selector
-   * @param {SnsGovernanceHook} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<SnsNameRecord>}
-  */
-  async unfreezeSnsRegistration(selector, request, options = {}) {
-    const literal = this._normalizeSnsDomainSelector(selector, "unfreezeSnsRegistration");
-    const payload = normalizeSnsGovernanceHook(request, "unfreezeSnsRegistration");
-    const { signal } = normalizeSignalOnlyOption(options, "unfreezeSnsRegistration");
-    const response = await this._request(
-      "DELETE",
-      `/v1/sns/names/domain/${encodeURIComponent(literal)}/freeze`,
-      {
-        headers: JSON_REQUEST_HEADERS,
-        body: JSON.stringify(payload),
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("sns unfreeze endpoint returned no payload");
-    }
-    return normalizeSnsNameRecord(body, "sns unfreeze response");
   }
 
   /**
@@ -8175,22 +8370,6 @@ export class ToriiClient {
   }
 
   /**
-   * Deploy contract bytecode and register the manifest (`POST /v1/contracts/deploy`).
-   * @param {DeployContractRequest} request
-   * @returns {Promise<DeployContractResponse | null>}
-   */
-  async deployContract(request = {}) {
-    const payload = normalizeDeployContractRequest(request);
-    const response = await this._request("POST", "/v1/contracts/deploy", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
-    });
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    return body ? normalizeDeployContractResponse(body) : null;
-  }
-
-  /**
    * Bind, update, or clear a contract alias (`POST /v1/contracts/aliases`).
    * @param {SetContractAliasRequest} request
    * @returns {Promise<SetContractAliasResponse | null>}
@@ -8591,13 +8770,15 @@ export class ToriiClient {
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
-  async getMultisigSpec(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getMultisigSpec");
+  async getMultisigSpec(request = {}, options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getMultisigSpec");
     const payload = normalizeMultisigSelectorOnlyRequest(request, "getMultisigSpec request");
+    const requestBody = JSON.stringify(payload);
     const response = await this._request("POST", "/v1/multisig/spec", {
       headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
+      body: requestBody,
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200], { signal });
     const body = await this._maybeJson(response);
@@ -8610,19 +8791,21 @@ export class ToriiClient {
   /**
    * Query multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/query`).
    * @param {object} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<object>}
    */
-  async queryMultisigProposals(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "queryMultisigProposals");
+  async queryMultisigProposals(request = {}, options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "queryMultisigProposals");
     const payload = normalizeMultisigProposalsQueryRequest(
       request,
       "queryMultisigProposals request",
     );
+    const requestBody = JSON.stringify(payload);
     const response = await this._request("POST", "/v1/multisig/proposals/query", {
       headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
+      body: requestBody,
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
@@ -8635,16 +8818,18 @@ export class ToriiClient {
   /**
    * Resolve one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/resolve`).
    * @param {object} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<object>}
    */
-  async resolveMultisigProposal(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "resolveMultisigProposal");
+  async resolveMultisigProposal(request = {}, options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "resolveMultisigProposal");
     const payload = normalizeMultisigProposalsResolveRequest(request);
+    const requestBody = JSON.stringify(payload);
     const response = await this._request("POST", "/v1/multisig/proposals/resolve", {
       headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
+      body: requestBody,
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
@@ -8686,24 +8871,16 @@ export class ToriiClient {
   /**
    * Fetch stored contract code bytes (`GET /v1/contracts/code-bytes/{hash}`).
    * @param {string} codeHashHex
-   * @param {{signal?: AbortSignalLike}} [options]
+   * @param {{signal?: AbortSignalLike, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ContractCodeBytesRecord | null>}
    */
-  async getContractCodeBytes(codeHashHex, options = {}) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
-      options,
-      "getContractCodeBytes",
-    );
-    assertSupportedOptionKeys(
-      rest,
-      new Set(),
-      "getContractCodeBytes options",
-    );
+  async getContractCodeBytes(codeHashHex, options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getContractCodeBytes");
     const normalizedHash = normalizeIrohaHashHex32(codeHashHex, "codeHashHex");
     const response = await this._request(
       "GET",
       `/v1/contracts/code-bytes/${normalizedHash}`,
-      { headers: JSON_ACCEPT_HEADERS, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal, canonicalAuth },
     );
     if (response.status === 404) {
       cancelResponseBodyBestEffort(
@@ -8728,18 +8905,19 @@ export class ToriiClient {
   /**
    * Read the governance binding for one contract address (`GET /v1/gov/contracts/{contract_address}`).
    * @param {string} contractAddress
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ToriiGovernanceContractResponse>}
    */
-  async getGovernanceContract(contractAddress, options = {}) {
+  async getGovernanceContract(contractAddress, options) {
     const normalizedAddress = requireNonEmptyString(contractAddress, "contractAddress");
-    const { signal } = normalizeSignalOnlyOption(options, "getGovernanceContract");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getGovernanceContract");
     const response = await this._request(
       "GET",
       `/v1/gov/contracts/${encodeURIComponent(normalizedAddress)}`,
       {
         headers: JSON_ACCEPT_HEADERS,
         signal: signal ?? undefined,
+        canonicalAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -9718,27 +9896,6 @@ export class ToriiClient {
       for (const [key, value] of Object.entries(canonicalHeaders)) {
         setHeader(initHeaders, key, value);
       }
-      if (headerValueRequiresRawUtf8Transport(canonicalHeaders["X-Iroha-Account"])) {
-        init[RAW_UTF8_HEADERS_INIT_KEY] = {
-          "X-Iroha-Account": canonicalHeaders["X-Iroha-Account"],
-        };
-      }
-    }
-    const rawUtf8Headers = cloneRawUtf8Headers(init[RAW_UTF8_HEADERS_INIT_KEY]);
-    const shouldUseNodeRawUtf8Transport =
-      rawUtf8Headers &&
-      !fetchSupportsRawUtf8Headers(this._fetch) &&
-      canUseNodeRawUtf8Transport(url);
-    if (
-      rawUtf8Headers &&
-      !fetchSupportsRawUtf8Headers(this._fetch) &&
-      !shouldUseNodeRawUtf8Transport
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "ToriiClient: canonicalAuth.accountId contains UTF-8 characters that require a fetch implementation with raw UTF-8 header support.",
-        "canonicalAuth.accountId",
-      );
     }
     const retryProfileName =
       typeof options.retryProfile === "string" && options.retryProfile
@@ -9791,25 +9948,13 @@ export class ToriiClient {
         }, this._config.timeoutMs);
       }
       try {
-        const response = shouldUseNodeRawUtf8Transport
-          ? await performNodeRawUtf8Request({
-              url,
-              method: methodUpper,
-              headers: cloneHeadersForFetch(initHeaders),
-              rawUtf8Headers,
-              body: init.body,
-              signal: signal ?? undefined,
-            })
-          : await this._fetch(url.toString(), {
-              ...init,
-              // Give fetch a fresh header bag for each retry attempt. Reusing the
-              // same object across retries can break native fetch implementations.
-              headers: cloneHeadersForFetch(initHeaders),
-              [RAW_UTF8_HEADERS_INIT_KEY]: cloneRawUtf8Headers(
-                init[RAW_UTF8_HEADERS_INIT_KEY],
-              ),
-              signal: signal ?? undefined,
-            });
+        const response = await this._fetch(url.toString(), {
+          ...init,
+          // Give fetch a fresh header bag for each retry attempt. Reusing the
+          // same object across retries can break native fetch implementations.
+          headers: cloneHeadersForFetch(initHeaders),
+          signal: signal ?? undefined,
+        });
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
@@ -11608,7 +11753,17 @@ export class ToriiClient {
         `${context}.accountId`,
       );
     }
-    const accountId = ToriiClient._normalizeAccountId(rawAccountId, `${context}.accountId`);
+    let accountId;
+    try {
+      accountId = requireCanonicalAuthAccount(rawAccountId, `${context}.accountId`);
+    } catch (error) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.accountId must be an exact canonical I105 account or ASCII account alias`,
+        `${context}.accountId`,
+        error,
+      );
+    }
     const privateKey = ToriiClient._normalizePrivateKey(
       record.privateKey,
       `${context}.privateKey`,
@@ -15083,6 +15238,7 @@ function parseSumeragiStatusPayload(payload) {
     "last_committed_subject",
     "height_context",
     "last_commit_qc",
+    "liveness",
     "safety_halt",
     "lane_settlement_commitments",
     "lane_relay_envelopes",
@@ -15106,6 +15262,10 @@ function parseSumeragiStatusPayload(payload) {
   }
   const height = parseSumeragiUnsigned(record.height, "sumeragi.height");
   const view = parseSumeragiUnsigned(record.view, "sumeragi.view");
+  const heightContextId = parseSumeragiContextId(
+    record.height_context_id,
+    "sumeragi.height_context_id",
+  );
   const leader = parseSumeragiUnsigned(record.leader, "sumeragi.leader", {
     max: 0xffffffff,
   });
@@ -15123,6 +15283,12 @@ function parseSumeragiStatusPayload(payload) {
   if (leader >= heightContext.validator_count) {
     throw new RangeError("sumeragi.leader must index the frozen validator roster");
   }
+  const liveness = parseSumeragiLivenessStatus(record.liveness, "sumeragi.liveness", {
+    height,
+    view,
+    contextId: heightContextId,
+    heightContext,
+  });
 
   const lastCommittedHeight = parseSumeragiUnsigned(
     record.last_committed_height,
@@ -15190,10 +15356,7 @@ function parseSumeragiStatusPayload(payload) {
       "sumeragi.config_fingerprint",
     ),
     restart_required: restartRequired,
-    height_context_id: parseSumeragiContextId(
-      record.height_context_id,
-      "sumeragi.height_context_id",
-    ),
+    height_context_id: heightContextId,
     height,
     view,
     phase: parseSumeragiTaggedUnit(
@@ -15248,6 +15411,7 @@ function parseSumeragiStatusPayload(payload) {
     last_committed_subject: lastCommittedSubject,
     height_context: heightContext,
     last_commit_qc: lastCommitQc,
+    liveness,
     safety_halt: safetyHalt,
     lane_settlement_commitments: laneSettlementCommitments,
     lane_relay_envelopes: laneRelayEnvelopes,
@@ -15259,6 +15423,458 @@ function parseSumeragiStatusPayload(payload) {
       "sumeragi.local_peer_removed",
     ),
     operator,
+  });
+}
+
+function parseSumeragiLivenessStatus(value, context, active) {
+  const record = ensureRecord(value, context);
+  const fields = new Set([
+    "generation",
+    "prepare_quorums",
+    "commit_quorums",
+    "timeout_quorums",
+    "outbound_intents",
+    "work",
+    "queues",
+    "last_progress",
+    "no_progress_age_ms",
+    "blocker",
+    "ignore_counts",
+  ]);
+  const unknown = Object.keys(record).find((field) => !fields.has(field));
+  if (unknown !== undefined) {
+    throw new TypeError(`${context} contains unknown field ${unknown}`);
+  }
+  for (const field of fields) {
+    if (field !== "last_progress" && field !== "blocker" &&
+        !Object.prototype.hasOwnProperty.call(record, field)) {
+      throw new TypeError(`${context} is missing required field ${field}`);
+    }
+  }
+
+  const generation = parseSumeragiUnsigned(record.generation, `${context}.generation`);
+  const boundRound = (raw, roundContext) => {
+    const round = parseSumeragiRound(raw, roundContext);
+    if (
+      round.context_id[0] !== active.contextId[0] ||
+      round.height !== active.height
+    ) {
+      throw new TypeError(`${roundContext} must match the active height context`);
+    }
+    return round;
+  };
+  const checkedRound = (raw, roundContext) => {
+    const round = boundRound(raw, roundContext);
+    if (round.view > active.view) {
+      throw new RangeError(`${roundContext}.view must not exceed the active view`);
+    }
+    return round;
+  };
+  const checkedPartialQuorum = (
+    raw,
+    itemContext,
+    { timeout = false, phase = null } = {},
+  ) => {
+    const expectedFields = timeout
+      ? [
+          "round",
+          "signer_count",
+          "signed_power",
+          "min_signers",
+          "total_power",
+          "certificate_formed",
+        ]
+      : [
+          "round",
+          "proposal_round",
+          "subject",
+          "execution_commitment",
+          "signer_count",
+          "signed_power",
+          "min_signers",
+          "total_power",
+        ];
+    const item = assertExactSumeragiRecord(raw, expectedFields, itemContext);
+    const signerCount = parseSumeragiUnsigned(
+      item.signer_count,
+      `${itemContext}.signer_count`,
+      { max: active.heightContext.validator_count },
+    );
+    const signedPower = parseSumeragiUnsigned(
+      item.signed_power,
+      `${itemContext}.signed_power`,
+    );
+    const minSigners = parseSumeragiUnsigned(
+      item.min_signers,
+      `${itemContext}.min_signers`,
+    );
+    const totalPower = parseSumeragiUnsigned(
+      item.total_power,
+      `${itemContext}.total_power`,
+      { positive: true },
+    );
+    if (
+      minSigners !== active.heightContext.quorum.min_signers ||
+      totalPower !== active.heightContext.quorum.total_power ||
+      signedPower < signerCount ||
+      signedPower > totalPower ||
+      (active.heightContext.mode.mode === "permissioned" && signedPower !== signerCount)
+    ) {
+      throw new RangeError(`${itemContext} disagrees with the frozen dual quorum`);
+    }
+    const round = checkedRound(item.round, `${itemContext}.round`);
+    if (timeout) {
+      const certificateFormed = parseSumeragiBoolean(
+        item.certificate_formed,
+        `${itemContext}.certificate_formed`,
+      );
+      if (
+        certificateFormed &&
+        (signerCount < minSigners || BigInt(signedPower) * 3n <= BigInt(totalPower) * 2n)
+      ) {
+        throw new RangeError(`${itemContext} does not form its advertised dual quorum`);
+      }
+      return Object.freeze({
+        round,
+        signer_count: signerCount,
+        signed_power: signedPower,
+        min_signers: minSigners,
+        total_power: totalPower,
+        certificate_formed: certificateFormed,
+      });
+    }
+    const proposalRound = checkedRound(
+      item.proposal_round,
+      `${itemContext}.proposal_round`,
+    );
+    validateSumeragiProposalRound(proposalRound, round, itemContext, {
+      requireEqual: phase === "prepare",
+    });
+    return Object.freeze({
+      round,
+      proposal_round: proposalRound,
+      subject: parseSumeragiBlockSubject(item.subject, `${itemContext}.subject`),
+      execution_commitment: parseSumeragiExecutionCommitment(
+        item.execution_commitment,
+        `${itemContext}.execution_commitment`,
+      ),
+      signer_count: signerCount,
+      signed_power: signedPower,
+      min_signers: minSigners,
+      total_power: totalPower,
+    });
+  };
+  const voteQuorums = (field, phase) => Object.freeze(
+    assertSumeragiArrayBound(record[field], 128, `${context}.${field}`).map(
+      (item, index) => checkedPartialQuorum(
+        item,
+        `${context}.${field}[${index}]`,
+        { phase },
+      ),
+    ),
+  );
+  const timeoutQuorums = Object.freeze(
+    assertSumeragiArrayBound(
+      record.timeout_quorums,
+      128,
+      `${context}.timeout_quorums`,
+    ).map((item, index) => checkedPartialQuorum(
+      item,
+      `${context}.timeout_quorums[${index}]`,
+      { timeout: true },
+    )),
+  );
+
+  const subjectKinds = new Set([
+    "proposal",
+    "prepare_vote",
+    "commit_vote",
+    "prepare_qc",
+    "commit_qc",
+  ]);
+  const outboundIntents = Object.freeze(
+    assertSumeragiArrayBound(
+      record.outbound_intents,
+      7,
+      `${context}.outbound_intents`,
+    ).map((raw, index) => {
+      const itemContext = `${context}.outbound_intents[${index}]`;
+      const item = ensureRecord(raw, itemContext);
+      const allowedFields = new Set([
+        "kind",
+        "round",
+        "proposal_round",
+        "subject",
+        "execution_commitment",
+        "stage",
+      ]);
+      const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
+      if (unknownField !== undefined) {
+        throw new TypeError(`${itemContext} contains unknown field ${unknownField}`);
+      }
+      for (const field of ["kind", "round", "stage"]) {
+        if (!Object.prototype.hasOwnProperty.call(item, field)) {
+          throw new TypeError(`${itemContext} is missing required field ${field}`);
+        }
+      }
+      const kind = parseSumeragiTaggedUnit(
+        item.kind,
+        "kind",
+        [
+          "proposal",
+          "prepare_vote",
+          "commit_vote",
+          "timeout_vote",
+          "prepare_qc",
+          "commit_qc",
+          "timeout_certificate",
+        ],
+        `${itemContext}.kind`,
+      );
+      const stage = parseSumeragiTaggedUnit(
+        item.stage,
+        "stage",
+        ["pending_persistence", "pending_signature", "queued", "sent"],
+        `${itemContext}.stage`,
+      );
+      const subject = item.subject == null
+        ? null
+        : parseSumeragiBlockSubject(item.subject, `${itemContext}.subject`);
+      const executionCommitment = item.execution_commitment == null
+        ? null
+        : parseSumeragiExecutionCommitment(
+            item.execution_commitment,
+            `${itemContext}.execution_commitment`,
+          );
+      const carriesProposalRound = subjectKinds.has(kind.kind);
+      if (carriesProposalRound !== (item.proposal_round != null)) {
+        throw new TypeError(`${itemContext} has inconsistent proposal_round for ${kind.kind}`);
+      }
+      const shapeIsValid =
+        (kind.kind === "proposal" && subject !== null && executionCommitment === null) ||
+        (subjectKinds.has(kind.kind) && kind.kind !== "proposal" &&
+          subject !== null && executionCommitment !== null) ||
+        (!subjectKinds.has(kind.kind) && subject === null && executionCommitment === null);
+      if (!shapeIsValid) {
+        throw new TypeError(`${itemContext} has inconsistent proposal fields`);
+      }
+      const round = boundRound(item.round, `${itemContext}.round`);
+      if (kind.kind !== "commit_qc" && round.view > active.view) {
+        throw new RangeError(`${itemContext}.round.view must not exceed the active view`);
+      }
+      const proposalRound = item.proposal_round == null
+        ? null
+        : boundRound(item.proposal_round, `${itemContext}.proposal_round`);
+      if (proposalRound !== null) {
+        validateSumeragiProposalRound(proposalRound, round, itemContext, {
+          requireEqual: ["proposal", "prepare_vote", "prepare_qc"].includes(kind.kind),
+        });
+      }
+      return Object.freeze({
+        kind,
+        round,
+        proposal_round: proposalRound,
+        subject,
+        execution_commitment: executionCommitment,
+        stage,
+      });
+    }),
+  );
+
+  const workRecord = assertExactSumeragiRecord(
+    record.work,
+    ["candidate", "body_recovery", "body_store", "validation", "application", "successor_height"],
+    `${context}.work`,
+  );
+  const work = Object.freeze(Object.fromEntries(
+    Object.keys(workRecord).map((field) => [
+      field,
+      parseSumeragiTaggedUnit(
+        workRecord[field],
+        "stage",
+        ["idle", "queued", "running", "complete"],
+        `${context}.work.${field}`,
+      ),
+    ]),
+  ));
+
+  const queueNames = new Set();
+  const queues = Object.freeze(
+    assertSumeragiArrayBound(record.queues, 10, `${context}.queues`).map((raw, index) => {
+      const itemContext = `${context}.queues[${index}]`;
+      const item = ensureRecord(raw, itemContext);
+      const allowedFields = new Set([
+        "queue",
+        "depth",
+        "capacity",
+        "oldest_age_ms",
+        "service_debt",
+      ]);
+      const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
+      if (unknownField !== undefined) {
+        throw new TypeError(`${itemContext} contains unknown field ${unknownField}`);
+      }
+      for (const field of ["queue", "depth", "capacity", "service_debt"]) {
+        if (!Object.prototype.hasOwnProperty.call(item, field)) {
+          throw new TypeError(`${itemContext} is missing required field ${field}`);
+        }
+      }
+      const queue = parseSumeragiTaggedUnit(
+        item.queue,
+        "queue",
+        [
+          "ingress",
+          "deferred_normal",
+          "deferred_progress",
+          "deferred_completion",
+          "runtime_normal",
+          "runtime_progress",
+          "runtime_completion",
+          "effect_completion",
+          "network_ingress",
+          "effect_dispatch",
+        ],
+        `${itemContext}.queue`,
+      );
+      if (queueNames.has(queue.queue)) {
+        throw new TypeError(`${itemContext}.queue is duplicated`);
+      }
+      queueNames.add(queue.queue);
+      const depth = parseSumeragiUnsigned(item.depth, `${itemContext}.depth`);
+      const capacity = parseSumeragiUnsigned(item.capacity, `${itemContext}.capacity`, {
+        positive: true,
+      });
+      const oldestAge = item.oldest_age_ms == null
+        ? null
+        : parseSumeragiUnsigned(item.oldest_age_ms, `${itemContext}.oldest_age_ms`);
+      if (depth > capacity || ((depth === 0) !== (oldestAge === null))) {
+        throw new RangeError(`${itemContext} has inconsistent occupancy and age`);
+      }
+      return Object.freeze({
+        queue,
+        depth,
+        capacity,
+        oldest_age_ms: oldestAge,
+        service_debt: parseSumeragiUnsigned(
+          item.service_debt,
+          `${itemContext}.service_debt`,
+        ),
+      });
+    }),
+  );
+
+  let lastProgress = null;
+  if (record.last_progress != null) {
+    const progress = assertExactSumeragiRecord(
+      record.last_progress,
+      ["generation", "round", "transition", "age_ms"],
+      `${context}.last_progress`,
+    );
+    const progressGeneration = parseSumeragiUnsigned(
+      progress.generation,
+      `${context}.last_progress.generation`,
+    );
+    if (progressGeneration > generation) {
+      throw new RangeError(`${context}.last_progress.generation is from the future`);
+    }
+    lastProgress = Object.freeze({
+      generation: progressGeneration,
+      round: checkedRound(progress.round, `${context}.last_progress.round`),
+      transition: parseSumeragiTaggedUnit(
+        progress.transition,
+        "transition",
+        [
+          "proposal_admitted",
+          "body_available",
+          "body_stored",
+          "body_validated",
+          "prepare_vote_admitted",
+          "commit_vote_admitted",
+          "timeout_vote_admitted",
+          "prepare_quorum",
+          "lock_installed",
+          "commit_quorum",
+          "timeout_certificate_installed",
+          "decision_persisted",
+          "applied",
+          "successor_height_activated",
+          "recovery_replayed",
+        ],
+        `${context}.last_progress.transition`,
+      ),
+      age_ms: parseSumeragiUnsigned(progress.age_ms, `${context}.last_progress.age_ms`),
+    });
+  }
+  const blocker = record.blocker == null
+    ? null
+    : parseSumeragiTaggedUnit(
+        record.blocker,
+        "blocker",
+        [
+          "missing_proposal",
+          "body_unavailable",
+          "prepare_quorum_missing",
+          "commit_quorum_missing",
+          "timeout_certificate_missing",
+          "scheduler_starvation",
+          "application_pending",
+          "local_control_pending",
+        ],
+        `${context}.blocker`,
+      );
+
+  const ignoreReasons = new Set();
+  const ignoreCounts = Object.freeze(
+    assertSumeragiArrayBound(record.ignore_counts, 12, `${context}.ignore_counts`).map(
+      (raw, index) => {
+        const itemContext = `${context}.ignore_counts[${index}]`;
+        const item = assertExactSumeragiRecord(raw, ["reason", "count"], itemContext);
+        const reason = parseSumeragiTaggedUnit(
+          item.reason,
+          "reason",
+          [
+            "wrong_height",
+            "wrong_view",
+            "stale_generation",
+            "busy",
+            "duplicate",
+            "no_matching_work",
+            "observer",
+            "view_closed",
+            "already_decided",
+            "recovery_pending",
+            "irrelevant_view",
+            "unsafe_proposal",
+          ],
+          `${itemContext}.reason`,
+        );
+        if (ignoreReasons.has(reason.reason)) {
+          throw new TypeError(`${itemContext}.reason is duplicated`);
+        }
+        ignoreReasons.add(reason.reason);
+        return Object.freeze({
+          reason,
+          count: parseSumeragiUnsigned(item.count, `${itemContext}.count`),
+        });
+      },
+    ),
+  );
+
+  return Object.freeze({
+    generation,
+    prepare_quorums: voteQuorums("prepare_quorums", "prepare"),
+    commit_quorums: voteQuorums("commit_quorums", "commit"),
+    timeout_quorums: timeoutQuorums,
+    outbound_intents: outboundIntents,
+    work,
+    queues,
+    last_progress: lastProgress,
+    no_progress_age_ms: parseSumeragiUnsigned(
+      record.no_progress_age_ms,
+      `${context}.no_progress_age_ms`,
+    ),
+    blocker,
+    ignore_counts: ignoreCounts,
   });
 }
 
@@ -15453,6 +16069,26 @@ function parseSumeragiRound(value, context) {
   });
 }
 
+function validateSumeragiProposalRound(
+  proposalRound,
+  round,
+  context,
+  { requireEqual = false } = {},
+) {
+  if (
+    proposalRound.context_id[0] !== round.context_id[0] ||
+    proposalRound.height !== round.height
+  ) {
+    throw new TypeError(`${context}.proposal_round must match round context and height`);
+  }
+  if (proposalRound.view > round.view) {
+    throw new RangeError(`${context}.proposal_round.view must not exceed round.view`);
+  }
+  if (requireEqual && proposalRound.view !== round.view) {
+    throw new TypeError(`${context}.proposal_round must equal round for prepare`);
+  }
+}
+
 function parseSumeragiBlockSubject(value, context) {
   const record = ensureRecord(value, context);
   return Object.freeze({
@@ -15517,14 +16153,24 @@ function parseSumeragiExecutionCommitment(value, context) {
 
 function parseSumeragiQcReference(value, context) {
   const record = ensureRecord(value, context);
+  const round = parseSumeragiRound(record.round, `${context}.round`);
+  const proposalRound = parseSumeragiRound(
+    record.proposal_round,
+    `${context}.proposal_round`,
+  );
+  const phase = parseSumeragiTaggedUnit(
+    record.phase,
+    "phase",
+    ["prepare", "commit"],
+    `${context}.phase`,
+  );
+  validateSumeragiProposalRound(proposalRound, round, context, {
+    requireEqual: phase.phase === "prepare",
+  });
   return Object.freeze({
-    round: parseSumeragiRound(record.round, `${context}.round`),
-    phase: parseSumeragiTaggedUnit(
-      record.phase,
-      "phase",
-      ["prepare", "commit"],
-      `${context}.phase`,
-    ),
+    round,
+    proposal_round: proposalRound,
+    phase,
     subject: parseSumeragiBlockSubject(record.subject, `${context}.subject`),
     execution_commitment: parseSumeragiExecutionCommitment(
       record.execution_commitment,
@@ -17556,6 +18202,148 @@ function normalizeExplorerMetricsResponse(payload) {
 
 const EXPLORER_ACCOUNT_QR_OPTION_KEYS = new Set(["signal"]);
 const VPN_SESSION_OPTION_KEYS = new Set(["signal", "canonicalAuth"]);
+const VPN_HELPER_TICKET_BYTES = 664;
+const VPN_HELPER_TICKET_HEX_LENGTH = VPN_HELPER_TICKET_BYTES * 2;
+const VPN_EXIT_CLASSES = new Set(["standard", "low-latency", "high-security"]);
+const VPN_SESSION_STATUSES = new Set(["active"]);
+const VPN_RECEIPT_STATUSES = new Set([
+  "disconnected",
+  "expired",
+  "replaced",
+  "settled",
+]);
+const VPN_RECEIPT_SOURCES = new Set(["torii", "relay", "wsv"]);
+const VPN_LEASE_SECONDS_MAX = 0xffff_ffff;
+const VPN_QUOTE_CREATE_REQUEST_KEYS = new Set([
+  "exitClass",
+  "exit_class",
+  "meteringPublicKeyHex",
+  "metering_public_key_hex",
+]);
+const VPN_SESSION_CREATE_REQUEST_KEYS = new Set([
+  "exitClass",
+  "exit_class",
+  "quoteId",
+  "quote_id",
+  "paymentTxHash",
+  "payment_tx_hash",
+  "meteringPublicKeyHex",
+  "metering_public_key_hex",
+]);
+const VPN_RECEIPT_SUBMIT_REQUEST_KEYS = new Set([
+  "relayReceiptHex",
+  "relay_receipt_hex",
+  "clientVoucherHex",
+  "client_voucher_hex",
+  "leaseIdHex",
+  "lease_id_hex",
+]);
+const VPN_TX_INSTRUCTION_RESPONSE_FIELDS = new Set(["wire_id", "payload_hex"]);
+const VPN_PROFILE_RESPONSE_FIELDS = new Set([
+  "available",
+  "relay_endpoint",
+  "supported_exit_classes",
+  "default_exit_class",
+  "lease_secs",
+  "dns_push_interval_secs",
+  "meter_family",
+  "route_pushes",
+  "excluded_routes",
+  "dns_servers",
+  "tunnel_addresses",
+  "mtu_bytes",
+  "display_billing_label",
+  "fee_asset_id",
+  "escrow_account_id",
+  "operator_account_id",
+  "lease_fee",
+  "settlement_grace_secs",
+  "flow_label_bits",
+  "padding_budget_ms",
+  "relay_tls_spki_sha256_hex",
+]);
+const VPN_QUOTE_RESPONSE_FIELDS = new Set([
+  "quote_id",
+  "lease_id_hex",
+  "session_id_hex",
+  "payment_reference",
+  "account_id",
+  "exit_class",
+  "relay_endpoint",
+  "lease_secs",
+  "quote_expires_at_ms",
+  "fee_asset_id",
+  "escrow_account_id",
+  "operator_account_id",
+  "lease_fee",
+  "route_pushes",
+  "excluded_routes",
+  "dns_servers",
+  "tunnel_addresses",
+  "mtu_bytes",
+  "meter_family",
+  "flow_label_bits",
+  "padding_budget_ms",
+  "relay_tls_spki_sha256_hex",
+  "metering_public_key_hex",
+  "open_lease_instruction",
+  "tx_instructions",
+]);
+const VPN_SESSION_RESPONSE_FIELDS = new Set([
+  "session_id",
+  "account_id",
+  "exit_class",
+  "relay_endpoint",
+  "lease_secs",
+  "expires_at_ms",
+  "connected_at_ms",
+  "meter_family",
+  "quote_id",
+  "payment_reference",
+  "payment_tx_hash",
+  "fee_asset_id",
+  "escrow_account_id",
+  "operator_account_id",
+  "lease_fee",
+  "flow_label_bits",
+  "padding_budget_ms",
+  "relay_tls_spki_sha256_hex",
+  "route_pushes",
+  "excluded_routes",
+  "dns_servers",
+  "tunnel_addresses",
+  "mtu_bytes",
+  "helper_ticket_hex",
+  "bytes_in",
+  "bytes_out",
+  "status",
+]);
+const VPN_RECEIPT_RESPONSE_FIELDS = new Set([
+  "session_id",
+  "account_id",
+  "exit_class",
+  "relay_endpoint",
+  "meter_family",
+  "connected_at_ms",
+  "disconnected_at_ms",
+  "duration_ms",
+  "bytes_in",
+  "bytes_out",
+  "status",
+  "receipt_source",
+  "quote_id",
+  "payment_tx_hash",
+  "fee_asset_id",
+  "escrow_account_id",
+  "operator_account_id",
+  "lease_fee",
+  "earned_fee",
+  "refunded_fee",
+  "lease_id_hex",
+  "settle_lease_instruction",
+  "tx_instructions",
+]);
+const VPN_RECEIPT_LIST_RESPONSE_FIELDS = new Set(["items", "total"]);
 
 function normalizeExplorerRequestOptions(options) {
   if (options === undefined) {
@@ -17573,107 +18361,165 @@ function normalizeExplorerRequestOptions(options) {
 
 function normalizeVpnProfileResponse(payload) {
   const record = ensureRecord(payload ?? {}, "vpn profile response");
+  assertVpnResponseFields(record, VPN_PROFILE_RESPONSE_FIELDS, "vpn profile response");
   return {
-    available: coerceBoolean(record.available ?? false, "vpn profile response.available"),
+    available: coerceBoolean(record.available, "vpn profile response.available"),
     relayEndpoint: requireNonEmptyString(
-      record.relay_endpoint ?? "",
+      record.relay_endpoint,
       "vpn profile response.relay_endpoint",
     ),
-    supportedExitClasses: normalizeStringArray(
-      record.supported_exit_classes ?? [],
+    supportedExitClasses: requireVpnProfileExitClasses(
+      record.supported_exit_classes,
       "vpn profile response.supported_exit_classes",
     ),
-    defaultExitClass: requireNonEmptyString(
-      record.default_exit_class ?? "",
+    defaultExitClass: requireVpnEnum(
+      record.default_exit_class,
+      VPN_EXIT_CLASSES,
       "vpn profile response.default_exit_class",
     ),
-    leaseSecs: ToriiClient._normalizeUnsignedInteger(
-      record.lease_secs ?? 0,
+    leaseSecs: requireVpnUnsignedInteger(
+      record.lease_secs,
       "vpn profile response.lease_secs",
-      { allowZero: true },
+      { min: 1, max: VPN_LEASE_SECONDS_MAX },
     ),
-    dnsPushIntervalSecs: ToriiClient._normalizeUnsignedInteger(
-      record.dns_push_interval_secs ?? 0,
+    dnsPushIntervalSecs: requireVpnUnsignedInteger(
+      record.dns_push_interval_secs,
       "vpn profile response.dns_push_interval_secs",
-      { allowZero: true },
+      { min: 30 },
     ),
     meterFamily: requireNonEmptyString(
-      record.meter_family ?? "",
+      record.meter_family,
       "vpn profile response.meter_family",
     ),
     routePushes: requireStringArray(
-      record.route_pushes ?? [],
+      record.route_pushes,
       "vpn profile response.route_pushes",
     ),
     excludedRoutes: requireStringArray(
-      record.excluded_routes ?? [],
+      record.excluded_routes,
       "vpn profile response.excluded_routes",
     ),
     dnsServers: requireStringArray(
-      record.dns_servers ?? [],
+      record.dns_servers,
       "vpn profile response.dns_servers",
     ),
     tunnelAddresses: requireStringArray(
-      record.tunnel_addresses ?? [],
+      record.tunnel_addresses,
       "vpn profile response.tunnel_addresses",
     ),
-    mtuBytes: ToriiClient._normalizeUnsignedInteger(
-      record.mtu_bytes ?? 0,
+    mtuBytes: requireVpnNumericConstant(
+      record.mtu_bytes,
       "vpn profile response.mtu_bytes",
-      { allowZero: true },
+      1280,
     ),
     displayBillingLabel: requireNonEmptyString(
-      record.display_billing_label ?? "",
+      record.display_billing_label,
       "vpn profile response.display_billing_label",
     ),
     feeAssetId: requireNonEmptyString(
-      record.fee_asset_id ?? "",
+      record.fee_asset_id,
       "vpn profile response.fee_asset_id",
     ),
     escrowAccountId: requireNonEmptyString(
-      record.escrow_account_id ?? "",
+      record.escrow_account_id,
       "vpn profile response.escrow_account_id",
     ),
     operatorAccountId: requireNonEmptyString(
-      record.operator_account_id ?? "",
+      record.operator_account_id,
       "vpn profile response.operator_account_id",
     ),
-    leaseFeeNanos: ToriiClient._normalizeUnsignedInteger(
-      record.lease_fee_nanos ?? 0,
-      "vpn profile response.lease_fee_nanos",
-      { allowZero: true },
+    leaseFee: requireCanonicalQuantity(
+      record.lease_fee,
+      "vpn profile response.lease_fee",
     ),
-    settlementGraceSecs: ToriiClient._normalizeUnsignedInteger(
-      record.settlement_grace_secs ?? 0,
+    settlementGraceSecs: requireVpnUnsignedInteger(
+      record.settlement_grace_secs,
       "vpn profile response.settlement_grace_secs",
-      { allowZero: true },
+      { min: 1 },
     ),
-    flowLabelBits: ToriiClient._normalizeUnsignedInteger(
-      record.flow_label_bits ?? 0,
+    flowLabelBits: requireVpnNumericConstant(
+      record.flow_label_bits,
       "vpn profile response.flow_label_bits",
-      { allowZero: true },
+      24,
     ),
-    paddingBudgetMs: ToriiClient._normalizeUnsignedInteger(
-      record.padding_budget_ms ?? 0,
+    paddingBudgetMs: requireVpnUnsignedInteger(
+      record.padding_budget_ms,
       "vpn profile response.padding_budget_ms",
-      { allowZero: true },
+      { min: 1, max: 65535 },
     ),
-    relayTlsSpkiSha256Hex: normalizeNullableHex32(
+    relayTlsSpkiSha256Hex: requireNullableExactLowerHex32String(
       record.relay_tls_spki_sha256_hex,
       "vpn profile response.relay_tls_spki_sha256_hex",
     ),
   };
 }
 
+function requireVpnEnum(value, allowed, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  if (!allowed.has(literal)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be one of: ${[...allowed].join(", ")}`,
+      context,
+    );
+  }
+  return literal;
+}
+
+function requireVpnProfileExitClasses(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  const exits = value.map((entry, index) =>
+    requireVpnEnum(entry, VPN_EXIT_CLASSES, `${context}[${index}]`),
+  );
+  if (exits.length !== 3 || new Set(exits).size !== 3) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must contain exactly three unique exit classes`,
+      context,
+    );
+  }
+  return exits;
+}
+
+function requireVpnNumericConstant(value, context, expected) {
+  const numeric = requireVpnUnsignedInteger(value, context);
+  if (numeric !== expected) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context} must equal ${expected}`,
+      context,
+    );
+  }
+  return numeric;
+}
+
+function requireVpnUnsignedInteger(value, context, options = {}) {
+  if (typeof value !== "number") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${context} must be a JSON integer`,
+      context,
+    );
+  }
+  return ToriiClient._normalizeUnsignedInteger(value, context, options);
+}
+
 function normalizeVpnQuoteCreateRequest(input) {
   const record = ensureRecord(input, "createVpnQuote request");
+  assertSupportedOptionKeys(record, VPN_QUOTE_CREATE_REQUEST_KEYS, "createVpnQuote request");
+  const exitClassValue = record.exitClass ?? record.exit_class;
   const exitClass =
-    record.exitClass === undefined && record.exit_class === undefined
+    exitClassValue === undefined
       ? ""
-      : requireNonEmptyString(
-          record.exitClass ?? record.exit_class,
-          "createVpnQuote request.exitClass",
-        );
+      : exitClassValue === ""
+        ? ""
+        : requireVpnEnum(
+            exitClassValue,
+            VPN_EXIT_CLASSES,
+            "createVpnQuote request.exitClass",
+          );
   return {
     exit_class: exitClass,
     metering_public_key_hex: normalizeHex32String(
@@ -17685,16 +18531,25 @@ function normalizeVpnQuoteCreateRequest(input) {
 
 function normalizeVpnSessionCreateRequest(input) {
   const record = ensureRecord(input, "createVpnSession request");
+  assertSupportedOptionKeys(
+    record,
+    VPN_SESSION_CREATE_REQUEST_KEYS,
+    "createVpnSession request",
+  );
+  const exitClassValue = record.exitClass ?? record.exit_class;
   const exitClass =
-    record.exitClass === undefined && record.exit_class === undefined
+    exitClassValue === undefined
       ? ""
-      : requireNonEmptyString(
-          record.exitClass ?? record.exit_class,
-          "createVpnSession request.exitClass",
-        );
+      : exitClassValue === ""
+        ? ""
+        : requireVpnEnum(
+            exitClassValue,
+            VPN_EXIT_CLASSES,
+            "createVpnSession request.exitClass",
+          );
   return {
     exit_class: exitClass,
-    quote_id: normalizeHex32String(
+    quote_id: requireExactLowerHex32String(
       record.quoteId ?? record.quote_id,
       "createVpnSession request.quoteId",
     ),
@@ -17711,6 +18566,11 @@ function normalizeVpnSessionCreateRequest(input) {
 
 function normalizeVpnReceiptSubmitRequest(input) {
   const record = ensureRecord(input, "submitVpnReceipt request");
+  assertSupportedOptionKeys(
+    record,
+    VPN_RECEIPT_SUBMIT_REQUEST_KEYS,
+    "submitVpnReceipt request",
+  );
   const payload = {
     relay_receipt_hex: normalizeArbitraryHex(
       record.relayReceiptHex ?? record.relay_receipt_hex,
@@ -17722,7 +18582,7 @@ function normalizeVpnReceiptSubmitRequest(input) {
     ),
   };
   const leaseIdValue = record.leaseIdHex ?? record.lease_id_hex;
-  if (leaseIdValue !== undefined && leaseIdValue !== null) {
+  if (leaseIdValue !== undefined && leaseIdValue !== null && leaseIdValue !== "") {
     payload.lease_id_hex = normalizeHex32String(
       leaseIdValue,
       "submitVpnReceipt request.leaseIdHex",
@@ -17733,10 +18593,11 @@ function normalizeVpnReceiptSubmitRequest(input) {
 
 function normalizeVpnTxInstruction(payload, context) {
   const record = ensureRecord(payload, context);
+  assertVpnResponseFields(record, VPN_TX_INSTRUCTION_RESPONSE_FIELDS, context);
   return {
-    wireId: requireNonEmptyString(record.wire_id ?? record.wireId, `${context}.wire_id`),
-    payloadHex: normalizeArbitraryHex(
-      record.payload_hex ?? record.payloadHex,
+    wireId: requireNonEmptyString(record.wire_id, `${context}.wire_id`),
+    payloadHex: requireExactLowerEvenHexString(
+      record.payload_hex,
       `${context}.payload_hex`,
     ),
   };
@@ -17749,94 +18610,117 @@ function normalizeVpnOptionalTxInstruction(payload, context) {
   return normalizeVpnTxInstruction(payload, context);
 }
 
-function normalizeVpnTxInstructionList(payload, context) {
-  const instructions = payload ?? [];
-  if (!Array.isArray(instructions)) {
+function normalizeVpnTxInstructionList(payload, context, { min = 0, max } = {}) {
+  if (!Array.isArray(payload)) {
     throw new TypeError(`${context} must be an array`);
   }
-  return instructions.map((entry, index) =>
+  if (payload.length < min || (max !== undefined && payload.length > max)) {
+    const expected = min === max ? `exactly ${min}` : `from ${min} to ${max}`;
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must contain ${expected} instruction${max === 1 ? "" : "s"}`,
+      context,
+    );
+  }
+  return payload.map((entry, index) =>
     normalizeVpnTxInstruction(entry, `${context}[${index}]`),
   );
 }
 
-function normalizeNullableHex32(value, context) {
+function requireNullableExactLowerHex32String(value, context) {
   if (value === undefined || value === null) {
     return null;
   }
-  return normalizeHex32String(value, context);
+  return requireExactLowerHex32String(value, context);
 }
 
 function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
   const record = ensureRecord(payload ?? {}, context);
+  assertVpnResponseFields(record, VPN_QUOTE_RESPONSE_FIELDS, context);
+  const txInstructions = normalizeVpnTxInstructionList(
+    record.tx_instructions,
+    `${context}.tx_instructions`,
+    { min: 1, max: 1 },
+  );
   return {
-    quoteId: normalizeHex32String(record.quote_id, `${context}.quote_id`),
-    leaseIdHex: normalizeHex32String(record.lease_id_hex, `${context}.lease_id_hex`),
-    sessionIdHex: normalizeArbitraryHex(record.session_id_hex, `${context}.session_id_hex`),
+    quoteId: requireExactLowerHex32String(record.quote_id, `${context}.quote_id`),
+    leaseIdHex: requireExactLowerHex32String(
+      record.lease_id_hex,
+      `${context}.lease_id_hex`,
+    ),
+    sessionIdHex: requireExactLowerHexBytesString(
+      record.session_id_hex,
+      `${context}.session_id_hex`,
+      16,
+    ),
     paymentReference: requireNonEmptyString(
       record.payment_reference ?? "",
       `${context}.payment_reference`,
     ),
     accountId: requireNonEmptyString(record.account_id ?? "", `${context}.account_id`),
-    exitClass: requireNonEmptyString(record.exit_class ?? "", `${context}.exit_class`),
+    exitClass: requireVpnEnum(
+      record.exit_class,
+      VPN_EXIT_CLASSES,
+      `${context}.exit_class`,
+    ),
     relayEndpoint: requireNonEmptyString(
-      record.relay_endpoint ?? "",
+      record.relay_endpoint,
       `${context}.relay_endpoint`,
     ),
-    leaseSecs: ToriiClient._normalizeUnsignedInteger(
-      record.lease_secs ?? 0,
+    leaseSecs: requireVpnUnsignedInteger(
+      record.lease_secs,
       `${context}.lease_secs`,
-      { allowZero: true },
+      { min: 1, max: VPN_LEASE_SECONDS_MAX },
     ),
-    quoteExpiresAtMs: ToriiClient._normalizeUnsignedInteger(
-      record.quote_expires_at_ms ?? 0,
+    quoteExpiresAtMs: requireVpnUnsignedInteger(
+      record.quote_expires_at_ms,
       `${context}.quote_expires_at_ms`,
       { allowZero: true },
     ),
-    feeAssetId: requireNonEmptyString(record.fee_asset_id ?? "", `${context}.fee_asset_id`),
+    feeAssetId: requireNonEmptyString(record.fee_asset_id, `${context}.fee_asset_id`),
     escrowAccountId: requireNonEmptyString(
-      record.escrow_account_id ?? "",
+      record.escrow_account_id,
       `${context}.escrow_account_id`,
     ),
     operatorAccountId: requireNonEmptyString(
-      record.operator_account_id ?? "",
+      record.operator_account_id,
       `${context}.operator_account_id`,
     ),
-    leaseFeeNanos: ToriiClient._normalizeUnsignedInteger(
-      record.lease_fee_nanos ?? 0,
-      `${context}.lease_fee_nanos`,
-      { allowZero: true },
+    leaseFee: requireCanonicalQuantity(
+      record.lease_fee,
+      `${context}.lease_fee`,
     ),
-    routePushes: requireStringArray(record.route_pushes ?? [], `${context}.route_pushes`),
+    routePushes: requireStringArray(record.route_pushes, `${context}.route_pushes`),
     excludedRoutes: requireStringArray(
-      record.excluded_routes ?? [],
+      record.excluded_routes,
       `${context}.excluded_routes`,
     ),
-    dnsServers: requireStringArray(record.dns_servers ?? [], `${context}.dns_servers`),
+    dnsServers: requireStringArray(record.dns_servers, `${context}.dns_servers`),
     tunnelAddresses: requireStringArray(
-      record.tunnel_addresses ?? [],
+      record.tunnel_addresses,
       `${context}.tunnel_addresses`,
     ),
-    mtuBytes: ToriiClient._normalizeUnsignedInteger(
-      record.mtu_bytes ?? 0,
+    mtuBytes: requireVpnNumericConstant(
+      record.mtu_bytes,
       `${context}.mtu_bytes`,
-      { allowZero: true },
+      1280,
     ),
-    meterFamily: requireNonEmptyString(record.meter_family ?? "", `${context}.meter_family`),
-    flowLabelBits: ToriiClient._normalizeUnsignedInteger(
-      record.flow_label_bits ?? 0,
+    meterFamily: requireNonEmptyString(record.meter_family, `${context}.meter_family`),
+    flowLabelBits: requireVpnNumericConstant(
+      record.flow_label_bits,
       `${context}.flow_label_bits`,
-      { allowZero: true },
+      24,
     ),
-    paddingBudgetMs: ToriiClient._normalizeUnsignedInteger(
-      record.padding_budget_ms ?? 0,
+    paddingBudgetMs: requireVpnUnsignedInteger(
+      record.padding_budget_ms,
       `${context}.padding_budget_ms`,
-      { allowZero: true },
+      { min: 1, max: 65535 },
     ),
-    relayTlsSpkiSha256Hex: normalizeNullableHex32(
+    relayTlsSpkiSha256Hex: requireNullableExactLowerHex32String(
       record.relay_tls_spki_sha256_hex,
       `${context}.relay_tls_spki_sha256_hex`,
     ),
-    meteringPublicKeyHex: normalizeHex32String(
+    meteringPublicKeyHex: requireExactLowerHex32String(
       record.metering_public_key_hex,
       `${context}.metering_public_key_hex`,
     ),
@@ -17844,200 +18728,239 @@ function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
       record.open_lease_instruction,
       `${context}.open_lease_instruction`,
     ),
-    txInstructions: normalizeVpnTxInstructionList(
-      record.tx_instructions,
-      `${context}.tx_instructions`,
-    ),
+    txInstructions,
   };
 }
 
 function normalizeVpnSessionResponse(payload, context = "vpn session response") {
   const record = ensureRecord(payload ?? {}, context);
+  assertVpnResponseFields(record, VPN_SESSION_RESPONSE_FIELDS, context);
   return {
-    sessionId: requireNonEmptyString(record.session_id ?? "", `${context}.session_id`),
-    accountId: requireNonEmptyString(record.account_id ?? "", `${context}.account_id`),
-    exitClass: requireNonEmptyString(record.exit_class ?? "", `${context}.exit_class`),
+    sessionId: requireExactLowerHex32String(record.session_id, `${context}.session_id`),
+    accountId: requireNonEmptyString(record.account_id, `${context}.account_id`),
+    exitClass: requireVpnEnum(
+      record.exit_class,
+      VPN_EXIT_CLASSES,
+      `${context}.exit_class`,
+    ),
     relayEndpoint: requireNonEmptyString(
-      record.relay_endpoint ?? "",
+      record.relay_endpoint,
       `${context}.relay_endpoint`,
     ),
-    leaseSecs: ToriiClient._normalizeUnsignedInteger(
-      record.lease_secs ?? 0,
+    leaseSecs: requireVpnUnsignedInteger(
+      record.lease_secs,
       `${context}.lease_secs`,
-      { allowZero: true },
+      { min: 1, max: VPN_LEASE_SECONDS_MAX },
     ),
-    expiresAtMs: ToriiClient._normalizeUnsignedInteger(
-      record.expires_at_ms ?? 0,
+    expiresAtMs: requireVpnUnsignedInteger(
+      record.expires_at_ms,
       `${context}.expires_at_ms`,
       { allowZero: true },
     ),
-    connectedAtMs: ToriiClient._normalizeUnsignedInteger(
-      record.connected_at_ms ?? 0,
+    connectedAtMs: requireVpnUnsignedInteger(
+      record.connected_at_ms,
       `${context}.connected_at_ms`,
       { allowZero: true },
     ),
-    meterFamily: requireNonEmptyString(record.meter_family ?? "", `${context}.meter_family`),
-    quoteId: normalizeHex32String(record.quote_id, `${context}.quote_id`),
+    meterFamily: requireNonEmptyString(record.meter_family, `${context}.meter_family`),
+    quoteId: requireExactLowerHex32String(record.quote_id, `${context}.quote_id`),
     paymentReference: requireNonEmptyString(
       record.payment_reference ?? "",
       `${context}.payment_reference`,
     ),
-    paymentTxHash: normalizeHex32String(
+    paymentTxHash: requireExactLowerHex32String(
       record.payment_tx_hash,
       `${context}.payment_tx_hash`,
     ),
-    feeAssetId: requireNonEmptyString(record.fee_asset_id ?? "", `${context}.fee_asset_id`),
+    feeAssetId: requireNonEmptyString(record.fee_asset_id, `${context}.fee_asset_id`),
     escrowAccountId: requireNonEmptyString(
-      record.escrow_account_id ?? "",
+      record.escrow_account_id,
       `${context}.escrow_account_id`,
     ),
     operatorAccountId: requireNonEmptyString(
-      record.operator_account_id ?? "",
+      record.operator_account_id,
       `${context}.operator_account_id`,
     ),
-    leaseFeeNanos: ToriiClient._normalizeUnsignedInteger(
-      record.lease_fee_nanos ?? 0,
-      `${context}.lease_fee_nanos`,
-      { allowZero: true },
+    leaseFee: requireCanonicalQuantity(
+      record.lease_fee,
+      `${context}.lease_fee`,
     ),
-    flowLabelBits: ToriiClient._normalizeUnsignedInteger(
-      record.flow_label_bits ?? 0,
+    flowLabelBits: requireVpnNumericConstant(
+      record.flow_label_bits,
       `${context}.flow_label_bits`,
-      { allowZero: true },
+      24,
     ),
-    paddingBudgetMs: ToriiClient._normalizeUnsignedInteger(
-      record.padding_budget_ms ?? 0,
+    paddingBudgetMs: requireVpnUnsignedInteger(
+      record.padding_budget_ms,
       `${context}.padding_budget_ms`,
-      { allowZero: true },
+      { min: 1, max: 65535 },
     ),
-    relayTlsSpkiSha256Hex: normalizeNullableHex32(
+    relayTlsSpkiSha256Hex: requireNullableExactLowerHex32String(
       record.relay_tls_spki_sha256_hex,
       `${context}.relay_tls_spki_sha256_hex`,
     ),
-    routePushes: requireStringArray(record.route_pushes ?? [], `${context}.route_pushes`),
+    routePushes: requireStringArray(record.route_pushes, `${context}.route_pushes`),
     excludedRoutes: requireStringArray(
-      record.excluded_routes ?? [],
+      record.excluded_routes,
       `${context}.excluded_routes`,
     ),
-    dnsServers: requireStringArray(record.dns_servers ?? [], `${context}.dns_servers`),
+    dnsServers: requireStringArray(record.dns_servers, `${context}.dns_servers`),
     tunnelAddresses: requireStringArray(
-      record.tunnel_addresses ?? [],
+      record.tunnel_addresses,
       `${context}.tunnel_addresses`,
     ),
-    mtuBytes: ToriiClient._normalizeUnsignedInteger(
-      record.mtu_bytes ?? 0,
+    mtuBytes: requireVpnNumericConstant(
+      record.mtu_bytes,
       `${context}.mtu_bytes`,
-      { allowZero: true },
+      1280,
     ),
-    helperTicketHex: requireHexString(
-      record.helper_ticket_hex ?? "",
+    helperTicketHex: requireVpnHelperTicketHex(
+      record.helper_ticket_hex,
       `${context}.helper_ticket_hex`,
     ),
-    bytesIn: ToriiClient._normalizeUnsignedInteger(
-      record.bytes_in ?? 0,
+    bytesIn: requireVpnUnsignedInteger(
+      record.bytes_in,
       `${context}.bytes_in`,
       { allowZero: true },
     ),
-    bytesOut: ToriiClient._normalizeUnsignedInteger(
-      record.bytes_out ?? 0,
+    bytesOut: requireVpnUnsignedInteger(
+      record.bytes_out,
       `${context}.bytes_out`,
       { allowZero: true },
     ),
-    status: requireNonEmptyString(record.status ?? "", `${context}.status`),
+    status: requireVpnEnum(record.status, VPN_SESSION_STATUSES, `${context}.status`),
   };
 }
 
 function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") {
   const record = ensureRecord(payload ?? {}, context);
+  assertVpnResponseFields(record, VPN_RECEIPT_RESPONSE_FIELDS, context);
+  const txInstructions = normalizeVpnTxInstructionList(
+    record.tx_instructions,
+    `${context}.tx_instructions`,
+    { max: 1 },
+  );
   return {
-    sessionId: requireNonEmptyString(record.session_id ?? "", `${context}.session_id`),
-    accountId: requireNonEmptyString(record.account_id ?? "", `${context}.account_id`),
-    exitClass: requireNonEmptyString(record.exit_class ?? "", `${context}.exit_class`),
+    sessionId: requireExactLowerHex32String(record.session_id, `${context}.session_id`),
+    accountId: requireNonEmptyString(record.account_id, `${context}.account_id`),
+    exitClass: requireVpnEnum(
+      record.exit_class,
+      VPN_EXIT_CLASSES,
+      `${context}.exit_class`,
+    ),
     relayEndpoint: requireNonEmptyString(
-      record.relay_endpoint ?? "",
+      record.relay_endpoint,
       `${context}.relay_endpoint`,
     ),
-    meterFamily: requireNonEmptyString(record.meter_family ?? "", `${context}.meter_family`),
-    connectedAtMs: ToriiClient._normalizeUnsignedInteger(
-      record.connected_at_ms ?? 0,
+    meterFamily: requireNonEmptyString(record.meter_family, `${context}.meter_family`),
+    connectedAtMs: requireVpnUnsignedInteger(
+      record.connected_at_ms,
       `${context}.connected_at_ms`,
       { allowZero: true },
     ),
-    disconnectedAtMs: ToriiClient._normalizeUnsignedInteger(
-      record.disconnected_at_ms ?? 0,
+    disconnectedAtMs: requireVpnUnsignedInteger(
+      record.disconnected_at_ms,
       `${context}.disconnected_at_ms`,
       { allowZero: true },
     ),
-    durationMs: ToriiClient._normalizeUnsignedInteger(
-      record.duration_ms ?? 0,
+    durationMs: requireVpnUnsignedInteger(
+      record.duration_ms,
       `${context}.duration_ms`,
       { allowZero: true },
     ),
-    bytesIn: ToriiClient._normalizeUnsignedInteger(
-      record.bytes_in ?? 0,
+    bytesIn: requireVpnUnsignedInteger(
+      record.bytes_in,
       `${context}.bytes_in`,
       { allowZero: true },
     ),
-    bytesOut: ToriiClient._normalizeUnsignedInteger(
-      record.bytes_out ?? 0,
+    bytesOut: requireVpnUnsignedInteger(
+      record.bytes_out,
       `${context}.bytes_out`,
       { allowZero: true },
     ),
-    status: requireNonEmptyString(record.status ?? "", `${context}.status`),
-    receiptSource: requireNonEmptyString(
-      record.receipt_source ?? "",
+    status: requireVpnEnum(record.status, VPN_RECEIPT_STATUSES, `${context}.status`),
+    receiptSource: requireVpnEnum(
+      record.receipt_source,
+      VPN_RECEIPT_SOURCES,
       `${context}.receipt_source`,
     ),
-    quoteId: normalizeHex32String(record.quote_id, `${context}.quote_id`),
-    paymentTxHash: normalizeHex32String(
+    quoteId: requireExactLowerHex32String(record.quote_id, `${context}.quote_id`),
+    paymentTxHash: requireExactLowerHex32String(
       record.payment_tx_hash,
       `${context}.payment_tx_hash`,
     ),
-    feeAssetId: requireNonEmptyString(record.fee_asset_id ?? "", `${context}.fee_asset_id`),
+    feeAssetId: requireNonEmptyString(record.fee_asset_id, `${context}.fee_asset_id`),
     escrowAccountId: requireNonEmptyString(
-      record.escrow_account_id ?? "",
+      record.escrow_account_id,
       `${context}.escrow_account_id`,
     ),
     operatorAccountId: requireNonEmptyString(
-      record.operator_account_id ?? "",
+      record.operator_account_id,
       `${context}.operator_account_id`,
     ),
-    leaseFeeNanos: ToriiClient._normalizeUnsignedInteger(
-      record.lease_fee_nanos ?? 0,
-      `${context}.lease_fee_nanos`,
-      { allowZero: true },
+    leaseFee: requireCanonicalQuantity(
+      record.lease_fee,
+      `${context}.lease_fee`,
     ),
-    earnedFeeNanos: ToriiClient._normalizeUnsignedInteger(
-      record.earned_fee_nanos ?? 0,
-      `${context}.earned_fee_nanos`,
-      { allowZero: true },
+    earnedFee: requireCanonicalQuantity(
+      record.earned_fee,
+      `${context}.earned_fee`,
     ),
-    refundedFeeNanos: ToriiClient._normalizeUnsignedInteger(
-      record.refunded_fee_nanos ?? 0,
-      `${context}.refunded_fee_nanos`,
-      { allowZero: true },
+    refundedFee: requireCanonicalQuantity(
+      record.refunded_fee,
+      `${context}.refunded_fee`,
     ),
-    leaseIdHex: normalizeHex32String(record.lease_id_hex, `${context}.lease_id_hex`),
+    leaseIdHex: requireExactLowerHex32String(
+      record.lease_id_hex,
+      `${context}.lease_id_hex`,
+    ),
     settleLeaseInstruction: normalizeVpnOptionalTxInstruction(
       record.settle_lease_instruction,
       `${context}.settle_lease_instruction`,
     ),
-    txInstructions: normalizeVpnTxInstructionList(
-      record.tx_instructions,
-      `${context}.tx_instructions`,
-    ),
+    txInstructions,
   };
 }
 
 function normalizeVpnReceiptListResponse(payload) {
   const record = ensureRecord(payload ?? {}, "vpn receipts response");
+  assertVpnResponseFields(
+    record,
+    VPN_RECEIPT_LIST_RESPONSE_FIELDS,
+    "vpn receipts response",
+  );
   if (!Array.isArray(record.items)) {
     throw new TypeError("vpn receipts response.items must be an array");
   }
+  if (record.items.length > 24) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      "vpn receipts response.items must contain at most 24 receipts",
+      "vpn.receipts.response.items",
+    );
+  }
+  const total = requireVpnUnsignedInteger(record.total, "vpn receipts response.total", {
+    allowZero: true,
+    max: 24,
+  });
   const items = record.items.map((item, index) =>
     normalizeVpnReceiptResponse(item, `vpn receipts response.items[${index}]`),
   );
-  return items;
+  return { items, total };
+}
+
+function assertVpnResponseFields(record, requiredFields, context) {
+  assertSupportedOptionKeys(record, requiredFields, context);
+  const missing = [...requiredFields].filter(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  if (missing.length > 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} is missing required fields: ${missing.join(", ")}`,
+      context.replace(/\s+/gu, "."),
+    );
+  }
 }
 
 function normalizeVpnSessionOptions(options, context) {
@@ -18208,132 +19131,6 @@ function normalizeSnsFeeSplit(payload, context) {
   };
 }
 
-function normalizeSnsRegisterRequest(payload, context) {
-  const record = ensureRecord(payload ?? {}, `${context} payload`);
-  const selector = normalizeSnsSelector(record.selector, `${context}.selector`);
-  const controllers = normalizeSnsControllers(record.controllers, `${context}.controllers`);
-  const owner = ToriiClient._normalizeAccountId(record.owner, `${context}.owner`);
-  const termYears =
-    record.term_years === undefined
-      ? ToriiClient._normalizeUnsignedInteger(1, `${context}.term_years`)
-      : ToriiClient._normalizeUnsignedInteger(record.term_years, `${context}.term_years`);
-  const pricingClassHint =
-    record.pricing_class_hint === undefined || record.pricing_class_hint === null
-      ? null
-      : ToriiClient._normalizeUnsignedInteger(record.pricing_class_hint, `${context}.pricing_class_hint`, {
-          allowZero: true,
-        });
-  const payment = normalizeSnsPayment(record.payment, `${context}.payment`);
-  const governance =
-    record.governance === undefined || record.governance === null
-      ? null
-      : normalizeSnsGovernanceHook(record.governance, `${context}.governance`);
-  const metadata = normalizeOptionalMetadata(record.metadata, `${context}.metadata`);
-  return {
-    selector,
-    owner,
-    controllers,
-    term_years: termYears,
-    pricing_class_hint: pricingClassHint ?? undefined,
-    payment,
-    governance: governance ?? undefined,
-    metadata,
-  };
-}
-
-function normalizeSnsRenewRequest(payload, context) {
-  const record = ensureRecord(payload ?? {}, `${context} payload`);
-  const termYears = ToriiClient._normalizeUnsignedInteger(record.term_years, `${context}.term_years`);
-  const payment = normalizeSnsPayment(record.payment, `${context}.payment`);
-  return {
-    term_years: termYears,
-    payment,
-  };
-}
-
-function normalizeSnsTransferRequest(payload, context) {
-  const record = ensureRecord(payload ?? {}, `${context} payload`);
-  const newOwner = ToriiClient._normalizeAccountId(record.new_owner, `${context}.new_owner`);
-  const governance = normalizeSnsGovernanceHook(record.governance, `${context}.governance`);
-  return {
-    new_owner: newOwner,
-    governance,
-  };
-}
-
-function normalizeSnsFreezeRequest(payload, context) {
-  const record = ensureRecord(payload ?? {}, `${context} payload`);
-  const reason = requireNonEmptyString(record.reason, `${context}.reason`);
-  const untilMs = ToriiClient._normalizeUnsignedInteger(record.until_ms, `${context}.until_ms`, { allowZero: true });
-  const guardianTicket = record.guardian_ticket;
-  if (guardianTicket === undefined || guardianTicket === null) {
-    throw new TypeError(`${context}.guardian_ticket must be provided`);
-  }
-  return {
-    reason,
-    until_ms: untilMs,
-    guardian_ticket: guardianTicket,
-  };
-}
-
-function normalizeSnsPayment(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const assetId = ToriiClient._normalizeAssetId(
-    record.asset_id ?? record.assetId,
-    `${context}.asset_id`,
-  );
-  const gross = requireCanonicalQuantity(
-    record.gross_amount ?? record.grossAmount,
-    `${context}.gross_amount`,
-  );
-  const netRaw = record.net_amount ?? record.netAmount;
-  const settlementTx = record.settlement_tx ?? record.settlementTx;
-  if (settlementTx === undefined || settlementTx === null) {
-    throw new TypeError(`${context}.settlement_tx must be provided`);
-  }
-  const payer = ToriiClient._normalizeAccountId(
-    record.payer,
-    `${context}.payer`,
-  );
-  const signature = record.signature;
-  if (signature === undefined || signature === null) {
-    throw new TypeError(`${context}.signature must be provided`);
-  }
-  const payment = {
-    asset_id: assetId,
-    gross_amount: gross,
-    settlement_tx: settlementTx,
-    payer,
-    signature,
-  };
-  if (netRaw !== undefined && netRaw !== null) {
-    payment.net_amount = requireCanonicalQuantity(
-      netRaw,
-      `${context}.net_amount`,
-    );
-  }
-  return payment;
-}
-
-function normalizeSnsGovernanceHook(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const proposalId = requireNonEmptyString(record.proposal_id, `${context}.proposal_id`);
-  const councilVoteHash = requireNonEmptyString(record.council_vote_hash, `${context}.council_vote_hash`);
-  const daoVoteHash = requireNonEmptyString(record.dao_vote_hash, `${context}.dao_vote_hash`);
-  const stewardAck = requireNonEmptyString(record.steward_ack, `${context}.steward_ack`);
-  const guardianClearance =
-    record.guardian_clearance === undefined || record.guardian_clearance === null
-      ? null
-      : requireNonEmptyString(record.guardian_clearance, `${context}.guardian_clearance`);
-  return {
-    proposal_id: proposalId,
-    council_vote_hash: councilVoteHash,
-    dao_vote_hash: daoVoteHash,
-    steward_ack: stewardAck,
-    guardian_clearance: guardianClearance ?? undefined,
-  };
-}
-
 function normalizeSnsSelector(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const version = ToriiClient._normalizeUnsignedInteger(record.version ?? 1, `${context}.version`, { allowZero: true });
@@ -18496,13 +19293,6 @@ function normalizeSnsNameStatus(payload, context) {
     };
   }
   return { status };
-}
-
-function normalizeSnsRegisterResponse(payload) {
-  const record = ensureRecord(payload ?? {}, "sns register response");
-  return {
-    nameRecord: normalizeSnsNameRecord(record.name_record, "sns register response.name_record"),
-  };
 }
 
 function normalizeStringList(value, context) {
@@ -19712,377 +20502,6 @@ function cloneHeadersForFetch(headers) {
   return clone;
 }
 
-function cloneRawUtf8Headers(headers) {
-  if (!headers || typeof headers !== "object") {
-    return undefined;
-  }
-  const clone = {};
-  for (const [key, value] of Object.entries(headers)) {
-    clone[key] = String(value);
-  }
-  return Object.keys(clone).length > 0 ? clone : undefined;
-}
-
-function headerValueRequiresRawUtf8Transport(value) {
-  if (value == null) {
-    return false;
-  }
-  const rendered = String(value);
-  for (let index = 0; index < rendered.length; index += 1) {
-    if (rendered.charCodeAt(index) > 0xff) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function fetchSupportsRawUtf8Headers(fetchImpl) {
-  return Boolean(fetchImpl && fetchImpl[RAW_UTF8_HEADER_SUPPORT_FLAG] === true);
-}
-
-function canUseNodeRawUtf8Transport(url) {
-  const parsed = url instanceof URL ? url : new URL(String(url));
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return false;
-  }
-  return typeof process !== "undefined" && Boolean(process?.versions?.node);
-}
-
-async function performNodeRawUtf8Request({
-  url,
-  method,
-  headers,
-  rawUtf8Headers,
-  body,
-  signal,
-}) {
-  const parsed = url instanceof URL ? url : new URL(String(url));
-  const requestBuffer = buildRawUtf8HttpRequestBuffer({
-    url: parsed,
-    method,
-    headers,
-    rawUtf8Headers,
-    body,
-  });
-  throwIfAborted(signal);
-  const socket = await openNodeRawUtf8Socket(parsed);
-  if (typeof socket.setNoDelay === "function") {
-    socket.setNoDelay(true);
-  }
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const chunks = [];
-    const finishWithError = (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(error instanceof Error ? error : new Error(String(error)));
-    };
-    const finishWithResponse = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      try {
-        resolve(createNodeRawUtf8Response(Buffer.concat(chunks)));
-      } catch (error) {
-        reject(error);
-      }
-    };
-    const onAbort = () => {
-      const reason = signalAbortReason(signal) ?? createAbortError();
-      try {
-        socket.destroy(reason instanceof Error ? reason : undefined);
-      } catch {
-        // Ignore socket teardown failures during abort.
-      }
-      finishWithError(reason);
-    };
-    const cleanup = () => {
-      socket.removeListener("error", onError);
-      socket.removeListener("data", onData);
-      socket.removeListener("end", onEnd);
-      socket.removeListener("close", onClose);
-      if (signal) {
-        removeSignalAbortListener(signal, onAbort);
-      }
-    };
-    const onError = (error) => {
-      finishWithError(error);
-    };
-    const onData = (chunk) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    };
-    const onEnd = () => {
-      finishWithResponse();
-    };
-    const onClose = (hadError) => {
-      if (settled || hadError) {
-        return;
-      }
-      if (chunks.length > 0) {
-        finishWithResponse();
-        return;
-      }
-      finishWithError(new Error("raw UTF-8 request socket closed before a response arrived"));
-    };
-    socket.once("error", onError);
-    socket.on("data", onData);
-    socket.once("end", onEnd);
-    socket.once("close", onClose);
-    if (signal) {
-      addSignalAbortListener(signal, onAbort);
-      if (signalIsAborted(signal)) onAbort();
-    }
-    try {
-      socket.write(requestBuffer);
-    } catch (error) {
-      finishWithError(error);
-    }
-  });
-}
-
-async function openNodeRawUtf8Socket(url) {
-  const port =
-    url.port !== "" ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`invalid port for raw UTF-8 request: ${url.port}`);
-  }
-  if (url.protocol === "https:") {
-    const tls = await import("node:tls");
-    return tls.connect({
-      host: url.hostname,
-      port,
-      ALPNProtocols: ["http/1.1"],
-      servername: url.hostname.includes(":") ? undefined : url.hostname,
-    });
-  }
-  const net = await import("node:net");
-  return net.createConnection({
-    host: url.hostname,
-    port,
-  });
-}
-
-function buildRawUtf8HttpRequestBuffer({
-  url,
-  method,
-  headers,
-  rawUtf8Headers,
-  body,
-}) {
-  const renderedHeaders = cloneHeadersForFetch(headers);
-  const rawHeaders = cloneRawUtf8Headers(rawUtf8Headers) ?? {};
-  for (const name of Object.keys(rawHeaders)) {
-    deleteHeader(renderedHeaders, name);
-  }
-  if (!hasHeader(renderedHeaders, "Host")) {
-    renderedHeaders.Host = renderRawHttpHostHeader(url);
-  }
-  if (!hasHeader(renderedHeaders, "Connection")) {
-    renderedHeaders.Connection = "close";
-  }
-  const bodyBuffer = encodeRawUtf8RequestBody(body);
-  if (
-    bodyBuffer &&
-    !hasHeader(renderedHeaders, "Content-Length") &&
-    !hasHeader(renderedHeaders, "Transfer-Encoding")
-  ) {
-    renderedHeaders["Content-Length"] = String(bodyBuffer.length);
-  }
-  const target = `${url.pathname || "/"}${url.search || ""}` || "/";
-  const chunks = [Buffer.from(`${method} ${target} HTTP/1.1\r\n`, "ascii")];
-  for (const [name, value] of Object.entries(renderedHeaders)) {
-    chunks.push(encodeRawHttpHeaderLine(name, value));
-  }
-  for (const [name, value] of Object.entries(rawHeaders)) {
-    chunks.push(encodeRawHttpHeaderLine(name, value));
-  }
-  chunks.push(Buffer.from("\r\n", "ascii"));
-  if (bodyBuffer) {
-    chunks.push(bodyBuffer);
-  }
-  return Buffer.concat(chunks);
-}
-
-function encodeRawUtf8RequestBody(body) {
-  if (body === undefined || body === null) {
-    return null;
-  }
-  if (typeof body === "string") {
-    return Buffer.from(body, "utf8");
-  }
-  if (body instanceof URLSearchParams) {
-    return Buffer.from(body.toString(), "utf8");
-  }
-  return toBuffer(body);
-}
-
-function renderRawHttpHostHeader(url) {
-  const defaultPort = url.protocol === "https:" ? "443" : "80";
-  const hostname = url.hostname.includes(":") ? `[${url.hostname}]` : url.hostname;
-  if (url.port && url.port !== defaultPort) {
-    return `${hostname}:${url.port}`;
-  }
-  return hostname;
-}
-
-function encodeRawHttpHeaderLine(name, value) {
-  const renderedName = String(name);
-  if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u.test(renderedName)) {
-    throw new TypeError(`invalid raw HTTP header name: ${renderedName}`);
-  }
-  const renderedValue = value == null ? "" : String(value);
-  if (/[\r\n]/u.test(renderedValue)) {
-    throw new TypeError(`invalid raw HTTP header value for ${renderedName}`);
-  }
-  return Buffer.concat([
-    Buffer.from(`${renderedName}: `, "ascii"),
-    Buffer.from(renderedValue, "utf8"),
-    Buffer.from("\r\n", "ascii"),
-  ]);
-}
-
-function createNodeRawUtf8Response(buffer) {
-  const parsed = parseRawHttpResponse(buffer);
-  if (typeof Response === "function") {
-    return new Response(parsed.body, {
-      status: parsed.status,
-      statusText: parsed.statusText,
-      headers: parsed.headers,
-    });
-  }
-  attachHeaderAccessors(parsed.headers);
-  return {
-    status: parsed.status,
-    statusText: parsed.statusText,
-    headers: parsed.headers,
-    body: null,
-    json: async () => JSON.parse(parsed.body.toString("utf8")),
-    text: async () => parsed.body.toString("utf8"),
-    arrayBuffer: async () =>
-      parsed.body.buffer.slice(
-        parsed.body.byteOffset,
-        parsed.body.byteOffset + parsed.body.byteLength,
-      ),
-  };
-}
-
-function parseRawHttpResponse(buffer) {
-  const headerSeparator = buffer.indexOf("\r\n\r\n");
-  if (headerSeparator === -1) {
-    throw new Error("invalid raw HTTP response: missing header terminator");
-  }
-  const headerBlock = buffer.subarray(0, headerSeparator).toString("latin1");
-  const lines = headerBlock.split("\r\n");
-  const statusLine = lines.shift();
-  const match =
-    typeof statusLine === "string"
-      ? /^HTTP\/1\.[01]\s+(\d{3})(?:\s+(.*))?$/u.exec(statusLine)
-      : null;
-  if (!match) {
-    throw new Error("invalid raw HTTP response: malformed status line");
-  }
-  const headers = {};
-  for (const line of lines) {
-    const delimiter = line.indexOf(":");
-    if (delimiter === -1) {
-      continue;
-    }
-    const name = line.slice(0, delimiter).trim();
-    const value = line.slice(delimiter + 1).trim();
-    const existing = findHeaderKey(headers, name);
-    if (existing) {
-      headers[existing] = `${headers[existing]}, ${value}`;
-    } else {
-      headers[name] = value;
-    }
-  }
-  let body = buffer.subarray(headerSeparator + 4);
-  const status = Number.parseInt(match[1], 10);
-  if (status < 200 || status === 204 || status === 304) {
-    body = Buffer.alloc(0);
-  } else if (responseUsesChunkedTransferEncoding(headers)) {
-    body = decodeChunkedHttpBody(body);
-  } else {
-    const contentLength = parseContentLengthHeader(headers);
-    if (contentLength !== null) {
-      if (body.length < contentLength) {
-        throw new Error("invalid raw HTTP response: body shorter than content-length");
-      }
-      body = body.subarray(0, contentLength);
-    }
-  }
-  return {
-    status,
-    statusText: match[2] ?? "",
-    headers,
-    body,
-  };
-}
-
-function responseUsesChunkedTransferEncoding(headers) {
-  const key = findHeaderKey(headers, "transfer-encoding");
-  if (!key) {
-    return false;
-  }
-  return String(headers[key])
-    .split(",")
-    .some((entry) => entry.trim().toLowerCase() === "chunked");
-}
-
-function parseContentLengthHeader(headers) {
-  const key = findHeaderKey(headers, "content-length");
-  if (!key) {
-    return null;
-  }
-  const parsed = Number.parseInt(String(headers[key]).trim(), 10);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new Error("invalid raw HTTP response: malformed content-length");
-  }
-  return parsed;
-}
-
-function decodeChunkedHttpBody(buffer) {
-  const chunks = [];
-  let offset = 0;
-  while (offset < buffer.length) {
-    const lineEnd = buffer.indexOf("\r\n", offset);
-    if (lineEnd === -1) {
-      throw new Error("invalid raw HTTP response: unterminated chunk size");
-    }
-    const sizeLine = buffer
-      .subarray(offset, lineEnd)
-      .toString("latin1")
-      .split(";", 1)[0]
-      .trim();
-    const size = Number.parseInt(sizeLine, 16);
-    if (!Number.isInteger(size) || size < 0) {
-      throw new Error("invalid raw HTTP response: malformed chunk size");
-    }
-    offset = lineEnd + 2;
-    if (size === 0) {
-      if (offset + 2 > buffer.length) {
-        throw new Error("invalid raw HTTP response: missing chunk terminator");
-      }
-      return Buffer.concat(chunks);
-    }
-    if (offset + size + 2 > buffer.length) {
-      throw new Error("invalid raw HTTP response: truncated chunk body");
-    }
-    chunks.push(buffer.subarray(offset, offset + size));
-    offset += size;
-    if (buffer[offset] !== 13 || buffer[offset + 1] !== 10) {
-      throw new Error("invalid raw HTTP response: malformed chunk delimiter");
-    }
-    offset += 2;
-  }
-  throw new Error("invalid raw HTTP response: missing terminating chunk");
-}
-
 function headersContainCredentials(headers) {
   if (!headers || typeof headers !== "object") {
     return false;
@@ -20340,15 +20759,49 @@ function requireExactJsonUnsignedInteger(value, name, options = {}) {
 }
 
 function requireExactLowerHex32String(value, name) {
+  return requireExactLowerHexBytesString(value, name, 32);
+}
+
+function requireExactLowerHexBytesString(value, name, expectedBytes) {
   const literal = requireExactNonEmptyString(value, name);
-  if (!/^[0-9a-f]{64}$/.test(literal)) {
+  if (
+    literal.length !== expectedBytes * 2 ||
+    !/^[0-9a-f]+$/u.test(literal)
+  ) {
     throw createValidationError(
       ValidationErrorCode.INVALID_HEX,
-      `${name} must be an exact lowercase 32-byte hex string`,
+      `${name} must be an exact lowercase ${expectedBytes}-byte hex string`,
       name,
     );
   }
   return literal;
+}
+
+function requireExactLowerEvenHexString(value, name) {
+  const literal = requireExactNonEmptyString(value, name);
+  if (literal.length % 2 !== 0 || !/^[0-9a-f]+$/u.test(literal)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be an exact lowercase even-length hex string`,
+      name,
+    );
+  }
+  return literal;
+}
+
+function requireVpnHelperTicketHex(value, name) {
+  if (
+    typeof value !== "string" ||
+    value.length !== VPN_HELPER_TICKET_HEX_LENGTH ||
+    !/^[0-9a-f]+$/u.test(value)
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must contain exactly ${VPN_HELPER_TICKET_HEX_LENGTH} lowercase hexadecimal characters (${VPN_HELPER_TICKET_BYTES} bytes)`,
+      name,
+    );
+  }
+  return value;
 }
 
 function requireHexString(value, name) {
@@ -22286,313 +22739,6 @@ function normalizeRevokeSpaceDirectoryManifestRequest(input) {
   return payload;
 }
 
-function normalizeDeployContractRequest(input) {
-  const record = ensureRecord(input, "deployContract request");
-  const credentials = normalizeAuthorityCredentials(record, "deployContract");
-  const codeB64 = record.code_b64 ?? record.codeB64;
-  const contractAlias = record.contract_alias ?? record.contractAlias;
-  const payload = {
-    ...credentials,
-    code_b64: normalizeIvmArtifactBytecodeInput(
-      codeB64,
-      "deployContract.codeB64",
-    ),
-    contract_alias: requireNonEmptyString(
-      contractAlias,
-      "deployContract.contract_alias",
-    ),
-  };
-  if (record.dataspace !== undefined && record.dataspace !== null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "deployContract.dataspace is not accepted by /v1/contracts/deploy; use contractAlias to select the dataspace",
-      "deployContract.dataspace",
-    );
-  }
-  if (record.manifest !== undefined && record.manifest !== null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "deployContract.manifest is not accepted by /v1/contracts/deploy",
-      "deployContract.manifest",
-    );
-  }
-  const leaseExpiryValue = record.lease_expiry_ms ?? record.leaseExpiryMs;
-  if (leaseExpiryValue !== undefined && leaseExpiryValue !== null) {
-    const leaseExpiryMs = coerceInteger(
-      leaseExpiryValue,
-      "deployContract.lease_expiry_ms",
-    );
-    if (leaseExpiryMs < 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        "deployContract.lease_expiry_ms must be a non-negative integer",
-        "deployContract.lease_expiry_ms",
-      );
-    }
-    payload.lease_expiry_ms = leaseExpiryMs;
-  }
-  return payload;
-}
-
-function normalizeDeployContractResponse(payload) {
-  const record = ensureRecord(payload, "deployContract response");
-  if (!Array.isArray(record.contracts)) {
-    throw new TypeError("deployContract.response.contracts must be an array");
-  }
-  if (!Array.isArray(record.hajimari_calls)) {
-    throw new TypeError("deployContract.response.hajimari_calls must be an array");
-  }
-  if (!Array.isArray(record.completed_stages)) {
-    throw new TypeError("deployContract.response.completed_stages must be an array");
-  }
-  const normalizeOptionalString = (value, context) =>
-    value === undefined || value === null ? null : requireNonEmptyString(value, context);
-  const normalizeOptionalHash = (value, context) =>
-    value === undefined || value === null ? null : normalizeHex32String(value, context);
-  const normalizeContract = (contractPayload, index) => {
-    const contract = ensureRecord(
-      contractPayload,
-      `deployContract.response.contracts[${index}]`,
-    );
-    const contractResult = {
-      name: requireNonEmptyString(
-        contract.name,
-        `deployContract.response.contracts[${index}].name`,
-      ),
-      contract_alias: requireNonEmptyString(
-        contract.contract_alias,
-        `deployContract.response.contracts[${index}].contract_alias`,
-      ),
-      contract_address: requireNonEmptyString(
-        contract.contract_address,
-        `deployContract.response.contracts[${index}].contract_address`,
-      ),
-      previous_contract_address: normalizeOptionalString(
-        contract.previous_contract_address,
-        `deployContract.response.contracts[${index}].previous_contract_address`,
-      ),
-      kaizen: Boolean(contract.kaizen),
-      dataspace: requireNonEmptyString(
-        contract.dataspace,
-        `deployContract.response.contracts[${index}].dataspace`,
-      ),
-      deploy_nonce: coerceInteger(
-        contract.deploy_nonce,
-        `deployContract.response.contracts[${index}].deploy_nonce`,
-      ),
-      code_hash_hex: normalizeHex32String(
-        contract.code_hash_hex,
-        `deployContract.response.contracts[${index}].code_hash_hex`,
-      ),
-      abi_hash_hex: normalizeHex32String(
-        contract.abi_hash_hex,
-        `deployContract.response.contracts[${index}].abi_hash_hex`,
-      ),
-      tx_hash_hex: normalizeOptionalHash(
-        contract.tx_hash_hex,
-        `deployContract.response.contracts[${index}].tx_hash_hex`,
-      ),
-      status: requireNonEmptyString(
-        contract.status,
-        `deployContract.response.contracts[${index}].status`,
-      ),
-    };
-    if (contract.pipeline_status !== undefined) {
-      contractResult.pipeline_status =
-        contract.pipeline_status === null
-          ? null
-          : normalizePipelineTransactionStatus(
-              contract.pipeline_status,
-              `deployContract.response.contracts[${index}].pipeline_status`,
-            );
-    }
-    return contractResult;
-  };
-  const normalizeCall = (callPayload, index) => {
-    const call = ensureRecord(callPayload, `deployContract.response.hajimari_calls[${index}]`);
-    const callResult = {
-      id: requireNonEmptyString(call.id, `deployContract.response.hajimari_calls[${index}].id`),
-      contract_alias: requireNonEmptyString(
-        call.contract_alias,
-        `deployContract.response.hajimari_calls[${index}].contract_alias`,
-      ),
-      entrypoint: normalizeOptionalString(
-        call.entrypoint,
-        `deployContract.response.hajimari_calls[${index}].entrypoint`,
-      ),
-      tx_hash_hex: normalizeOptionalHash(
-        call.tx_hash_hex,
-        `deployContract.response.hajimari_calls[${index}].tx_hash_hex`,
-      ),
-      status: requireNonEmptyString(
-        call.status,
-        `deployContract.response.hajimari_calls[${index}].status`,
-      ),
-    };
-    if (call.pipeline_status !== undefined) {
-      callResult.pipeline_status =
-        call.pipeline_status === null
-          ? null
-          : normalizePipelineTransactionStatus(
-              call.pipeline_status,
-              `deployContract.response.hajimari_calls[${index}].pipeline_status`,
-            );
-    }
-    return callResult;
-  };
-  const normalizeAssertion = (assertionPayload, index) => {
-    const assertion = ensureRecord(
-      assertionPayload,
-      `deployContract.response.assertions[${index}]`,
-    );
-    const assertionResult = {
-      id: requireNonEmptyString(
-        assertion.id,
-        `deployContract.response.assertions[${index}].id`,
-      ),
-      contract_alias: requireNonEmptyString(
-        assertion.contract_alias,
-        `deployContract.response.assertions[${index}].contract_alias`,
-      ),
-      entrypoint: normalizeOptionalString(
-        assertion.entrypoint,
-        `deployContract.response.assertions[${index}].entrypoint`,
-      ),
-      status: requireNonEmptyString(
-        assertion.status,
-        `deployContract.response.assertions[${index}].status`,
-      ),
-    };
-    if (assertion.actual_result !== undefined) {
-      assertionResult.actual_result = assertion.actual_result;
-    }
-    if (assertion.expected_result !== undefined) {
-      assertionResult.expected_result = assertion.expected_result;
-    }
-    if (assertion.error !== undefined) {
-      assertionResult.error = normalizeOptionalString(
-        assertion.error,
-        `deployContract.response.assertions[${index}].error`,
-      );
-    }
-    return assertionResult;
-  };
-  const normalizeOperationReceipt = (receiptPayload) => {
-    const receipt = ensureRecord(
-      receiptPayload,
-      "deployContract.response.operation_receipt",
-    );
-    const receiptResult = {
-      operation_kind: requireNonEmptyString(
-        receipt.operation_kind,
-        "deployContract.response.operation_receipt.operation_kind",
-      ),
-      status: requireNonEmptyString(
-        receipt.status,
-        "deployContract.response.operation_receipt.status",
-      ),
-      transport: requireNonEmptyString(
-        receipt.transport,
-        "deployContract.response.operation_receipt.transport",
-      ),
-      dataspace: requireNonEmptyString(
-        receipt.dataspace,
-        "deployContract.response.operation_receipt.dataspace",
-      ),
-      contract_alias: normalizeOptionalString(
-        receipt.contract_alias,
-        "deployContract.response.operation_receipt.contract_alias",
-      ),
-      contract_address: normalizeOptionalString(
-        receipt.contract_address,
-        "deployContract.response.operation_receipt.contract_address",
-      ),
-      code_hash_hex: normalizeOptionalHash(
-        receipt.code_hash_hex,
-        "deployContract.response.operation_receipt.code_hash_hex",
-      ),
-      abi_hash_hex: normalizeOptionalHash(
-        receipt.abi_hash_hex,
-        "deployContract.response.operation_receipt.abi_hash_hex",
-      ),
-      tx_hash_hex: normalizeOptionalHash(
-        receipt.tx_hash_hex,
-        "deployContract.response.operation_receipt.tx_hash_hex",
-      ),
-      entrypoint: normalizeOptionalString(
-        receipt.entrypoint,
-        "deployContract.response.operation_receipt.entrypoint",
-      ),
-      entrypoint_hash_hex: normalizeOptionalHash(
-        receipt.entrypoint_hash_hex,
-        "deployContract.response.operation_receipt.entrypoint_hash_hex",
-      ),
-      gas_limit:
-        receipt.gas_limit === undefined || receipt.gas_limit === null
-          ? null
-          : coerceInteger(
-              receipt.gas_limit,
-              "deployContract.response.operation_receipt.gas_limit",
-            ),
-      gas_used:
-        receipt.gas_used === undefined || receipt.gas_used === null
-          ? null
-          : coerceInteger(
-              receipt.gas_used,
-              "deployContract.response.operation_receipt.gas_used",
-            ),
-      gas_asset_id: normalizeOptionalString(
-        receipt.gas_asset_id,
-        "deployContract.response.operation_receipt.gas_asset_id",
-      ),
-      fee_sponsor: normalizeOptionalString(
-        receipt.fee_sponsor,
-        "deployContract.response.operation_receipt.fee_sponsor",
-      ),
-      payload_digest_hex: normalizeHex32String(
-        receipt.payload_digest_hex,
-        "deployContract.response.operation_receipt.payload_digest_hex",
-      ),
-    };
-    return receiptResult;
-  };
-  const normalized = {
-    ok: Boolean(record.ok),
-    bundle_name: requireNonEmptyString(
-      record.bundle_name,
-      "deployContract.response.bundle_name",
-    ),
-    bundle_digest: normalizeHex32String(
-      record.bundle_digest,
-      "deployContract.response.bundle_digest",
-      { allowShort: true },
-    ),
-    chain_fingerprint: requireNonEmptyString(
-      record.chain_fingerprint,
-      "deployContract.response.chain_fingerprint",
-    ),
-    dry_run: Boolean(record.dry_run),
-    completed_stages: record.completed_stages.map((stage, index) =>
-      requireNonEmptyString(stage, `deployContract.response.completed_stages[${index}]`),
-    ),
-    failure_point: normalizeOptionalString(
-      record.failure_point,
-      "deployContract.response.failure_point",
-    ),
-    contracts: record.contracts.map(normalizeContract),
-    hajimari_calls: record.hajimari_calls.map(normalizeCall),
-    assertions: Array.isArray(record.assertions)
-      ? record.assertions.map(normalizeAssertion)
-      : [],
-  };
-  if (record.operation_receipt !== undefined) {
-    normalized.operation_receipt =
-      record.operation_receipt === null
-        ? null
-        : normalizeOperationReceipt(record.operation_receipt);
-  }
-  return normalized;
-}
 
 function normalizeSetContractAliasRequest(input) {
   const record = ensureRecord(input, "setContractAlias request");
@@ -23429,6 +23575,9 @@ function normalizeContractTargetSelector(record, context) {
 
 function normalizeContractCallRequest(input) {
   const record = ensureRecord(input, "contractCall request");
+  rejectRetiredFeeSelectionFields(record, "contractCall request", {
+    allowGasLimit: false,
+  });
   const normalized = {
     authority: ToriiClient._normalizeAccountId(
       record.authority,
@@ -23466,24 +23615,10 @@ function normalizeContractCallRequest(input) {
       "contractCall.transactionTtlMs",
     );
   }
-  const gasAsset = record.gas_asset_id ?? record.gasAssetId;
-  if (gasAsset !== undefined && gasAsset !== null) {
-    normalized.gas_asset_id = ToriiClient._normalizeAssetId(
-      gasAsset,
-      "contractCall.gasAssetId",
-    );
-  }
-  const feeSponsor = record.fee_sponsor ?? record.feeSponsor;
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    normalized.fee_sponsor = ToriiClient._normalizeAccountId(
-      feeSponsor,
-      "contractCall.feeSponsor",
-    );
-  }
-  const gasLimit = record.gas_limit ?? record.gasLimit;
-  normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
-    gasLimit,
-    "contractCall.gasLimit",
+  normalized.fee_payment = normalizeFeePaymentIntentValue(
+    record.fee_payment ?? record.feePayment,
+    "contractCall.fee_payment",
+    { requireGasLimit: true },
   );
   return normalized;
 }
@@ -23506,8 +23641,7 @@ function normalizeContractOperationReceipt(payload, context) {
       "entrypoint_hash_hex",
       "gas_limit",
       "gas_used",
-      "gas_asset_id",
-      "fee_sponsor",
+      "fee_payment",
       "payload_digest_hex",
     ]),
     context,
@@ -23550,8 +23684,13 @@ function normalizeContractOperationReceipt(payload, context) {
         : requireExactJsonUnsignedInteger(receipt.gas_used, `${context}.gas_used`, {
             allowZero: true,
           }),
-    gas_asset_id: optionalString(receipt.gas_asset_id, `${context}.gas_asset_id`),
-    fee_sponsor: optionalString(receipt.fee_sponsor, `${context}.fee_sponsor`),
+    fee_payment:
+      receipt.fee_payment === undefined || receipt.fee_payment === null
+        ? null
+        : normalizeFeePaymentIntentValue(
+            receipt.fee_payment,
+            `${context}.fee_payment`,
+          ),
     payload_digest_hex: requireExactLowerHex32String(
       receipt.payload_digest_hex,
       `${context}.payload_digest_hex`,
@@ -23682,6 +23821,9 @@ function normalizeContractCallResponse(payload) {
 
 function normalizeContractCallSimulateRequest(input) {
   const record = ensureRecord(input, "contractCall simulation request");
+  rejectRetiredFeeSelectionFields(record, "contractCall simulation request", {
+    allowGasLimit: true,
+  });
   const normalized = {
     authority: ToriiClient._normalizeAccountId(
       record.authority,
@@ -23699,20 +23841,6 @@ function normalizeContractCallSimulateRequest(input) {
     normalized.payload = cloneJsonValue(
       record.payload,
       "contractCall simulation.payload",
-    );
-  }
-  const gasAsset = record.gas_asset_id ?? record.gasAssetId;
-  if (gasAsset !== undefined && gasAsset !== null) {
-    normalized.gas_asset_id = ToriiClient._normalizeAssetId(
-      gasAsset,
-      "contractCall simulation.gasAssetId",
-    );
-  }
-  const feeSponsor = record.fee_sponsor ?? record.feeSponsor;
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    normalized.fee_sponsor = ToriiClient._normalizeAccountId(
-      feeSponsor,
-      "contractCall simulation.feeSponsor",
     );
   }
   normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
@@ -24351,6 +24479,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
 function normalizeMultisigProposeRequest(input) {
   const record = ensureRecord(input, "proposeMultisig request");
   rejectValidationFeeSnakeCaseInputs(record, "proposeMultisig request");
+  rejectRetiredFeeSelectionFields(record, "proposeMultisig request");
   const selector = normalizeMultisigAccountSelector(record, "proposeMultisig request");
   const instructionsValue = pickOverride(record, "instructions", "instructions");
   if (!Array.isArray(instructionsValue) || instructionsValue.length === 0) {
@@ -24402,13 +24531,10 @@ function normalizeMultisigProposeRequest(input) {
       { allowZero: true },
     );
   }
-  const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
-      feeSponsor,
-      "proposeMultisig request.fee_sponsor",
-    );
-  }
+  payload.fee_payment = normalizeFeePaymentIntentValue(
+    record.fee_payment ?? record.feePayment,
+    "proposeMultisig request.fee_payment",
+  );
   const validationFeePolicyVersion = record.validationFeePolicyVersion;
   const validationFeePolicyHash = record.validationFeePolicyHash;
   const validationFeeInstructionIndex = record.validationFeeInstructionIndex;
@@ -24485,6 +24611,10 @@ function normalizeMultisigProposeRequest(input) {
 
 function normalizeMultisigContractCallProposeRequest(input) {
   const record = ensureRecord(input, "proposeMultisigContractCall request");
+  rejectRetiredFeeSelectionFields(
+    record,
+    "proposeMultisigContractCall request",
+  );
   const selector = normalizeMultisigAccountSelector(
     record,
     "proposeMultisigContractCall request",
@@ -24536,33 +24666,20 @@ function normalizeMultisigContractCallProposeRequest(input) {
       "proposeMultisigContractCall request.payload",
     );
   }
-  const gasAssetId = pickOverride(record, "gas_asset_id", "gasAssetId");
-  if (gasAssetId !== undefined && gasAssetId !== null) {
-    payload.gas_asset_id = ToriiClient._normalizeAssetId(
-      gasAssetId,
-      "proposeMultisigContractCall request.gas_asset_id",
-    );
-  }
-  const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
-      feeSponsor,
-      "proposeMultisigContractCall request.fee_sponsor",
-    );
-  }
-  const gasLimit = pickOverride(record, "gas_limit", "gasLimit");
-  if (gasLimit !== undefined && gasLimit !== null) {
-    payload.gas_limit = ToriiClient._normalizeUnsignedInteger(
-      gasLimit,
-      "proposeMultisigContractCall request.gas_limit",
-      { allowZero: false },
-    );
-  }
+  payload.fee_payment = normalizeFeePaymentIntentValue(
+    record.fee_payment ?? record.feePayment,
+    "proposeMultisigContractCall request.fee_payment",
+    { requireGasLimit: true },
+  );
   return payload;
 }
 
 function normalizeMultisigContractCallApproveRequest(input) {
   const record = ensureRecord(input, "approveMultisigContractCall request");
+  rejectRetiredFeeSelectionFields(
+    record,
+    "approveMultisigContractCall request",
+  );
   const selector = normalizeMultisigAccountSelector(
     record,
     "approveMultisigContractCall request",
@@ -24628,13 +24745,10 @@ function normalizeMultisigContractCallApproveRequest(input) {
       "approveMultisigContractCall.request",
     );
   }
-  const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
-      feeSponsor,
-      "approveMultisigContractCall request.fee_sponsor",
-    );
-  }
+  payload.fee_payment = normalizeFeePaymentIntentValue(
+    record.fee_payment ?? record.feePayment,
+    "approveMultisigContractCall request.fee_payment",
+  );
   return payload;
 }
 
@@ -25190,26 +25304,399 @@ function normalizeRetailRecipientLookupResponse(
   context = "retail recipient lookup response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(record, RETAIL_RECIPIENT_LOOKUP_RESPONSE_KEYS, context);
   if (typeof record.resolved !== "boolean") {
     throw new TypeError(`${context}.resolved must be a boolean`);
   }
-  const result = { resolved: record.resolved };
-  if (record.account_id !== undefined && record.account_id !== null) {
-    result.account_id = ToriiClient._requireAccountId(
-      record.account_id,
-      `${context}.account_id`,
-    );
+  const accountId = ToriiClient._requireAccountId(
+    record.account_id,
+    `${context}.account_id`,
+  );
+  const aliasFqn = normalizeAccountAliasFqn(record.alias_fqn, `${context}.alias_fqn`);
+  if (aliasFqn !== record.alias_fqn) {
+    throw new TypeError(`${context}.alias_fqn must be canonical`);
   }
-  if (record.alias_fqn !== undefined && record.alias_fqn !== null) {
-    result.alias_fqn = requireNonEmptyString(record.alias_fqn, `${context}.alias_fqn`);
+  const fiId = requireNonEmptyString(record.fi_id, `${context}.fi_id`);
+  if (fiId !== "hbl.sbp" && fiId !== "ubl.sbp") {
+    throw new TypeError(`${context}.fi_id must be hbl.sbp or ubl.sbp`);
   }
-  if (record.fi_id !== undefined && record.fi_id !== null) {
-    result.fi_id = requireNonEmptyString(record.fi_id, `${context}.fi_id`);
+  if (aliasFqn.slice(aliasFqn.indexOf("@") + 1) !== fiId) {
+    throw new TypeError(`${context}.alias_fqn must use the returned FI domain`);
   }
+  const result = {
+    resolved: record.resolved,
+    account_id: accountId,
+    alias_fqn: aliasFqn,
+    fi_id: fiId,
+  };
   if (record.full_name !== undefined && record.full_name !== null) {
     result.full_name = requireNonEmptyString(record.full_name, `${context}.full_name`);
   }
+  if (record.resolved && result.full_name === undefined) {
+    throw new TypeError(`${context}.full_name is required when resolved is true`);
+  }
   return result;
+}
+
+function normalizeRetailRecipientRouteResponse(
+  payload,
+  context = "retail recipient route response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(record, RETAIL_RECIPIENT_ROUTE_RESPONSE_KEYS, context);
+  const accountId = ToriiClient._requireAccountId(
+    record.account_id,
+    `${context}.account_id`,
+  );
+  const aliasFqn = normalizeAccountAliasFqn(record.alias_fqn, `${context}.alias_fqn`);
+  if (aliasFqn !== record.alias_fqn) {
+    throw new TypeError(`${context}.alias_fqn must be canonical`);
+  }
+  const fiId = requireNonEmptyString(record.fi_id, `${context}.fi_id`);
+  if (fiId !== "hbl.sbp" && fiId !== "ubl.sbp") {
+    throw new TypeError(`${context}.fi_id must be hbl.sbp or ubl.sbp`);
+  }
+  if (aliasFqn.slice(aliasFqn.indexOf("@") + 1) !== fiId) {
+    throw new TypeError(`${context}.alias_fqn must use the returned FI domain`);
+  }
+  return {
+    account_id: accountId,
+    alias_fqn: aliasFqn,
+    fi_id: fiId,
+  };
+}
+
+function normalizeFeeSponsorProgramId(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  const separator = literal.lastIndexOf("/");
+  if (separator <= 0 || separator === literal.length - 1) {
+    throw new TypeError(`${context} must be an exact sponsor/program literal`);
+  }
+  const sponsorLiteral = literal.slice(0, separator);
+  const sponsor = ToriiClient._requireAccountId(sponsorLiteral, `${context}.sponsor`);
+  if (sponsor !== sponsorLiteral) {
+    throw new TypeError(`${context}.sponsor must be a canonical I105 account id`);
+  }
+  const name = requireCanonicalIrohaName(literal.slice(separator + 1), `${context}.name`);
+  return { literal, sponsor, name };
+}
+
+function normalizeTaggedUnit(value, tag, allowed, context) {
+  const record = ensureRecord(value, context);
+  assertSupportedOptionKeys(record, new Set([tag, "value"]), context);
+  const kind = requireExactNonEmptyString(record[tag], `${context}.${tag}`);
+  if (!allowed.has(kind) || record.value !== null) {
+    throw new TypeError(`${context} must contain a supported tagged unit value`);
+  }
+  return kind;
+}
+
+function normalizeFeeSponsorProgramResponse(
+  payload,
+  context = "fee sponsor program response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(record, FEE_SPONSOR_PROGRAM_RESPONSE_KEYS, context);
+  const id = ensureRecord(record.id, `${context}.id`);
+  assertSupportedOptionKeys(id, new Set(["sponsor", "name"]), `${context}.id`);
+  const sponsor = ToriiClient._requireAccountId(id.sponsor, `${context}.id.sponsor`);
+  if (sponsor !== id.sponsor) {
+    throw new TypeError(`${context}.id.sponsor must be a canonical I105 account id`);
+  }
+  requireCanonicalIrohaName(id.name, `${context}.id.name`);
+  normalizeTaggedUnit(
+    record.lifecycle,
+    "state",
+    new Set(["staged", "paused", "active", "closing", "closed"]),
+    `${context}.lifecycle`,
+  );
+  for (const field of ["active_revision", "staged_revision"]) {
+    if (record[field] !== undefined && record[field] !== null) {
+      ToriiClient._normalizeUnsignedInteger(record[field], `${context}.${field}`, {
+        allowZero: false,
+      });
+    }
+  }
+  if (record.scheduled_activation !== undefined && record.scheduled_activation !== null) {
+    const activation = ensureRecord(
+      record.scheduled_activation,
+      `${context}.scheduled_activation`,
+    );
+    assertSupportedOptionKeys(
+      activation,
+      new Set(["revision", "activate_at_height"]),
+      `${context}.scheduled_activation`,
+    );
+    ToriiClient._normalizeUnsignedInteger(
+      activation.revision,
+      `${context}.scheduled_activation.revision`,
+      { allowZero: false },
+    );
+    ToriiClient._normalizeUnsignedInteger(
+      activation.activate_at_height,
+      `${context}.scheduled_activation.activate_at_height`,
+      { allowZero: true },
+    );
+  }
+  return record;
+}
+
+function rejectRetiredFeeSelectionFields(
+  record,
+  context,
+  { allowGasLimit = false } = {},
+) {
+  const retired = [
+    ["gas_asset_id", "fee_payment"],
+    ["gasAssetId", "feePayment"],
+    ["fee_sponsor", "fee_payment"],
+    ["feeSponsor", "feePayment"],
+  ];
+  if (!allowGasLimit) {
+    retired.push(["gas_limit", "fee_payment.value.gas_limit"]);
+    retired.push(["gasLimit", "feePayment.value.gas_limit"]);
+  }
+  for (const [field, replacement] of retired) {
+    if (Object.prototype.hasOwnProperty.call(record, field)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${field} is retired; use ${replacement}`,
+        normalizeErrorPath(`${context}.${field}`),
+      );
+    }
+  }
+}
+
+function normalizeFeePaymentIntentValue(
+  intent,
+  context,
+  { requireGasLimit = false } = {},
+) {
+  const record = ensureRecord(intent, context);
+  assertSupportedOptionKeys(record, new Set(["payer", "value"]), context);
+  const payer = requireExactNonEmptyString(record.payer, `${context}.payer`);
+  if (payer !== "authority" && payer !== "sponsor") {
+    throw new TypeError(`${context}.payer must be authority or sponsor`);
+  }
+  const value = ensureRecord(record.value, `${context}.value`);
+  const allowed = new Set(["charge_limits", "gas_limit"]);
+  if (payer === "sponsor") {
+    allowed.add("program_id");
+    allowed.add("program_revision");
+  }
+  assertSupportedOptionKeys(value, allowed, `${context}.value`);
+  const normalizedValue = {};
+  if (payer === "sponsor") {
+    const programId = ensureRecord(value.program_id, `${context}.value.program_id`);
+    assertSupportedOptionKeys(
+      programId,
+      new Set(["sponsor", "name"]),
+      `${context}.value.program_id`,
+    );
+    const sponsor = ToriiClient._requireAccountId(
+      programId.sponsor,
+      `${context}.value.program_id.sponsor`,
+    );
+    if (sponsor !== programId.sponsor) {
+      throw new TypeError(
+        `${context}.value.program_id.sponsor must be a canonical I105 account id`,
+      );
+    }
+    const name = requireCanonicalIrohaName(
+      programId.name,
+      `${context}.value.program_id.name`,
+    );
+    normalizedValue.program_id = { sponsor, name };
+    normalizedValue.program_revision = ToriiClient._normalizeUnsignedInteger(
+      value.program_revision,
+      `${context}.value.program_revision`,
+      { allowZero: false },
+    );
+  }
+  let previousKind = -1;
+  normalizedValue.charge_limits = requireDenseArray(
+    value.charge_limits,
+    `${context}.value.charge_limits`,
+  ).map((limit, index) => {
+    const limitContext = `${context}.value.charge_limits[${index}]`;
+    const item = ensureRecord(limit, limitContext);
+    assertSupportedOptionKeys(
+      item,
+      new Set(["kind", "asset_definition_id", "max_amount"]),
+      limitContext,
+    );
+    const kind = normalizeTaggedUnit(
+      item.kind,
+      "kind",
+      new Set(["nexus", "pipeline_gas"]),
+      `${limitContext}.kind`,
+    );
+    const kindIndex = kind === "nexus" ? 0 : 1;
+    if (kindIndex <= previousKind) {
+      throw new TypeError(
+        `${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`,
+      );
+    }
+    previousKind = kindIndex;
+    return {
+      kind: { kind, value: null },
+      asset_definition_id: normalizeAssetDefinitionId(
+        item.asset_definition_id,
+        `${limitContext}.asset_definition_id`,
+      ),
+      max_amount: requireCanonicalQuantity(
+        item.max_amount,
+        `${limitContext}.max_amount`,
+      ),
+    };
+  });
+  if (value.gas_limit !== undefined && value.gas_limit !== null) {
+    normalizedValue.gas_limit = ToriiClient._normalizeUnsignedInteger(
+      value.gas_limit,
+      `${context}.value.gas_limit`,
+      {
+        allowZero: false,
+      },
+    );
+  } else {
+    normalizedValue.gas_limit = null;
+  }
+  if (requireGasLimit && normalizedValue.gas_limit === null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.value.gas_limit is required for contract execution`,
+      normalizeErrorPath(`${context}.value.gas_limit`),
+    );
+  }
+  return { payer, value: normalizedValue };
+}
+
+function normalizeFeePaymentIntentResponse(intent, context) {
+  return normalizeFeePaymentIntentValue(intent, context);
+}
+
+function normalizeFeeQuoteResponse(payload, context = "fee quote response") {
+  const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(record, FEE_QUOTE_RESPONSE_KEYS, context);
+  normalizeFeePaymentIntentResponse(record.intent, `${context}.intent`);
+  const observation = ensureRecord(record.observation, `${context}.observation`);
+  assertSupportedOptionKeys(
+    observation,
+    new Set(["ledger_time_ms", "next_block_height", "route_dataspace_id"]),
+    `${context}.observation`,
+  );
+  ToriiClient._normalizeUnsignedInteger(
+    observation.ledger_time_ms,
+    `${context}.observation.ledger_time_ms`,
+    { allowZero: true },
+  );
+  ToriiClient._normalizeUnsignedInteger(
+    observation.next_block_height,
+    `${context}.observation.next_block_height`,
+    { allowZero: false },
+  );
+  if (observation.route_dataspace_id !== undefined && observation.route_dataspace_id !== null) {
+    ToriiClient._normalizeUnsignedInteger(
+      observation.route_dataspace_id,
+      `${context}.observation.route_dataspace_id`,
+      { allowZero: true },
+    );
+  }
+  requireDenseArray(record.components, `${context}.components`).forEach((component, index) => {
+    const item = ensureRecord(component, `${context}.components[${index}]`);
+    assertSupportedOptionKeys(
+      item,
+      new Set(["kind", "asset_definition_id", "max_amount"]),
+      `${context}.components[${index}]`,
+    );
+    normalizeTaggedUnit(
+      item.kind,
+      "kind",
+      new Set(["nexus", "pipeline_gas"]),
+      `${context}.components[${index}].kind`,
+    );
+    normalizeAssetDefinitionId(
+      item.asset_definition_id,
+      `${context}.components[${index}].asset_definition_id`,
+    );
+    requireCanonicalQuantity(item.max_amount, `${context}.components[${index}].max_amount`);
+  });
+  requireDenseArray(record.capacities, `${context}.capacities`).forEach((capacity, index) => {
+    const item = ensureRecord(capacity, `${context}.capacities[${index}]`);
+    const fields = [
+      "asset_definition_id",
+      "vault_balance",
+      "reserve_floor",
+      "block_remaining",
+      "program_epoch_remaining",
+      "beneficiary_epoch_remaining",
+    ];
+    assertSupportedOptionKeys(item, new Set(fields), `${context}.capacities[${index}]`);
+    normalizeAssetDefinitionId(
+      item.asset_definition_id,
+      `${context}.capacities[${index}].asset_definition_id`,
+    );
+    for (const field of fields.slice(1)) {
+      requireCanonicalQuantity(item[field], `${context}.capacities[${index}].${field}`);
+    }
+  });
+  const decision = ensureRecord(record.decision, `${context}.decision`);
+  assertSupportedOptionKeys(decision, new Set(["status", "value"]), `${context}.decision`);
+  if (decision.status !== "accepted") {
+    throw new TypeError(`${context}.decision.status must be accepted`);
+  }
+  const decisionValue = ensureRecord(decision.value, `${context}.decision.value`);
+  assertSupportedOptionKeys(
+    decisionValue,
+    new Set(["debit_source", "program_revision"]),
+    `${context}.decision.value`,
+  );
+  const debitSource = ensureRecord(
+    decisionValue.debit_source,
+    `${context}.decision.value.debit_source`,
+  );
+  assertSupportedOptionKeys(
+    debitSource,
+    new Set(["kind", "value"]),
+    `${context}.decision.value.debit_source`,
+  );
+  if (debitSource.kind !== "account" && debitSource.kind !== "sponsor_program") {
+    throw new TypeError(`${context}.decision.value.debit_source.kind is unsupported`);
+  }
+  return record;
+}
+
+function requireDenseArray(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) {
+      throw new TypeError(`${context} must be a dense array`);
+    }
+  }
+  return value;
+}
+
+function requireCanonicalSortedStringSet(value, context) {
+  const values = requireDenseArray(value, context);
+  let previous = null;
+  values.forEach((entry, index) => {
+    const normalized = requireExactNonEmptyString(entry, `${context}[${index}]`);
+    if (previous !== null && normalized <= previous) {
+      throw new TypeError(`${context} must be sorted and contain unique strings`);
+    }
+    previous = normalized;
+  });
+  return values;
+}
+
+function requireCanonicalIrohaName(value, context) {
+  const name = requireExactNonEmptyString(value, context);
+  if (/\s|[@#$]/u.test(name) || name.normalize("NFC") !== name) {
+    throw new TypeError(`${context} must be a canonical Iroha Name`);
+  }
+  return name;
 }
 
 function buildIdentifierResolveRequest(options, context) {
@@ -28577,31 +29064,11 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
       per_byte_fee: fees.per_byte_fee,
       per_instruction_fee: fees.per_instruction_fee,
       per_gas_unit_fee: fees.per_gas_unit_fee,
-      sponsorship_enabled: coerceBoolean(
-        fees.sponsorship_enabled,
-        `${context}.fees.sponsorship_enabled`,
-      ),
-      sponsor_max_fee: fees.sponsor_max_fee,
-      sponsor_verified_balance_safety_floor:
-        fees.sponsor_verified_balance_safety_floor,
-      canonical_sponsor_account_id: optionalString(
-        fees.canonical_sponsor_account_id,
-        `${context}.fees.canonical_sponsor_account_id`,
-      ),
-      fee_receipts_activation_height: coerceNestedInt(
-        fees,
-        "fee_receipts_activation_height",
-        `${context}.fees`,
-      ),
-      external_settlement_enabled: coerceBoolean(
-        fees.external_settlement_enabled,
-        `${context}.fees.external_settlement_enabled`,
-      ),
-      burn_from_unix_timestamp_ms: coerceNestedInt(
-        fees,
-        "burn_from_unix_timestamp_ms",
-        `${context}.fees`,
-      ),
+      sponsor_vault_custody_account_id:
+        fees.sponsor_vault_custody_account_id === undefined ||
+        fees.sponsor_vault_custody_account_id === null
+          ? ""
+          : String(fees.sponsor_vault_custody_account_id),
       settlement_mode:
         fees.settlement_mode === undefined || fees.settlement_mode === null
           ? ""
@@ -28836,7 +29303,6 @@ function buildSorafsPinRegisterPayload(record, context) {
       "private_key",
       "manifest_payload",
       "submitted_epoch",
-      "gas_asset_id",
       "alias",
       "successor_of_hex",
       "signal",
@@ -28857,12 +29323,6 @@ function buildSorafsPinRegisterPayload(record, context) {
       { allowZero: true },
     ),
   };
-  if (record.gas_asset_id !== undefined && record.gas_asset_id !== null) {
-    payload.gas_asset_id = requireExactNonEmptyString(
-      record.gas_asset_id,
-      `${context}.gas_asset_id`,
-    );
-  }
   if (record.alias !== undefined && record.alias !== null) {
     payload.alias = normalizeSorafsPinRegisterAlias(record.alias, `${context}.alias`);
   }
@@ -30743,6 +31203,55 @@ function normalizeSccpMessageIdPath(value, context) {
   return value;
 }
 
+const SCCP_EXTERNAL_ROUTE_PROFILES = new Set([
+  "ethereum-mainnet",
+  "ethereum-sepolia",
+  "bsc-mainnet",
+  "bsc-testnet",
+  "solana-testnet",
+  "tron-mainnet",
+  "tron-nile",
+  "tron-shasta",
+]);
+const SCCP_ROUTE_KEY_SEGMENT = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/u;
+
+function normalizeSccpSoraOutboundMaterialRoute(value, context) {
+  const record = requirePlainObjectOption(value, context, {
+    message: "must be a plain object",
+  });
+  const expectedFields = ["sourceProfile", "routeId", "assetKey", "revision"];
+  const unknown = Object.keys(record).find((field) => !expectedFields.includes(field));
+  if (unknown !== undefined) {
+    throw new TypeError(`${context} contains unknown field \`${unknown}\``);
+  }
+  for (const field of expectedFields) {
+    if (!Object.prototype.hasOwnProperty.call(record, field)) {
+      throw new TypeError(`${context} is missing required field \`${field}\``);
+    }
+  }
+  if (!SCCP_EXTERNAL_ROUTE_PROFILES.has(record.sourceProfile)) {
+    throw new TypeError(`${context}.sourceProfile is not one exact external SCCP profile`);
+  }
+  for (const field of ["routeId", "assetKey"]) {
+    if (typeof record[field] !== "string" || !SCCP_ROUTE_KEY_SEGMENT.test(record[field])) {
+      throw new TypeError(`${context}.${field} must be canonical lowercase route text`);
+    }
+  }
+  if (
+    !Number.isSafeInteger(record.revision) ||
+    record.revision < 1 ||
+    record.revision > 0xffff_ffff
+  ) {
+    throw new TypeError(`${context}.revision must be a nonzero uint32`);
+  }
+  return Object.freeze({
+    sourceProfile: record.sourceProfile,
+    routeId: record.routeId,
+    assetKey: record.assetKey,
+    revision: record.revision,
+  });
+}
+
 function normalizeSccpTypedReadOptions(options, context) {
   const record = requirePlainObjectOption(options, `${context}.options`, {
     message: "must be a plain object",
@@ -32619,9 +33128,8 @@ function normalizeContractActivityListItem(value, context) {
   rejectAliasField(record, context, "contractAlias", "contract_alias");
   rejectAliasField(record, context, "contractEntrypoint", "contract_entrypoint");
   rejectAliasField(record, context, "contractPayload", "contract_payload");
-  rejectAliasField(record, context, "gasAssetId", "gas_asset_id");
-  rejectAliasField(record, context, "feeSponsor", "fee_sponsor");
-  rejectAliasField(record, context, "gasLimit", "gas_limit");
+  rejectAliasField(record, context, "feePayment", "fee_payment");
+  rejectRetiredFeeSelectionFields(record, context);
   const entrypointHash = requireNonEmptyString(
     record.entrypoint_hash,
     `${context}.entrypoint_hash`,
@@ -32660,20 +33168,10 @@ function normalizeContractActivityListItem(value, context) {
     record.contract_payload === undefined
       ? undefined
       : cloneJsonValue(record.contract_payload, `${context}.contract_payload`);
-  const gasAssetId =
-    record.gas_asset_id === undefined || record.gas_asset_id === null
+  const feePayment =
+    record.fee_payment === undefined || record.fee_payment === null
       ? undefined
-      : requireNonEmptyString(record.gas_asset_id, `${context}.gas_asset_id`);
-  const feeSponsor =
-    record.fee_sponsor === undefined || record.fee_sponsor === null
-      ? undefined
-      : requireNonEmptyString(record.fee_sponsor, `${context}.fee_sponsor`);
-  const gasLimit =
-    record.gas_limit === undefined || record.gas_limit === null
-      ? undefined
-      : ToriiClient._normalizeUnsignedInteger(record.gas_limit, `${context}.gas_limit`, {
-          allowZero: true,
-        });
+      : normalizeFeePaymentIntentValue(record.fee_payment, `${context}.fee_payment`);
   const normalized = {
     ...record,
     entrypoint_hash: entrypointHash,
@@ -32697,14 +33195,10 @@ function normalizeContractActivityListItem(value, context) {
   if (contractPayload !== undefined) {
     normalized.contract_payload = contractPayload;
   }
-  if (gasAssetId !== undefined) {
-    normalized.gas_asset_id = gasAssetId;
-  }
-  if (feeSponsor !== undefined) {
-    normalized.fee_sponsor = feeSponsor;
-  }
-  if (gasLimit !== undefined) {
-    normalized.gas_limit = gasLimit;
+  if (feePayment !== undefined) {
+    normalized.fee_payment = feePayment;
+  } else {
+    delete normalized.fee_payment;
   }
   return normalized;
 }
@@ -32723,6 +33217,8 @@ function normalizeContractEventListItem(value, context) {
   rejectAliasField(record, context, "eventKind", "event_kind");
   rejectAliasField(record, context, "assetIds", "asset_ids");
   rejectAliasField(record, context, "numericFields", "numeric_fields");
+  rejectAliasField(record, context, "feePayment", "fee_payment");
+  rejectRetiredFeeSelectionFields(record, context);
   const eventId = requireNonEmptyString(record.event_id, `${context}.event_id`);
   const schemaVersion = ToriiClient._normalizeUnsignedInteger(
     record.schema_version,
@@ -32781,20 +33277,10 @@ function normalizeContractEventListItem(value, context) {
     record.payload === undefined
       ? undefined
       : cloneJsonValue(record.payload, `${context}.payload`);
-  const gasAssetId =
-    record.gas_asset_id === undefined || record.gas_asset_id === null
+  const feePayment =
+    record.fee_payment === undefined || record.fee_payment === null
       ? undefined
-      : requireNonEmptyString(record.gas_asset_id, `${context}.gas_asset_id`);
-  const feeSponsor =
-    record.fee_sponsor === undefined || record.fee_sponsor === null
-      ? undefined
-      : requireNonEmptyString(record.fee_sponsor, `${context}.fee_sponsor`);
-  const gasLimit =
-    record.gas_limit === undefined || record.gas_limit === null
-      ? undefined
-      : ToriiClient._normalizeUnsignedInteger(record.gas_limit, `${context}.gas_limit`, {
-          allowZero: true,
-        });
+      : normalizeFeePaymentIntentValue(record.fee_payment, `${context}.fee_payment`);
   const normalized = {
     ...record,
     event_id: eventId,
@@ -32831,14 +33317,10 @@ function normalizeContractEventListItem(value, context) {
   if (payload !== undefined) {
     normalized.payload = payload;
   }
-  if (gasAssetId !== undefined) {
-    normalized.gas_asset_id = gasAssetId;
-  }
-  if (feeSponsor !== undefined) {
-    normalized.fee_sponsor = feeSponsor;
-  }
-  if (gasLimit !== undefined) {
-    normalized.gas_limit = gasLimit;
+  if (feePayment !== undefined) {
+    normalized.fee_payment = feePayment;
+  } else {
+    delete normalized.fee_payment;
   }
   return normalized;
 }

@@ -72,23 +72,35 @@ fn scheduler_layer_metrics_and_utilization_populated() {
         "coin".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
-    let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Mint::asset_quantity(10_u32, a_coin.clone())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx2 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Transfer::asset_quantity(
-            a_coin.clone(),
-            5_u32,
-            bob_id.clone(),
-        )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx3 = TransactionBuilder::new(chain_id.clone(), carol_id.clone())
-        .with_instructions([SetKeyValue::account(
-            carol_id.clone(),
-            "k".parse().unwrap(),
-            iroha_primitives::json::Json::new("v"),
-        )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let tx1 = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Mint::asset_quantity(10_u32, a_coin.clone())])
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let tx2 = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        a_coin.clone(),
+        5_u32,
+        bob_id.clone(),
+    )])
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let tx3 = TransactionBuilder::new(
+        chain_id.clone(),
+        carol_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([SetKeyValue::account(
+        carol_id.clone(),
+        "k".parse().unwrap(),
+        iroha_primitives::json::Json::new("v"),
+    )])
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
 
     let acc: Vec<_> = vec![tx1, tx2, tx3]
         .into_iter()
@@ -713,8 +725,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         configured_lane_catalog: lane_catalog.clone(),
         lane_catalog,
         dataspace_catalog,
-        dataspace_fee_sponsors: BTreeMap::new(),
-        dataspace_fee_sponsor_policies: BTreeMap::new(),
+        dataspace_fee_sponsor_program_ids: BTreeMap::new(),
         routing_policy,
         registry,
         governance,

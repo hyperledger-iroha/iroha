@@ -1051,19 +1051,19 @@ mod tests {
 
         assert_eq!(
             hex_lower(summary.proposal_v1_digest),
-            "8d052d49cac188be4fa2ce7c60f24c706a3839441070fa5a3cfdb1189ecfecc1"
+            "65ce8b32017a665c413844ad0c6ee725a2e7ca83820e9bc0d45f5fec3e8aef64"
         );
         assert_eq!(
             hex_lower(summary.envelope_v1_digest),
-            "65b2bfdfe16f559cc01795ec99ad0c16c3f2d29e642ea729cfa78ee4114ab2c9"
+            "5401f0d026142e83241decbe120c6d5219fd5314f1aba4a7d829dab3d6941d4b"
         );
         assert_eq!(
             hex_lower(summary.renewal_envelope_digest),
-            "87283d3bd48286b434beb8dec673b9169528c02296423cdd2b357a517d88dc47"
+            "14c4e80d9134e260c91590fd98edb6593682bd25e7375745863dbe37c8e8f10e"
         );
         assert_eq!(
             hex_lower(summary.revocation_digest),
-            "441911ea40c3c5ebade081cc7501fe3f3c18c9cce3ddb04c8885fdf52d14827b"
+            "c848c9205487cc40236c25926c69991420959f0794637a7e5d2a0c0b057b745b"
         );
 
         let generated_names: BTreeSet<String> = fs::read_dir(&dir_path)

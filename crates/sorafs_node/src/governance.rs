@@ -2474,22 +2474,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(settlement.ledger.captured_at),
             );
             settlement_obj.insert(
-<<<<<<< HEAD
-                "provider_accrual".into(),
-                JsonValue::from(settlement.ledger.provider_accrual.to_string()),
-            );
-            settlement_obj.insert(
-                "client_liability".into(),
-                JsonValue::from(settlement.ledger.client_liability.to_string()),
-            );
-            settlement_obj.insert(
-                "bond_locked".into(),
-                JsonValue::from(settlement.ledger.bond_locked.to_string()),
-            );
-            settlement_obj.insert(
-                "bond_slashed".into(),
-                JsonValue::from(settlement.ledger.bond_slashed.to_string()),
-=======
                 "window_start_epoch".into(),
                 JsonValue::from(settlement.ledger.window_start_epoch),
             );
@@ -2502,33 +2486,32 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(settlement.ledger.settlement_window_epochs),
             );
             settlement_obj.insert(
-                "provider_accrual_nano".into(),
-                JsonValue::from(settlement.ledger.provider_accrual_nano.to_string()),
+                "provider_accrual".into(),
+                JsonValue::from(settlement.ledger.provider_accrual.to_string()),
             );
             settlement_obj.insert(
-                "client_liability_nano".into(),
-                JsonValue::from(settlement.ledger.client_liability_nano.to_string()),
+                "client_liability".into(),
+                JsonValue::from(settlement.ledger.client_liability.to_string()),
             );
             settlement_obj.insert(
-                "outstanding_liability_nano".into(),
-                JsonValue::from(settlement.ledger.outstanding_liability_nano.to_string()),
+                "outstanding_liability".into(),
+                JsonValue::from(settlement.ledger.outstanding_liability.to_string()),
             );
             settlement_obj.insert(
-                "bond_total_nano".into(),
-                JsonValue::from(settlement.ledger.bond_total_nano.to_string()),
+                "bond_total".into(),
+                JsonValue::from(settlement.ledger.bond_total.to_string()),
             );
             settlement_obj.insert(
-                "bond_locked_nano".into(),
-                JsonValue::from(settlement.ledger.bond_locked_nano.to_string()),
+                "bond_locked".into(),
+                JsonValue::from(settlement.ledger.bond_locked.to_string()),
             );
             settlement_obj.insert(
-                "bond_slashed_nano".into(),
-                JsonValue::from(settlement.ledger.bond_slashed_nano.to_string()),
+                "bond_slashed".into(),
+                JsonValue::from(settlement.ledger.bond_slashed.to_string()),
             );
             settlement_obj.insert(
-                "bond_released_nano".into(),
-                JsonValue::from(settlement.ledger.bond_released_nano.to_string()),
->>>>>>> origin/optimizations
+                "bond_released".into(),
+                JsonValue::from(settlement.ledger.bond_released.to_string()),
             );
             if let Some(notes) = &settlement.audit_notes {
                 settlement_obj.insert("audit_notes".into(), JsonValue::from(notes.clone()));
@@ -4643,7 +4626,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use norito::codec::Encode;
     use sorafs_manifest::deal::{
-        DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
+        DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1, XorQuantity,
     };
     use sorafs_manifest::repair::{
         GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1,
@@ -4717,38 +4700,28 @@ mod tests {
             terms_digest: [0xA4; 32],
             provider_id,
             client_id,
-<<<<<<< HEAD
-            provider_accrual: sorafs_manifest::deal::XorQuantity::try_from_micro(500_000)
-                .expect("legacy micro-XOR value is representable"),
-            client_liability: sorafs_manifest::deal::XorQuantity::try_from_micro(500_000)
-                .expect("legacy micro-XOR value is representable"),
-            bond_locked: sorafs_manifest::deal::XorQuantity::try_from_micro(1_000_000)
-                .expect("legacy micro-XOR value is representable"),
-            bond_slashed: sorafs_manifest::deal::XorQuantity::zero(),
-=======
             deal_start_epoch: 1_699_999_990,
             deal_end_epoch: 1_699_999_999,
             settlement_window_epochs: 10,
             window_start_epoch: 1_699_999_990,
             window_end_epoch: 1_700_000_000,
-            provider_accrual_nano: 500_000,
-            client_liability_nano: 500_000,
-            micropayment_credit_generated_nano: 0,
-            micropayment_credit_applied_nano: 0,
-            micropayment_credit_carry_nano: 0,
-            client_debit_nano: 500_000,
-            outstanding_liability_nano: 0,
-            bond_total_nano: 1_000_000,
-            bond_locked_nano: 0,
-            bond_slashed_nano: 0,
-            bond_released_nano: 1_000_000,
-            window_expected_charge_nano: 500_000,
-            window_micropayment_generated_nano: 0,
-            window_micropayment_applied_nano: 0,
-            window_client_debit_nano: 500_000,
-            window_bond_slashed_nano: 0,
-            window_bond_released_nano: 1_000_000,
->>>>>>> origin/optimizations
+            provider_accrual: xor("0.5"),
+            client_liability: xor("0.5"),
+            micropayment_credit_generated: XorQuantity::zero(),
+            micropayment_credit_applied: XorQuantity::zero(),
+            micropayment_credit_carry: XorQuantity::zero(),
+            client_debit: xor("0.5"),
+            outstanding_liability: XorQuantity::zero(),
+            bond_total: xor("1"),
+            bond_locked: XorQuantity::zero(),
+            bond_slashed: XorQuantity::zero(),
+            bond_released: xor("1"),
+            window_expected_charge: xor("0.5"),
+            window_micropayment_generated: XorQuantity::zero(),
+            window_micropayment_applied: XorQuantity::zero(),
+            window_client_debit: xor("0.5"),
+            window_bond_slashed: XorQuantity::zero(),
+            window_bond_released: xor("1"),
             captured_at: 1_700_000_000,
         };
         ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");
@@ -5308,7 +5281,7 @@ mod tests {
             provider_id: [0x11; 32],
             manifest_digest: [0x22; 32],
             auditor_account: "auditor-1".into(),
-            proposed_penalty_nano: 50_000,
+            proposed_penalty: xor("0.00005"),
             submitted_at_unix: 1_700_000_222,
             rationale: "missed SLA".into(),
             approval: Some(RepairEscalationApprovalV1 {
@@ -5475,10 +5448,13 @@ mod tests {
                 let marker = u8::try_from(index + 1).expect("small publication count");
                 settlement.deal_id = [marker; 32];
                 settlement.ledger.deal_id = settlement.deal_id;
-                settlement.settled_at = settlement
-                    .settled_at
-                    .checked_add(u64::try_from(index).expect("small publication index"))
-                    .expect("settlement timestamp range");
+                settlement.ledger.snapshot_id = settlement
+                    .ledger
+                    .derive_snapshot_id()
+                    .expect("reseal ledger snapshot");
+                settlement.settlement_id = settlement
+                    .derive_settlement_id()
+                    .expect("reseal settlement");
                 thread::spawn(move || {
                     let encoded = norito::to_bytes(&settlement).expect("encode settlement");
                     publisher
@@ -6623,13 +6599,45 @@ mod tests {
         let publisher =
             FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
         let (mut settlement, _) = sample_settlement();
+        let wide = xor("340282366920938463463374607431768211456");
+        let sub_micro = xor("0.0000001");
+        let applied = xor("0.00000004");
+        let client_debit = xor("0.00000006");
+        let slash = xor("0.000000001");
+        let satisfied_without_outstanding = applied
+            .checked_add(&client_debit)
+            .and_then(|amount| amount.checked_add(&slash))
+            .expect("fixture liability components");
+        let outstanding = wide
+            .checked_sub(&satisfied_without_outstanding)
+            .expect("wide liability exceeds fixture payments");
+        settlement.status = DealSettlementStatusV1::WindowSettled;
+        settlement.ledger.deal_end_epoch = settlement.ledger.window_end_epoch + 10;
         settlement.ledger.provider_accrual = "0.0000001".parse().expect("sub-micro quantity");
-        settlement.ledger.client_liability = "340282366920938463463374607431768211456"
-            .parse()
-            .expect("quantity wider than u128");
-        settlement.ledger.bond_locked = "1.000000001".parse().expect("high precision quantity");
-        settlement.ledger.bond_slashed = "0.000000001".parse().expect("high precision quantity");
-        let encoded = settlement.encode();
+        settlement.ledger.client_liability = wide.clone();
+        settlement.ledger.micropayment_credit_generated = applied.clone();
+        settlement.ledger.micropayment_credit_applied = applied.clone();
+        settlement.ledger.micropayment_credit_carry = XorQuantity::zero();
+        settlement.ledger.client_debit = client_debit.clone();
+        settlement.ledger.outstanding_liability = outstanding;
+        settlement.ledger.bond_total = xor("1.000000002");
+        settlement.ledger.bond_locked = xor("1.000000001");
+        settlement.ledger.bond_slashed = slash.clone();
+        settlement.ledger.bond_released = XorQuantity::zero();
+        settlement.ledger.window_expected_charge = wide;
+        settlement.ledger.window_micropayment_generated = applied.clone();
+        settlement.ledger.window_micropayment_applied = applied;
+        settlement.ledger.window_client_debit = client_debit;
+        settlement.ledger.window_bond_slashed = slash;
+        settlement.ledger.window_bond_released = XorQuantity::zero();
+        settlement.audit_notes = Some("exact wide-quantity settlement fixture".to_owned());
+        assert_eq!(settlement.ledger.provider_accrual, sub_micro);
+        settlement.ledger.snapshot_id = settlement.ledger.derive_snapshot_id().expect("ledger id");
+        settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
+        settlement
+            .validate_transition(None)
+            .expect("coherent exact settlement fixture");
+        let encoded = norito::to_bytes(&settlement).expect("encode canonical settlement");
 
         publisher
             .publish_deal_settlement(&settlement, &encoded)

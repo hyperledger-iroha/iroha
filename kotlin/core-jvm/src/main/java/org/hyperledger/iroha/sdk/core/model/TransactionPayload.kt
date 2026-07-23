@@ -11,10 +11,9 @@ private val DEFAULT_AUTHORITY = AccountAddress
 /**
  * Representation of a transaction payload prior to Norito encoding.
  *
- * The structure mirrors the Rust data model sufficiently for encoding and signing. Instruction
- * handling currently focuses on the IVM bytecode variant; support for general instruction lists will
- * be added alongside dedicated builders. `authority` must use the canonical I105 account
- * literal.
+ * The structure mirrors the Rust data model sufficiently for encoding and signing, including
+ * instruction lists, by-reference contract calls, IVM bytecode, and flat mixed batches. `authority`
+ * must use the canonical I105 account literal.
  */
 class TransactionPayload(
     val chainId: String = DEFAULT_CHAIN_ID,
@@ -23,6 +22,7 @@ class TransactionPayload(
     val executable: Executable = Executable.ivm(byteArrayOf()),
     val timeToLiveMs: Long? = null,
     val nonce: Int? = null,
+    val feePayment: FeePaymentIntent,
     metadata: Map<String, JsonValue> = emptyMap(),
 ) {
     private val _metadata: Map<String, JsonValue> = metadata.toMap()
@@ -52,6 +52,7 @@ class TransactionPayload(
         executable: Executable = this.executable,
         timeToLiveMs: Long? = this.timeToLiveMs,
         nonce: Int? = this.nonce,
+        feePayment: FeePaymentIntent = this.feePayment,
         metadata: Map<String, JsonValue> = this.metadata,
     ): TransactionPayload = TransactionPayload(
         chainId = chainId,
@@ -60,6 +61,7 @@ class TransactionPayload(
         executable = executable,
         timeToLiveMs = timeToLiveMs,
         nonce = nonce,
+        feePayment = feePayment,
         metadata = metadata,
     )
 
@@ -72,6 +74,7 @@ class TransactionPayload(
             && executable == other.executable
             && timeToLiveMs == other.timeToLiveMs
             && nonce == other.nonce
+            && feePayment == other.feePayment
             && _metadata == other._metadata
     }
 
@@ -82,6 +85,7 @@ class TransactionPayload(
         result = 31 * result + executable.hashCode()
         result = 31 * result + (timeToLiveMs?.hashCode() ?: 0)
         result = 31 * result + (nonce?.hashCode() ?: 0)
+        result = 31 * result + feePayment.hashCode()
         result = 31 * result + _metadata.hashCode()
         return result
     }

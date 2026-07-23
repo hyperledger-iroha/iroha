@@ -353,6 +353,25 @@ pub(crate) enum NativeAmxSigningGuardError {
     InvalidInput(String),
 }
 
+impl NativeAmxSigningGuardError {
+    /// Return whether the signer must stop all consensus output until a verified reopen.
+    #[must_use]
+    pub(crate) const fn requires_restart_recovery(&self) -> bool {
+        match self {
+            Self::UnsafeJournal(_)
+            | Self::Poisoned(_)
+            | Self::HeightRegression { .. }
+            | Self::HeightJump { .. }
+            | Self::ContextMismatch
+            | Self::FutureHeight { .. }
+            | Self::StaleHeight { .. } => true,
+            #[cfg(not(unix))]
+            Self::UnsupportedPlatform => true,
+            _ => false,
+        }
+    }
+}
+
 /// Crash-safe local anti-equivocation journal for Native AMX v2 votes.
 ///
 /// Every record is appended to a hash chain. The updated chain anchor is also
@@ -1195,6 +1214,29 @@ impl NativeAmxSigningGuard {
         }
         result
     }
+
+    #[cfg(test)]
+    pub(crate) fn record_count_for_test(&self) -> u32 {
+        self.inner.lock().anchor.record_count
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn max_records_for_test(&self) -> usize {
+        self.max_records
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remove_one_record_for_test(&self) {
+        let path = self
+            .inner
+            .lock()
+            .record_identities
+            .values()
+            .next()
+            .map(|(path, _)| path.clone())
+            .expect("test signing guard has a retained record");
+        std::fs::remove_file(path).expect("remove one retained signing record for test");
+    }
 }
 
 fn native_amx_ensure_signer_directory(
@@ -2031,10 +2073,10 @@ impl NativeAmxAttestationRequestV2 {
                 .len()
                 == settlement_receipts.len()
             && settlement_receipts.iter().all(|receipt| {
-                receipt.local_amount_micro == 0
-                    && receipt.xor_due_micro == 0
-                    && receipt.xor_after_haircut_micro == 0
-                    && receipt.xor_variance_micro == 0
+                receipt.local_amount.is_zero()
+                    && receipt.xor_due.is_zero()
+                    && receipt.xor_after_haircut.is_zero()
+                    && receipt.xor_variance.is_zero()
                     && receipt.timestamp_ms == body.authority_context_height
             })
             && settlement_receipts
@@ -2080,10 +2122,13 @@ impl NativeAmxAttestationRequestV2 {
             || self.participant_settlement.lane_incarnation != body.participant_lane_incarnation
             || self.participant_settlement.tx_count
                 != u64::try_from(settlement_receipts.len()).unwrap_or(u64::MAX)
-            || self.participant_settlement.total_local_micro != 0
-            || self.participant_settlement.total_xor_due_micro != 0
-            || self.participant_settlement.total_xor_after_haircut_micro != 0
-            || self.participant_settlement.total_xor_variance_micro != 0
+            || !self.participant_settlement.total_local_amount.is_zero()
+            || !self.participant_settlement.total_xor_due.is_zero()
+            || !self
+                .participant_settlement
+                .total_xor_after_haircut
+                .is_zero()
+            || !self.participant_settlement.total_xor_variance.is_zero()
             || self.participant_settlement.swap_metadata.is_some()
             || !self.participant_settlement.nexus_fee_receipts.is_empty()
             || !self.participant_settlement.native_amx_receipts.is_empty()

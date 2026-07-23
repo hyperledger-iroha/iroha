@@ -25,12 +25,14 @@ from iroha_python import (
     TransactionConfig,
     TransactionDraft,
     UaidPortfolioAsset,
+    authority_fee_payment,
 )
 from iroha_python._privacy_backends import (
     _is_pending_production_backend_label,
     _is_production_verify_backend_label,
     _require_production_verify_backend_label,
 )
+from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER
 from iroha_python.repo import (
     RepoAgreementListPage,
     RepoCashLeg,
@@ -45,6 +47,9 @@ from iroha_python.tx import (
 )
 
 
+FEE_PAYMENT = authority_fee_payment(charge_limits=[])
+
+
 class FakeSession:
     def __init__(self, responses: list[requests.Response]):
         self.responses = responses
@@ -57,6 +62,28 @@ class FakeSession:
                 "path": urlsplit(url).path,
                 "params": kwargs.get("params"),
                 "data": kwargs.get("data"),
+            }
+        )
+        if not self.responses:
+            raise AssertionError(f"unexpected request {method} {url}")
+        response = self.responses.pop(0)
+        response.url = url
+        return response
+
+
+class OnboardingSession:
+    def __init__(self, responses: list[requests.Response]):
+        self.responses = responses
+        self.calls: list[dict[str, object]] = []
+
+    def request(self, method: str, url: str, **kwargs: object) -> requests.Response:
+        self.calls.append(
+            {
+                "method": method,
+                "path": urlsplit(url).path,
+                "headers": dict(kwargs.get("headers") or {}),
+                "data": kwargs.get("data"),
+                "allow_redirects": kwargs.get("allow_redirects"),
             }
         )
         if not self.responses:
@@ -82,6 +109,129 @@ def response(
         result._content = json.dumps(payload).encode("utf-8")
         result.headers["Content-Type"] = "application/json"
     return result
+
+
+ONBOARDING_TOKEN = "0123456789abcdef0123456789ABCDEF"
+ONBOARDING_UAID = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+
+def test_onboard_account_sends_exact_route_token_and_current_json_contract() -> None:
+    session = OnboardingSession([response(202, {"status": "QUEUED"})])
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        api_token="global-api-token",
+    )
+
+    result = client.onboard_account(
+        onboarding_token=ONBOARDING_TOKEN,
+        alias="merchant@universal",
+        uaid=ONBOARDING_UAID.upper(),
+        public_key_hex="AB" * 32,
+        identity_commitment_hex="CD" * 32,
+        permissions=["CanFoo", "CanFoo", "CanBar"],
+    )
+
+    assert result.status_code == 202
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/v1/accounts/onboard"
+    assert call["allow_redirects"] is False
+    headers = call["headers"]
+    assert isinstance(headers, dict)
+    onboarding_headers = [
+        (name, value)
+        for name, value in headers.items()
+        if name.lower() == ACCOUNT_ONBOARDING_TOKEN_HEADER.lower()
+    ]
+    assert onboarding_headers == [(ACCOUNT_ONBOARDING_TOKEN_HEADER, ONBOARDING_TOKEN)]
+    assert headers["X-API-Token"] == "global-api-token"
+    assert headers["Accept"] == "application/json"
+    assert headers["Content-Type"] == "application/json"
+    data = call["data"]
+    assert isinstance(data, bytes)
+    assert ONBOARDING_TOKEN.encode() not in data
+    assert json.loads(data) == {
+        "alias": "merchant@universal",
+        "uaid": ONBOARDING_UAID,
+        "public_key_hex": "ab" * 32,
+        "identity_commitment_hex": "cd" * 32,
+        "permissions": ["CanFoo", "CanBar"],
+    }
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        None,
+        "",
+        "T" * 31,
+        "T" * 257,
+        "T" * 31 + " ",
+        "T" * 31 + "é",
+    ],
+)
+def test_onboard_account_rejects_malformed_route_token_before_dispatch(
+    token: object,
+) -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises((TypeError, ValueError)) as error:
+        client.onboard_account(
+            onboarding_token=token,  # type: ignore[arg-type]
+            alias="merchant@universal",
+            uaid=ONBOARDING_UAID,
+            public_key_hex="ab" * 32,
+        )
+
+    if token:
+        assert str(token) not in str(error.value)
+    assert session.calls == []
+
+
+def test_onboard_account_requires_explicit_token_and_rejects_global_default() -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(TypeError, match="onboarding_token"):
+        client.onboard_account(  # type: ignore[call-arg]
+            alias="merchant@universal",
+            uaid=ONBOARDING_UAID,
+            public_key_hex="ab" * 32,
+        )
+    with pytest.raises(ValueError, match="pass onboarding_token explicitly"):
+        ToriiClient(
+            "https://torii.example",
+            session=session,
+            default_headers={ACCOUNT_ONBOARDING_TOKEN_HEADER.lower(): ONBOARDING_TOKEN},
+        )
+    assert session.calls == []
+
+
+def test_onboard_account_does_not_follow_redirect_or_accept_retired_fields() -> None:
+    session = OnboardingSession([response(307, text="redirect")])
+    client = ToriiClient("https://torii.example", session=session)
+
+    result = client.onboard_account(
+        onboarding_token=ONBOARDING_TOKEN,
+        alias="merchant@universal",
+        uaid=ONBOARDING_UAID,
+        public_key_hex="ab" * 32,
+    )
+
+    assert result.status_code == 307
+    assert len(session.calls) == 1
+    assert session.calls[0]["allow_redirects"] is False
+    with pytest.raises(TypeError, match="gas_asset_id"):
+        client.onboard_account(  # type: ignore[call-arg]
+            onboarding_token=ONBOARDING_TOKEN,
+            alias="merchant@universal",
+            uaid=ONBOARDING_UAID,
+            public_key_hex="ab" * 32,
+            gas_asset_id="retired",
+        )
 
 
 def _expected_backend_rejection_message(backend: object) -> str:
@@ -898,29 +1048,23 @@ def test_solve_account_faucet_pow_accepts_zero_difficulty_puzzle() -> None:
     assert nonce_hex == "0000000000000000"
 
 
-def test_sns_helpers_read_policy_and_submit_registration() -> None:
+def test_sns_helpers_read_policy_and_name() -> None:
     session = FakeSession(
         [
             response(200, {"payment_asset_id": "fee", "pricing": []}),
-            response(202, {"ok": True}),
+            response(200, {"literal": "merchant@paynet"}),
         ]
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     assert client.get_sns_policy(2)["payment_asset_id"] == "fee"
-    registration = client.submit_sns_name_registration(
-        {
-            "selector": {"suffix_id": 2, "label": "is"},
-            "owner": "owner@is",
-        }
-    )
+    registration = client.get_sns_name("account-alias", "merchant@paynet")
 
-    assert registration.status_code == 202
+    assert registration == {"literal": "merchant@paynet"}
     assert [call["path"] for call in session.calls] == [
         "/v1/sns/policies/2",
-        "/v1/sns/names",
+        "/v1/sns/names/account-alias/merchant%40paynet",
     ]
-    assert b'"owner": "owner@is"' in session.calls[-1]["data"]
 
 
 def test_zk_verifying_key_helpers_detect_active_status() -> None:
@@ -1742,63 +1886,6 @@ def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None
     assert session.calls == []
 
 
-def test_deploy_contract_bundle_reads_code_file_and_waits(tmp_path) -> None:
-    code_file = tmp_path / "contract.to"
-    code_file.write_bytes(b"contract-code")
-    tx_hash = "a" * 64
-    session = FakeSession(
-        [
-            response(
-                200,
-                {
-                    "ok": True,
-                    "bundle_name": "single",
-                    "bundle_digest": "digest",
-                    "chain_fingerprint": "chain",
-                    "dry_run": False,
-                    "completed_stages": [],
-                    "contracts": [
-                        {
-                            "name": "contract",
-                            "contract_alias": "contract::is",
-                            "contract_address": "addr",
-                            "kaizen": False,
-                            "tx_hash_hex": tx_hash,
-                            "code_hash_hex": "b" * 64,
-                            "abi_hash_hex": "c" * 64,
-                            "status": "submitted",
-                        }
-                    ],
-                    "hajimari_calls": [],
-                    "assertions": [],
-                },
-            ),
-            response(200, {"status": {"kind": "Applied"}, "hash": tx_hash}),
-        ]
-    )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    result = client.deploy_contract_bundle(
-        authority="authority@is",
-        private_key="priv",
-        contract_alias="contract::is",
-        code_file=code_file,
-        wait=True,
-        timeout_ms=1000,
-        interval=0,
-        gas_asset_id="xor#sora",
-        fee_sponsor="sponsor@sora",
-        gas_limit=10_000_000,
-    )
-
-    assert result["terminal_kind"] == "Applied"
-    assert result["tx_hashes"] == [tx_hash]
-    deploy_payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert deploy_payload["code_b64"] == "Y29udHJhY3QtY29kZQ=="
-    assert deploy_payload["gas_asset_id"] == "xor#sora"
-    assert deploy_payload["fee_sponsor"] == "sponsor@sora"
-    assert deploy_payload["gas_limit"] == 10_000_000
-
 
 def test_call_contract_and_wait_posts_typed_request() -> None:
     tx_hash = "d" * 64
@@ -1839,7 +1926,7 @@ def test_call_contract_and_wait_posts_typed_request() -> None:
         contract_alias="contract::is",
         entrypoint="main",
         payload={"amount": 7},
-        gas_limit=5000,
+        fee_payment=authority_fee_payment(charge_limits=[], gas_limit=5000),
         wait=True,
         timeout_ms=1000,
         interval=0,
@@ -1896,7 +1983,7 @@ def test_call_contract_and_wait_uses_embedded_pipeline_status_without_polling() 
         contract_alias="contract::is",
         entrypoint="main",
         payload={"amount": 7},
-        gas_limit=5000,
+        fee_payment=authority_fee_payment(charge_limits=[], gas_limit=5000),
         wait=True,
         timeout_ms=1000,
         interval=0,
@@ -1930,6 +2017,7 @@ def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:
     result = client.mint_assets_and_wait(
         chain_id="chain",
         authority="authority@is",
+        fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         mints=[
             {"asset_id": f"{asset_definition_id}#{adult}", "quantity": "1.25"},
@@ -1954,13 +2042,21 @@ def test_transaction_draft_rejects_padded_chain_and_authority_before_signing() -
         ValueError,
         match="chain_id must not contain surrounding whitespace",
     ):
-        client._transaction_draft(chain_id=" chain", authority="authority@is")
+        client._transaction_draft(
+            chain_id=" chain",
+            authority="authority@is",
+            fee_payment=FEE_PAYMENT,
+        )
 
     with pytest.raises(
         ValueError,
         match="authority must not contain surrounding whitespace",
     ):
-        client._transaction_draft(chain_id="chain", authority=" authority@is ")
+        client._transaction_draft(
+            chain_id="chain",
+            authority=" authority@is ",
+            fee_payment=FEE_PAYMENT,
+        )
 
 
 def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
@@ -1990,6 +2086,7 @@ def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
     result = client.transfer_assets_and_wait(
         chain_id="chain",
         authority="source@is",
+        fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
         transfers=[
             {
@@ -2028,20 +2125,22 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
     grant = client.grant_account_permission_and_wait(
         chain_id="chain",
         authority="authority@is",
+        fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         account_id=account,
-        permission_name="CanUseFeeSponsor",
-        permission_payload={"sponsor": "sponsor@is"},
-        transaction_metadata={"purpose": "fee-sponsor"},
+        permission_name="CanEnrollFeeSponsorProgram",
+        permission_payload={"program_id": "sponsor@is/retail"},
+        transaction_metadata={"purpose": "fee-sponsor-program"},
         wait=False,
     )
     revoke = client.revoke_account_permission_and_wait(
         chain_id="chain",
         authority="authority@is",
+        fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
         account_id=account,
-        permission_name="CanUseFeeSponsor",
-        permission_payload={"sponsor": "sponsor@is"},
+        permission_name="CanEnrollFeeSponsorProgram",
+        permission_payload={"program_id": "sponsor@is/retail"},
         wait=True,
     )
 
@@ -2051,7 +2150,7 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
     revoke_draft, revoke_kwargs = captured[1]
     assert len(grant_draft) == 1
     assert len(revoke_draft) == 1
-    assert grant_draft.config.metadata == {"purpose": "fee-sponsor"}
+    assert grant_draft.config.metadata == {"purpose": "fee-sponsor-program"}
     assert grant_kwargs["private_key_hex"] == "11" * 32
     assert grant_kwargs["wait"] is False
     assert revoke_kwargs["private_key_hex"] == "22" * 32
@@ -2079,10 +2178,11 @@ def test_permission_grant_normalizes_configured_chain_discriminant_for_transacti
     assert client.grant_account_permission_and_wait(
         chain_id="chain",
         authority=account,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         account_id=account,
-        permission_name="CanUseFeeSponsor",
-        permission_payload={"sponsor": "sponsor@is"},
+        permission_name="CanEnrollFeeSponsorProgram",
+        permission_payload={"program_id": "sponsor@is/retail"},
         wait=False,
     ) == {"hash": "permission-taira"}
 
@@ -2115,6 +2215,7 @@ def test_transfer_helper_normalizes_configured_chain_discriminant_for_transactio
     assert client.transfer_asset_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
         asset_id=f"{asset_definition_id}#{source}",
         destination=destination,
@@ -2152,6 +2253,7 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
     assert client.transfer_asset_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="23" * 32,
         asset_id=f"{asset_definition_id}#{source}#{scope}",
         destination=destination,
@@ -2206,6 +2308,7 @@ def test_zk_ace_transfer_helper_normalizes_configured_chain_discriminant_for_tra
     assert client.zk_ace_authorized_transfer_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="24" * 32,
         from_account_id=source,
         to_account_id=destination,
@@ -2367,7 +2470,13 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
     encoded = [instruction.to_json() for instruction in instructions]
     assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
 
-    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=source))
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=source,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
     draft.open_asset_lock(
         "lock-sdk-2",
         asset_definition_id,
@@ -2442,7 +2551,13 @@ def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
     amount: object,
 ) -> None:
     account = account_address(0x74)
-    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=account))
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
     method = getattr(draft, method_name)
 
     with pytest.raises(ValueError, match="amount must be positive|quantity must be a finite"):
@@ -2451,7 +2566,13 @@ def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
 
 def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
     account = account_address(0x75)
-    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=account))
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
 
     with pytest.raises(ValueError, match="escrow_id"):
         draft.cancel_asset_lock("")
@@ -2470,6 +2591,7 @@ def test_transaction_draft_shield_accepts_raw_text_ciphertext() -> None:
         TransactionConfig(
             chain_id="chain",
             authority=account_address(0x65),
+            fee_payment=authority_fee_payment(charge_limits=[]),
         )
     )
 
@@ -2992,7 +3114,13 @@ def test_zk_transaction_draft_rejects_invalid_inputs(
     match: str,
 ) -> None:
     account = account_address(0x68)
-    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=account))
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
     proof = {
         "backend": "halo2/ipa",
         "proof_bytes": b"proof-bytes",
@@ -3030,6 +3158,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.register_zk_asset_and_wait(
         chain_id="chain",
         authority="authority@is",
+        fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         asset_definition_id=asset_definition_id,
         vk_transfer="halo2/ipa:vk_transfer",
@@ -3040,6 +3169,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.shield_asset_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
         asset_definition_id=asset_definition_id,
         from_account_id=source,
@@ -3052,6 +3182,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.zk_transfer_prepared_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="33" * 32,
         asset_definition_id=asset_definition_id,
         inputs=["aa" * 32],
@@ -3062,6 +3193,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.unshield_prepared_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="44" * 32,
         asset_definition_id=asset_definition_id,
         to_account_id=destination,
@@ -3074,6 +3206,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.register_zk_ace_identity_commitment_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="55" * 32,
         asset_definition_id=asset_definition_id,
         identity_commitment="11" * 32,
@@ -3085,6 +3218,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.rotate_zk_ace_identity_commitment_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="66" * 32,
         asset_definition_id=asset_definition_id,
         old_identity_commitment="11" * 32,
@@ -3097,6 +3231,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.revoke_zk_ace_identity_commitment_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="77" * 32,
         asset_definition_id=asset_definition_id,
         identity_commitment="12" * 32,
@@ -3106,6 +3241,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.zk_ace_authorized_transfer_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="88" * 32,
         from_account_id=source,
         to_account_id=destination,
@@ -3123,6 +3259,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.register_asset_hidden_zk_pool_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="99" * 32,
         pool_id="boi-masp-pool-v1",
         storage_asset=asset_definition_id,
@@ -3133,6 +3270,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.asset_hidden_zk_transfer_prepared_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="aa" * 32,
         pool_id="boi-masp-pool-v1",
         inputs=["66" * 32],
@@ -3144,6 +3282,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert client.verify_proof_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="bb" * 32,
         proof=proof,
         wait=False,
@@ -3196,6 +3335,7 @@ def test_zk_ace_waited_helpers_enrich_receipts_from_asset_metadata() -> None:
     registration = client.register_zk_ace_identity_commitment_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="55" * 32,
         asset_definition_id=asset_definition_id,
         identity_commitment="11" * 32,
@@ -3226,6 +3366,7 @@ def test_zk_ace_waited_helpers_enrich_receipts_from_asset_metadata() -> None:
     transfer = client.zk_ace_authorized_transfer_and_wait(
         chain_id="chain",
         authority=source,
+        fee_payment=FEE_PAYMENT,
         private_key_hex="88" * 32,
         from_account_id=source,
         to_account_id=destination,
@@ -3569,6 +3710,7 @@ def test_batch_helpers_reject_invalid_records(
         method(
             chain_id="chain",
             authority="authority@is",
+            fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
             **kwargs,
         )
@@ -3578,7 +3720,10 @@ def test_batch_helpers_reject_invalid_records(
     ("kwargs", "match"),
     [
         (
-            {"account_id": "adult@is", "permission_name": "CanUseFeeSponsor"},
+            {
+                "account_id": "adult@is",
+                "permission_name": "CanEnrollFeeSponsorProgram",
+            },
             "invalid account id",
         ),
         (
@@ -3588,7 +3733,7 @@ def test_batch_helpers_reject_invalid_records(
         (
             {
                 "account_id": account_address(0x4A),
-                "permission_name": "CanUseFeeSponsor",
+                "permission_name": "CanEnrollFeeSponsorProgram",
                 "permission_payload": object(),
             },
             "JSON",
@@ -3608,6 +3753,7 @@ def test_permission_helpers_reject_invalid_inputs(
         client.grant_account_permission_and_wait(
             chain_id="chain",
             authority="authority@is",
+            fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
             **kwargs,
         )

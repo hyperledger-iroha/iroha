@@ -23,7 +23,7 @@ public final class VpnProfile {
   private final String feeAssetId;
   private final String escrowAccountId;
   private final String operatorAccountId;
-  private final long leaseFeeNanos;
+  private final String leaseFee;
   private final long settlementGraceSecs;
   private final int flowLabelBits;
   private final int paddingBudgetMs;
@@ -46,7 +46,7 @@ public final class VpnProfile {
       final String feeAssetId,
       final String escrowAccountId,
       final String operatorAccountId,
-      final long leaseFeeNanos,
+      final String leaseFee,
       final long settlementGraceSecs,
       final int flowLabelBits,
       final int paddingBudgetMs,
@@ -67,7 +67,7 @@ public final class VpnProfile {
     this.feeAssetId = Objects.requireNonNull(feeAssetId, "feeAssetId");
     this.escrowAccountId = Objects.requireNonNull(escrowAccountId, "escrowAccountId");
     this.operatorAccountId = Objects.requireNonNull(operatorAccountId, "operatorAccountId");
-    this.leaseFeeNanos = leaseFeeNanos;
+    this.leaseFee = Objects.requireNonNull(leaseFee, "leaseFee");
     this.settlementGraceSecs = settlementGraceSecs;
     this.flowLabelBits = flowLabelBits;
     this.paddingBudgetMs = paddingBudgetMs;
@@ -90,7 +90,7 @@ public final class VpnProfile {
   public String feeAssetId() { return feeAssetId; }
   public String escrowAccountId() { return escrowAccountId; }
   public String operatorAccountId() { return operatorAccountId; }
-  public long leaseFeeNanos() { return leaseFeeNanos; }
+  public String leaseFee() { return leaseFee; }
   public long settlementGraceSecs() { return settlementGraceSecs; }
   public int flowLabelBits() { return flowLabelBits; }
   public int paddingBudgetMs() { return paddingBudgetMs; }
