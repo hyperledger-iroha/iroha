@@ -343,36 +343,20 @@ impl PricingMicropaymentPolicyV1 {
     pub fn evaluate(
         &self,
         nonce: u16,
-<<<<<<< HEAD
         fee: &XorQuantity,
-    ) -> Result<MicropaymentDecision, DealAmountError> {
-        if self.payout_probability_bps == 0 {
-            return Ok(MicropaymentDecision::skip(
-                fee.clone(),
-                self.payout_probability_bps,
-            ));
-        }
-
-        if nonce >= self.payout_probability_bps {
-            return Ok(MicropaymentDecision::skip(
-                fee.clone(),
-=======
-        fee_nanos: u128,
     ) -> Result<MicropaymentDecision, PricingMicropaymentEvaluationError> {
         self.validate()?;
         if nonce >= BASIS_POINTS_SCALE as u16 {
             return Err(PricingMicropaymentEvaluationError::NonceOutOfRange { nonce });
         }
 
-        if fee_nanos == 0 || nonce >= self.payout_probability_bps {
+        if fee.is_zero() || nonce >= self.payout_probability_bps {
             return Ok(MicropaymentDecision::skip(
-                fee_nanos,
->>>>>>> origin/optimizations
+                fee.clone(),
                 self.payout_probability_bps,
             ));
         }
 
-<<<<<<< HEAD
         let payout = fee
             .checked_mul_u128(BASIS_POINTS_SCALE)?
             .checked_div_u64_round(
@@ -386,24 +370,6 @@ impl PricingMicropaymentPolicyV1 {
         Ok(MicropaymentDecision::pay(
             fee.clone(),
             capped,
-=======
-        let probability = u128::from(self.payout_probability_bps);
-        let quotient = fee_nanos / probability;
-        let remainder = fee_nanos % probability;
-        let cap = self.max_voucher_value_nanos;
-        let payout = if quotient > cap / BASIS_POINTS_SCALE {
-            cap
-        } else {
-            let base = quotient * BASIS_POINTS_SCALE;
-            let remainder_component = (remainder * BASIS_POINTS_SCALE).div_ceil(probability);
-            base.checked_add(remainder_component)
-                .map_or(cap, |raw| raw.min(cap))
-        };
-
-        Ok(MicropaymentDecision::pay(
-            fee_nanos,
-            payout,
->>>>>>> origin/optimizations
             self.payout_probability_bps,
         ))
     }
