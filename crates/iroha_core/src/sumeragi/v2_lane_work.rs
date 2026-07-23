@@ -4375,6 +4375,65 @@ impl V2LaneWorkAdapter {
         Ok(None)
     }
 
+    fn historical_block_anchors_proposal(
+        &self,
+        block: &SignedBlock,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        let Some(hint) = proposal.payload_block_hint else {
+            return false;
+        };
+        if hint.proposal_height != proposal.descriptor.proposal_height
+            || block.header().height().get() != hint.proposal_height
+            || block.header().view_change_index() != hint.proposal_view
+            || block.hash() != hint.proposal_block_hash
+        {
+            return false;
+        }
+        let Some(bundle) = block.execution_context() else {
+            return false;
+        };
+        if bundle
+            .lane_payload_ownerships
+            .len()
+            .saturating_add(bundle.autonomous_lane_payloads.len())
+            > self.limits.session_capacity.get()
+        {
+            return false;
+        }
+        let mut matches = bundle
+            .lane_payload_ownerships
+            .iter()
+            .filter(|ownership| {
+                proposal_from_ownership(ownership, block.hash()).as_ref() == Some(proposal)
+            })
+            .count();
+        let expected_epoch = {
+            let world = self.state.world_view();
+            crate::sumeragi::epoch_for_height_from_world(&world, hint.proposal_height)
+        };
+        for envelope in &bundle.autonomous_lane_payloads {
+            let Ok(payload) = decode_autonomous_lane_payload_envelope(
+                envelope,
+                self.native_chain_id_hash(),
+                expected_epoch,
+            )
+            .and_then(|payload| {
+                payload.attach_global_hint_exact(
+                    hint,
+                    self.native_chain_id_hash(),
+                    expected_epoch,
+                )
+            }) else {
+                return false;
+            };
+            if payload.origin_proposal == *proposal {
+                matches = matches.saturating_add(1);
+            }
+        }
+        matches == 1
+    }
+
     fn proposal_anchor_is_committed_in_state(&self, proposal: &LaneBlockProposalV1) -> bool {
         let Some(hint) = proposal.payload_block_hint else {
             return false;

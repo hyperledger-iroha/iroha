@@ -2154,6 +2154,69 @@ def set_command_stream(
     record[f"{stream}_size_bytes"] = len(data)
 
 
+def write_pretty_json(path: Path, value: object) -> None:
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def regenerate_scaling_report(
+    evidence: dict[str, Path | str | list[Path]],
+) -> None:
+    manifest = evidence["scaling_manifest"]
+    report = evidence["scaling_report"]
+    assert isinstance(manifest, Path)
+    assert isinstance(report, Path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(
+                ROOT_DIR
+                / "scripts"
+                / "nexus"
+                / "validate_multilane_scaling_evidence.py"
+            ),
+            str(manifest),
+            "--report",
+            str(report),
+            "--quiet",
+        ],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def rebind_scaling_identity(
+    evidence: dict[str, Path | str | list[Path]],
+    field: str,
+    value: str,
+) -> None:
+    root = evidence["scaling_root"]
+    manifest_path = evidence["scaling_manifest"]
+    identity_path = evidence["scaling_identity"]
+    assert isinstance(root, Path)
+    assert isinstance(manifest_path, Path)
+    assert isinstance(identity_path, Path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    identity["software"][field] = value
+    write_pretty_json(identity_path, identity)
+    manifest["identity"]["sha256"] = sha256(identity_path)
+    for entry in manifest["runs"]:
+        raw_path = root / entry["raw_samples"]["path"]
+        raw = json.loads(raw_path.read_text(encoding="utf-8"))
+        raw["identity_before"] = identity
+        raw["identity_after"] = identity
+        write_pretty_json(raw_path, raw)
+        entry["raw_samples"]["sha256"] = sha256(raw_path)
+    write_pretty_json(manifest_path, manifest)
+    regenerate_scaling_report(evidence)
+
+
 def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
     tmp_path: Path,
 ) -> None:

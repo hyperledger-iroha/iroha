@@ -55408,16 +55408,18 @@ mod gateway_runtime_config_tests {
             enabled: true,
             account_email: Some("gateway-ops@example.test".into()),
             directory_url: "https://acme.example.test/directory".into(),
-            hostnames: vec!["gateway-a.example.test".into(), "gateway-b.example.test".into()],
+            hostnames: vec![
+                "gateway-a.example.test".into(),
+                "gateway-b.example.test".into(),
+            ],
             dns_provider_id: Some("runtime-dns-provider".into()),
             renewal_window: Duration::from_secs(91),
             retry_backoff: Duration::from_secs(92),
             retry_jitter: Duration::from_secs(93),
-            challenges:
-                iroha_config::parameters::actual::SorafsGatewayAcmeChallenges {
-                    dns01: true,
-                    tls_alpn_01: false,
-                },
+            challenges: iroha_config::parameters::actual::SorafsGatewayAcmeChallenges {
+                dns01: true,
+                tls_alpn_01: false,
+            },
             ech_enabled: true,
         };
 
@@ -55432,10 +55434,7 @@ mod gateway_runtime_config_tests {
         assert_eq!(mapped.retry_backoff, source.retry_backoff);
         assert_eq!(mapped.retry_jitter, source.retry_jitter);
         assert_eq!(mapped.challenge.dns01, source.challenges.dns01);
-        assert_eq!(
-            mapped.challenge.tls_alpn_01,
-            source.challenges.tls_alpn_01
-        );
+        assert_eq!(mapped.challenge.tls_alpn_01, source.challenges.tls_alpn_01);
     }
 
     #[test]
@@ -55514,23 +55513,14 @@ mod gateway_runtime_config_tests {
             mapped.fetch_limits.max_decoded_bytes,
             usize::try_from(source.max_decoded_bytes.0).expect("test value fits usize")
         );
-        assert_eq!(
-            mapped.fetch_limits.max_redirects,
-            source.max_redirects
-        );
+        assert_eq!(mapped.fetch_limits.max_redirects, source.max_redirects);
         assert_eq!(
             mapped.fetch_limits.max_dns_addresses,
             source.max_dns_addresses
         );
-        assert_eq!(
-            mapped.fetch_limits.connect_timeout,
-            source.connect_timeout
-        );
+        assert_eq!(mapped.fetch_limits.connect_timeout, source.connect_timeout);
         assert_eq!(mapped.fetch_limits.total_timeout, source.total_timeout);
-        assert_eq!(
-            mapped.max_clock_skew_secs,
-            source.max_clock_skew.as_secs()
-        );
+        assert_eq!(mapped.max_clock_skew_secs, source.max_clock_skew.as_secs());
         assert_eq!(mapped.max_feed_age_secs, source.max_feed_age.as_secs());
         assert_eq!(
             mapped.max_catalog_validity_secs,
@@ -55543,9 +55533,8 @@ mod gateway_runtime_config_tests {
     #[test]
     fn runtime_dependency_builders_retain_injected_instances() {
         let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
-        let compliance_transport: Arc<
-            dyn sorafs::gateway::GatewayComplianceFeedTransport,
-        > = Arc::new(TestComplianceFeedTransport);
+        let compliance_transport: Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport> =
+            Arc::new(TestComplianceFeedTransport);
 
         let dependencies = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
             .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
@@ -55571,9 +55560,8 @@ mod gateway_runtime_config_tests {
     fn gateway_security_builds_only_from_resolved_config_and_runtime_dependencies() {
         let checkpoint_dir = tempfile::tempdir().expect("temporary checkpoint directory");
         let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
-        let compliance_transport: Arc<
-            dyn sorafs::gateway::GatewayComplianceFeedTransport,
-        > = Arc::new(TestComplianceFeedTransport);
+        let compliance_transport: Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport> =
+            Arc::new(TestComplianceFeedTransport);
         let mut config = iroha_config::parameters::actual::SorafsGateway::default();
         config.acme.enabled = true;
         config.compliance = Some(compliance_config(
