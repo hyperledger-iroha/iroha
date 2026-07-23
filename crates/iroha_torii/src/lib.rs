@@ -2073,7 +2073,11 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
     #[cfg(feature = "app_api")]
+    sorafs_routing_authority_cache: Arc<sorafs::delegated_routing::RoutingAuthorityCache>,
+    #[cfg(feature = "app_api")]
     sorafs_node: sorafs_node::NodeHandle,
+    #[cfg(feature = "app_api")]
+    sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
     sorafs_limits: Arc<sorafs::SorafsQuotaEnforcer>,
     #[cfg(feature = "app_api")]
@@ -49785,6 +49789,8 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_node: sorafs_node::NodeHandle,
     #[cfg(feature = "app_api")]
+    sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
+    #[cfg(feature = "app_api")]
     sorafs_limits: Arc<sorafs::SorafsQuotaEnforcer>,
     #[cfg(feature = "app_api")]
     por_coordinator: Arc<sorafs::PorCoordinator>,
@@ -49834,6 +49840,13 @@ pub struct ToriiRuntimeDeps {
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     soracloud_hf_config: Option<iroha_config::parameters::actual::SoracloudRuntimeHuggingFace>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
+    #[cfg(feature = "app_api")]
+    sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_moderation_quarantine_key_wrapper:
+        Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
+    #[cfg(feature = "app_api")]
+    sorafs_privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
     torii_proxy_bridge_signer: Option<KeyPair>,
@@ -49848,6 +49861,12 @@ impl ToriiRuntimeDeps {
             soracloud_runtime: None,
             soracloud_hf_config: None,
             sorafs_node: None,
+            #[cfg(feature = "app_api")]
+            sorafs_pop_credentials: None,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_quarantine_key_wrapper: None,
+            #[cfg(feature = "app_api")]
+            sorafs_privacy_cycle_prf_provider: None,
             sorafs_cache: None,
             vpn_helper_ticket_secret: None,
             torii_proxy_bridge_signer: None,
@@ -49875,6 +49894,41 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_sorafs_node(mut self, sorafs_node: sorafs_node::NodeHandle) -> Self {
         self.sorafs_node = Some(sorafs_node);
+        self
+    }
+
+    /// Attach the fully constructed runtime-only SoraFS PoP credential service.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_pop_credentials(
+        mut self,
+        runtime: Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>,
+    ) -> Self {
+        self.sorafs_pop_credentials = Some(runtime);
+        self
+    }
+
+    /// Attach the runtime-only PKCS#11/KMS wrapper used for SoraFS moderation
+    /// quarantine object data keys.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_moderation_quarantine_key_wrapper(
+        mut self,
+        key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>,
+    ) -> Self {
+        self.sorafs_moderation_quarantine_key_wrapper = Some(key_wrapper);
+        self
+    }
+
+    /// Attach the runtime-only threshold-PRF provider used for SoraFS
+    /// differential-privacy publication cycles.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_privacy_cycle_prf_provider(
+        mut self,
+        provider: Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>,
+    ) -> Self {
+        self.sorafs_privacy_cycle_prf_provider = Some(provider);
         self
     }
 
@@ -52467,7 +52521,123 @@ impl Torii {
             STORAGE_POR_SAMPLE,
             sorafs::api::handle_post_sorafs_storage_por_sample
         );
-        capacity_post!(PROOF_STREAM, sorafs::api::handle_post_sorafs_proof_stream);
+        let proof_stream_state = builder.state().clone();
+        builder.route(
+            &route_catalog::sorafs::PROOF_STREAM,
+            catalog_post(sorafs::api::handle_post_sorafs_proof_stream)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::PDP_CHALLENGE,
+            catalog_post(sorafs::api::handle_post_sorafs_pdp_challenge)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::PDP_NEXT,
+            catalog_post(sorafs::api::handle_post_sorafs_pdp_next)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::PDP_PROOF,
+            catalog_post(sorafs::api::handle_post_sorafs_pdp_proof)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::PDP_STATUS,
+            catalog_post(sorafs::api::handle_post_sorafs_pdp_status)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::PDP_EXPORT,
+            catalog_post(sorafs::api::handle_post_sorafs_pdp_export)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state),
+        );
+        macro_rules! pop_post {
+            ($descriptor:ident, $handler:path, $limit:expr) => {
+                builder.route(
+                    &route_catalog::sorafs::$descriptor,
+                    catalog_post($handler)
+                        .layer(DefaultBodyLimit::max($limit))
+                        .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+                );
+            };
+        }
+        pop_post!(
+            POP_ENROLLMENT,
+            sorafs::pop_api::handle_post_pop_enrollment,
+            sorafs::pop_api::POP_ENROLLMENT_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_ENROLLMENT_STATUS,
+            sorafs::pop_api::handle_post_pop_enrollment_status,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_APPROVAL,
+            sorafs::pop_api::handle_post_pop_approval,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_ISSUE,
+            sorafs::pop_api::handle_post_pop_issue,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_REVOCATION,
+            sorafs::pop_api::handle_post_pop_revocation,
+            sorafs::pop_api::POP_ENROLLMENT_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_REGISTRY_SUBMIT,
+            sorafs::pop_api::handle_post_pop_registry_submit,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_REGISTRY_RECONCILE,
+            sorafs::pop_api::handle_post_pop_registry_reconcile,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_REGISTRY_PROJECTION,
+            sorafs::pop_api::handle_post_pop_registry_projection,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_WALLET_DELIVERY,
+            sorafs::pop_api::handle_post_pop_wallet_delivery,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_WALLET_IMPORT,
+            sorafs::pop_api::handle_post_pop_wallet_import,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_WALLET_ACKNOWLEDGE,
+            sorafs::pop_api::handle_post_pop_wallet_acknowledge,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_WALLET_SYNCHRONIZE,
+            sorafs::pop_api::handle_post_pop_wallet_synchronize,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_WALLET_PROVE,
+            sorafs::pop_api::handle_post_pop_wallet_prove,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_VERIFY,
+            sorafs::pop_api::handle_post_pop_verify,
+            sorafs::pop_api::POP_PROOF_REQUEST_MAX_BYTES_V1
+        );
         let app_state = builder.state().clone();
         builder.route(
             &route_catalog::sorafs::DEAL_USAGE,
@@ -52836,6 +53006,15 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
+        let shared_sorafs_pop_credentials = runtime_deps.sorafs_pop_credentials.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_moderation_quarantine_key_wrapper = runtime_deps
+            .sorafs_moderation_quarantine_key_wrapper
+            .clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_privacy_cycle_prf_provider =
+            runtime_deps.sorafs_privacy_cycle_prf_provider.clone();
+        #[cfg(feature = "app_api")]
         let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
         #[cfg(feature = "app_api")]
         let sorafs_gateway = config.sorafs_gateway.clone();
@@ -53192,16 +53371,126 @@ impl Torii {
         let sorafs_cache =
             shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()));
         #[cfg(feature = "app_api")]
-        let sorafs_node = shared_sorafs_node.unwrap_or_else(|| {
-            sorafs_node::NodeHandle::new_with_policies(
-                sorafs_node::config::StorageConfig::from(&config.sorafs_storage),
-                sorafs_node::config::RepairConfig::from_repair_and_policy(
-                    &config.sorafs_repair,
-                    &state.gov.sorafs_repair_escalation,
-                ),
-                sorafs_node::config::GcConfig::from(&config.sorafs_gc),
-            )
-        });
+        let sorafs_node = {
+            let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
+            let repair_config = sorafs_node::config::RepairConfig::from_repair_and_policy(
+                &config.sorafs_repair,
+                &state.gov.sorafs_repair_escalation,
+            );
+            let gc_config = sorafs_node::config::GcConfig::from(&config.sorafs_gc);
+            let privacy_cycle_prf_required = storage_config.privacy_aggregate_schedule().is_some()
+                && storage_config
+                    .privacy_aggregate_policy()
+                    .is_some_and(
+                        sorafs_node::config::PrivacyAggregatePolicyConfig::requires_cycle_prf,
+                    );
+            match shared_sorafs_node {
+                Some(node) => {
+                    assert_eq!(
+                        node.moderation_screening_enabled(),
+                        storage_config.moderation_screening_enabled(),
+                        "injected SoraFS node moderation-screening enablement does not match torii.sorafs.storage"
+                    );
+                    assert_eq!(
+                        node.moderation_screening_authority_bundle_digest(),
+                        storage_config.moderation_screening_authority_bundle_digest(),
+                        "injected SoraFS node moderation-screening authority digest does not match torii.sorafs.storage"
+                    );
+                    assert_eq!(
+                        node.privacy_cycle_prf_required(),
+                        privacy_cycle_prf_required,
+                        "injected SoraFS node privacy-cycle PRF requirement does not match torii.sorafs.storage"
+                    );
+                    if storage_config.moderation_screening_enabled()
+                        && shared_sorafs_moderation_quarantine_key_wrapper.is_none()
+                    {
+                        panic!(
+                            "torii.sorafs.storage moderation screening is enabled but its runtime-only PKCS#11/KMS quarantine key wrapper was not injected"
+                        );
+                    }
+                    if let Some(key_wrapper) =
+                        shared_sorafs_moderation_quarantine_key_wrapper.as_ref()
+                    {
+                        assert!(
+                            node.uses_moderation_quarantine_key_wrapper(key_wrapper),
+                            "injected SoraFS node does not retain the exact Torii quarantine key wrapper runtime dependency"
+                        );
+                        assert_eq!(
+                            node.moderation_quarantine_key_id(),
+                            Some(key_wrapper.active_key_id()),
+                            "injected SoraFS node quarantine key wrapper does not match the Torii runtime dependency"
+                        );
+                    }
+                    if privacy_cycle_prf_required
+                        && shared_sorafs_privacy_cycle_prf_provider.is_none()
+                    {
+                        panic!(
+                            "torii.sorafs.storage differential-privacy aggregates are enabled but their runtime-only threshold PRF provider was not injected"
+                        );
+                    }
+                    if let Some(provider) = shared_sorafs_privacy_cycle_prf_provider.as_ref() {
+                        assert!(
+                            node.uses_privacy_cycle_prf_provider(provider),
+                            "injected SoraFS node does not retain the exact Torii privacy-cycle PRF runtime dependency"
+                        );
+                    }
+                    node
+                }
+                None => {
+                    let node_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
+                    let node_runtime_deps =
+                        if let Some(key_wrapper) =
+                            shared_sorafs_moderation_quarantine_key_wrapper
+                        {
+                            node_runtime_deps
+                                .with_moderation_quarantine_key_wrapper(key_wrapper)
+                        } else {
+                            node_runtime_deps
+                        };
+                    let node_runtime_deps =
+                        if let Some(provider) = shared_sorafs_privacy_cycle_prf_provider {
+                            node_runtime_deps.with_privacy_cycle_prf_provider(provider)
+                        } else {
+                            node_runtime_deps
+                        };
+                    sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
+                        storage_config,
+                        repair_config,
+                        gc_config,
+                        node_runtime_deps,
+                    )
+                    .unwrap_or_else(|err| {
+                        panic!("failed to initialise embedded SoraFS runtime: {err}")
+                    })
+                }
+            }
+        };
+        #[cfg(feature = "app_api")]
+        let sorafs_pop_credentials = match (
+            config.sorafs_storage.pop_credentials.as_ref(),
+            shared_sorafs_pop_credentials,
+        ) {
+            (None, None) => None,
+            (Some(config), Some(runtime)) => {
+                let expected = sorafs::pop_api::PopCredentialRuntimeConfigV1::from(config);
+                assert_eq!(
+                    runtime.config(),
+                    &expected,
+                    "injected SoraFS PoP runtime does not match torii.sorafs.storage.pop_credentials"
+                );
+                Some(runtime)
+            }
+            (Some(_), None) => {
+                panic!(
+                    "torii.sorafs.storage.pop_credentials is enabled but runtime-only enrollment/HSM/KMS/authentication dependencies were not injected"
+                )
+            }
+            (None, Some(_)) => {
+                panic!(
+                    "a SoraFS PoP runtime was injected without enabling torii.sorafs.storage.pop_credentials"
+                )
+            }
+        };
         #[cfg(feature = "app_api")]
         let sorafs_limits = Arc::new(sorafs::SorafsQuotaEnforcer::from_config(
             &build_sorafs_quota_config(&config.sorafs_quota),
@@ -53478,6 +53767,8 @@ impl Torii {
             sorafs_cache,
             #[cfg(feature = "app_api")]
             sorafs_node,
+            #[cfg(feature = "app_api")]
+            sorafs_pop_credentials,
             #[cfg(feature = "app_api")]
             sorafs_limits,
             #[cfg(feature = "app_api")]
@@ -53902,7 +54193,13 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_cache: self.sorafs_cache.clone(),
             #[cfg(feature = "app_api")]
+            sorafs_routing_authority_cache: Arc::new(
+                sorafs::delegated_routing::RoutingAuthorityCache::default(),
+            ),
+            #[cfg(feature = "app_api")]
             sorafs_node: self.sorafs_node.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_pop_credentials: self.sorafs_pop_credentials.clone(),
             #[cfg(feature = "app_api")]
             sorafs_limits: self.sorafs_limits.clone(),
             #[cfg(feature = "app_api")]
@@ -54439,6 +54736,11 @@ impl Torii {
         }
 
         #[cfg(feature = "app_api")]
+        if let Some(runtime) = &self.sorafs_pop_credentials {
+            runtime.clone().spawn(shutdown_signal.clone());
+        }
+
+        #[cfg(feature = "app_api")]
         if let Some(runtime) = &self.repair_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
@@ -54733,8 +55035,8 @@ fn build_sorafs_gateway_security(
     admission: Option<Arc<sorafs::AdmissionRegistry>>,
 ) -> GatewaySecurityComponents {
     use sorafs::gateway::{
-        AcmeConfig, ChallengeProfile, GatewayDenylist, GatewayPolicy, GatewayPolicyConfig,
-        GatewayRateLimitConfig, GatewayRateLimiter, TlsAutomationHandle, TlsStateSnapshot,
+        GatewayDenylist, GatewayPolicy, GatewayPolicyConfig, GatewayRateLimitConfig,
+        GatewayRateLimiter, TlsStateSnapshot,
     };
 
     let denylist = Arc::new(GatewayDenylist::new());
@@ -54761,32 +55063,9 @@ fn build_sorafs_gateway_security(
     let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(config.acme.ech_enabled)));
 
     let tls_automation = if config.acme.enabled {
-        if config.acme.hostnames.is_empty() {
-            iroha_logger::warn!(
-                "SoraFS TLS automation enabled but no hostnames configured; automation skipped"
-            );
-            None
-        } else {
-            let automation_config = AcmeConfig {
-                enabled: config.acme.enabled,
-                account_email: config.acme.account_email.clone(),
-                directory_url: config.acme.directory_url.clone(),
-                hostnames: config.acme.hostnames.clone(),
-                dns_provider_id: config.acme.dns_provider_id.clone(),
-                renewal_window: config.acme.renewal_window,
-                retry_backoff: config.acme.retry_backoff,
-                retry_jitter: config.acme.retry_jitter,
-                challenge: ChallengeProfile {
-                    dns01: config.acme.challenges.dns01,
-                    tls_alpn_01: config.acme.challenges.tls_alpn_01,
-                },
-            };
-
-            Some(Arc::new(TlsAutomationHandle::new(
-                automation_config,
-                Arc::clone(&tls_state),
-            )))
-        }
+        panic!(
+            "torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected"
+        );
     } else {
         None
     };
@@ -58481,6 +58760,10 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(feature = "app_api")]
             sorafs_cache,
             #[cfg(feature = "app_api")]
+            sorafs_routing_authority_cache: Arc::new(
+                sorafs::delegated_routing::RoutingAuthorityCache::default(),
+            ),
+            #[cfg(feature = "app_api")]
             sorafs_node,
             #[cfg(feature = "app_api")]
             sorafs_limits,
@@ -58498,6 +58781,8 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_alias_enforcement,
             #[cfg(feature = "app_api")]
             sorafs_admission: None,
+            #[cfg(feature = "app_api")]
+            sorafs_pop_credentials: None,
             #[cfg(feature = "app_api")]
             sorafs_publish_discovery,
             #[cfg(feature = "app_api")]

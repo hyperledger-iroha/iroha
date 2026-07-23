@@ -8,7 +8,9 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
-use crate::{account::AccountId, escrow::EscrowId};
+use sorafs_manifest::deal::XorQuantity;
+
+use crate::{account::AccountId, escrow::EscrowId, sorafs::capacity::ProviderId};
 
 /// First-release schema version for [`OrderbookAdmissionPolicyV1`].
 pub const ORDERBOOK_ADMISSION_POLICY_VERSION_V1: u16 = 1;
@@ -22,6 +24,12 @@ pub const ORDERBOOK_MAX_CLOCK_SKEW_SECS_V1: u64 = 60 * 60;
 pub const ORDERBOOK_MAX_RECEIPT_BYTES_V1: u64 = 1 << 40;
 /// Hard ceiling for receipt ranges retained in one channel index.
 pub const ORDERBOOK_MAX_RECEIPTS_PER_CHANNEL_V1: u32 = 8_192;
+/// Hard ceiling for open orders retained by the authoritative V1 book.
+pub const ORDERBOOK_MAX_OPEN_ORDERS_V1: u32 = 4_096;
+/// Hard ceiling for fills committed by one deterministic matching instruction.
+pub const ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1: u32 = 64;
+/// Hard ceiling for orders/channels examined by one maintenance instruction.
+pub const ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1: u32 = 512;
 /// Hard ceiling for one authoritative orderbook read page.
 pub const ORDERBOOK_QUERY_MAX_ITEMS_V1: u32 = 500;
 /// Domain separator for policy digests.
@@ -30,6 +38,17 @@ pub const ORDERBOOK_ADMISSION_POLICY_DIGEST_DOMAIN_V1: &[u8] =
 /// Domain separator for funded settlement locks derived from channel ids.
 pub const ORDERBOOK_SETTLEMENT_ESCROW_ID_DOMAIN_V1: &[u8] =
     b"sorafs.orderbook.settlement-escrow-id.v1";
+/// Domain separator for bid-order custody locks.
+pub const ORDERBOOK_ORDER_ESCROW_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-escrow-id.v1";
+
+/// Derive the native asset-lock identifier that funds an admitted bid.
+#[must_use]
+pub fn orderbook_order_escrow_id(order_id: [u8; 32]) -> EscrowId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(ORDERBOOK_ORDER_ESCROW_ID_DOMAIN_V1);
+    hasher.update(&order_id);
+    EscrowId::new(iroha_crypto::Hash::prehashed(*hasher.finalize().as_bytes()))
+}
 
 /// Derive the native asset-lock identifier required for a settlement channel.
 ///
@@ -271,10 +290,16 @@ pub struct OrderbookAdmissionPolicyRecord {
     norito(tag = "status", content = "value", rename_all = "snake_case")
 )]
 pub enum OrderbookOrderStatusV1 {
-    /// Order is available to an authoritative matcher.
+    /// Order has not yet received a fill.
     Open,
+    /// Order has received at least one fill and retains quantity.
+    PartiallyFilled,
+    /// Order has no remaining quantity.
+    Filled,
     /// Owner cancellation has been committed.
     Cancelled,
+    /// Ledger maintenance retired the order after its signed expiry.
+    Expired,
 }
 
 /// Canonical signed order and its authoritative ledger status.
@@ -297,8 +322,14 @@ pub struct OrderbookOrderRecord {
     pub admitted_policy_digest: [u8; 32],
     /// Block timestamp assigned at admission.
     pub admitted_at_unix: u64,
+    /// Monotonic sequence assigned by the authoritative ledger at admission.
+    pub admission_sequence: u64,
+    /// Quantity not yet filled.
+    pub remaining_gib: u64,
     /// Current authoritative lifecycle status.
     pub status: OrderbookOrderStatusV1,
+    /// Block timestamp of the latest lifecycle mutation.
+    pub updated_at_unix: u64,
     /// Exact canonical cancellation payload, present only after cancellation.
     #[cfg_attr(
         feature = "json",
@@ -378,6 +409,94 @@ pub struct OrderbookSettlementReceiptRecord {
     pub recorded_by: AccountId,
 }
 
+/// Immutable authoritative trade produced by deterministic matching.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookTradeRecord {
+    /// Canonical trade identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub trade_id: [u8; 32],
+    /// Maker order identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub maker_order_id: [u8; 32],
+    /// Taker order identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub taker_order_id: [u8; 32],
+    /// Deterministic sequence in the authoritative trade log.
+    pub trade_sequence: u64,
+    /// Exact canonical `sorafs_manifest::orderbook::TradeEventV1` bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub canonical_trade: Vec<u8>,
+    /// Settlement channel derived from this trade.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub channel_id: [u8; 32],
+    /// Book revision committed by the matching transition.
+    pub book_revision: u64,
+    /// Block timestamp assigned to the fill.
+    pub recorded_at_unix: u64,
+}
+
+/// Authoritative settlement-channel lifecycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "status", content = "value", rename_all = "snake_case")
+)]
+pub enum OrderbookSettlementChannelStatusV1 {
+    /// The provider may submit signed delivery receipts.
+    Open,
+    /// All channel bytes and escrow were settled.
+    Closed,
+    /// The delivery deadline elapsed and remaining custody was refunded.
+    Expired,
+}
+
+/// Authoritative settlement-channel state bound to native custody.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookSettlementChannelRecord {
+    /// Settlement channel identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub channel_id: [u8; 32],
+    /// Trade funded by this channel.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub trade_id: [u8; 32],
+    /// Buyer whose admitted bid funded custody.
+    pub buyer: AccountId,
+    /// Provider account entitled to sign receipts and receive settlement.
+    pub provider: AccountId,
+    /// Provider registry identifier selected deterministically at matching.
+    pub provider_id: ProviderId,
+    /// Account bound as native release authority for the channel lock.
+    pub settlement_authority: AccountId,
+    /// Total byte capacity created by the fill.
+    pub total_bytes: u64,
+    /// Bytes not yet covered by accepted receipts.
+    pub remaining_bytes: u64,
+    /// Initial XOR partitioned from bid custody.
+    pub initial_xor_locked: XorQuantity,
+    /// XOR still held by channel custody.
+    pub remaining_xor_locked: XorQuantity,
+    /// Current channel lifecycle.
+    pub status: OrderbookSettlementChannelStatusV1,
+    /// Block timestamp assigned when matching opened the channel.
+    pub opened_at_unix: u64,
+    /// Inclusive channel delivery deadline.
+    pub expires_at_unix: u64,
+    /// Block timestamp of the latest channel mutation.
+    pub updated_at_unix: u64,
+}
+
 /// One receipt range retained in a channel replay index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -420,14 +539,31 @@ pub struct OrderbookSettlementIndexRecord {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct OrderbookLedgerStatusV1 {
-    /// Number of currently open admitted orders.
+    /// Number of unfilled open orders.
     pub open_orders: u64,
+    /// Number of partially filled orders with remaining quantity.
+    pub partially_filled_orders: u64,
+    /// Number of fully filled terminal orders.
+    pub filled_orders: u64,
     /// Number of terminal owner/governance cancellations.
     pub cancelled_orders: u64,
+    /// Number of terminal expired orders.
+    pub expired_orders: u64,
+    /// Number of immutable deterministic trades.
+    pub trades: u64,
     /// Number of immutable settlement receipts.
     pub settlement_receipts: u64,
-    /// Number of channels with at least one admitted receipt.
+    /// Number of settlement channels created by fills.
     pub settlement_channels: u64,
+    /// Number of open settlement channels.
+    pub open_settlement_channels: u64,
+    /// Revision of the authoritative book. Every order, fill, cancellation, or
+    /// expiry mutation advances this value exactly once.
+    pub book_revision: u64,
+    /// Next monotonic order admission sequence.
+    pub next_admission_sequence: u64,
+    /// Next monotonic trade sequence.
+    pub next_trade_sequence: u64,
     /// Block timestamp of the most recent counter mutation.
     pub updated_at_unix: u64,
 }

@@ -1,11 +1,11 @@
 {
   "deadline_ms": 90000,
-  "gateway_signature": null,
+  "gateway_signature": "present",
   "latency_ms": 42000,
   "manifest_digest_hex": "4242424242424242424242424242424242424242424242424242424242424242",
   "note": "fixture retrieval completed",
   "provider_id_hex": "1010101010101010101010101010101010101010101010101010101010101010",
-  "provider_signature": null,
+  "provider_signature": "present",
   "range_end": 1048575,
   "range_start": 0,
   "recorded_at_ms": 1700000042100,

@@ -1033,11 +1033,12 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
         "soranet" | "soranet-pq" | "soranet_pq" | "soranet-hybrid-pq" => {
             CapabilityType::SoraNetHybridPq
         }
+        "potr-mldsa" | "potr_mldsa" => CapabilityType::PotrMlDsa,
         "range" | "chunk-range" => CapabilityType::ChunkRangeFetch,
         "vendor" | "vendor-reserved" => CapabilityType::VendorReserved,
         other => {
             return Err(format!(
-                "unknown capability `{other}` (expected torii|quic|soranet|soranet-pq|range|vendor)"
+                "unknown capability `{other}` (expected torii|quic|soranet|soranet-pq|potr-mldsa|range|vendor)"
             ));
         }
     };
@@ -1060,6 +1061,13 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
         }
         .to_bytes()
         .map_err(|err| format!("invalid soranet-pq capability: {err}"))?,
+        (CapabilityType::PotrMlDsa, Some(rest)) => {
+            require_capability_payload(rest)?;
+            parse_hex_vec(rest)?
+        }
+        (CapabilityType::PotrMlDsa, None) => {
+            return Err("potr-mldsa capability requires a hex ML-DSA-65 public key".to_owned());
+        }
         (_, Some(rest)) => {
             require_capability_payload(rest)?;
             parse_hex_vec(rest)?

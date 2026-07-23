@@ -4,6 +4,9 @@ use std::{str::FromStr, sync::OnceLock};
 
 use iroha_data_model::{
     account::AccountId,
+    events::data::sorafs::{
+        SorafsGatewayEvent, SorafsModerationLedgerEvent, SorafsModerationLedgerEventKind,
+    },
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
         sorafs::{
@@ -171,6 +174,13 @@ fn block_time_ms(
         ));
     }
     Ok(now)
+}
+
+fn ceil_unix_ms_to_epoch(unix_ms: u64) -> Result<u64, InstructionExecutionError> {
+    unix_ms
+        .checked_add(999)
+        .map(|value| value / 1_000)
+        .ok_or_else(|| corrupt_state("moderation millisecond deadline overflows epoch rounding"))
 }
 
 fn active_pop_snapshot(
@@ -891,12 +901,12 @@ fn read_eligibility(
     }
     let appeal = read_appeal(world, case_id, round_id)?
         .ok_or_else(|| corrupt_state("moderation eligibility has no appeal"))?;
+    let reveal_deadline_epoch = ceil_unix_ms_to_epoch(appeal.intake.reveal_deadline_unix_ms)?;
     if record.pop_snapshot_digest != appeal.pop_snapshot_digest
         || !appeal.eligible_jurors.contains(juror)
         || record.registered_at_unix_ms < appeal.submitted_at_unix_ms
         || record.registered_at_unix_ms > appeal.intake.registration_deadline_unix_ms
-        || record.credential_expires_at_epoch
-            <= appeal.intake.reveal_deadline_unix_ms.saturating_add(999) / 1_000
+        || record.credential_expires_at_epoch <= reveal_deadline_epoch
     {
         return Err(corrupt_state(
             "stored moderation eligibility does not match its appeal",
@@ -1339,6 +1349,27 @@ fn encode_status(status: &ModerationLedgerStatusV1) -> Result<Vec<u8>, Instructi
     encode_state(status, "moderation status")
 }
 
+fn emit_moderation_ledger_event(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    kind: SorafsModerationLedgerEventKind,
+    case_id: Option<&str>,
+    round_id: Option<&str>,
+    authority: &AccountId,
+    now: u64,
+) {
+    state_transaction
+        .world
+        .emit_events(Some(SorafsGatewayEvent::ModerationLedger(
+            SorafsModerationLedgerEvent {
+                kind,
+                case_id: case_id.map(str::to_owned),
+                round_id: round_id.map(str::to_owned),
+                authority: authority.clone(),
+                occurred_at_unix_ms: now,
+            },
+        )));
+}
+
 impl Execute for SetSorafsModerationPolicy {
     fn execute(
         self,
@@ -1411,6 +1442,14 @@ impl Execute for SetSorafsModerationPolicy {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::PolicyActivated,
+            None,
+            None,
+            authority,
+            now,
+        );
         Ok(())
     }
 }
@@ -1576,6 +1615,14 @@ impl Execute for SubmitSorafsModerationAppeal {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::AppealSubmitted,
+            Some(&record.intake.case_id),
+            Some(&record.intake.round_id),
+            authority,
+            now,
+        );
         Ok(())
     }
 }
@@ -1663,8 +1710,7 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
                 "observer-only PoP credentials cannot enter a moderation voting panel",
             ));
         }
-        let reveal_deadline_epoch =
-            appeal.intake.reveal_deadline_unix_ms.saturating_add(999) / 1_000;
+        let reveal_deadline_epoch = ceil_unix_ms_to_epoch(appeal.intake.reveal_deadline_unix_ms)?;
         if proof.expires_at_epoch <= reveal_deadline_epoch {
             return Err(invalid_parameter(
                 "moderation juror PoP credential expires before the reveal deadline",
@@ -1712,6 +1758,14 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::EligibilityRegistered,
+            Some(&record.case_id),
+            Some(&record.round_id),
+            authority,
+            now,
+        );
         Ok(())
     }
 }
@@ -1817,6 +1871,14 @@ impl Execute for FinalizeSorafsModerationSortition {
                     .world
                     .smart_contract_state
                     .insert(status_key().clone(), encoded_status);
+                emit_moderation_ledger_event(
+                    state_transaction,
+                    SorafsModerationLedgerEventKind::SortitionFailed,
+                    Some(&self.case_id),
+                    Some(&self.round_id),
+                    authority,
+                    now,
+                );
                 return Ok(());
             }
             Err(error) => {
@@ -1861,6 +1923,14 @@ impl Execute for FinalizeSorafsModerationSortition {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::SortitionFinalized,
+            Some(&self.case_id),
+            Some(&self.round_id),
+            authority,
+            now,
+        );
         Ok(())
     }
 }
@@ -1926,6 +1996,14 @@ impl Execute for AcceptSorafsModerationJurorAssignment {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::AssignmentAccepted,
+            Some(&self.case_id),
+            Some(&self.round_id),
+            authority,
+            now,
+        );
         Ok(())
     }
 }
@@ -1996,6 +2074,14 @@ impl Execute for ActivateSorafsModerationCase {
                     .world
                     .smart_contract_state
                     .insert(status_key().clone(), encoded_status);
+                emit_moderation_ledger_event(
+                    state_transaction,
+                    SorafsModerationLedgerEventKind::CaseActivationFailed,
+                    Some(&self.case_id),
+                    Some(&self.round_id),
+                    authority,
+                    now,
+                );
                 return Ok(());
             };
             jurors.push(replacement.clone());
@@ -2054,9 +2140,11 @@ impl Execute for ActivateSorafsModerationCase {
         appeal.activated_at_unix_ms = Some(now);
         let mut status = status_for_mutation(state_transaction.world(), now)?;
         status.open_cases = checked_inc(status.open_cases, "open-case")?;
+        let replacement_count = u64::try_from(appeal.replacements.len())
+            .map_err(|_| corrupt_state("moderation failover replacement count does not fit u64"))?;
         status.failover_replacements = checked_add(
             status.failover_replacements,
-            appeal.replacements.len() as u64,
+            replacement_count,
             "failover-replacement",
         )?;
         status.updated_at_unix_ms = now;
@@ -2075,6 +2163,14 @@ impl Execute for ActivateSorafsModerationCase {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::CaseActivated,
+            Some(&self.case_id),
+            Some(&self.round_id),
+            authority,
+            now,
+        );
         Ok(())
     }
 }
@@ -2174,6 +2270,14 @@ impl Execute for SubmitSorafsModerationCommit {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::CommitAccepted,
+            Some(&record.case_id),
+            Some(&record.round_id),
+            authority,
+            now,
+        );
         Ok(())
     }
 }
@@ -2296,6 +2400,14 @@ impl Execute for RaiseSorafsModerationChallenge {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::ChallengeRaised,
+            Some(&record.case_id),
+            Some(&record.round_id),
+            authority,
+            now,
+        );
         Ok(())
     }
 }
@@ -2384,6 +2496,14 @@ impl Execute for ResolveSorafsModerationChallenge {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::ChallengeResolved,
+            Some(&self.case_id),
+            Some(&self.round_id),
+            authority,
+            now,
+        );
         Ok(())
     }
 }
@@ -2504,6 +2624,14 @@ impl Execute for SubmitSorafsModerationReveal {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::RevealAccepted,
+            Some(&record.case_id),
+            Some(&record.round_id),
+            authority,
+            now,
+        );
         Ok(())
     }
 }
@@ -2738,6 +2866,14 @@ impl Execute for FinalizeSorafsModerationCase {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encoded_status);
+        emit_moderation_ledger_event(
+            state_transaction,
+            SorafsModerationLedgerEventKind::CaseFinalized,
+            Some(&self.case_id),
+            Some(&self.round_id),
+            authority,
+            now,
+        );
         Ok(())
     }
 }

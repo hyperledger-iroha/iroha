@@ -1220,6 +1220,43 @@ pub struct Iroha {
     network: IrohaNetwork,
 }
 
+/// Runtime-only daemon dependencies supplied by the deployment launcher.
+///
+/// Implementations of the moderation wrapper and privacy-cycle PRF provider are
+/// the reference-node boundaries for PKCS#11, managed-KMS, and threshold
+/// services. Provider credentials, unwrapped keys, PRF shares, seeds, and
+/// outputs must stay inside those implementations and must never be sourced
+/// from `iroha_config`.
+#[derive(Clone, Default)]
+pub struct IrohaRuntimeDeps {
+    moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
+    privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
+}
+
+impl IrohaRuntimeDeps {
+    /// Attach the production PKCS#11/KMS wrapper for moderation quarantine
+    /// object data keys.
+    #[must_use]
+    pub fn with_moderation_quarantine_key_wrapper(
+        mut self,
+        key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>,
+    ) -> Self {
+        self.moderation_quarantine_key_wrapper = Some(key_wrapper);
+        self
+    }
+
+    /// Attach the production threshold-PRF provider for differential-privacy
+    /// publication cycles.
+    #[must_use]
+    pub fn with_privacy_cycle_prf_provider(
+        mut self,
+        provider: Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>,
+    ) -> Self {
+        self.privacy_cycle_prf_provider = Some(provider);
+        self
+    }
+}
+
 /// Error(s) that might occur while starting [`Iroha`]
 #[derive(Debug, Copy, Clone)]
 pub enum StartError {
@@ -3144,16 +3181,27 @@ impl NetworkRelayShared {
                     message: Arc::unwrap_or_clone(message),
                 }),
             ),
-            LaneDrainVote(_) => {
-                iroha_logger::debug!(
-                    %peer,
-                    "rejecting decode-only lane-drain vote in retained ingress"
-                );
-                return PrepareSumeragiRelayResult::Terminal {
-                    outcome: SumeragiRelayTerminalOutcome::Failed,
-                    retention_guard,
-                    completion,
-                };
+            LaneDrainVote(vote) => {
+                let vote = *vote;
+                if vote.signer != peer_id {
+                    iroha_logger::debug!(
+                        %peer,
+                        signer = %vote.signer,
+                        "rejecting lane-drain vote whose signed identity differs from its authenticated sender"
+                    );
+                    return PrepareSumeragiRelayResult::Terminal {
+                        outcome: SumeragiRelayTerminalOutcome::Failed,
+                        retention_guard,
+                        completion,
+                    };
+                }
+                (
+                    SumeragiRelayClass::Lane,
+                    PreparedSumeragiRelayItem::Lane(LaneRelayMessage::DrainVote {
+                        sender: peer_id,
+                        vote,
+                    }),
+                )
             }
             _ => {
                 iroha_logger::error!(
@@ -5945,7 +5993,7 @@ mod network_relay_tests {
         let origin_proposal = sample_lane_block_proposal();
         let producer = origin_proposal.descriptor.validator_set[0].clone();
         LaneExecutablePayloadV1 {
-            version: 1,
+            version: 2,
             chain_id_hash: Hash::new(b"irohad-lane-payload-chain"),
             epoch: 3,
             origin_proposal,
@@ -5964,12 +6012,15 @@ mod network_relay_tests {
         let origin_proposal = sample_lane_block_proposal();
         let proposer = origin_proposal.descriptor.validator_set[0].clone();
         LaneExecutablePayloadHandoffV1 {
-            version: 1,
+            version: 2,
             chain_id_hash: Hash::new(b"irohad-lane-handoff-chain"),
             epoch: 3,
             origin_proposal,
             entrypoint_hashes: Vec::new(),
             entrypoints: Vec::new(),
+            reservation_keys: Vec::new(),
+            routing_plans: Vec::new(),
+            native_amx_receipts: Vec::new(),
             payload_hash: Hash::new(b"irohad-lane-handoff"),
             proposer,
             proposer_signature: vec![0xBB],
@@ -7354,13 +7405,47 @@ impl Iroha {
     /// - Reading telemetry configs
     /// - Telemetry setup
     /// - Initialization of the Sumeragi v2 reducer via [`SumeragiStartArgs`] and [`Kura`]
+    pub async fn start(
+        config: Config,
+        genesis: Option<GenesisBlock>,
+        logger: LoggerHandle,
+        shutdown_signal: ShutdownSignal,
+    ) -> ReportResult<
+        (
+            Self,
+            impl Future<Output = iroha_futures::supervisor::Result<()>>,
+        ),
+        StartError,
+    > {
+        Self::start_with_runtime_deps(
+            config,
+            genesis,
+            logger,
+            shutdown_signal,
+            IrohaRuntimeDeps::default(),
+        )
+        .await
+    }
+
+    /// Starts Iroha with deployment-owned, runtime-only service dependencies.
+    ///
+    /// The standard daemon entry point supplies no crypto providers.
+    /// Consequently, enabling authenticated SoraFS moderation screening or
+    /// differential-privacy aggregates without a launcher that injects the
+    /// corresponding production adapter fails closed at startup.
+    ///
+    /// # Errors
+    /// - Reading telemetry configs
+    /// - Telemetry setup
+    /// - Initialization of the Sumeragi v2 reducer via [`SumeragiStartArgs`] and [`Kura`]
     #[allow(clippy::too_many_lines)]
     #[iroha_logger::log(name = "start", skip_all)] // This is actually easier to understand as a linear sequence of init statements.
-    pub async fn start(
+    pub async fn start_with_runtime_deps(
         mut config: Config,
         mut genesis: Option<GenesisBlock>,
         logger: LoggerHandle,
         shutdown_signal: ShutdownSignal,
+        runtime_deps: IrohaRuntimeDeps,
     ) -> ReportResult<
         (
             Self,
@@ -8002,6 +8087,8 @@ impl Iroha {
             restored = lane_reservation_replay.restored,
             awaiting_transaction_replay = lane_reservation_replay.awaiting_transaction_replay,
             commit_barriers = lane_reservation_replay.commit_barriers,
+            release_barriers = lane_reservation_replay.release_barriers,
+            completed_releases = lane_reservation_replay.completed_releases,
             "lane queue reservation journal installed"
         );
 
@@ -8868,13 +8955,35 @@ impl Iroha {
             supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
         }
 
-        let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies(
-            sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage),
-            sorafs_node::config::RepairConfig::from_repair_and_policy(
-                &config.torii.sorafs_repair,
-                &state.gov.sorafs_repair_escalation,
-            ),
-            sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc),
+        let sorafs_storage_config =
+            sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage);
+        let sorafs_repair_config = sorafs_node::config::RepairConfig::from_repair_and_policy(
+            &config.torii.sorafs_repair,
+            &state.gov.sorafs_repair_escalation,
+        );
+        let sorafs_gc_config = sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc);
+        let moderation_quarantine_key_wrapper =
+            runtime_deps.moderation_quarantine_key_wrapper.clone();
+        let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
+        let sorafs_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
+        let sorafs_runtime_deps =
+            if let Some(key_wrapper) = moderation_quarantine_key_wrapper.as_ref() {
+                sorafs_runtime_deps
+                    .with_moderation_quarantine_key_wrapper(Arc::clone(key_wrapper))
+            } else {
+                sorafs_runtime_deps
+            };
+        let sorafs_runtime_deps =
+            if let Some(provider) = privacy_cycle_prf_provider.as_ref() {
+                sorafs_runtime_deps.with_privacy_cycle_prf_provider(Arc::clone(provider))
+            } else {
+                sorafs_runtime_deps
+            };
+        let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
+            sorafs_storage_config,
+            sorafs_repair_config,
+            sorafs_gc_config,
+            sorafs_runtime_deps,
         )
         .map_err(|err| {
             Report::new(StartError::StartTorii).attach(format!(
@@ -8958,6 +9067,16 @@ impl Iroha {
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
             runtime_deps.with_sorafs_cache(cache)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(key_wrapper) = moderation_quarantine_key_wrapper {
+            runtime_deps.with_sorafs_moderation_quarantine_key_wrapper(key_wrapper)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(provider) = privacy_cycle_prf_provider {
+            runtime_deps.with_sorafs_privacy_cycle_prf_provider(provider)
         } else {
             runtime_deps
         };

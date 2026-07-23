@@ -779,6 +779,7 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
         "soranet" | "soranet-pq" | "soranet_pq" | "soranet-hybrid-pq" => {
             CapabilityType::SoraNetHybridPq
         }
+        "potr-mldsa" | "potr_mldsa" => CapabilityType::PotrMlDsa,
         "range" | "chunk-range" | "chunk_range" => {
             return Err(
                 "use --range-capability=<key=value,...> to describe chunk-range support".into(),
@@ -787,12 +788,16 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
         _ if head_lower == "vendor" => CapabilityType::VendorReserved,
         other => {
             return Err(format!(
-                "unknown capability type: {other} (expected torii|quic|soranet|soranet-pq|vendor)"
+                "unknown capability type: {other} (expected torii|quic|soranet|soranet-pq|potr-mldsa|vendor)"
             ));
         }
     };
     let payload = match (cap_type, payload_str) {
         (CapabilityType::VendorReserved, Some(rest)) => parse_hex_vec(rest)?,
+        (CapabilityType::PotrMlDsa, Some(rest)) => parse_hex_vec(rest)?,
+        (CapabilityType::PotrMlDsa, None) => {
+            return Err("potr-mldsa capability requires a hex ML-DSA-65 public key".into());
+        }
         (CapabilityType::SoraNetHybridPq, Some(rest)) => parse_soranet_pq(rest)?
             .to_bytes()
             .map_err(|err| format!("invalid soranet-pq capability: {err}"))?,
@@ -1379,6 +1384,7 @@ fn capability_name(cap: CapabilityType) -> &'static str {
         CapabilityType::QuicNoise => "quic",
         CapabilityType::ChunkRangeFetch => "range",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
+        CapabilityType::PotrMlDsa => "potr_mldsa",
         CapabilityType::VendorReserved => "vendor",
     }
 }

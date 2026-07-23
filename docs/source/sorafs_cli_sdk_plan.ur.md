@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_cli_sdk_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8984542c0f7827c5864b6f2119b1674036000245693f2fd423cccec2fc12b112
+source_hash: ec197b8b56174cdfdf4188ed5eed585157baac769a50a56bfc5b48ced0a6f7e9
 source_last_modified: "2026-07-10T10:11:25+00:00"
 translation_last_reviewed: 2026-01-30
 ---

@@ -340,6 +340,27 @@
       "status": "specified_unproved"
     },
     {
+      "id": "autoscale-lifecycle-production-refinement",
+      "requirement": "The deterministic production autoscaler refines the bounded creation, storage-before-activation, evidence-aware drain, archive-before-destruction, and fresh-incarnation recreation model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
+      "module": "SumeragiV2AutoscaleLifecycle",
+      "symbol": "AutoscaleLifecycleProductionRefinementObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "native-application-evidence-production-refinement",
+      "requirement": "Production Native AMX participant evidence refines the bounded finality-plus-manifest, exact-sidecar, replicated-frontier, proof-preserving pruning, and same-route control-only model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
+      "module": "SumeragiV2NativeApplicationEvidence",
+      "symbol": "NativeApplicationEvidenceProductionRefinementObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "autonomous-reservation-carrier-production-refinement",
+      "requirement": "Production queue reservations and canonical global merge application refine the bounded single-owner, unchanged-identity, at-most-once application, loss-release, and commit-before-forget model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
+      "module": "SumeragiV2AutonomousReservationCarrier",
+      "symbol": "AutonomousReservationCarrierProductionRefinementObligation",
+      "status": "specified_unproved"
+    },
+    {
       "id": "cryptography",
       "requirement": "Signature authenticity and hash collision resistance",
       "module": "trusted-boundary",

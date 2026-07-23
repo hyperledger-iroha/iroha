@@ -11,6 +11,9 @@ readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly MULTILANE_CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"
+readonly MULTILANE_MUTATION_RUNNER="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_multilane_mutations.sh"
+readonly MULTILANE_APALACHE_RUNNER="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_multilane_apalache.sh"
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
 else
@@ -90,6 +93,8 @@ case "$PROFILE" in
 esac
 shift || true
 
+python3 -I -S "$MULTILANE_CONTRACT_CHECKER"
+
 allowed_configs=(
   quorum_count
   quorum_stake
@@ -99,11 +104,16 @@ allowed_configs=(
   liveness
   effective_lock_acquisition
   resume_locked_commit_witness
+  multilane_autoscale_lifecycle_fixed
+  multilane_native_application_evidence_fixed
+  multilane_autonomous_reservation_carrier_fixed
 )
 if (($#)); then
   configs=("$@")
+  run_multilane_mutations=0
 else
   configs=("${allowed_configs[@]}")
+  run_multilane_mutations=1
 fi
 for config in "${configs[@]}"; do
   if [[ ! " ${allowed_configs[*]} " =~ " ${config} " ]]; then
@@ -168,6 +178,15 @@ for config in "${configs[@]}"; do
       resume_locked_commit_witness)
         "${common[@]}" SumeragiV2ResumeVoteWitness.tla
         ;;
+      multilane_autoscale_lifecycle_fixed)
+        "${common[@]}" SumeragiV2AutoscaleLifecycle.tla
+        ;;
+      multilane_native_application_evidence_fixed)
+        "${common[@]}" SumeragiV2NativeApplicationEvidence.tla
+        ;;
+      multilane_autonomous_reservation_carrier_fixed)
+        "${common[@]}" SumeragiV2AutonomousReservationCarrier.tla
+        ;;
       *)
         echo "internal error: unclassified TLC configuration ${config}" >&2
         exit 2
@@ -223,4 +242,10 @@ for config in "${configs[@]}"; do
   fi
   seed=$((seed + 7919))
 done
-echo "[tlc] all exhaustive searches, deterministic simulations, and the recovery witness had their exact expected outcomes; no proof status was changed"
+if ((run_multilane_mutations)); then
+  bash "$MULTILANE_MUTATION_RUNNER"
+  bash "$MULTILANE_APALACHE_RUNNER"
+  echo "[tlc] all exhaustive searches, deterministic simulations, the recovery witness, and the pinned multilane Apalache gate had their exact expected outcomes; no proof status was changed"
+else
+  echo "[tlc] all requested exhaustive searches, deterministic simulations, and recovery witnesses had their exact expected outcomes; no proof status was changed"
+fi

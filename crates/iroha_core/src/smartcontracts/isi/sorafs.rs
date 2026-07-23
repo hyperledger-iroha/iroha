@@ -5,16 +5,33 @@ use blake3::hash as blake3_hash;
 use iroha_crypto::{Algorithm, PublicKey, ed25519_parse_signature};
 use iroha_data_model::{
     asset::AssetId,
-    events::data::sorafs::{SorafsGatewayEvent, SorafsProofHealthAlert},
+    events::data::sorafs::{
+        SorafsGatewayEvent, SorafsProofHealthAlert, SorafsRepairLedgerEvent,
+        SorafsRepairLedgerEventKind,
+    },
     isi::error::{InstructionExecutionError, InvalidParameterError},
     metadata::Metadata,
     name::Name,
     permission::{Permission, Permissions},
+    query::{
+        error::{FindError, QueryExecutionFail},
+        sorafs::prelude::{FindSorafsRepairStatus, FindSorafsRepairTask},
+    },
     sorafs::{
         capacity::{
             CapacityAccrual, CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
             CapacityDisputeRecord, CapacityDisputeStatus, CapacityFeeLedgerEntry,
             CapacityTelemetryRecord, ProviderId,
+        },
+        moderation_ledger::{
+            REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1,
+            REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MAX_RECEIPTS_V1,
+            REPAIR_LEDGER_MIN_LEASE_MS_V1, REPAIR_LEDGER_TASK_VERSION_V1,
+            RepairLedgerActionReceiptV1, RepairLedgerAppealRecordV1, RepairLedgerCompletedV1,
+            RepairLedgerEscalatedV1, RepairLedgerFailedV1, RepairLedgerLeaseV1,
+            RepairLedgerSlashRecordV1, RepairLedgerStatusV1, RepairLedgerTaskV1,
+            RepairLedgerTerminalKindV1, RepairLedgerTerminalOutcomeV1, sorafs_repair_appeal_id_v1,
+            sorafs_repair_idempotency_digest_v1, sorafs_repair_task_id_v1,
         },
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
@@ -49,11 +66,12 @@ use sorafs_manifest::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
         ReplicationOrderV1,
     },
+    repair::{RepairReportV1, RepairSlashProposalV1, RepairTicketId},
     validate_chunker_handle, validate_manifest, validate_manifest_root_cid, validate_pin_policy,
 };
 
 use super::*;
-use crate::state::StateTransaction;
+use crate::{smartcontracts::ValidSingularQuery, state::StateTransaction};
 
 /// Convert governance configuration into manifest validation constraints.
 pub fn manifest_pin_policy_constraints_from_config(
@@ -3001,6 +3019,1082 @@ impl Execute for iroha_data_model::isi::sorafs::UpsertProviderCredit {
     }
 }
 
+const REPAIR_STATUS_STATE_KEY_V1: &str = "sorafs_repair_status_v1";
+const REPAIR_TASK_STATE_KEY_PREFIX_V1: &str = "sorafs_repair_task_v1_";
+const REPAIR_SOURCE_STATE_KEY_PREFIX_V1: &str = "sorafs_repair_source_v1_";
+const REPAIR_TICKET_STATE_KEY_DOMAIN_V1: &[u8] = b"sorafs.repair.ticket-state-key.v1";
+const REPAIR_ACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.repair.action-digest.v1";
+const REPAIR_STATE_MAX_BYTES_V1: usize = 256 * 1024;
+const REPAIR_PAYLOAD_MAX_BYTES_V1: usize = 64 * 1024;
+const REPAIR_STATE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    512,
+    REPAIR_STATE_MAX_BYTES_V1,
+    4_096,
+    2 * REPAIR_STATE_MAX_BYTES_V1,
+    64,
+);
+const REPAIR_PAYLOAD_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    256,
+    REPAIR_PAYLOAD_MAX_BYTES_V1,
+    2_048,
+    2 * REPAIR_PAYLOAD_MAX_BYTES_V1,
+    64,
+);
+
+#[derive(Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct RepairSourceBindingV1 {
+    source_identity: [u8; 32],
+    task_id: [u8; 32],
+    ticket_id: String,
+    report_digest: [u8; 32],
+}
+
+fn repair_status_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| Name::from_str(REPAIR_STATUS_STATE_KEY_V1).expect("static key is valid"))
+}
+
+fn repair_ticket_digest(ticket_id: &str) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_TICKET_STATE_KEY_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(ticket_id.len())
+            .expect("string length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(ticket_id.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+fn repair_digest_key(prefix: &str, digest: [u8; 32]) -> Name {
+    Name::from_str(&format!("{prefix}{}", hex::encode(digest)))
+        .expect("static prefix plus lowercase hex is a valid state key")
+}
+
+fn repair_task_key(ticket_id: &str) -> Name {
+    repair_digest_key(
+        REPAIR_TASK_STATE_KEY_PREFIX_V1,
+        repair_ticket_digest(ticket_id),
+    )
+}
+
+fn repair_source_key(source_identity: [u8; 32]) -> Name {
+    repair_digest_key(
+        REPAIR_SOURCE_STATE_KEY_PREFIX_V1,
+        sorafs_repair_task_id_v1(source_identity),
+    )
+}
+
+fn encode_repair_state<T: norito::core::NoritoSerialize>(
+    value: &T,
+    label: &str,
+) -> Result<Vec<u8>, InstructionExecutionError> {
+    norito::to_bytes(value).map_err(|error| {
+        InstructionExecutionError::InvariantViolation(
+            format!("failed to encode {label}: {error}").into(),
+        )
+    })
+}
+
+fn decode_repair_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    if bytes.len() > REPAIR_STATE_MAX_BYTES_V1 {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("{label} exceeds {REPAIR_STATE_MAX_BYTES_V1} bytes").into(),
+        ));
+    }
+    let value =
+        decode_from_bytes_with_limits::<T>(bytes, REPAIR_STATE_LIMITS_V1).map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to decode {label}: {error}").into(),
+            )
+        })?;
+    if encode_repair_state(&value, label)? != bytes {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("{label} is not exact canonical Norito").into(),
+        ));
+    }
+    Ok(value)
+}
+
+fn decode_repair_payload<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    if bytes.is_empty() || bytes.len() > REPAIR_PAYLOAD_MAX_BYTES_V1 {
+        return Err(invalid_parameter(format!(
+            "{label} payload length {} is outside 1..={REPAIR_PAYLOAD_MAX_BYTES_V1}",
+            bytes.len()
+        )));
+    }
+    let value = decode_from_bytes_with_limits::<T>(bytes, REPAIR_PAYLOAD_LIMITS_V1)
+        .map_err(|error| invalid_parameter(format!("invalid canonical {label}: {error}")))?;
+    let canonical = norito::to_bytes(&value)
+        .map_err(|error| invalid_parameter(format!("failed to canonicalize {label}: {error}")))?;
+    if canonical != bytes {
+        return Err(invalid_parameter(format!(
+            "{label} is not exact canonical Norito"
+        )));
+    }
+    Ok(value)
+}
+
+fn repair_block_time_ms(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<u64, InstructionExecutionError> {
+    let now = state_transaction.block_unix_timestamp_ms();
+    if now == 0 {
+        return Err(invalid_parameter(
+            "authoritative repair operations require a non-zero block timestamp",
+        ));
+    }
+    Ok(now)
+}
+
+fn has_repair_worker_permission(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    provider_id: [u8; 32],
+) -> bool {
+    let required = Permission::from(CanOperateSorafsRepair {
+        provider_id: ProviderId::new(provider_id),
+    });
+    let direct = state_transaction
+        .world
+        .account_permissions
+        .get(authority)
+        .is_some_and(|permissions| permissions.contains(&required));
+    direct
+        || state_transaction
+            .world
+            .account_roles_iter(authority)
+            .filter_map(|role_id| state_transaction.world.roles.get(role_id))
+            .any(|role| role.permissions().any(|permission| permission == &required))
+}
+
+fn validate_repair_idempotency_key(key: &str) -> Result<(), InstructionExecutionError> {
+    if key.is_empty()
+        || key != key.trim()
+        || key.len() > REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1
+        || key.chars().any(char::is_control)
+    {
+        return Err(invalid_parameter(
+            "repair idempotency key is empty, padded, contains control characters, or is too long",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_repair_appeal_reason(reason: &str) -> Result<(), InstructionExecutionError> {
+    if reason.is_empty()
+        || reason != reason.trim()
+        || reason.len() > REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1
+        || reason.chars().any(char::is_control)
+    {
+        return Err(invalid_parameter(
+            "repair appeal reason is empty, padded, contains control characters, or is too long",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_repair_lease_duration(duration_ms: u64) -> Result<(), InstructionExecutionError> {
+    if !(REPAIR_LEDGER_MIN_LEASE_MS_V1..=REPAIR_LEDGER_MAX_LEASE_MS_V1).contains(&duration_ms) {
+        return Err(invalid_parameter(format!(
+            "repair lease duration {duration_ms} ms is outside {REPAIR_LEDGER_MIN_LEASE_MS_V1}..={REPAIR_LEDGER_MAX_LEASE_MS_V1}"
+        )));
+    }
+    Ok(())
+}
+
+fn checked_repair_inc(value: u64, label: &str) -> Result<u64, InstructionExecutionError> {
+    value.checked_add(1).ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            format!("repair {label} counter overflow").into(),
+        )
+    })
+}
+
+fn read_repair_source_binding(
+    world: &impl crate::state::WorldReadOnly,
+    source_identity: [u8; 32],
+) -> Result<Option<RepairSourceBindingV1>, InstructionExecutionError> {
+    let Some(bytes) = world
+        .smart_contract_state()
+        .get(&repair_source_key(source_identity))
+    else {
+        return Ok(None);
+    };
+    let binding: RepairSourceBindingV1 = decode_repair_state(bytes, "repair source binding")?;
+    let task_id = sorafs_repair_task_id_v1(binding.source_identity);
+    if binding.source_identity != source_identity
+        || binding.source_identity == [0; 32]
+        || binding.task_id != task_id
+        || binding.report_digest == [0; 32]
+        || RepairTicketId(binding.ticket_id.clone())
+            .validate()
+            .is_err()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "stored repair source binding is inconsistent".into(),
+        ));
+    }
+    Ok(Some(binding))
+}
+
+fn read_repair_status(
+    world: &impl crate::state::WorldReadOnly,
+) -> Result<Option<RepairLedgerStatusV1>, InstructionExecutionError> {
+    let Some(bytes) = world.smart_contract_state().get(repair_status_key()) else {
+        return Ok(None);
+    };
+    let status: RepairLedgerStatusV1 = decode_repair_state(bytes, "repair ledger status")?;
+    let terminal_sum = status
+        .completed
+        .checked_add(status.failed)
+        .and_then(|value| value.checked_add(status.escalated));
+    let open_tasks = status.tasks.checked_sub(status.terminal_outcomes);
+    if status.updated_at_unix_ms == 0
+        || terminal_sum != Some(status.terminal_outcomes)
+        || open_tasks.is_none()
+        || open_tasks.is_some_and(|open_tasks| status.leased_tasks > open_tasks)
+        || status.slash_proposals != status.escalated
+        || status.appeals > status.slash_proposals
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "stored repair ledger status is inconsistent".into(),
+        ));
+    }
+    Ok(Some(status))
+}
+
+fn validate_repair_task_record(
+    task: &RepairLedgerTaskV1,
+    ticket_id: &str,
+) -> Result<(), InstructionExecutionError> {
+    let report: RepairReportV1 =
+        decode_repair_state(&task.canonical_report, "stored repair report")?;
+    report.validate().map_err(|error| {
+        InstructionExecutionError::InvariantViolation(
+            format!("stored repair report is invalid: {error}").into(),
+        )
+    })?;
+    let expected_revision = u64::try_from(task.action_receipts.len())
+        .ok()
+        .and_then(|count| count.checked_add(1));
+    if task.version != REPAIR_LEDGER_TASK_VERSION_V1
+        || task.source_identity == [0; 32]
+        || task.task_id != sorafs_repair_task_id_v1(task.source_identity)
+        || task.ticket_id != ticket_id
+        || report.ticket_id.0 != task.ticket_id
+        || report.evidence.manifest_digest != task.manifest_digest
+        || report.evidence.provider_id != task.provider_id
+        || report.auditor_account != task.submitted_by.to_string()
+        || task.submitted_at_unix_ms == 0
+        || task.updated_at_unix_ms < task.submitted_at_unix_ms
+        || task.revision == 0
+        || expected_revision != Some(task.revision)
+        || task.action_receipts.len() > REPAIR_LEDGER_MAX_RECEIPTS_V1
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "stored repair task metadata is inconsistent".into(),
+        ));
+    }
+    let mut receipt_keys = BTreeSet::new();
+    let mut last_revision = 1_u64;
+    for receipt in &task.action_receipts {
+        let expected = last_revision.checked_add(1).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "stored repair receipt revision overflow".into(),
+            )
+        })?;
+        if receipt.idempotency_digest == [0; 32]
+            || receipt.action_digest == [0; 32]
+            || !receipt_keys.insert(receipt.idempotency_digest)
+            || receipt.resulting_revision != expected
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "stored repair action receipts are inconsistent".into(),
+            ));
+        }
+        last_revision = expected;
+    }
+    if let Some(lease) = &task.lease {
+        if lease.generation == 0
+            || lease.acquired_at_unix_ms == 0
+            || lease.renewed_at_unix_ms < lease.acquired_at_unix_ms
+            || lease.expires_at_unix_ms <= lease.renewed_at_unix_ms
+            || task.terminal_outcome.is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "stored repair lease is inconsistent".into(),
+            ));
+        }
+    }
+    match (&task.terminal_outcome, &task.slash, &task.appeal) {
+        (None, None, None) => {}
+        (
+            Some(RepairLedgerTerminalOutcomeV1 {
+                kind:
+                    RepairLedgerTerminalKindV1::Completed(RepairLedgerCompletedV1 { evidence_digest }),
+                ..
+            }),
+            None,
+            None,
+        ) if *evidence_digest != [0; 32] => {}
+        (
+            Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Failed(RepairLedgerFailedV1 { failure_digest }),
+                ..
+            }),
+            None,
+            None,
+        ) if *failure_digest != [0; 32] => {}
+        (
+            Some(RepairLedgerTerminalOutcomeV1 {
+                kind:
+                    RepairLedgerTerminalKindV1::Escalated(RepairLedgerEscalatedV1 {
+                        slash_proposal_digest,
+                    }),
+                finalized_by,
+                ..
+            }),
+            Some(slash),
+            appeal,
+        ) if *slash_proposal_digest != [0; 32]
+            && *slash_proposal_digest == slash.proposal_digest
+            && slash.proposal_digest == *blake3_hash(&slash.canonical_proposal).as_bytes()
+            && &slash.submitted_by == finalized_by
+            && slash.submitted_at_unix_ms != 0
+            && appeal.as_ref().is_none_or(|appeal| {
+                appeal.slash_proposal_digest == slash.proposal_digest
+                    && appeal.evidence_digest != [0; 32]
+                    && !appeal.reason.is_empty()
+                    && appeal.reason == appeal.reason.trim()
+                    && appeal.reason.len() <= REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1
+                    && !appeal.reason.chars().any(char::is_control)
+                    && appeal.submitted_at_unix_ms >= slash.submitted_at_unix_ms
+                    && appeal.appeal_id
+                        == sorafs_repair_appeal_id_v1(
+                            task.task_id,
+                            slash.proposal_digest,
+                            &appeal.appellant,
+                            appeal.evidence_digest,
+                            &appeal.reason,
+                        )
+            }) => {}
+        _ => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "stored repair terminal, slash, and appeal records are inconsistent".into(),
+            ));
+        }
+    }
+    if let Some(slash) = &task.slash {
+        let proposal: RepairSlashProposalV1 =
+            decode_repair_state(&slash.canonical_proposal, "stored repair slash proposal")?;
+        proposal.validate().map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("stored repair slash proposal is invalid: {error}").into(),
+            )
+        })?;
+        if proposal.ticket_id.0 != task.ticket_id
+            || proposal.provider_id != task.provider_id
+            || proposal.manifest_digest != task.manifest_digest
+            || proposal.auditor_account != task.submitted_by.to_string()
+            || proposal.approval.is_some()
+            || proposal.submitted_at_unix < report.submitted_at_unix
+            || proposal.submitted_at_unix > slash.submitted_at_unix_ms / 1_000
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "stored repair slash proposal does not match its task provenance".into(),
+            ));
+        }
+    }
+    if let Some(terminal) = &task.terminal_outcome
+        && (terminal.lease_generation == 0
+            || terminal.finalized_at_unix_ms < task.submitted_at_unix_ms
+            || terminal.finalized_at_unix_ms > task.updated_at_unix_ms
+            || task.lease.is_some())
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "stored repair terminal provenance is inconsistent".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn read_repair_task(
+    world: &impl crate::state::WorldReadOnly,
+    ticket_id: &str,
+) -> Result<Option<RepairLedgerTaskV1>, InstructionExecutionError> {
+    RepairTicketId(ticket_id.to_owned())
+        .validate()
+        .map_err(|error| invalid_parameter(format!("invalid repair ticket id: {error}")))?;
+    let Some(bytes) = world
+        .smart_contract_state()
+        .get(&repair_task_key(ticket_id))
+    else {
+        return Ok(None);
+    };
+    let task: RepairLedgerTaskV1 = decode_repair_state(bytes, "repair task")?;
+    validate_repair_task_record(&task, ticket_id)?;
+    let binding = read_repair_source_binding(world, task.source_identity)?.ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            "stored repair task is missing its source binding".into(),
+        )
+    })?;
+    if binding.task_id != task.task_id
+        || binding.ticket_id != task.ticket_id
+        || binding.report_digest != *blake3_hash(&task.canonical_report).as_bytes()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "stored repair task disagrees with its source binding".into(),
+        ));
+    }
+    Ok(Some(task))
+}
+
+fn repair_action_digest<T: norito::core::NoritoSerialize>(
+    authority: &AccountId,
+    action: &T,
+) -> Result<[u8; 32], InstructionExecutionError> {
+    let bytes = norito::to_bytes(action)
+        .map_err(|error| invalid_parameter(format!("failed to encode repair action: {error}")))?;
+    let authority = authority.to_string();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_ACTION_DIGEST_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(authority.len())
+            .expect("string length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(authority.as_bytes());
+    hasher.update(
+        &u64::try_from(bytes.len())
+            .expect("slice length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(&bytes);
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn repair_action_is_replay(
+    task: &RepairLedgerTaskV1,
+    idempotency_digest: [u8; 32],
+    action_digest: [u8; 32],
+) -> Result<bool, InstructionExecutionError> {
+    let Some(receipt) = task
+        .action_receipts
+        .iter()
+        .find(|receipt| receipt.idempotency_digest == idempotency_digest)
+    else {
+        return Ok(false);
+    };
+    if receipt.action_digest == action_digest {
+        return Ok(true);
+    }
+    Err(invalid_parameter(
+        "repair idempotency key was already used for a different action",
+    ))
+}
+
+fn append_repair_receipt(
+    task: &mut RepairLedgerTaskV1,
+    idempotency_digest: [u8; 32],
+    action_digest: [u8; 32],
+    now: u64,
+) -> Result<(), InstructionExecutionError> {
+    if task.action_receipts.len() >= REPAIR_LEDGER_MAX_RECEIPTS_V1 {
+        return Err(invalid_parameter(
+            "repair task reached the bounded idempotency receipt limit",
+        ));
+    }
+    let revision = task.revision.checked_add(1).ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation("repair task revision overflow".into())
+    })?;
+    task.action_receipts.push(RepairLedgerActionReceiptV1 {
+        idempotency_digest,
+        action_digest,
+        resulting_revision: revision,
+    });
+    task.revision = revision;
+    task.updated_at_unix_ms = now;
+    Ok(())
+}
+
+fn ensure_repair_receipt_capacity(
+    task: &RepairLedgerTaskV1,
+    reserved_after: usize,
+    action: &str,
+) -> Result<(), InstructionExecutionError> {
+    let required = task
+        .action_receipts
+        .len()
+        .checked_add(1)
+        .and_then(|count| count.checked_add(reserved_after))
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "repair receipt-capacity calculation overflow".into(),
+            )
+        })?;
+    if required > REPAIR_LEDGER_MAX_RECEIPTS_V1 {
+        return Err(invalid_parameter(format!(
+            "repair {action} would consume receipt capacity reserved for terminal outcome and appeal"
+        )));
+    }
+    Ok(())
+}
+
+fn repair_active_lease<'a>(
+    task: &'a RepairLedgerTaskV1,
+    authority: &AccountId,
+    generation: u64,
+    now: u64,
+) -> Result<&'a RepairLedgerLeaseV1, InstructionExecutionError> {
+    let lease = task
+        .lease
+        .as_ref()
+        .ok_or_else(|| invalid_parameter("repair task has no active worker lease"))?;
+    if &lease.owner != authority {
+        return Err(invalid_parameter(
+            "repair task lease is owned by a different account",
+        ));
+    }
+    if generation == 0 || lease.generation != generation {
+        return Err(invalid_parameter("repair task lease generation mismatch"));
+    }
+    if now >= lease.expires_at_unix_ms {
+        return Err(invalid_parameter("repair task lease is expired"));
+    }
+    Ok(lease)
+}
+
+fn emit_repair_ledger_event(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    task: &RepairLedgerTaskV1,
+    kind: SorafsRepairLedgerEventKind,
+    authority: &AccountId,
+    now: u64,
+) {
+    state_transaction
+        .world
+        .emit_events(Some(SorafsGatewayEvent::RepairLedger(
+            SorafsRepairLedgerEvent {
+                kind,
+                ticket_id: task.ticket_id.clone(),
+                task_id: task.task_id,
+                provider_id: ProviderId::new(task.provider_id),
+                manifest_digest: ManifestDigest::new(task.manifest_digest),
+                revision: task.revision,
+                authority: authority.clone(),
+                occurred_at_unix_ms: now,
+            },
+        )));
+}
+
+impl Execute for iroha_data_model::isi::sorafs::SubmitSorafsRepairTask {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        if self.source_identity == [0; 32] {
+            return Err(invalid_parameter("repair source identity must be non-zero"));
+        }
+        if state_transaction.world.accounts.get(authority).is_none() {
+            return Err(invalid_parameter(
+                "repair task authority is not a registered account",
+            ));
+        }
+        let report: RepairReportV1 = decode_repair_payload(&self.report_payload, "repair report")?;
+        report
+            .validate()
+            .map_err(|error| invalid_parameter(format!("invalid repair report: {error}")))?;
+        if report.auditor_account != authority.to_string() {
+            return Err(invalid_parameter(
+                "repair report auditor must equal the transaction authority",
+            ));
+        }
+        if !state_transaction._curr_block.is_genesis()
+            && !has_repair_worker_permission(
+                state_transaction,
+                authority,
+                report.evidence.provider_id,
+            )
+        {
+            return Err(invalid_parameter(
+                "provider-scoped CanOperateSorafsRepair permission required to submit a repair task",
+            ));
+        }
+        let now = repair_block_time_ms(state_transaction)?;
+        if report.submitted_at_unix > now / 1_000 {
+            return Err(invalid_parameter(
+                "repair report submission time is later than the committing block",
+            ));
+        }
+        let task_id = sorafs_repair_task_id_v1(self.source_identity);
+        let report_digest = *blake3_hash(&self.report_payload).as_bytes();
+        if let Some(binding) =
+            read_repair_source_binding(state_transaction.world(), self.source_identity)?
+        {
+            let task = read_repair_task(state_transaction.world(), &binding.ticket_id)?
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "repair source binding references a missing task".into(),
+                    )
+                })?;
+            if binding.task_id == task_id
+                && binding.report_digest == report_digest
+                && task.source_identity == self.source_identity
+                && task.canonical_report == self.report_payload
+            {
+                return Ok(());
+            }
+            return Err(invalid_parameter(
+                "repair source identity is already bound to a different canonical report",
+            ));
+        }
+        if let Some(existing) = read_repair_task(state_transaction.world(), &report.ticket_id.0)? {
+            if existing.task_id == task_id
+                && existing.source_identity == self.source_identity
+                && existing.canonical_report == self.report_payload
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "repair task exists without its source binding".into(),
+                ));
+            }
+            return Err(invalid_parameter(
+                "repair ticket is already bound to a different task",
+            ));
+        }
+        let task = RepairLedgerTaskV1 {
+            version: REPAIR_LEDGER_TASK_VERSION_V1,
+            task_id,
+            source_identity: self.source_identity,
+            ticket_id: report.ticket_id.0.clone(),
+            canonical_report: self.report_payload,
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            submitted_by: authority.clone(),
+            submitted_at_unix_ms: now,
+            revision: 1,
+            lease: None,
+            terminal_outcome: None,
+            slash: None,
+            appeal: None,
+            action_receipts: Vec::new(),
+            updated_at_unix_ms: now,
+        };
+        validate_repair_task_record(&task, &task.ticket_id)?;
+        let binding = RepairSourceBindingV1 {
+            source_identity: task.source_identity,
+            task_id,
+            ticket_id: task.ticket_id.clone(),
+            report_digest,
+        };
+        let mut status = read_repair_status(state_transaction.world())?.unwrap_or_default();
+        if status.updated_at_unix_ms != 0 && now < status.updated_at_unix_ms {
+            return Err(invalid_parameter(
+                "repair ledger block time precedes its latest mutation",
+            ));
+        }
+        status.tasks = checked_repair_inc(status.tasks, "task")?;
+        status.updated_at_unix_ms = now;
+        let encoded_task = encode_repair_state(&task, "repair task")?;
+        let encoded_binding = encode_repair_state(&binding, "repair source binding")?;
+        let encoded_status = encode_repair_state(&status, "repair ledger status")?;
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(repair_task_key(&task.ticket_id), encoded_task);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(repair_source_key(task.source_identity), encoded_binding);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(repair_status_key().clone(), encoded_status);
+        emit_repair_ledger_event(
+            state_transaction,
+            &task,
+            SorafsRepairLedgerEventKind::TaskSubmitted,
+            authority,
+            now,
+        );
+        Ok(())
+    }
+}
+
+impl Execute for iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction {
+    #[allow(clippy::too_many_lines)]
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        use iroha_data_model::isi::sorafs::SorafsRepairTaskActionV1;
+
+        RepairTicketId(self.ticket_id.clone())
+            .validate()
+            .map_err(|error| invalid_parameter(format!("invalid repair ticket id: {error}")))?;
+        validate_repair_idempotency_key(self.action.idempotency_key())?;
+        let now = repair_block_time_ms(state_transaction)?;
+        let action_digest = repair_action_digest(authority, &self)?;
+        let idempotency_digest =
+            sorafs_repair_idempotency_digest_v1(&self.ticket_id, self.action.idempotency_key());
+        let mut task = read_repair_task(state_transaction.world(), &self.ticket_id)?
+            .ok_or_else(|| invalid_parameter("repair task does not exist"))?;
+        if repair_action_is_replay(&task, idempotency_digest, action_digest)? {
+            return Ok(());
+        }
+        if self.expected_revision != task.revision {
+            return Err(invalid_parameter(format!(
+                "repair task revision mismatch: expected {}, found {}",
+                self.expected_revision, task.revision
+            )));
+        }
+        if task.terminal_outcome.is_some() {
+            return Err(invalid_parameter(
+                "repair task already has its terminal outcome",
+            ));
+        }
+        if now < task.updated_at_unix_ms {
+            return Err(invalid_parameter(
+                "repair action block time precedes the task's latest mutation",
+            ));
+        }
+        let mut status = read_repair_status(state_transaction.world())?.ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "repair task exists without ledger status".into(),
+            )
+        })?;
+        if now < status.updated_at_unix_ms {
+            return Err(invalid_parameter(
+                "repair action block time precedes the ledger's latest mutation",
+            ));
+        }
+        let kind = match self.action {
+            SorafsRepairTaskActionV1::Claim(action) => {
+                ensure_repair_receipt_capacity(&task, 2, "lease claim")?;
+                let lease_duration_ms = action.lease_duration_ms;
+                validate_repair_lease_duration(lease_duration_ms)?;
+                if !has_repair_worker_permission(state_transaction, authority, task.provider_id) {
+                    return Err(invalid_parameter(
+                        "provider-scoped CanOperateSorafsRepair permission required to claim task",
+                    ));
+                }
+                let generation = if let Some(lease) = &task.lease {
+                    if now < lease.expires_at_unix_ms {
+                        return Err(invalid_parameter(format!(
+                            "repair task lease is held by {} until {}",
+                            lease.owner, lease.expires_at_unix_ms
+                        )));
+                    }
+                    lease.generation.checked_add(1).ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "repair lease generation overflow".into(),
+                        )
+                    })?
+                } else {
+                    status.leased_tasks = checked_repair_inc(status.leased_tasks, "leased-task")?;
+                    1
+                };
+                let expires_at_unix_ms = now
+                    .checked_add(lease_duration_ms)
+                    .ok_or_else(|| invalid_parameter("repair lease expiry overflows u64"))?;
+                task.lease = Some(RepairLedgerLeaseV1 {
+                    owner: authority.clone(),
+                    generation,
+                    acquired_at_unix_ms: now,
+                    renewed_at_unix_ms: now,
+                    expires_at_unix_ms,
+                });
+                SorafsRepairLedgerEventKind::LeaseClaimed
+            }
+            SorafsRepairTaskActionV1::Renew(action) => {
+                ensure_repair_receipt_capacity(&task, 2, "lease renewal")?;
+                let lease_generation = action.lease_generation;
+                let lease_duration_ms = action.lease_duration_ms;
+                validate_repair_lease_duration(lease_duration_ms)?;
+                repair_active_lease(&task, authority, lease_generation, now)?;
+                let expires_at_unix_ms = now
+                    .checked_add(lease_duration_ms)
+                    .ok_or_else(|| invalid_parameter("repair lease expiry overflows u64"))?;
+                let lease = task.lease.as_mut().ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "validated repair lease disappeared".into(),
+                    )
+                })?;
+                lease.renewed_at_unix_ms = now;
+                lease.expires_at_unix_ms = expires_at_unix_ms;
+                SorafsRepairLedgerEventKind::LeaseRenewed
+            }
+            SorafsRepairTaskActionV1::Complete(action) => {
+                ensure_repair_receipt_capacity(&task, 0, "completion")?;
+                let lease_generation = action.lease_generation;
+                let evidence_digest = action.evidence_digest;
+                if evidence_digest == [0; 32] {
+                    return Err(invalid_parameter(
+                        "repair completion evidence digest must be non-zero",
+                    ));
+                }
+                repair_active_lease(&task, authority, lease_generation, now)?;
+                task.terminal_outcome = Some(RepairLedgerTerminalOutcomeV1 {
+                    kind: RepairLedgerTerminalKindV1::Completed(RepairLedgerCompletedV1 {
+                        evidence_digest,
+                    }),
+                    lease_generation,
+                    finalized_by: authority.clone(),
+                    finalized_at_unix_ms: now,
+                });
+                task.lease = None;
+                status.leased_tasks = status.leased_tasks.checked_sub(1).ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "repair leased-task counter underflow".into(),
+                    )
+                })?;
+                status.terminal_outcomes =
+                    checked_repair_inc(status.terminal_outcomes, "terminal-outcome")?;
+                status.completed = checked_repair_inc(status.completed, "completed")?;
+                SorafsRepairLedgerEventKind::Completed
+            }
+            SorafsRepairTaskActionV1::Fail(action) => {
+                ensure_repair_receipt_capacity(&task, 0, "failure")?;
+                let lease_generation = action.lease_generation;
+                let failure_digest = action.failure_digest;
+                if failure_digest == [0; 32] {
+                    return Err(invalid_parameter("repair failure digest must be non-zero"));
+                }
+                repair_active_lease(&task, authority, lease_generation, now)?;
+                task.terminal_outcome = Some(RepairLedgerTerminalOutcomeV1 {
+                    kind: RepairLedgerTerminalKindV1::Failed(RepairLedgerFailedV1 {
+                        failure_digest,
+                    }),
+                    lease_generation,
+                    finalized_by: authority.clone(),
+                    finalized_at_unix_ms: now,
+                });
+                task.lease = None;
+                status.leased_tasks = status.leased_tasks.checked_sub(1).ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "repair leased-task counter underflow".into(),
+                    )
+                })?;
+                status.terminal_outcomes =
+                    checked_repair_inc(status.terminal_outcomes, "terminal-outcome")?;
+                status.failed = checked_repair_inc(status.failed, "failed")?;
+                SorafsRepairLedgerEventKind::Failed
+            }
+            SorafsRepairTaskActionV1::Escalate(action) => {
+                ensure_repair_receipt_capacity(&task, 1, "escalation")?;
+                let lease_generation = action.lease_generation;
+                let slash_proposal_payload = action.slash_proposal_payload;
+                repair_active_lease(&task, authority, lease_generation, now)?;
+                let proposal: RepairSlashProposalV1 =
+                    decode_repair_payload(&slash_proposal_payload, "repair slash proposal")?;
+                proposal.validate().map_err(|error| {
+                    invalid_parameter(format!("invalid repair slash proposal: {error}"))
+                })?;
+                let report: RepairReportV1 =
+                    decode_repair_state(&task.canonical_report, "stored repair report")?;
+                if proposal.ticket_id.0 != task.ticket_id
+                    || proposal.provider_id != task.provider_id
+                    || proposal.manifest_digest != task.manifest_digest
+                    || proposal.auditor_account != report.auditor_account
+                    || proposal.approval.is_some()
+                    || proposal.submitted_at_unix < report.submitted_at_unix
+                    || proposal.submitted_at_unix > now / 1_000
+                {
+                    return Err(invalid_parameter(
+                        "repair slash proposal does not match the authoritative task or carries an embedded approval",
+                    ));
+                }
+                let proposal_digest = *blake3_hash(&slash_proposal_payload).as_bytes();
+                task.terminal_outcome = Some(RepairLedgerTerminalOutcomeV1 {
+                    kind: RepairLedgerTerminalKindV1::Escalated(RepairLedgerEscalatedV1 {
+                        slash_proposal_digest: proposal_digest,
+                    }),
+                    lease_generation,
+                    finalized_by: authority.clone(),
+                    finalized_at_unix_ms: now,
+                });
+                task.slash = Some(RepairLedgerSlashRecordV1 {
+                    canonical_proposal: slash_proposal_payload,
+                    proposal_digest,
+                    submitted_by: authority.clone(),
+                    submitted_at_unix_ms: now,
+                });
+                task.lease = None;
+                status.leased_tasks = status.leased_tasks.checked_sub(1).ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "repair leased-task counter underflow".into(),
+                    )
+                })?;
+                status.terminal_outcomes =
+                    checked_repair_inc(status.terminal_outcomes, "terminal-outcome")?;
+                status.escalated = checked_repair_inc(status.escalated, "escalated")?;
+                status.slash_proposals =
+                    checked_repair_inc(status.slash_proposals, "slash-proposal")?;
+                SorafsRepairLedgerEventKind::Escalated
+            }
+        };
+        append_repair_receipt(&mut task, idempotency_digest, action_digest, now)?;
+        status.updated_at_unix_ms = now;
+        validate_repair_task_record(&task, &task.ticket_id)?;
+        let encoded_task = encode_repair_state(&task, "repair task")?;
+        let encoded_status = encode_repair_state(&status, "repair ledger status")?;
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(repair_task_key(&task.ticket_id), encoded_task);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(repair_status_key().clone(), encoded_status);
+        emit_repair_ledger_event(state_transaction, &task, kind, authority, now);
+        Ok(())
+    }
+}
+
+impl Execute for iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        RepairTicketId(self.ticket_id.clone())
+            .validate()
+            .map_err(|error| invalid_parameter(format!("invalid repair ticket id: {error}")))?;
+        validate_repair_idempotency_key(&self.idempotency_key)?;
+        validate_repair_appeal_reason(&self.reason)?;
+        if self.evidence_digest == [0; 32] {
+            return Err(invalid_parameter(
+                "repair appeal evidence digest must be non-zero",
+            ));
+        }
+        let now = repair_block_time_ms(state_transaction)?;
+        let action_digest = repair_action_digest(authority, &self)?;
+        let idempotency_digest =
+            sorafs_repair_idempotency_digest_v1(&self.ticket_id, &self.idempotency_key);
+        let mut task = read_repair_task(state_transaction.world(), &self.ticket_id)?
+            .ok_or_else(|| invalid_parameter("repair task does not exist"))?;
+        if repair_action_is_replay(&task, idempotency_digest, action_digest)? {
+            return Ok(());
+        }
+        if task.revision != self.expected_revision {
+            return Err(invalid_parameter(format!(
+                "repair task revision mismatch: expected {}, found {}",
+                self.expected_revision, task.revision
+            )));
+        }
+        let provider_id = ProviderId::new(task.provider_id);
+        ensure_provider_owner_registered(state_transaction, &provider_id, authority)?;
+        let slash = task
+            .slash
+            .as_ref()
+            .ok_or_else(|| invalid_parameter("repair task has no slash proposal to appeal"))?;
+        if task.appeal.is_some() {
+            return Err(invalid_parameter(
+                "repair slash proposal already has its single appeal",
+            ));
+        }
+        if !matches!(
+            task.terminal_outcome,
+            Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Escalated(_),
+                ..
+            })
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "repair slash exists without escalated terminal outcome".into(),
+            ));
+        }
+        if now < slash.submitted_at_unix_ms || now < task.updated_at_unix_ms {
+            return Err(invalid_parameter(
+                "repair appeal block time precedes the slash or latest task mutation",
+            ));
+        }
+        let slash_proposal_digest = slash.proposal_digest;
+        task.appeal = Some(RepairLedgerAppealRecordV1 {
+            appeal_id: sorafs_repair_appeal_id_v1(
+                task.task_id,
+                slash_proposal_digest,
+                authority,
+                self.evidence_digest,
+                &self.reason,
+            ),
+            slash_proposal_digest,
+            appellant: authority.clone(),
+            evidence_digest: self.evidence_digest,
+            reason: self.reason,
+            submitted_at_unix_ms: now,
+        });
+        append_repair_receipt(&mut task, idempotency_digest, action_digest, now)?;
+        let mut status = read_repair_status(state_transaction.world())?.ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "repair task exists without ledger status".into(),
+            )
+        })?;
+        if now < status.updated_at_unix_ms {
+            return Err(invalid_parameter(
+                "repair appeal block time precedes the ledger's latest mutation",
+            ));
+        }
+        status.appeals = checked_repair_inc(status.appeals, "appeal")?;
+        status.updated_at_unix_ms = now;
+        validate_repair_task_record(&task, &task.ticket_id)?;
+        let encoded_task = encode_repair_state(&task, "repair task")?;
+        let encoded_status = encode_repair_state(&status, "repair ledger status")?;
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(repair_task_key(&task.ticket_id), encoded_task);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(repair_status_key().clone(), encoded_status);
+        emit_repair_ledger_event(
+            state_transaction,
+            &task,
+            SorafsRepairLedgerEventKind::Appealed,
+            authority,
+            now,
+        );
+        Ok(())
+    }
+}
+
+fn repair_query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
+    QueryExecutionFail::Conversion(error.to_string())
+}
+
+impl ValidSingularQuery for FindSorafsRepairTask {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<RepairLedgerTaskV1, QueryExecutionFail> {
+        read_repair_task(state_ro.world(), &self.ticket_id)
+            .map_err(repair_query_failure)?
+            .ok_or_else(|| {
+                QueryExecutionFail::Find(FindError::SorafsRepairTask(self.ticket_id.clone()))
+            })
+    }
+}
+
+impl ValidSingularQuery for FindSorafsRepairStatus {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<RepairLedgerStatusV1, QueryExecutionFail> {
+        read_repair_status(state_ro.world())
+            .map_err(repair_query_failure)?
+            .ok_or(QueryExecutionFail::Find(FindError::SorafsRepairStatus))
+    }
+}
+
 #[cfg(test)]
 mod sorafs_tests {
     use core::str::FromStr;
@@ -3014,11 +4108,13 @@ mod sorafs_tests {
         isi::{
             error::{InstructionExecutionError, InvalidParameterError},
             sorafs::{
-                ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder,
-                ExpireReplicationOrder, IssueReplicationOrder, RecordCapacityTelemetry,
-                RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-                RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
-                UnregisterProviderOwner, UpsertProviderCredit,
+                ApplySorafsRepairTaskAction, ApprovePinManifest, BindManifestAlias,
+                CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder,
+                RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
+                RegisterPinManifest, RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
+                SorafsRepairClaimV1, SorafsRepairCompleteV1, SorafsRepairEscalateV1,
+                SorafsRepairFailV1, SorafsRepairTaskActionV1, SubmitSorafsRepairAppeal,
+                SubmitSorafsRepairTask, UnregisterProviderOwner, UpsertProviderCredit,
             },
         },
         metadata::Metadata,
@@ -3059,6 +4155,10 @@ mod sorafs_tests {
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
         provider_advert::{CapabilityType, StakePointer},
+        repair::{
+            REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            RepairCauseV1, RepairEvidenceV1, RepairManualCauseV1,
+        },
     };
 
     use super::*;
@@ -3263,6 +4363,62 @@ mod sorafs_tests {
 
     pub(super) fn block_header() -> iroha_data_model::block::BlockHeader {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
+    }
+
+    fn repair_block_header(
+        height: u64,
+        creation_time_ms: u64,
+    ) -> iroha_data_model::block::BlockHeader {
+        iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(height).expect("non-zero test block height"),
+            None,
+            None,
+            None,
+            creation_time_ms,
+            0,
+        )
+    }
+
+    fn repair_report(
+        ticket_id: &str,
+        provider_id: ProviderId,
+        manifest_digest: [u8; 32],
+        auditor: &AccountId,
+        submitted_at_unix: u64,
+    ) -> RepairReportV1 {
+        RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId(ticket_id.to_owned()),
+            auditor_account: auditor.to_string(),
+            submitted_at_unix,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest,
+                provider_id: *provider_id.as_bytes(),
+                por_history_id: None,
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
+                    reason: "chain-authoritative test".to_owned(),
+                }),
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        }
+    }
+
+    fn grant_repair_operator(state: &mut State, account: &AccountId, provider_id: ProviderId) {
+        let permission = AccountPermission::from(CanOperateSorafsRepair { provider_id });
+        let mut permissions = {
+            let view = state.world.account_permissions.view();
+            view.get(account)
+                .cloned()
+                .unwrap_or_else(Permissions::default)
+        };
+        permissions.insert(permission);
+        state
+            .world
+            .account_permissions
+            .insert(account.clone(), permissions);
     }
 
     fn seed_test_call_hash(stx: &mut crate::state::StateTransaction<'_, '_>) {
@@ -10986,5 +12142,258 @@ mod sorafs_tests {
         let result = query.execute(&state.view()).expect("query resolves owner");
 
         assert_eq!(result, alice());
+    }
+
+    #[test]
+    fn repair_ledger_prevents_split_brain_and_duplicate_terminal_outcomes() {
+        let mut state = make_state();
+        let provider = ProviderId::new([0xD1; 32]);
+        grant_repair_operator(&mut state, &alice(), provider);
+        grant_repair_operator(&mut state, &bob(), provider);
+        let report = repair_report("REP-CHAIN-1", provider, [0xD2; 32], &alice(), 2_000);
+        let report_payload = to_bytes(&report).expect("encode repair report");
+        let source_identity = [0xD3; 32];
+
+        {
+            let mut block = state.block(repair_block_header(2, 2_000_000));
+            let mut transaction = block.transaction();
+            SubmitSorafsRepairTask::new(source_identity, report_payload.clone())
+                .execute(&alice(), &mut transaction)
+                .expect("submit repair task");
+            SubmitSorafsRepairTask::new(source_identity, report_payload.clone())
+                .execute(&alice(), &mut transaction)
+                .expect("exact source replay is idempotent");
+
+            let conflicting_report =
+                repair_report("REP-CHAIN-CONFLICT", provider, [0xD2; 32], &alice(), 2_000);
+            let conflict = SubmitSorafsRepairTask::new(
+                source_identity,
+                to_bytes(&conflicting_report).expect("encode conflicting report"),
+            )
+            .execute(&alice(), &mut transaction)
+            .expect_err("source identity cannot bind a different report");
+            assert!(conflict.to_string().contains("different canonical report"));
+
+            ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                1,
+                SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
+                    lease_duration_ms: REPAIR_LEDGER_MIN_LEASE_MS_V1,
+                    idempotency_key: "claim-alice".to_owned(),
+                }),
+            )
+            .execute(&alice(), &mut transaction)
+            .expect("first worker claims task");
+            let competing_claim = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                2,
+                SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
+                    lease_duration_ms: REPAIR_LEDGER_MIN_LEASE_MS_V1,
+                    idempotency_key: "claim-bob-early".to_owned(),
+                }),
+            )
+            .execute(&bob(), &mut transaction)
+            .expect_err("second worker cannot claim an unexpired lease");
+            assert!(competing_claim.to_string().contains("lease is held"));
+
+            transaction.apply();
+            block.commit().expect("commit first repair block");
+        }
+
+        {
+            let mut block = state.block(repair_block_header(3, 2_001_000));
+            let mut transaction = block.transaction();
+            ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                2,
+                SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
+                    lease_duration_ms: REPAIR_LEDGER_MIN_LEASE_MS_V1,
+                    idempotency_key: "claim-bob-expired".to_owned(),
+                }),
+            )
+            .execute(&bob(), &mut transaction)
+            .expect("expired lease can be reclaimed exactly once");
+
+            let stale_terminal = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                3,
+                SorafsRepairTaskActionV1::Complete(SorafsRepairCompleteV1 {
+                    lease_generation: 1,
+                    evidence_digest: [0xD4; 32],
+                    idempotency_key: "complete-stale".to_owned(),
+                }),
+            )
+            .execute(&alice(), &mut transaction)
+            .expect_err("old lease owner cannot finalize after reclaim");
+            assert!(
+                stale_terminal.to_string().contains("different account")
+                    || stale_terminal.to_string().contains("generation mismatch")
+            );
+
+            let completion = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                3,
+                SorafsRepairTaskActionV1::Complete(SorafsRepairCompleteV1 {
+                    lease_generation: 2,
+                    evidence_digest: [0xD5; 32],
+                    idempotency_key: "complete-bob".to_owned(),
+                }),
+            );
+            completion
+                .clone()
+                .execute(&bob(), &mut transaction)
+                .expect("current lease owner completes task");
+            completion
+                .execute(&bob(), &mut transaction)
+                .expect("exact terminal replay is idempotent");
+
+            let reused_key = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                3,
+                SorafsRepairTaskActionV1::Fail(SorafsRepairFailV1 {
+                    lease_generation: 2,
+                    failure_digest: [0xD6; 32],
+                    idempotency_key: "complete-bob".to_owned(),
+                }),
+            )
+            .execute(&bob(), &mut transaction)
+            .expect_err("same idempotency key cannot authorize a different terminal");
+            assert!(reused_key.to_string().contains("different action"));
+
+            let second_terminal = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                4,
+                SorafsRepairTaskActionV1::Fail(SorafsRepairFailV1 {
+                    lease_generation: 2,
+                    failure_digest: [0xD7; 32],
+                    idempotency_key: "fail-after-complete".to_owned(),
+                }),
+            )
+            .execute(&bob(), &mut transaction)
+            .expect_err("a task has exactly one terminal outcome");
+            assert!(second_terminal.to_string().contains("terminal outcome"));
+
+            let task = FindSorafsRepairTask::new(report.ticket_id.0.clone())
+                .execute(&transaction)
+                .expect("typed task query");
+            assert_eq!(task.revision, 4);
+            assert!(matches!(
+                task.terminal_outcome,
+                Some(RepairLedgerTerminalOutcomeV1 {
+                    kind: RepairLedgerTerminalKindV1::Completed(_),
+                    lease_generation: 2,
+                    ..
+                })
+            ));
+            let status = FindSorafsRepairStatus
+                .execute(&transaction)
+                .expect("typed status query");
+            assert_eq!(status.tasks, 1);
+            assert_eq!(status.terminal_outcomes, 1);
+            assert_eq!(status.completed, 1);
+            assert_eq!(status.leased_tasks, 0);
+        }
+    }
+
+    #[test]
+    fn repair_escalation_and_provider_appeal_are_atomic_and_idempotent() {
+        let mut state = make_state();
+        let provider = ProviderId::new([0xE1; 32]);
+        grant_repair_operator(&mut state, &alice(), provider);
+        state.world.provider_owners.insert(provider, bob());
+        let report = repair_report("REP-SLASH-1", provider, [0xE2; 32], &alice(), 3_000);
+        let mut block = state.block(repair_block_header(2, 3_000_000));
+        let mut transaction = block.transaction();
+
+        SubmitSorafsRepairTask::new([0xE3; 32], to_bytes(&report).expect("encode repair report"))
+            .execute(&alice(), &mut transaction)
+            .expect("submit repair task");
+        ApplySorafsRepairTaskAction::new(
+            report.ticket_id.0.clone(),
+            1,
+            SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
+                lease_duration_ms: REPAIR_LEDGER_MIN_LEASE_MS_V1,
+                idempotency_key: "claim-slash".to_owned(),
+            }),
+        )
+        .execute(&alice(), &mut transaction)
+        .expect("claim repair task");
+        let slash = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            provider_id: *provider.as_bytes(),
+            manifest_digest: report.evidence.manifest_digest,
+            auditor_account: report.auditor_account.clone(),
+            proposed_penalty: "0.000001".parse().expect("valid XOR quantity"),
+            submitted_at_unix: report.submitted_at_unix,
+            rationale: "repair SLA failed".to_owned(),
+            approval: None,
+        };
+        ApplySorafsRepairTaskAction::new(
+            report.ticket_id.0.clone(),
+            2,
+            SorafsRepairTaskActionV1::Escalate(SorafsRepairEscalateV1 {
+                lease_generation: 1,
+                slash_proposal_payload: to_bytes(&slash).expect("encode slash proposal"),
+                idempotency_key: "escalate-1".to_owned(),
+            }),
+        )
+        .execute(&alice(), &mut transaction)
+        .expect("slash proposal and terminal escalation commit atomically");
+
+        let appeal = SubmitSorafsRepairAppeal::new(
+            report.ticket_id.0.clone(),
+            3,
+            [0xE4; 32],
+            "provider counter-evidence".to_owned(),
+            "appeal-1".to_owned(),
+        );
+        appeal
+            .clone()
+            .execute(&bob(), &mut transaction)
+            .expect("provider owner appeals committed slash");
+        appeal
+            .execute(&bob(), &mut transaction)
+            .expect("exact appeal replay is idempotent");
+
+        let conflicting_replay = SubmitSorafsRepairAppeal::new(
+            report.ticket_id.0.clone(),
+            3,
+            [0xE5; 32],
+            "different evidence".to_owned(),
+            "appeal-1".to_owned(),
+        )
+        .execute(&bob(), &mut transaction)
+        .expect_err("appeal idempotency key cannot be rebound");
+        assert!(conflicting_replay.to_string().contains("different action"));
+        let duplicate_appeal = SubmitSorafsRepairAppeal::new(
+            report.ticket_id.0.clone(),
+            4,
+            [0xE6; 32],
+            "second appeal".to_owned(),
+            "appeal-2".to_owned(),
+        )
+        .execute(&bob(), &mut transaction)
+        .expect_err("slash proposal permits only one appeal");
+        assert!(duplicate_appeal.to_string().contains("single appeal"));
+
+        let task = FindSorafsRepairTask::new(report.ticket_id.0)
+            .execute(&transaction)
+            .expect("typed task query");
+        assert!(task.slash.is_some());
+        assert!(task.appeal.is_some());
+        assert!(matches!(
+            task.terminal_outcome,
+            Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Escalated(_),
+                ..
+            })
+        ));
+        let status = FindSorafsRepairStatus
+            .execute(&transaction)
+            .expect("typed status query");
+        assert_eq!(status.escalated, 1);
+        assert_eq!(status.slash_proposals, 1);
+        assert_eq!(status.appeals, 1);
     }
 }

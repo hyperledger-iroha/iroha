@@ -1269,6 +1269,7 @@ pub(crate) mod tests {
         batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
         let merge_validators = Vec::<PeerId>::new();
         MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: epoch,
             lane_catalog_hash: Hash::new(b"merge-query-catalog"),
             active_lanes: Vec::new(),

@@ -31,9 +31,15 @@ class SorafsReferenceValidatorsTest {
         assertEquals(1, SorafsOrderbookSide.BID.bridgeCode)
         assertEquals(3, SorafsOrderbookTier.ARCHIVE.bridgeCode)
         assertEquals(4, SorafsOrderbookCancelReason.REPLACED.bridgeCode)
-        assertEquals(19, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
-        assertTrue(!SorafsReferenceValidators.isBridgeAbiSupported(18))
-        assertTrue(SorafsReferenceValidators.isBridgeAbiSupported(19))
+        assertEquals(21, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
+        assertTrue(!SorafsReferenceValidators.isBridgeAbiSupported(20))
+        assertTrue(SorafsReferenceValidators.isBridgeAbiSupported(21))
+        assertTrue(!SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, false))
+        assertTrue(SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, true))
+        assertEquals(64, SorafsReferenceValidators.GOVERNANCE_DAG_MAX_BLOCKS_V1)
+        assertEquals(32, SorafsReferenceValidators.GOVERNANCE_DAG_CID_BYTES_V1)
+        assertEquals(67_108_864, SorafsReferenceValidators.REFERENCE_MAX_INPUT_BYTES_V1)
+        assertEquals(1_024, SorafsReferenceValidators.REFERENCE_MAX_LABEL_BYTES_V1)
     }
 
     @Test
@@ -59,6 +65,57 @@ class SorafsReferenceValidatorsTest {
             )
         }
         assertTrue(error.message.orEmpty().contains("label"))
+    }
+
+    @Test
+    fun boundsGovernanceDagInputsBeforeNativeDispatch() {
+        val emptyChain = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+                head = ByteArray(0),
+                blocks = emptyList(),
+                generatedAtUnix = 1,
+            )
+        }
+        assertTrue(emptyChain.message.orEmpty().contains("1..64"))
+
+        val tooManyBlocks = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+                head = ByteArray(0),
+                blocks = List(65) { ByteArray(0) },
+                generatedAtUnix = 1,
+            )
+        }
+        assertTrue(tooManyBlocks.message.orEmpty().contains("1..64"))
+
+        val mismatchedLabels = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+                head = ByteArray(0),
+                blocks = listOf(ByteArray(0)),
+                blockLabels = emptyList(),
+                generatedAtUnix = 1,
+            )
+        }
+        assertTrue(mismatchedLabels.message.orEmpty().contains("blockLabels"))
+
+        val oversizedLabel = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.validateGovernanceDagBlockJson(
+                noritoBytes = ByteArray(0),
+                label = "x".repeat(1_025),
+                generatedAtUnix = 1,
+            )
+        }
+        assertTrue(oversizedLabel.message.orEmpty().contains("1024"))
+
+        for (invalidCid in listOf(ByteArray(0), ByteArray(31), ByteArray(33))) {
+            val invalidExpectedCid = assertThrows(IllegalArgumentException::class.java) {
+                SorafsReferenceValidators.validateGovernanceDagBlockJson(
+                    noritoBytes = ByteArray(0),
+                    expectedBlockCid = invalidCid,
+                    generatedAtUnix = 1,
+                )
+            }
+            assertTrue(invalidExpectedCid.message.orEmpty().contains("exactly 32 bytes"))
+        }
     }
 
     @Test
@@ -213,6 +270,50 @@ class SorafsReferenceValidatorsTest {
         )
         assertTrue(json.contains("\"status\": \"Ok\""), json)
         assertTrue(json.contains("\"code\": \"SFS-OK-000\""), json)
+    }
+
+    @Test
+    fun validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable() {
+        assumeTrue(SorafsReferenceValidators.isNativeAvailable(), "connect_norito_bridge not available")
+        val first = fixture("sorafs_manifest", "governance", "dag_block_0_v1.to")
+        val second = fixture("sorafs_manifest", "governance", "dag_block_1_v1.to")
+        val head = fixture("sorafs_manifest", "governance", "dag_head_v1.to")
+
+        val blockOutcome = SorafsReferenceValidators.validateGovernanceDagBlockJson(
+            first,
+            generatedAtUnix = 123,
+        )
+        assertTrue(blockOutcome.contains("\"status\": \"Ok\""), blockOutcome)
+
+        val cidMismatch = SorafsReferenceValidators.validateGovernanceDagBlockJson(
+            first,
+            expectedBlockCid = ByteArray(32) { 0x7f },
+            generatedAtUnix = 123,
+        )
+        assertTrue(cidMismatch.contains("\"status\": \"Error\""), cidMismatch)
+        assertTrue(cidMismatch.contains("\"code\": \"SFS-GOV-004\""), cidMismatch)
+
+        val headOutcome = SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+            head = head,
+            blocks = listOf(first, second),
+            headLabel = "dag_head_v1.to",
+            blockLabels = listOf("dag_block_0_v1.to", "dag_block_1_v1.to"),
+            generatedAtUnix = 123,
+        )
+        assertTrue(headOutcome.contains("\"status\": \"Ok\""), headOutcome)
+        val goldenOutcome = fixture(
+            "sorafs_manifest",
+            "governance",
+            "dag_head_validation_outcome_v1.json",
+        ).toString(Charsets.UTF_8)
+        assertEquals(goldenOutcome, headOutcome)
+
+        val reordered = SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+            head,
+            listOf(second, first),
+            generatedAtUnix = 123,
+        )
+        assertTrue(reordered.contains("\"status\": \"Error\""), reordered)
     }
 
     @Test

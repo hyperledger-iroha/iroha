@@ -21695,11 +21695,19 @@ public struct ToriiSumeragiV2BlockSubject: Decodable, Sendable, Equatable {
 
 /// Deterministic execution result authenticated by a Sumeragi v2 quorum certificate.
 public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable {
+    public static let canonicalNativeAmxApplicationManifestVersion: UInt16 = 1
+    public static let maximumNativeAmxApplicationManifestLeafCount: UInt32 = 1024
+    public static let nativeAmxApplicationManifestEmptyRoot =
+        "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
+
     public let parentStateRoot: String
     public let postStateRoot: String
     public let ordinaryWritesRoot: String
     public let topUpAnchorRoot: String?
     public let topUpAnchorCount: UInt32
+    public let nativeAmxApplicationManifestVersion: UInt16
+    public let nativeAmxApplicationManifestRoot: String
+    public let nativeAmxApplicationManifestCount: UInt32
     public let executedBlockWireHash: String
 
     private enum CodingKeys: String, CodingKey {
@@ -21708,6 +21716,10 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
         case ordinaryWritesRoot = "ordinary_writes_root"
         case topUpAnchorRoot = "topup_anchor_root"
         case topUpAnchorCount = "topup_anchor_count"
+        case nativeAmxApplicationManifestVersion =
+            "native_amx_application_manifest_version"
+        case nativeAmxApplicationManifestRoot = "native_amx_application_manifest_root"
+        case nativeAmxApplicationManifestCount = "native_amx_application_manifest_count"
         case executedBlockWireHash = "executed_block_wire_hash"
     }
 
@@ -21716,7 +21728,11 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
             from: decoder,
             allowed: [
                 "parent_state_root", "post_state_root", "ordinary_writes_root",
-                "topup_anchor_root", "topup_anchor_count", "executed_block_wire_hash",
+                "topup_anchor_root", "topup_anchor_count",
+                "native_amx_application_manifest_version",
+                "native_amx_application_manifest_root",
+                "native_amx_application_manifest_count",
+                "executed_block_wire_hash",
             ],
             context: "Sumeragi v2 execution commitment"
         )
@@ -21755,6 +21771,41 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
                 forKey: .topUpAnchorCount,
                 in: container,
                 debugDescription: "Sumeragi v2 top-up count/root projection is not canonical"
+            )
+        }
+        nativeAmxApplicationManifestVersion = try container.decode(
+            UInt16.self,
+            forKey: .nativeAmxApplicationManifestVersion
+        )
+        guard nativeAmxApplicationManifestVersion ==
+            Self.canonicalNativeAmxApplicationManifestVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .nativeAmxApplicationManifestVersion,
+                in: container,
+                debugDescription:
+                    "Sumeragi v2 Native AMX application-manifest version is unsupported"
+            )
+        }
+        nativeAmxApplicationManifestRoot = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .nativeAmxApplicationManifestRoot),
+            key: .nativeAmxApplicationManifestRoot,
+            container: container,
+            field: "Sumeragi v2 native_amx_application_manifest_root"
+        )
+        nativeAmxApplicationManifestCount = try container.decode(
+            UInt32.self,
+            forKey: .nativeAmxApplicationManifestCount
+        )
+        guard nativeAmxApplicationManifestCount <=
+            Self.maximumNativeAmxApplicationManifestLeafCount,
+            (nativeAmxApplicationManifestCount == 0) ==
+                (nativeAmxApplicationManifestRoot ==
+                    Self.nativeAmxApplicationManifestEmptyRoot) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .nativeAmxApplicationManifestCount,
+                in: container,
+                debugDescription:
+                    "Sumeragi v2 Native AMX application-manifest count/root projection is not canonical"
             )
         }
         executedBlockWireHash = try ToriiNativeAmxWire.canonicalHash(
@@ -22191,8 +22242,128 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
     }
 }
 
+/// Durable-application state of one Native AMX participant control.
+public enum ToriiSumeragiNativeAmxParticipantApplicationState:
+    String, Decodable, Sendable, Equatable
+{
+    case certifiedPendingCarrier = "certified_pending_carrier"
+    case committedEvidencePending = "committed_evidence_pending"
+    case durablyApplied = "durably_applied"
+    case conflict
+}
+
+/// One bounded Native AMX participant-application diagnostics row.
+public struct ToriiSumeragiNativeAmxParticipantApplication: Decodable, Sendable, Equatable {
+    public let laneID: UInt32
+    public let dataspaceID: UInt64
+    public let laneIncarnation: String
+    public let participantHeight: UInt64
+    public let participantView: UInt64
+    public let predecessorHeight: UInt64
+    public let predecessorDescriptorHash: String?
+    public let descriptorHash: String
+    public let proposalHash: String
+    public let settlementHash: String
+    public let sourceCount: UInt64
+    public let applicationBlockHeight: UInt64?
+    public let applicationBlockHash: String?
+    public let state: ToriiSumeragiNativeAmxParticipantApplicationState
+
+    private enum CodingKeys: String, CodingKey {
+        case laneID = "lane_id"
+        case dataspaceID = "dataspace_id"
+        case laneIncarnation = "lane_incarnation"
+        case participantHeight = "participant_height"
+        case participantView = "participant_view"
+        case predecessorHeight = "predecessor_height"
+        case predecessorDescriptorHash = "predecessor_descriptor_hash"
+        case descriptorHash = "descriptor_hash"
+        case proposalHash = "proposal_hash"
+        case settlementHash = "settlement_hash"
+        case sourceCount = "source_count"
+        case applicationBlockHeight = "application_block_height"
+        case applicationBlockHash = "application_block_hash"
+        case state
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        laneID = try container.decode(UInt32.self, forKey: .laneID)
+        dataspaceID = try container.decode(UInt64.self, forKey: .dataspaceID)
+        laneIncarnation = try container.decode(String.self, forKey: .laneIncarnation)
+        participantHeight = try container.decode(UInt64.self, forKey: .participantHeight)
+        participantView = try container.decode(UInt64.self, forKey: .participantView)
+        predecessorHeight = try container.decode(UInt64.self, forKey: .predecessorHeight)
+        predecessorDescriptorHash = try container.decodeIfPresent(
+            String.self,
+            forKey: .predecessorDescriptorHash
+        )
+        descriptorHash = try container.decode(String.self, forKey: .descriptorHash)
+        proposalHash = try container.decode(String.self, forKey: .proposalHash)
+        settlementHash = try container.decode(String.self, forKey: .settlementHash)
+        sourceCount = try container.decode(UInt64.self, forKey: .sourceCount)
+        applicationBlockHeight = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .applicationBlockHeight
+        )
+        applicationBlockHash = try container.decodeIfPresent(
+            String.self,
+            forKey: .applicationBlockHash
+        )
+        state = try container.decode(
+            ToriiSumeragiNativeAmxParticipantApplicationState.self,
+            forKey: .state
+        )
+
+        let hashes = [laneIncarnation, descriptorHash, proposalHash, settlementHash]
+        guard hashes.allSatisfy(ToriiNativeAmxWire.isCanonicalHash),
+              predecessorDescriptorHash.map(ToriiNativeAmxWire.isCanonicalHash) ?? true,
+              applicationBlockHash.map(ToriiNativeAmxWire.isCanonicalHash) ?? true else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .descriptorHash,
+                in: container,
+                debugDescription: "Native AMX participant diagnostics hashes must be canonical"
+            )
+        }
+        guard participantHeight > 0,
+              predecessorHeight < UInt64.max,
+              predecessorHeight + 1 == participantHeight,
+              (predecessorHeight == 0) == (predecessorDescriptorHash == nil) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .predecessorHeight,
+                in: container,
+                debugDescription: "Native AMX participant diagnostics predecessor is inconsistent"
+            )
+        }
+        guard (1...4_096).contains(sourceCount) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .sourceCount,
+                in: container,
+                debugDescription: "Native AMX participant diagnostics source count is out of bounds"
+            )
+        }
+        guard (applicationBlockHeight == nil) == (applicationBlockHash == nil),
+              applicationBlockHeight != 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .applicationBlockHeight,
+                in: container,
+                debugDescription: "Native AMX participant diagnostics application identity is inconsistent"
+            )
+        }
+        if state == .durablyApplied, applicationBlockHeight == nil {
+            throw DecodingError.dataCorruptedError(
+                forKey: .state,
+                in: container,
+                debugDescription: "Durably applied Native AMX diagnostics require an application block"
+            )
+        }
+    }
+}
+
 /// Non-authoritative operator and lane diagnostics returned by `/v1/sumeragi/diagnostics`.
 public struct ToriiSumeragiDiagnosticsSnapshot: Decodable, Sendable {
+    private static let maximumNativeAmxParticipantApplications = 1_024
+
     public let pipelineExecution: ToriiJSONValue
     public let txQueueDepth: UInt64
     public let txQueueCapacity: UInt64
@@ -22214,6 +22385,8 @@ public struct ToriiSumeragiDiagnosticsSnapshot: Decodable, Sendable {
     public let laneGovernanceSealedTotal: UInt32
     public let laneGovernanceSealedAliases: [String]
     public let laneGovernance: [ToriiJSONValue]
+    public let nativeAmxParticipantApplications:
+        [ToriiSumeragiNativeAmxParticipantApplication]
     /// Original diagnostics fields, including future-neutral typed subtrees.
     public let fields: [String: ToriiJSONValue]
 
@@ -22226,6 +22399,7 @@ public struct ToriiSumeragiDiagnosticsSnapshot: Decodable, Sendable {
         "lane_relay_envelopes", "lane_payload_ownerships", "committed_lane_blocks",
         "lane_block_sessions", "lane_governance_sealed_total",
         "lane_governance_sealed_aliases", "lane_governance",
+        "native_amx_participant_applications",
     ]
 
     public init(from decoder: Decoder) throws {
@@ -22307,6 +22481,41 @@ public struct ToriiSumeragiDiagnosticsSnapshot: Decodable, Sendable {
             "lane_governance_sealed_aliases"
         )
         self.laneGovernance = try decode([ToriiJSONValue].self, "lane_governance")
+        self.nativeAmxParticipantApplications = try decode(
+            [ToriiSumeragiNativeAmxParticipantApplication].self,
+            "native_amx_participant_applications"
+        )
+        guard nativeAmxParticipantApplications.count
+                <= Self.maximumNativeAmxParticipantApplications else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription:
+                        "Native AMX participant diagnostics exceed the 1024-row limit"
+                )
+            )
+        }
+        var previousRoute: (UInt32, UInt64, String)?
+        for row in nativeAmxParticipantApplications {
+            let route = (row.laneID, row.dataspaceID, row.laneIncarnation)
+            if let previousRoute {
+                let ordered = previousRoute.0 < route.0
+                    || (previousRoute.0 == route.0 && previousRoute.1 < route.1)
+                    || (previousRoute.0 == route.0
+                        && previousRoute.1 == route.1
+                        && previousRoute.2 < route.2)
+                guard ordered else {
+                    throw DecodingError.dataCorrupted(
+                        .init(
+                            codingPath: decoder.codingPath,
+                            debugDescription:
+                                "Native AMX participant diagnostics must be strictly ordered by route and incarnation"
+                        )
+                    )
+                }
+            }
+            previousRoute = route
+        }
     }
 
     public subscript(field name: String) -> ToriiJSONValue? {

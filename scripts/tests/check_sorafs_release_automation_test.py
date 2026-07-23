@@ -34,6 +34,10 @@ def test_validate_release_automation_accepts_repository_contract() -> None:
     ("relative", "marker"),
     [
         (".github/workflows/sorafs-cli-release.yml", "run: bash ci/check_sorafs_cli_release.sh"),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "python3 scripts/check_workflow_action_pins.py",
+        ),
         (".github/workflows/sorafs-cli-release.yml", "cosign sign-blob --yes --bundle"),
         (
             ".github/workflows/sorafs-cli-release.yml",
@@ -153,6 +157,114 @@ def test_validate_release_automation_requires_both_scans_to_pin_grype(
         automation.validate_release_automation(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    [
+        (
+            "          - os: ubuntu-24.04-arm\n"
+            "            target: aarch64-unknown-linux-gnu",
+            "          - os: ubuntu-24.04\n"
+            "            target: aarch64-unknown-linux-gnu",
+        ),
+        (
+            "          - os: macos-15-intel\n"
+            "            target: x86_64-apple-darwin",
+            "          - os: macos-14\n"
+            "            target: x86_64-apple-darwin",
+        ),
+        (
+            "          - os: windows-latest\n"
+            "            target: x86_64-pc-windows-msvc",
+            "          - os: windows-latest\n"
+            "            target: i686-pc-windows-msvc",
+        ),
+    ],
+)
+def test_validate_release_automation_rejects_wrong_native_target_runner_pairs(
+    tmp_path: Path, original: str, replacement: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    assert original in source
+    workflow.write_text(source.replace(original, replacement, 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="native release matrix must contain exactly"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_missing_mandatory_target(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    entry = (
+        "          - os: macos-14\n"
+        "            target: aarch64-apple-darwin\n"
+        '            binary_suffix: ""\n'
+    )
+    assert entry in source
+    workflow.write_text(source.replace(entry, "", 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="native release matrix must contain exactly"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_signing_inventory_drift(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    workflow.write_text(
+        source.replace(
+            "            aarch64-apple-darwin\n"
+            "            x86_64-pc-windows-msvc\n",
+            "            aarch64-apple-darwin\n"
+            "            i686-pc-windows-msvc\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="target inventory must exactly match"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_five_checksum_manifests(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    workflow.write_text(
+        source.replace(
+            '[[ "${#checksum_files[@]}" -ne 5 ]]',
+            '[[ "${#checksum_files[@]}" -ne 4 ]]',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="missing contract marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_native_host_smoke_builds(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    workflow.write_text(
+        source.replace(
+            'if [[ "$host_target" != "$target" ]]; then',
+            'if [[ "$host_target" == "$target" ]]; then',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="missing contract marker"):
+        automation.validate_release_automation(tmp_path)
+
+
 def test_validate_release_automation_rejects_platform_scan_after_checksums(
     tmp_path: Path,
 ) -> None:
@@ -259,6 +371,7 @@ def test_release_workflow_script_dependencies_are_exactly_pinned() -> None:
     ).splitlines()
     assert requirements == sorted(requirements)
     assert requirements == [
+        "blake3==1.0.9",
         "pytest==8.4.2",
         "requests==2.32.5",
         'tomli==2.4.1; python_version < "3.11"',

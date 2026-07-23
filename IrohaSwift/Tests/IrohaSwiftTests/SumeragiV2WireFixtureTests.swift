@@ -273,6 +273,12 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
                 topUpAnchorCount: 0,
+                nativeAmxApplicationManifestVersion:
+                    commitment.nativeAmxApplicationManifestVersion,
+                nativeAmxApplicationManifestRoot:
+                    commitment.nativeAmxApplicationManifestRoot,
+                nativeAmxApplicationManifestCount:
+                    commitment.nativeAmxApplicationManifestCount,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
@@ -283,6 +289,12 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: nil,
                 topUpAnchorCount: 1,
+                nativeAmxApplicationManifestVersion:
+                    commitment.nativeAmxApplicationManifestVersion,
+                nativeAmxApplicationManifestRoot:
+                    commitment.nativeAmxApplicationManifestRoot,
+                nativeAmxApplicationManifestCount:
+                    commitment.nativeAmxApplicationManifestCount,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
@@ -293,6 +305,12 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
                 topUpAnchorCount: SumeragiV2ExecutionCommitment.maximumTopUpAnchorCount + 1,
+                nativeAmxApplicationManifestVersion:
+                    commitment.nativeAmxApplicationManifestVersion,
+                nativeAmxApplicationManifestRoot:
+                    commitment.nativeAmxApplicationManifestRoot,
+                nativeAmxApplicationManifestCount:
+                    commitment.nativeAmxApplicationManifestCount,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
@@ -303,10 +321,100 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
                 topUpAnchorCount: 1,
+                nativeAmxApplicationManifestVersion:
+                    commitment.nativeAmxApplicationManifestVersion,
+                nativeAmxApplicationManifestRoot:
+                    commitment.nativeAmxApplicationManifestRoot,
+                nativeAmxApplicationManifestCount:
+                    commitment.nativeAmxApplicationManifestCount,
                 executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
         XCTAssertEqual(commitment.executedBlockWireHash.bytes.count, 32)
+    }
+
+    func testExecutionCommitmentRejectsNoncanonicalNativeAmxManifestProjection() throws {
+        let row = try XCTUnwrap(
+            fixtureRows().first {
+                $0.kind == "message" && $0.name == "commit_certificate_response"
+            }
+        )
+        let message = try SumeragiV2ConsensusMessage.decodeCanonical(
+            Data(sumeragiV2Hex: row.hex)
+        )
+        guard case .commitCertificateResponse(let response) = message.payload else {
+            return XCTFail("response fixture decoded to the wrong v2 payload")
+        }
+        let commitment = response.certificate.executionCommitment
+        XCTAssertEqual(
+            commitment.nativeAmxApplicationManifestRoot.bytes,
+            SumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRootBytes()
+        )
+
+        XCTAssertThrowsError(
+            try SumeragiV2ExecutionCommitment(
+                parentStateRoot: commitment.parentStateRoot,
+                postStateRoot: commitment.postStateRoot,
+                ordinaryWritesRoot: commitment.ordinaryWritesRoot,
+                topUpAnchorRoot: nil,
+                topUpAnchorCount: 0,
+                nativeAmxApplicationManifestVersion:
+                    SumeragiV2ExecutionCommitment
+                        .canonicalNativeAmxApplicationManifestVersion + 1,
+                nativeAmxApplicationManifestRoot:
+                    commitment.nativeAmxApplicationManifestRoot,
+                nativeAmxApplicationManifestCount: 0,
+                executedBlockWireHash: commitment.executedBlockWireHash
+            )
+        )
+        XCTAssertThrowsError(
+            try SumeragiV2ExecutionCommitment(
+                parentStateRoot: commitment.parentStateRoot,
+                postStateRoot: commitment.postStateRoot,
+                ordinaryWritesRoot: commitment.ordinaryWritesRoot,
+                topUpAnchorRoot: nil,
+                topUpAnchorCount: 0,
+                nativeAmxApplicationManifestVersion:
+                    SumeragiV2ExecutionCommitment
+                        .canonicalNativeAmxApplicationManifestVersion,
+                nativeAmxApplicationManifestRoot: commitment.parentStateRoot,
+                nativeAmxApplicationManifestCount: 0,
+                executedBlockWireHash: commitment.executedBlockWireHash
+            )
+        )
+        XCTAssertThrowsError(
+            try SumeragiV2ExecutionCommitment(
+                parentStateRoot: commitment.parentStateRoot,
+                postStateRoot: commitment.postStateRoot,
+                ordinaryWritesRoot: commitment.ordinaryWritesRoot,
+                topUpAnchorRoot: nil,
+                topUpAnchorCount: 0,
+                nativeAmxApplicationManifestVersion:
+                    SumeragiV2ExecutionCommitment
+                        .canonicalNativeAmxApplicationManifestVersion,
+                nativeAmxApplicationManifestRoot:
+                    commitment.nativeAmxApplicationManifestRoot,
+                nativeAmxApplicationManifestCount: 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
+            )
+        )
+        XCTAssertThrowsError(
+            try SumeragiV2ExecutionCommitment(
+                parentStateRoot: commitment.parentStateRoot,
+                postStateRoot: commitment.postStateRoot,
+                ordinaryWritesRoot: commitment.ordinaryWritesRoot,
+                topUpAnchorRoot: nil,
+                topUpAnchorCount: 0,
+                nativeAmxApplicationManifestVersion:
+                    SumeragiV2ExecutionCommitment
+                        .canonicalNativeAmxApplicationManifestVersion,
+                nativeAmxApplicationManifestRoot: commitment.parentStateRoot,
+                nativeAmxApplicationManifestCount:
+                    SumeragiV2ExecutionCommitment
+                        .maximumNativeAmxApplicationManifestLeafCount + 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
+            )
+        )
     }
 
     func testMalformedAndSemanticallyNoncanonicalFixturesFailClosed() throws {

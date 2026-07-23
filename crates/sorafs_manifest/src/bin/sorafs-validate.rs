@@ -3343,16 +3343,17 @@ mod tests {
 
     #[test]
     fn governance_args_parse_reads_node_cid_format_and_generated_at() {
+        let cid = format!("hex:{}", "a5".repeat(32));
         let args = [
             "--node=governance.to".to_owned(),
-            "--cid=bafygovernancelognode".to_owned(),
+            format!("--cid={cid}"),
             "--format=json".to_owned(),
             "--telemetry-out=out.json".to_owned(),
             "--generated-at=6".to_owned(),
         ];
         let parsed = GovernanceArgs::parse(&args).expect("parse args");
         assert_eq!(parsed.node, Some(PathBuf::from("governance.to")));
-        assert_eq!(parsed.cid.as_deref(), Some("bafygovernancelognode"));
+        assert_eq!(parsed.cid.as_deref(), Some(cid.as_str()));
         assert!(matches!(parsed.format, Some(OutputFormat::Json)));
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
@@ -3378,18 +3379,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_cid_arg_bytes_accepts_hex_and_raw_cids() {
+    fn parse_cid_arg_bytes_accepts_exact_prefixed_and_bare_hex_cids() {
+        let expected = vec![0x0A; 32];
+        let hex_cid = "0a".repeat(32);
         assert_eq!(
-            parse_cid_arg_bytes("hex:0a0b").expect("parse prefixed hex"),
-            vec![0x0A, 0x0B]
+            parse_cid_arg_bytes(&format!("hex:{hex_cid}")).expect("parse prefixed hex"),
+            expected
         );
         assert_eq!(
-            parse_cid_arg_bytes("0a0b").expect("parse bare hex"),
-            vec![0x0A, 0x0B]
-        );
-        assert_eq!(
-            parse_cid_arg_bytes("bafygovernance").expect("parse raw CID"),
-            b"bafygovernance".to_vec()
+            parse_cid_arg_bytes(&hex_cid).expect("parse bare hex"),
+            expected
         );
     }
 

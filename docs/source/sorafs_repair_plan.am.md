@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_repair_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 63c424bbc734c2879e5b019f3b5844d54828549420517a5b0f09a74b93b9aa10
+source_hash: fc8591f4083fd1bf08af5a0785c86bf3c6111f4401540fb2d9b77cc8a84fcfb1
 source_last_modified: "2026-07-06T19:45:48.800622+00:00"
 translation_last_reviewed: 2026-07-03
 source_mtime: "2026-07-06T19:45:48.800622+00:00"

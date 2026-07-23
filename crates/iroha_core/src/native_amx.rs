@@ -12,12 +12,13 @@ use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     block::consensus::{
         LaneBlockCommitment, LaneBlockProposalV1, NativeAmxAttestationBodyV2,
-        NativeAmxAttestationQcV2, NativeAmxPhase,
+        NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
     },
     block::consensus_v2::{ConsensusRound, HeightContextId},
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
+    transaction::TransactionEntrypoint,
 };
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
@@ -32,9 +33,15 @@ use std::{
 use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan, RoutingPlan::NativeAmx};
 
 const DEFAULT_SESSION_BODY_BUCKET_MAX: usize = 256;
-const NATIVE_AMX_SIGNING_GUARD_VERSION: u8 = 3;
+const NATIVE_AMX_SIGNING_GUARD_VERSION: u8 = 4;
 #[cfg(unix)]
-const NATIVE_AMX_SIGNING_GUARD_DIRECTORY: &str = "native-amx-v2-signing-guard-v3";
+const NATIVE_AMX_SIGNING_GUARD_DIRECTORY: &str = "native-amx-v2-signing-guard-v4";
+#[cfg(unix)]
+const NATIVE_AMX_LEGACY_SIGNING_GUARD_DIRECTORIES: &[&str] = &[
+    "native-amx-v2-signing-guard-v1",
+    "native-amx-v2-signing-guard-v2",
+    "native-amx-v2-signing-guard-v3",
+];
 const NATIVE_AMX_SIGNING_GUARD_RECORD_EXTENSION: &str = "norito";
 const NATIVE_AMX_SIGNING_GUARD_TEMP_EXTENSION: &str = "norito.tmp";
 const NATIVE_AMX_SIGNING_GUARD_LOCK_FILE: &str = "owner.lock";
@@ -42,9 +49,9 @@ const NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE: &str = "chain-anchor.norito";
 const NATIVE_AMX_SIGNING_GUARD_ANCHOR_TEMP: &str = "chain-anchor.norito.tmp";
 #[cfg(unix)]
 const NATIVE_AMX_SIGNER_DIRECTORY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signer-directory:v1\0";
-const NATIVE_AMX_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body:v3\0";
-const NATIVE_AMX_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v3\0";
-const NATIVE_AMX_SIGNING_GENESIS_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-genesis:v3\0";
+const NATIVE_AMX_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body:v4\0";
+const NATIVE_AMX_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v4\0";
+const NATIVE_AMX_SIGNING_GENESIS_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-genesis:v4\0";
 /// Absolute bound for durable Native AMX signing decisions retained at one height.
 pub(crate) const MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD: usize = 1_048_576;
 const MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES: usize = 16 * 1024;
@@ -64,6 +71,100 @@ pub(crate) const MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES: usize =
     crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS;
 /// Canonical compressed BLS-normal signature/proof size.
 pub(crate) const NATIVE_AMX_BLS_PROOF_BYTES: usize = 96;
+
+/// Canonical application role of one Native AMX control leg.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeAmxParticipantApplicationRole {
+    /// The leg is the exact coordinator proposal represented in participant
+    /// form and must not create separate durable application evidence.
+    Coordinator,
+    /// The leg belongs to a distinct participant route and needs its own
+    /// durable application evidence.
+    SeparateParticipant,
+}
+
+/// Classify whether a Native AMX control leg needs its own durable participant
+/// application evidence.
+///
+/// A coordinator-route leg certifies routing and settlement, but its economic
+/// effects are already carried by the canonical global block. It must never
+/// create a second participant receipt or WSV frontier marker. A same-route
+/// leg is classified as the coordinator only when its incarnation, proposal
+/// height, lane-local height/view, and proposal hash exactly match the
+/// coordinator identity. Any identity drift is an error rather than a second
+/// participant route.
+pub(crate) fn native_amx_participant_application_role(
+    receipt: &NativeAmxReceipt,
+    leg: &NativeAmxLegRecordV2,
+) -> Result<NativeAmxParticipantApplicationRole, &'static str> {
+    let descriptor = &leg.participant_proposal.descriptor;
+    let prepare = &leg.prepare_qc.body;
+    let commit = &leg.commit_qc.body;
+    let settlement_hash =
+        iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
+            .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
+    if descriptor.lane_id != leg.lane_id
+        || descriptor.dataspace_id != leg.dataspace_id
+        || prepare.participant_lane_id != leg.lane_id
+        || commit.participant_lane_id != leg.lane_id
+        || prepare.participant_dataspace_id != leg.dataspace_id
+        || commit.participant_dataspace_id != leg.dataspace_id
+        || descriptor.lane_incarnation != prepare.participant_lane_incarnation
+        || descriptor.lane_incarnation != commit.participant_lane_incarnation
+        || descriptor.proposal_height != prepare.authority_context_height
+        || descriptor.proposal_height != commit.authority_context_height
+        || descriptor.previous_lane_block_height != prepare.participant_previous_block_height
+        || descriptor.previous_lane_block_height != commit.participant_previous_block_height
+        || descriptor.previous_lane_block_descriptor_hash
+            != prepare.participant_previous_block_descriptor_hash
+        || descriptor.previous_lane_block_descriptor_hash
+            != commit.participant_previous_block_descriptor_hash
+        || descriptor.lane_block_height != prepare.participant_lane_block_height
+        || descriptor.lane_block_height != commit.participant_lane_block_height
+        || descriptor.lane_block_view != prepare.participant_lane_block_view
+        || descriptor.lane_block_view != commit.participant_lane_block_view
+        || leg.participant_proposal.proposal_hash != prepare.participant_proposal_hash
+        || leg.participant_proposal.proposal_hash != commit.participant_proposal_hash
+        || settlement_hash != leg.participant_settlement_hash
+        || leg.participant_settlement.lane_id != descriptor.lane_id
+        || leg.participant_settlement.dataspace_id != descriptor.dataspace_id
+        || leg.participant_settlement.lane_incarnation != descriptor.lane_incarnation
+        || leg.participant_settlement.block_height != descriptor.lane_block_height
+        || Hash::from(settlement_hash) != prepare.participant_settlement_commitment
+        || Hash::from(settlement_hash) != commit.participant_settlement_commitment
+        || prepare.coordinator_lane_id != receipt.lane_id
+        || commit.coordinator_lane_id != receipt.lane_id
+        || prepare.coordinator_dataspace_id != receipt.dataspace_id
+        || commit.coordinator_dataspace_id != receipt.dataspace_id
+        || prepare.coordinator_lane_incarnation != receipt.lane_incarnation
+        || commit.coordinator_lane_incarnation != receipt.lane_incarnation
+        || prepare.authority_context_height != receipt.authority_context_height
+        || commit.authority_context_height != receipt.authority_context_height
+        || prepare.planned_coordinator_block_height != receipt.lane_block_height
+        || commit.planned_coordinator_block_height != receipt.lane_block_height
+        || prepare.coordinator_lane_block_view != receipt.lane_block_view
+        || commit.coordinator_lane_block_view != receipt.lane_block_view
+        || prepare.coordinator_proposal_hash != receipt.coordinator_proposal_hash
+        || commit.coordinator_proposal_hash != receipt.coordinator_proposal_hash
+    {
+        return Err("Native AMX participant leg identity is internally inconsistent");
+    }
+
+    let same_route =
+        descriptor.lane_id == receipt.lane_id && descriptor.dataspace_id == receipt.dataspace_id;
+    if !same_route {
+        return Ok(NativeAmxParticipantApplicationRole::SeparateParticipant);
+    }
+    if descriptor.lane_incarnation != receipt.lane_incarnation
+        || descriptor.proposal_height != receipt.authority_context_height
+        || descriptor.lane_block_height != receipt.lane_block_height
+        || descriptor.lane_block_view != receipt.lane_block_view
+        || leg.participant_proposal.proposal_hash != receipt.coordinator_proposal_hash
+    {
+        return Err("Native AMX same-route leg differs from the coordinator identity");
+    }
+    Ok(NativeAmxParticipantApplicationRole::Coordinator)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct NativeAmxSigningKeyV2 {
@@ -144,6 +245,104 @@ impl NativeAmxSigningSlotClaimV3 {
             participant_proposal_hash: body.participant_proposal_hash,
             participant_settlement_commitment: body.participant_settlement_commitment,
         }
+    }
+}
+
+/// Durable source-session claim shared by every phase and participant leg.
+///
+/// Participant proposal and settlement identities deliberately remain in the
+/// separate slot claim. This claim prevents a source from changing its typed
+/// entrypoint, global round, routing plan, authority height, or coordinator
+/// identity while still allowing the same grouped source to certify each
+/// participant route exactly once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+struct NativeAmxSourceSessionClaimV4 {
+    source_id: [u8; Hash::LENGTH],
+    tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
+    plan_digest: Hash,
+    round: ConsensusRound,
+    epoch: u64,
+    chain_id_hash: Hash,
+    authority_context_height: u64,
+    coordinator_lane_id: LaneId,
+    coordinator_dataspace_id: DataSpaceId,
+    coordinator_lane_incarnation: Hash,
+    planned_coordinator_block_height: u64,
+    coordinator_lane_block_view: u64,
+    coordinator_proposal_hash: Hash,
+}
+
+impl NativeAmxSourceSessionClaimV4 {
+    fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
+        Self {
+            source_id: body.source_id,
+            tx_entrypoint_hash: body.tx_entrypoint_hash,
+            plan_digest: body.plan_digest,
+            round: body.round,
+            epoch: body.epoch,
+            chain_id_hash: body.chain_id_hash,
+            authority_context_height: body.authority_context_height,
+            coordinator_lane_id: body.coordinator_lane_id,
+            coordinator_dataspace_id: body.coordinator_dataspace_id,
+            coordinator_lane_incarnation: body.coordinator_lane_incarnation,
+            planned_coordinator_block_height: body.planned_coordinator_block_height,
+            coordinator_lane_block_view: body.coordinator_lane_block_view,
+            coordinator_proposal_hash: body.coordinator_proposal_hash,
+        }
+    }
+}
+
+/// Participant route/incarnation attached to one durable source-session claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+struct NativeAmxSourceParticipantClaimV4 {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+}
+
+impl NativeAmxSourceParticipantClaimV4 {
+    fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
+        Self {
+            lane_id: body.participant_lane_id,
+            dataspace_id: body.participant_dataspace_id,
+            lane_incarnation: body.participant_lane_incarnation,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NativeAmxDurableSourceClaimV4 {
+    session: NativeAmxSourceSessionClaimV4,
+    participants: BTreeMap<(LaneId, DataSpaceId), NativeAmxSourceParticipantClaimV4>,
+}
+
+impl NativeAmxDurableSourceClaimV4 {
+    fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
+        let participant = NativeAmxSourceParticipantClaimV4::from_body(body);
+        Self {
+            session: NativeAmxSourceSessionClaimV4::from_body(body),
+            participants: std::iter::once((
+                (participant.lane_id, participant.dataspace_id),
+                participant,
+            ))
+            .collect(),
+        }
+    }
+
+    fn accepts(&self, body: &NativeAmxAttestationBodyV2) -> bool {
+        let participant = NativeAmxSourceParticipantClaimV4::from_body(body);
+        self.session == NativeAmxSourceSessionClaimV4::from_body(body)
+            && self
+                .participants
+                .get(&(participant.lane_id, participant.dataspace_id))
+                .is_none_or(|claim| *claim == participant)
+    }
+
+    fn insert_participant(&mut self, body: &NativeAmxAttestationBodyV2) {
+        let participant = NativeAmxSourceParticipantClaimV4::from_body(body);
+        self.participants
+            .entry((participant.lane_id, participant.dataspace_id))
+            .or_insert(participant);
     }
 }
 
@@ -259,7 +458,7 @@ struct NativeAmxSigningGuardInner {
     anchor_identity: NativeAmxFileIdentity,
     records: BTreeMap<NativeAmxSigningKeyV2, NativeAmxSigningRecordV2>,
     record_identities: BTreeMap<NativeAmxSigningKeyV2, (PathBuf, NativeAmxFileIdentity)>,
-    source_plan_claims: BTreeMap<[u8; Hash::LENGTH], Hash>,
+    source_claims: BTreeMap<[u8; Hash::LENGTH], NativeAmxDurableSourceClaimV4>,
     slot_claims: BTreeMap<NativeAmxSigningSlotV3, NativeAmxSigningSlotClaimV3>,
     poisoned: Option<String>,
 }
@@ -267,7 +466,7 @@ struct NativeAmxSigningGuardInner {
 #[derive(Debug)]
 struct LoadedNativeAmxJournal {
     records: BTreeMap<NativeAmxSigningKeyV2, NativeAmxSigningRecordV2>,
-    source_plan_claims: BTreeMap<[u8; Hash::LENGTH], Hash>,
+    source_claims: BTreeMap<[u8; Hash::LENGTH], NativeAmxDurableSourceClaimV4>,
     slot_claims: BTreeMap<NativeAmxSigningSlotV3, NativeAmxSigningSlotClaimV3>,
     anchored_paths: Vec<PathBuf>,
 }
@@ -336,8 +535,8 @@ pub(crate) enum NativeAmxSigningGuardError {
         /// Highest view durably authorized at this height.
         highest_view: u64,
     },
-    /// The same source transaction attempted a second plan at this height.
-    #[error("native AMX source transaction conflicts with its durable routing-plan claim")]
+    /// The same source transaction attempted to change its durable session claim.
+    #[error("native AMX source transaction conflicts with its durable session claim")]
     PlanEquivocation,
     /// One lane-local signing slot attempted a different proposal or settlement.
     #[error("native AMX participant slot conflicts with its durable proposal/settlement claim")]
@@ -488,7 +687,7 @@ impl NativeAmxSigningGuard {
             max_records: max_records_u32,
         };
         let durable_anchor = Self::read_anchor(&directory, owner_uid)?;
-        let (anchor, records, source_plan_claims, slot_claims) = match durable_anchor {
+        let (anchor, records, source_claims, slot_claims) = match durable_anchor {
             None => {
                 Self::ensure_empty_uninitialized_directory(&directory)?;
                 let anchor = NativeAmxSigningAnchorV2::empty(supplied_binding)?;
@@ -522,7 +721,7 @@ impl NativeAmxSigningGuard {
                     (
                         anchor,
                         loaded.records,
-                        loaded.source_plan_claims,
+                        loaded.source_claims,
                         loaded.slot_claims,
                     )
                 } else {
@@ -597,7 +796,7 @@ impl NativeAmxSigningGuard {
                 anchor_identity,
                 records,
                 record_identities,
-                source_plan_claims,
+                source_claims,
                 slot_claims,
                 poisoned: None,
             }),
@@ -792,7 +991,7 @@ impl NativeAmxSigningGuard {
             .map_err(|_| native_amx_unsafe_journal(directory, "record count overflow"))?;
         let mut head = anchor.binding.genesis_head()?;
         let mut records = BTreeMap::new();
-        let mut source_plan_claims = BTreeMap::new();
+        let mut source_claims = BTreeMap::new();
         let mut slot_claims = BTreeMap::new();
         let mut anchored_paths = Vec::with_capacity(expected_count);
         let mut highest_view = None::<u64>;
@@ -810,14 +1009,19 @@ impl NativeAmxSigningGuard {
                     "record chain predecessor mismatch",
                 ));
             }
-            if source_plan_claims
-                .insert(record.body.source_id, record.body.plan_digest)
-                .is_some_and(|claimed| claimed != record.body.plan_digest)
-            {
-                return Err(native_amx_unsafe_journal(
-                    &path,
-                    "one source has conflicting anchored plans",
-                ));
+            match source_claims.entry(record.body.source_id) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(NativeAmxDurableSourceClaimV4::from_body(&record.body));
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    if !entry.get().accepts(&record.body) {
+                        return Err(native_amx_unsafe_journal(
+                            &path,
+                            "one source has conflicting anchored session claims",
+                        ));
+                    }
+                    entry.get_mut().insert_participant(&record.body);
+                }
             }
             let slot = NativeAmxSigningSlotV3::from_body(&record.body, &record.key.signer);
             let slot_claim = NativeAmxSigningSlotClaimV3::from_body(&record.body);
@@ -882,9 +1086,9 @@ impl NativeAmxSigningGuard {
                     .highest_view
                     .is_some_and(|view| tail.body.round.view < view)
                 || records.contains_key(&tail.key)
-                || source_plan_claims
+                || source_claims
                     .get(&tail.body.source_id)
-                    .is_some_and(|plan| *plan != tail.body.plan_digest)
+                    .is_some_and(|claim| !claim.accepts(&tail.body))
                 || slot_claims
                     .get(&tail_slot)
                     .is_some_and(|claim| *claim != tail_slot_claim)
@@ -905,7 +1109,7 @@ impl NativeAmxSigningGuard {
         }
         Ok(LoadedNativeAmxJournal {
             records,
-            source_plan_claims,
+            source_claims,
             slot_claims,
             anchored_paths,
         })
@@ -1055,12 +1259,13 @@ impl NativeAmxSigningGuard {
                 active_height: binding.active_height,
             });
         }
-        if inner
-            .source_plan_claims
-            .get(&body.source_id)
-            .is_some_and(|plan| *plan != body.plan_digest)
-        {
-            return Err(NativeAmxSigningGuardError::PlanEquivocation);
+        let key = NativeAmxSigningKeyV2::from_body(body, &binding.signer);
+        if let Some(existing) = inner.records.get(&key) {
+            return if existing.body == *body {
+                Ok(())
+            } else {
+                Err(NativeAmxSigningGuardError::Equivocation)
+            };
         }
         let slot = NativeAmxSigningSlotV3::from_body(body, &binding.signer);
         let slot_claim = NativeAmxSigningSlotClaimV3::from_body(body);
@@ -1072,6 +1277,13 @@ impl NativeAmxSigningGuard {
             return Err(NativeAmxSigningGuardError::SlotEquivocation);
         }
         if inner
+            .source_claims
+            .get(&body.source_id)
+            .is_some_and(|claim| !claim.accepts(body))
+        {
+            return Err(NativeAmxSigningGuardError::PlanEquivocation);
+        }
+        if inner
             .anchor
             .highest_view
             .is_some_and(|highest| body.round.view < highest)
@@ -1080,14 +1292,6 @@ impl NativeAmxSigningGuard {
                 attempted_view: body.round.view,
                 highest_view: inner.anchor.highest_view.expect("checked"),
             });
-        }
-        let key = NativeAmxSigningKeyV2::from_body(body, &binding.signer);
-        if let Some(existing) = inner.records.get(&key) {
-            return if existing.body == *body {
-                Ok(())
-            } else {
-                Err(NativeAmxSigningGuardError::Equivocation)
-            };
         }
         if inner.records.len() >= self.max_records {
             return Err(NativeAmxSigningGuardError::Capacity);
@@ -1188,17 +1392,18 @@ impl NativeAmxSigningGuard {
             .insert(key.clone(), (path, record_identity));
         inner.records.insert(key, record);
         inner
-            .source_plan_claims
+            .source_claims
             .entry(body.source_id)
-            .or_insert(body.plan_digest);
+            .and_modify(|claim| claim.insert_participant(body))
+            .or_insert_with(|| NativeAmxDurableSourceClaimV4::from_body(body));
         inner.slot_claims.entry(slot).or_insert(slot_claim);
         Ok(())
     }
 
     /// Durably authorize the exact full body before BLS signature creation.
     ///
-    /// Exact replay at the current view is idempotent. A changed plan for a
-    /// source, a conflicting body for one key, or a stale view is refused.
+    /// Exact replay at the current view is idempotent. A changed source session,
+    /// a conflicting body for one key, or a stale view is refused.
     /// Unsafe journal and I/O failures permanently poison this guard instance.
     pub(crate) fn record(
         &self,
@@ -1261,15 +1466,13 @@ fn native_amx_ensure_signer_directory(
         }
         let owner_uid = native_amx_effective_user_id(store_root)?;
         native_amx_validate_uid(store_root, &root_metadata, owner_uid)?;
+        let signer_digest = native_amx_signer_directory_digest(store_root, signer)?;
+        native_amx_reject_legacy_signer_journals(store_root, signer_digest, owner_uid)?;
         let guard_root = store_root.join(NATIVE_AMX_SIGNING_GUARD_DIRECTORY);
         let guard_root_created = native_amx_ensure_secure_directory(&guard_root, owner_uid)?;
         if guard_root_created {
             native_amx_sync_directory_path(store_root)?;
         }
-        let signer_bytes = norito::to_bytes(signer)
-            .map_err(|error| native_amx_unsafe_journal(&guard_root, error.to_string()))?;
-        let signer_digest =
-            Hash::new_from_chunks(&[NATIVE_AMX_SIGNER_DIRECTORY_DOMAIN, signer_bytes.as_slice()]);
         let directory = guard_root.join(signer_digest.to_string());
         let signer_created = native_amx_ensure_secure_directory(&directory, owner_uid)?;
         if signer_created {
@@ -1277,6 +1480,61 @@ fn native_amx_ensure_signer_directory(
         }
         Ok((directory, owner_uid))
     }
+}
+
+#[cfg(unix)]
+fn native_amx_signer_directory_digest(
+    store_root: &Path,
+    signer: &PeerId,
+) -> Result<Hash, NativeAmxSigningGuardError> {
+    let signer_bytes = norito::to_bytes(signer)
+        .map_err(|error| native_amx_unsafe_journal(store_root, error.to_string()))?;
+    Ok(Hash::new_from_chunks(&[
+        NATIVE_AMX_SIGNER_DIRECTORY_DOMAIN,
+        signer_bytes.as_slice(),
+    ]))
+}
+
+#[cfg(unix)]
+fn native_amx_reject_legacy_signer_journals(
+    store_root: &Path,
+    signer_digest: Hash,
+    owner_uid: u32,
+) -> Result<(), NativeAmxSigningGuardError> {
+    for legacy_name in NATIVE_AMX_LEGACY_SIGNING_GUARD_DIRECTORIES {
+        let legacy_root = store_root.join(legacy_name);
+        let legacy_root_metadata = match fs::symlink_metadata(&legacy_root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(native_amx_unsafe_journal(&legacy_root, error.to_string()));
+            }
+        };
+        native_amx_validate_secure_directory_metadata(
+            &legacy_root,
+            &legacy_root_metadata,
+            owner_uid,
+        )?;
+        let legacy_signer = legacy_root.join(signer_digest.to_string());
+        match fs::symlink_metadata(&legacy_signer) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(native_amx_unsafe_journal(&legacy_signer, error.to_string()));
+            }
+            Ok(metadata) => {
+                native_amx_validate_secure_directory_metadata(
+                    &legacy_signer,
+                    &metadata,
+                    owner_uid,
+                )?;
+                return Err(native_amx_unsafe_journal(
+                    &legacy_signer,
+                    "legacy Native AMX signing evidence requires authenticated recovery; it must not be silently ignored",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -2167,6 +2425,12 @@ fn native_amx_body_shape_valid(body: &NativeAmxAttestationBodyV2) -> bool {
         && body.authority_context_height == body.round.height
         && body.planned_coordinator_block_height != 0
         && body.chain_id_hash.as_ref().iter().any(|byte| *byte != 0)
+        && body.source_id.iter().any(|byte| *byte != 0)
+        && body
+            .tx_entrypoint_hash
+            .as_ref()
+            .iter()
+            .any(|byte| *byte != 0)
         && body.plan_digest.as_ref().iter().any(|byte| *byte != 0)
         && body
             .coordinator_lane_incarnation
@@ -3024,6 +3288,28 @@ impl NativeAmxSessionCache {
             })
             .collect()
     }
+
+    /// Return whether retained Native AMX vote evidence names an exact lane
+    /// incarnation as coordinator or participant.
+    #[must_use]
+    pub(crate) fn has_pending_votes_for_lane(
+        &self,
+        lane_id: iroha_data_model::nexus::LaneId,
+        dataspace_id: iroha_data_model::nexus::DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> bool {
+        self.sessions.values().any(|session| {
+            session.votes.keys().any(|bucket| {
+                let body = &bucket.body;
+                (body.coordinator_lane_id == lane_id
+                    && body.coordinator_dataspace_id == dataspace_id
+                    && body.coordinator_lane_incarnation == lane_incarnation)
+                    || (body.participant_lane_id == lane_id
+                        && body.participant_dataspace_id == dataspace_id
+                        && body.participant_lane_incarnation == lane_incarnation)
+            })
+        })
+    }
 }
 
 #[cfg(test)]
@@ -3203,6 +3489,34 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn signing_guard_rejects_legacy_signer_journal_instead_of_ignoring_it() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let body = body(NativeAmxPhase::Prepare);
+        let (_keypair, signer) = signing_guard_signer(0x6F);
+        let owner_uid = native_amx_effective_user_id(root.path()).expect("effective uid");
+        let signer_digest =
+            native_amx_signer_directory_digest(root.path(), &signer).expect("signer digest");
+        let legacy_root = root.path().join("native-amx-v2-signing-guard-v3");
+        native_amx_ensure_secure_directory(&legacy_root, owner_uid)
+            .expect("create secure legacy root");
+        native_amx_ensure_secure_directory(&legacy_root.join(signer_digest.to_string()), owner_uid)
+            .expect("create secure legacy signer journal");
+
+        assert!(matches!(
+            open_signing_guard(root.path(), &body, signer, 8),
+            Err(NativeAmxSigningGuardError::UnsafeJournal(message))
+                if message.contains("authenticated recovery")
+        ));
+        assert!(
+            !root
+                .path()
+                .join(NATIVE_AMX_SIGNING_GUARD_DIRECTORY)
+                .exists()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation() {
         let root = tempfile::tempdir().expect("temp dir");
         let (_keypair, signer) = signing_guard_signer(0x71);
@@ -3227,6 +3541,92 @@ mod tests {
             restarted.record(&conflict),
             Err(NativeAmxSigningGuardError::Equivocation)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signing_guard_durably_binds_full_source_session_and_participant_incarnation() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let (_keypair, signer) = signing_guard_signer(0x6E);
+        let base = body(NativeAmxPhase::Prepare);
+        let guard =
+            open_signing_guard(root.path(), &base, signer.clone(), 32).expect("open signing guard");
+        guard.record(&base).expect("record source-session claim");
+        drop(guard);
+
+        let mut drifts = Vec::new();
+
+        let mut entrypoint = base;
+        entrypoint.phase = NativeAmxPhase::Commit;
+        entrypoint.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            Hash::new(b"source-entrypoint-drift"),
+        );
+        drifts.push(entrypoint);
+
+        let mut global_view = base;
+        global_view.phase = NativeAmxPhase::Commit;
+        global_view.round.view = global_view.round.view.saturating_add(1);
+        drifts.push(global_view);
+
+        let mut coordinator_route = base;
+        coordinator_route.phase = NativeAmxPhase::Commit;
+        coordinator_route.coordinator_lane_id = LaneId::new(9);
+        drifts.push(coordinator_route);
+
+        let mut coordinator_incarnation = base;
+        coordinator_incarnation.phase = NativeAmxPhase::Commit;
+        coordinator_incarnation.coordinator_lane_incarnation =
+            Hash::new(b"coordinator-incarnation-drift");
+        drifts.push(coordinator_incarnation);
+
+        let mut planned_height = base;
+        planned_height.phase = NativeAmxPhase::Commit;
+        planned_height.planned_coordinator_block_height = planned_height
+            .planned_coordinator_block_height
+            .saturating_add(1);
+        drifts.push(planned_height);
+
+        let mut coordinator_view = base;
+        coordinator_view.phase = NativeAmxPhase::Commit;
+        coordinator_view.coordinator_lane_block_view = coordinator_view
+            .coordinator_lane_block_view
+            .saturating_add(1);
+        drifts.push(coordinator_view);
+
+        let mut coordinator_proposal = base;
+        coordinator_proposal.phase = NativeAmxPhase::Commit;
+        coordinator_proposal.coordinator_proposal_hash = Hash::new(b"coordinator-proposal-drift");
+        drifts.push(coordinator_proposal);
+
+        let mut participant_incarnation = base;
+        participant_incarnation.phase = NativeAmxPhase::Commit;
+        participant_incarnation.participant_lane_incarnation =
+            Hash::new(b"participant-incarnation-drift");
+        drifts.push(participant_incarnation);
+
+        for drift in drifts {
+            let restarted = open_signing_guard(root.path(), &base, signer.clone(), 32)
+                .expect("restart signing guard");
+            assert_eq!(
+                restarted.record(&drift),
+                Err(NativeAmxSigningGuardError::PlanEquivocation)
+            );
+        }
+
+        let mut second_participant = base;
+        second_participant.participant_lane_id = LaneId::new(3);
+        second_participant.participant_dataspace_id = DataSpaceId::new(9);
+        second_participant.participant_lane_incarnation =
+            Hash::new(b"second-planned-participant-incarnation");
+        second_participant.participant_proposal_hash =
+            Hash::new(b"second-planned-participant-proposal");
+        second_participant.participant_settlement_commitment =
+            second_participant.computed_participant_settlement_commitment();
+        let restarted =
+            open_signing_guard(root.path(), &base, signer, 32).expect("restart signing guard");
+        restarted
+            .record(&second_participant)
+            .expect("same source may bind another planned participant route");
     }
 
     #[cfg(unix)]
@@ -3785,12 +4185,29 @@ mod tests {
             Err(NativeAmxSigningGuardError::InvalidInput(_))
         ));
 
-        let mut mismatched_view = body;
-        mismatched_view.coordinator_lane_block_view += 1;
+        let mut zero_source = body;
+        zero_source.source_id = [0; Hash::LENGTH];
         assert!(matches!(
-            guard.record(&mismatched_view),
+            guard.record(&zero_source),
             Err(NativeAmxSigningGuardError::InvalidInput(_))
         ));
+
+        let mut zero_entrypoint = body;
+        zero_entrypoint.tx_entrypoint_hash =
+            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
+                [0; Hash::LENGTH],
+            ));
+        assert!(matches!(
+            guard.record(&zero_entrypoint),
+            Err(NativeAmxSigningGuardError::InvalidInput(_))
+        ));
+
+        let mut mismatched_view = body;
+        mismatched_view.coordinator_lane_block_view += 1;
+        assert_eq!(
+            guard.record(&mismatched_view),
+            Err(NativeAmxSigningGuardError::Equivocation)
+        );
     }
 
     #[cfg(unix)]

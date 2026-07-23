@@ -33,7 +33,7 @@ use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     Encode as _,
     account::AccountId,
-    block::{SignedBlock, consensus_v2 as wire},
+    block::{BlockHeader, SignedBlock, consensus_v2 as wire},
     events::{EventBox, pipeline::PipelineEventBox},
     peer::PeerId,
 };
@@ -78,8 +78,8 @@ use super::{
     v2_worker::{ExactFanoutOwnership, ProductionV2Services, V2CleanupSupervisor},
 };
 use crate::{
-    block::BlockBuilder, kura::Kura, merge_sidecar::CertifiedMergeSidecarMessage,
-    native_amx::NativeAmxMessage, queue::Queue, state::State,
+    kura::Kura, merge_sidecar::CertifiedMergeSidecarMessage, native_amx::NativeAmxMessage,
+    queue::Queue, state::State,
 };
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
@@ -609,6 +609,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         shutdown_signal,
         ingress_ready,
         output_guard,
+        consensus_frame_byte_capacity,
     } = worker;
 
     // Reject an unsupported voting host before any recovery or durable
@@ -726,8 +727,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         validate_deadline_duration(CANDIDATE_WORK_RECHECK)?;
         let runtime_queue = runtime_queue_config(&shared_config)?;
         let effect_queue = effect_queue_config(&shared_config)?;
-        let lane_work_limits =
-            lane_work_limits(&shared_config, network.reply_route_source_capacity())?;
+        let lane_work_limits = lane_work_limits(
+            &shared_config,
+            network.reply_route_source_capacity(),
+            consensus_frame_byte_capacity,
+        )?;
         let candidate_limits = candidate_limits(&context, &shared_config)?;
         let local_validator = local_validator_index(&context, &local_peer, config.role)?;
         let new_block_sync_server = block_sync_server
@@ -868,6 +872,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             recovered_applied_height,
             Arc::clone(&output_guard),
         )?;
+        lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
         // Seed executor lock ownership from replay before consuming startup
         // effects. Otherwise a recovered lock would look like a live first-lock
         // transition and could retire safe work reconstructed from the same WAL.
@@ -1049,6 +1054,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
+                    lane_work.schedule_autonomous_new_view_timeouts(
+                        now,
+                        executor.current_tag().view(),
+                        round_timeout,
+                    )?;
                     lane_work.schedule_retransmission()?;
                     next_lane_retransmit = deadline_after(now, retransmit_interval);
                 }
@@ -1079,6 +1089,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
+                    lane_work.schedule_autonomous_new_view_timeouts(
+                        now,
+                        executor.current_tag().view(),
+                        round_timeout,
+                    )?;
                     lane_work.schedule_retransmission()?;
                     next_lane_retransmit = deadline_after(now, retransmit_interval);
                 }
@@ -1422,6 +1437,12 @@ fn schedule_local_proposal(
     if directive.locked_body().is_some() {
         return Ok(());
     }
+    // Every validator drives its independently selected lane-author slots;
+    // this must precede the global-leader and proposal-capacity gates below.
+    // The lane adapter internally rate-limits durable FIFO scans and publishes
+    // only after both the reservation journal and hint-free Kura payload are
+    // durable.
+    lane_work.schedule_autonomous_lane_production(directive.tag().view(), candidate_limits)?;
     // Do not consume a prepared candidate or register outbound payload bytes
     // until the executor can reserve the local StoreBody owner. Timers,
     // retransmission, and completions continue to run while this producer
@@ -1495,10 +1516,23 @@ fn schedule_local_proposal(
                 }
                 _ => return Err(V2RunnerError::InvalidSnapshotBootstrapParent),
             };
-        let (_, time_source) = iroha_primitives::time::TimeSource::new_mock(logical_time);
+        let carrier_context_header =
+            lane_work.merge_carrier_context_header(directive.tag().view())?;
+        if carrier_context_header.creation_time() != logical_time {
+            return Err(V2RunnerError::Candidate(
+                "shared merge carrier timestamp differs from the frozen height cadence".to_owned(),
+            ));
+        }
+        let (_, time_source) =
+            iroha_primitives::time::TimeSource::new_mock(carrier_context_header.creation_time());
         let assembler = V2CandidateAssembler::new(candidate_limits, time_source.clone());
-        let attachments =
-            candidate_attachments(context, state, parent, directive.tag().view(), time_source)?;
+        let attachments = candidate_attachments(
+            context,
+            state,
+            parent,
+            directive.tag().view(),
+            &carrier_context_header,
+        )?;
         let candidate = if proposal_state.heartbeat_only == Some(owner) {
             assembler.assemble(CandidateRequest {
                 context,
@@ -1548,6 +1582,9 @@ fn schedule_local_proposal(
                 });
                 return Ok(());
             }
+            lane_work.allow_ordinary_execution_after_autonomous_wait();
+            proposal_state.candidate_work_wait = None;
+            return Ok(());
         }
         proposal_state.candidate_work_wait = None;
         if lane_work.bind_local_candidate(round_for_tag(context, tag)?, candidate.block().hash())
@@ -2318,6 +2355,7 @@ fn effect_queue_config(config: &SumeragiV2Config) -> Result<EffectQueueConfig, V
 fn lane_work_limits(
     config: &SumeragiV2Config,
     reply_source_capacity: usize,
+    consensus_frame_byte_capacity: usize,
 ) -> Result<V2LaneWorkLimits, V2RunnerError> {
     let non_zero = |value: u64| {
         usize::try_from(value)
@@ -2333,6 +2371,7 @@ fn lane_work_limits(
         non_zero(config.limits.certified_request_capacity)?,
         non_zero(config.limits.control_queue_capacity)?,
         NonZeroUsize::new(reply_source_capacity).ok_or(V2RunnerError::InvalidLimits)?,
+        NonZeroUsize::new(consensus_frame_byte_capacity).ok_or(V2RunnerError::InvalidLimits)?,
     ))
 }
 
@@ -2360,19 +2399,13 @@ fn candidate_attachments(
     state: &State,
     parent: CandidateParent<'_>,
     view: wire::View,
-    time_source: iroha_primitives::time::TimeSource,
+    round_header: &BlockHeader,
 ) -> Result<CandidateAttachments, V2RunnerError> {
-    let pending = BlockBuilder::new_with_time_source(Vec::new(), time_source);
-    let round_header = match parent {
-        CandidateParent::Block(parent) => pending.chain(view, Some(parent)),
-        CandidateParent::Snapshot(anchor) => {
-            pending.chain_with_parent_hash(view, anchor.snapshot_height, anchor.snapshot_block_hash)
-        }
-    }
-    .carrier_context_header();
     if round_header.height().get() != context.height
         || round_header.prev_block_hash() != Some(parent.hash())
         || round_header.view_change_index() != view
+        || round_header.merkle_root().is_some()
+        || round_header.result_merkle_root().is_some()
     {
         return Err(V2RunnerError::Candidate(
             "certified merge carrier probe differs from the frozen round".to_owned(),
@@ -2383,9 +2416,15 @@ fn candidate_attachments(
         .latest()
         .map_or(1, |latest| latest.epoch_id.saturating_add(1));
     let certified_merge_entry = state
-        .select_pending_certified_merge_entry_for_round(&round_header, expected_merge_epoch)
+        .select_pending_certified_merge_entry_for_round(round_header, expected_merge_epoch)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
-        .map(|(_, entry, _)| entry);
+        .map(|(_, entry, _)| entry)
+        .map(|entry| {
+            super::v2_lane_work::authenticate_merge_entry_for_height_context(context, &entry)
+                .map(|()| entry)
+                .map_err(V2RunnerError::Candidate)
+        })
+        .transpose()?;
 
     let effects = if context.mode == wire::ConsensusMode::Npos {
         super::penalties::PenaltyApplier::from_parts(
@@ -2402,6 +2441,10 @@ fn candidate_attachments(
     };
     Ok(CandidateAttachments {
         npos_consensus_effects: (!effects.is_empty()).then_some(effects),
+        certified_merge_carrier_header: certified_merge_entry
+            .as_ref()
+            .and_then(|entry| entry.execution_batch.as_ref())
+            .map(|batch| batch.application_block_header.clone()),
         certified_merge_entry,
         ..CandidateAttachments::default()
     })
@@ -2432,6 +2475,9 @@ impl CandidateWorkProvider for HeartbeatOnlyWorkProvider {
         _view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
     ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
+        if candidates.is_empty() {
+            return Ok(PreparedCandidateWork::default());
+        }
         Err(CandidateWorkUnavailable::new(
             (0..candidates.len()).collect::<BTreeSet<_>>(),
             "local fallback requested an empty heartbeat",
@@ -2614,6 +2660,7 @@ where
         V2LaneWorkEffect::PostLaneBlock { .. }
         | V2LaneWorkEffect::PostDurableLaneCertificate { .. }
         | V2LaneWorkEffect::PostNativeAmx { .. }
+        | V2LaneWorkEffect::PostLaneDrainVote { .. }
         | V2LaneWorkEffect::BroadcastMerge(_)
         | V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => return true,
     };
@@ -2686,6 +2733,9 @@ fn dispatch_lane_work_effect(
             message,
         } => {
             services.post_native_amx_with_reply_routes(peer, reply_routes, message);
+        }
+        V2LaneWorkEffect::PostLaneDrainVote { peer, vote } => {
+            services.post_lane_drain_vote(peer, vote);
         }
         V2LaneWorkEffect::BroadcastMerge(signature) => {
             services.broadcast_merge_to_voters(signature);
@@ -3051,6 +3101,19 @@ mod tests {
             },
             keys,
         )
+    }
+
+    #[test]
+    fn heartbeat_provider_accepts_only_an_empty_descriptor_batch() {
+        let (context, _) = context();
+        let mut provider = HeartbeatOnlyWorkProvider;
+        assert_eq!(
+            provider
+                .prepare(&context, 0, &[])
+                .expect("an explicit heartbeat has no lane work")
+                .native_amx_receipts,
+            Vec::new()
+        );
     }
 
     fn test_predecessor(

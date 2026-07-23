@@ -17,6 +17,13 @@ object SumeragiV2Wire {
     const val MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: Long = 16
     private val KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
         "iroha:kagemusha:v2:post-state-root".toByteArray(StandardCharsets.UTF_8)
+    /** Canonical Native AMX application-manifest wire version. */
+    const val NATIVE_AMX_APPLICATION_MANIFEST_VERSION: Int = 1
+    /** Maximum participant route/incarnation leaves committed by one global block. */
+    const val MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: Long = 1_024
+    private val NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN =
+        "iroha:sumeragi:v2:native-amx-application-manifest:v1:empty"
+            .toByteArray(StandardCharsets.UTF_8)
 
     /** A 32-byte Iroha hash. The low bit of the final byte must be set. */
     class Hash32(bytes: ByteArray) {
@@ -163,6 +170,9 @@ object SumeragiV2Wire {
         @JvmField val ordinaryWritesRoot: Hash32,
         @JvmField val topupAnchorRoot: Hash32?,
         @JvmField val topupAnchorCount: Long,
+        @JvmField val nativeAmxApplicationManifestVersion: Int,
+        @JvmField val nativeAmxApplicationManifestRoot: Hash32,
+        @JvmField val nativeAmxApplicationManifestCount: Long,
         @JvmField val executedBlockWireHash: Hash32,
     ) : WireValue() {
         init {
@@ -188,6 +198,22 @@ object SumeragiV2Wire {
                     ),
                 ) { "post-state root does not bind the top-up anchor projection" }
             }
+            require(
+                nativeAmxApplicationManifestVersion ==
+                    NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            ) { "unsupported Native AMX application-manifest version" }
+            require(nativeAmxApplicationManifestCount in 0..0xffff_ffffL) {
+                "nativeAmxApplicationManifestCount must fit in an unsigned 32-bit integer"
+            }
+            require(
+                nativeAmxApplicationManifestCount <=
+                    MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES,
+            ) { "Native AMX application-manifest leaf count exceeds the consensus bound" }
+            val emptyManifestRoot = nativeAmxApplicationManifestEmptyRoot()
+            require(
+                (nativeAmxApplicationManifestCount == 0L) ==
+                    (nativeAmxApplicationManifestRoot == emptyManifestRoot),
+            ) { "Native AMX application-manifest count/root projection is not canonical" }
         }
 
         override fun encode(): ByteArray = struct(
@@ -196,6 +222,9 @@ object SumeragiV2Wire {
             ordinaryWritesRoot.bytes(),
             option(topupAnchorRoot?.bytes()),
             u32(topupAnchorCount),
+            u16(nativeAmxApplicationManifestVersion),
+            nativeAmxApplicationManifestRoot.bytes(),
+            u32(nativeAmxApplicationManifestCount),
             executedBlockWireHash.bytes(),
         )
 
@@ -212,8 +241,16 @@ object SumeragiV2Wire {
                 ordinaryWritesRoot,
                 null,
                 0,
+                NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                nativeAmxApplicationManifestEmptyRoot(),
+                0,
                 executedBlockWireHash,
             )
+
+            /** Canonical root for a global block with no separate Native AMX applications. */
+            @JvmStatic
+            fun nativeAmxApplicationManifestEmptyRoot(): Hash32 =
+                Hash32(IrohaHash.prehash(NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN))
 
             @JvmStatic
             fun topupPostStateRoot(
@@ -242,6 +279,17 @@ object SumeragiV2Wire {
                         reader.field("execution.topup_anchor_root") { optionHash(it) },
                         reader.field("execution.topup_anchor_count") {
                             it.u32Only("execution.topup_anchor_count")
+                        },
+                        reader.field("execution.native_amx_application_manifest_version") {
+                            it.u16Only("execution.native_amx_application_manifest_version")
+                        },
+                        Hash32(
+                            reader.field("execution.native_amx_application_manifest_root") {
+                                it.hash()
+                            },
+                        ),
+                        reader.field("execution.native_amx_application_manifest_count") {
+                            it.u32Only("execution.native_amx_application_manifest_count")
                         },
                         Hash32(reader.field("execution.executed_block_wire_hash") { it.hash() }),
                     )

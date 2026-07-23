@@ -55164,6 +55164,18 @@ pub async fn handle_v1_sumeragi_diagnostics(
         }
         None => None,
     };
+    drop(world);
+    let native_amx_participant_applications = if nexus_enabled {
+        state
+            .native_amx_participant_applications_diagnostics()
+            .map_err(|error| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                    "failed to derive Native AMX participant diagnostics: {error}",
+                )))
+            })?
+    } else {
+        Vec::new()
+    };
 
     let lane_commitments = nexus_enabled
         .then(|| {
@@ -55269,7 +55281,15 @@ pub async fn handle_v1_sumeragi_diagnostics(
             .then_some(snapshot.lane_governance_sealed_aliases)
             .unwrap_or_default(),
         lane_governance,
+        native_amx_participant_applications,
     };
+    diagnostics
+        .validate_native_amx_participant_applications()
+        .map_err(|reason| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                reason.to_owned(),
+            ))
+        })?;
     Ok(crate::utils::respond_with_format(diagnostics, format))
 }
 
@@ -83186,9 +83206,17 @@ mod tests {
         assert!(decoded.npos.is_none());
         assert!(decoded.lane_commitments.is_empty());
         assert!(decoded.lane_relay_envelopes.is_empty());
+        assert!(decoded.native_amx_participant_applications.is_empty());
         let json: norito::json::Value =
             norito::json::from_slice(&body).expect("decode diagnostics JSON object");
         assert!(json.get("npos").is_none());
+        assert_eq!(
+            json.get("native_amx_participant_applications")
+                .and_then(|value| value.as_array())
+                .map(|rows| rows.len()),
+            Some(0),
+            "diagnostics expose the durable Native AMX evidence vector independently of status"
+        );
         for canonical in ["height", "view", "phase", "leader", "locked_prepare_qc"] {
             assert!(
                 json.get(canonical).is_none(),

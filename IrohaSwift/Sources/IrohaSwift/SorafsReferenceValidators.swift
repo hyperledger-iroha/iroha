@@ -5,6 +5,7 @@ public enum SorafsReferenceValidationError: Error, Equatable {
     case invalidLabel(String)
     case invalidPrivateKey(String)
     case invalidOrderbookField(String)
+    case invalidGovernanceDagInput(String)
     case unsupportedOrderbookPayloadKind(SorafsOrderbookPayloadKind)
 }
 
@@ -206,9 +207,28 @@ public struct SorafsSignedOrderbookSettlementReceiptFields: Sendable {
     }
 }
 
+/// One root-to-head governance DAG block input and its diagnostic label.
+public struct SorafsGovernanceDagBlockInput: Sendable {
+    public let payload: Data
+    public let label: String?
+
+    public init(payload: Data, label: String? = nil) {
+        self.payload = payload
+        self.label = label
+    }
+}
+
 public enum SorafsReferenceValidators {
     /// Canonical maximum byte length for a V1 orderbook owner account.
     public static let orderbookOwnerAccountMaxBytesV1 = 256
+    /// Maximum complete-root or checkpoint-tail window accepted by one head validation.
+    public static let governanceDagMaxBlocksV1 = 64
+    /// Canonical byte length for every Governance DAG CID.
+    public static let governanceDagCidBytesV1 = 32
+    /// Maximum aggregate payload, CID, and label bytes accepted by one reference call.
+    public static let referenceMaxInputBytesV1 = 67_108_864
+    /// Maximum UTF-8 bytes accepted for one diagnostic input label.
+    public static let referenceMaxLabelBytesV1 = 1_024
 
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isSorafsReferenceValidationAvailable
@@ -224,6 +244,10 @@ public enum SorafsReferenceValidators {
 
     public static var isHedgingNativeAvailable: Bool {
         NoritoNativeBridge.shared.isSorafsReferenceHedgingValidationAvailable
+    }
+
+    public static var isGovernanceDagNativeAvailable: Bool {
+        NoritoNativeBridge.shared.isSorafsReferenceGovernanceDagValidationAvailable
     }
 
     public static var isOrderbookFieldBuilderAvailable: Bool {
@@ -290,6 +314,87 @@ public enum SorafsReferenceValidators {
             kind: kind.rawValue,
             payload: payload,
             label: resolvedLabel,
+            generatedAtUnix: generatedAtUnix
+        ) else {
+            throw SorafsReferenceValidationError.bridgeUnavailable
+        }
+        return json
+    }
+
+    /// Validate one canonical `GovernanceDagBlockV1`.
+    ///
+    /// When `expectedBlockCid` is nil, the external CID equality check is omitted. The native
+    /// validator still recomputes and validates the CID embedded in the block.
+    public static func validateGovernanceDagBlockJSON(
+        payload: Data,
+        label: String? = nil,
+        expectedBlockCid: Data? = nil,
+        generatedAtUnix: UInt64 = currentEpochSeconds()
+    ) throws -> String {
+        try requireReferencePayload(payload, "payload")
+        let resolvedLabel = try validatorLabel(label, fallback: "governance-dag-block.to")
+        if let expectedBlockCid {
+            guard expectedBlockCid.count == governanceDagCidBytesV1 else {
+                throw SorafsReferenceValidationError.invalidGovernanceDagInput(
+                    "expectedBlockCid must contain exactly \(governanceDagCidBytesV1) bytes"
+                )
+            }
+        }
+        try requireReferenceAggregateBytes(
+            payload.count,
+            resolvedLabel.utf8.count,
+            expectedBlockCid?.count ?? 0
+        )
+        guard let json = NoritoNativeBridge.shared.sorafsReferenceValidateGovernanceDagBlock(
+            payload: payload,
+            label: resolvedLabel,
+            expectedBlockCid: expectedBlockCid,
+            generatedAtUnix: generatedAtUnix
+        ) else {
+            throw SorafsReferenceValidationError.bridgeUnavailable
+        }
+        return json
+    }
+
+    /// Validate a signed `GovernanceDagHeadV1` against either a complete root-to-head history
+    /// or its signed checkpoint-anchored tail.
+    public static func validateGovernanceDagHeadChainJSON(
+        head: Data,
+        blocks: [SorafsGovernanceDagBlockInput],
+        headLabel: String? = nil,
+        generatedAtUnix: UInt64 = currentEpochSeconds()
+    ) throws -> String {
+        guard (1...governanceDagMaxBlocksV1).contains(blocks.count) else {
+            throw SorafsReferenceValidationError.invalidGovernanceDagInput(
+                "blocks must contain 1...\(governanceDagMaxBlocksV1) entries"
+            )
+        }
+        try requireReferencePayload(head, "head")
+        let resolvedHeadLabel = try validatorLabel(
+            headLabel,
+            fallback: "governance-dag-head.to"
+        )
+        var aggregateBytes = head.count + resolvedHeadLabel.utf8.count
+        var resolvedBlocks: [(payload: Data, label: String)] = []
+        resolvedBlocks.reserveCapacity(blocks.count)
+        for (index, block) in blocks.enumerated() {
+            try requireReferencePayload(block.payload, "blocks[\(index)].payload")
+            let label = try validatorLabel(
+                block.label,
+                fallback: "governance-dag-block-\(index).to"
+            )
+            aggregateBytes += block.payload.count + label.utf8.count
+            guard aggregateBytes <= referenceMaxInputBytesV1 else {
+                throw SorafsReferenceValidationError.invalidGovernanceDagInput(
+                    "governance DAG head-chain inputs exceed \(referenceMaxInputBytesV1) aggregate bytes"
+                )
+            }
+            resolvedBlocks.append((payload: block.payload, label: label))
+        }
+        guard let json = NoritoNativeBridge.shared.sorafsReferenceValidateGovernanceDagHeadChain(
+            head: head,
+            headLabel: resolvedHeadLabel,
+            blocks: resolvedBlocks,
             generatedAtUnix: generatedAtUnix
         ) else {
             throw SorafsReferenceValidationError.bridgeUnavailable
@@ -617,7 +722,29 @@ public enum SorafsReferenceValidators {
         guard !value.contains("\u{0}") else {
             throw SorafsReferenceValidationError.invalidLabel("label must not contain NUL")
         }
+        guard value.utf8.count <= referenceMaxLabelBytesV1 else {
+            throw SorafsReferenceValidationError.invalidLabel(
+                "label must be at most \(referenceMaxLabelBytesV1) UTF-8 bytes"
+            )
+        }
         return value
+    }
+
+    private static func requireReferencePayload(_ payload: Data, _ field: String) throws {
+        guard payload.count <= referenceMaxInputBytesV1 else {
+            throw SorafsReferenceValidationError.invalidGovernanceDagInput(
+                "\(field) must be at most \(referenceMaxInputBytesV1) bytes"
+            )
+        }
+    }
+
+    private static func requireReferenceAggregateBytes(_ sizes: Int...) throws {
+        let aggregateBytes = sizes.reduce(0, +)
+        guard aggregateBytes <= referenceMaxInputBytesV1 else {
+            throw SorafsReferenceValidationError.invalidGovernanceDagInput(
+                "reference inputs exceed \(referenceMaxInputBytesV1) aggregate bytes"
+            )
+        }
     }
 
     private static func requireUserSignedOrderbookKind(_ kind: SorafsOrderbookPayloadKind) throws {

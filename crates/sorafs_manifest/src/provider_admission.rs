@@ -23,10 +23,10 @@ use crate::provider_advert::TransportProtocol;
 use crate::{
     CouncilSignature, chunker_registry,
     provider_advert::{
-        AdvertEndpoint, CapabilityTlv, CapabilityType, EndpointKind, PqCapabilityError,
-        ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
+        AdvertEndpoint, CapabilityTlv, CapabilityType, EndpointKind, PotrMldsaCapabilityError,
+        PqCapabilityError, ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
         ProviderCapabilitySoranetPqV1, RangeCapabilityError, StakePointer, StreamBudgetError,
-        StreamBudgetV1, TransportHintError, TransportHintV1,
+        StreamBudgetV1, TransportHintError, TransportHintV1, validate_potr_mldsa_capability,
     },
 };
 
@@ -239,6 +239,7 @@ impl ProviderAdmissionProposalV1 {
         }
         let mut seen_range_capability = false;
         let mut seen_pq_capability = false;
+        let mut seen_potr_mldsa_capability = false;
         for capability in &self.capabilities {
             if capability.cap_type == CapabilityType::ChunkRangeFetch {
                 if seen_range_capability {
@@ -262,6 +263,15 @@ impl ProviderAdmissionProposalV1 {
                     .validate()
                     .map_err(ProviderAdmissionValidationError::InvalidSoranetPqCapability)?;
                 seen_pq_capability = true;
+                continue;
+            }
+            if capability.cap_type == CapabilityType::PotrMlDsa {
+                if seen_potr_mldsa_capability {
+                    return Err(ProviderAdmissionValidationError::DuplicatePotrMldsaCapability);
+                }
+                validate_potr_mldsa_capability(&capability.payload)
+                    .map_err(ProviderAdmissionValidationError::InvalidPotrMldsaCapability)?;
+                seen_potr_mldsa_capability = true;
             }
         }
         validate_jurisdiction_code(&self.jurisdiction_code)?;
@@ -754,6 +764,20 @@ impl AdmissionRecord {
         &self.envelope.proposal.por_vrf_key
     }
 
+    /// Returns the council-approved ML-DSA-65 key used for PoTR receipts.
+    ///
+    /// Absence means the provider is not authorised to emit production PoTR
+    /// receipts, even when another admission capability is present.
+    #[must_use]
+    pub fn potr_mldsa_key(&self) -> Option<&[u8]> {
+        self.envelope
+            .proposal
+            .capabilities
+            .iter()
+            .find(|capability| capability.cap_type == CapabilityType::PotrMlDsa)
+            .map(|capability| capability.payload.as_slice())
+    }
+
     /// Returns the canonical envelope digest.
     #[must_use]
     pub fn envelope_digest(&self) -> &[u8; 32] {
@@ -1140,6 +1164,10 @@ pub enum ProviderAdmissionValidationError {
     DuplicateSoranetPqCapability,
     #[error("soranet_pq capability invalid: {0}")]
     InvalidSoranetPqCapability(#[source] PqCapabilityError),
+    #[error("duplicate PoTR ML-DSA capability TLV detected")]
+    DuplicatePotrMldsaCapability,
+    #[error("PoTR ML-DSA capability invalid: {0}")]
+    InvalidPotrMldsaCapability(#[source] PotrMldsaCapabilityError),
     #[error("stream budget or transport hints require chunk_range_fetch capability")]
     RangeMetadataWithoutCapability,
     #[error("stream budget invalid: {0}")]

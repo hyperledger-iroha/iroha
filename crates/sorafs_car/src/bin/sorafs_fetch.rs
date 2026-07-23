@@ -59,11 +59,12 @@ use sorafs_manifest::{
     provider_advert::ProviderCapabilitySoranetPqV1,
 };
 
-const KNOWN_CAPABILITIES: &[CapabilityType; 4] = &[
+const KNOWN_CAPABILITIES: &[CapabilityType; 5] = &[
     CapabilityType::ToriiGateway,
     CapabilityType::QuicNoise,
     CapabilityType::ChunkRangeFetch,
     CapabilityType::SoraNetHybridPq,
+    CapabilityType::PotrMlDsa,
 ];
 use std::{
     collections::{HashMap, HashSet},
@@ -1760,6 +1761,7 @@ fn capability_name(capability: CapabilityType) -> &'static str {
         CapabilityType::QuicNoise => "quic_noise",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
+        CapabilityType::PotrMlDsa => "potr_mldsa",
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }

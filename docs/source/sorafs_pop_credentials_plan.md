@@ -8,19 +8,38 @@ summary: SFM-4b1 implementation status for PoP credential foundations and the re
 ## Current Status
 
 SFM-4b1 now has canonical PoP credential payloads, a production cryptographic
-membership-proof backend, and a consensus-owned issuer/registry foundation,
-but it is not yet shipped as a complete SoraFS proof-of-personhood credential
-service. The first-release backend is a
+membership-proof backend, a consensus-owned issuer/registry foundation, a
+durable issuer/wallet service, and the canonical authenticated Torii V1 API,
+but it is not yet deployable from the standard `irohad` binary. The
+first-release backend is a
 fixed Halo2 circuit over Pasta with transparent IPA polynomial commitments. It
 proves membership in the signed active credential root and empty-leaf membership
 in the signed sparse revocation root while keeping the credential id, holder
 commitment, revocation nonce, holder secret, and both authentication paths out
 of the public payload. The verifier also binds eligibility class, verifier
 challenge and context, credential expiry, root/list versions, and a
-replay-resistant nullifier. The repository still does not contain the
-enrollment portal, credential issuer daemon, juror wallet, dedicated
-credential-registry service facade, or deployed SoraFS verifier service
-described by the original plan. The native registry is available through signed
+replay-resistant nullifier.
+
+`crates/sorafs_node/src/pop_credentials.rs` now owns encrypted enrollment,
+dual-control approval, HSM-backed issuance, durable registry outbox/dead-letter
+and finalized reconciliation, encrypted wallet custody, witness
+synchronization, local proof generation, and exactly-once nullifier
+consumption. `crates/iroha_torii/src/sorafs/pop_api.rs` exposes the exact
+14-route V1 family for enrollment, approval, issuance, revocation, registry,
+wallet, proof generation, and verification. Every route has a strict
+unknown-field-denying request, a route-specific body ceiling, bounded canonical
+Norito decoding, action/request-bound authentication, payload-free errors, and
+no-store responses. `iroha_config` is the sole source of non-secret policy and
+resource bounds. HSM, KMS, authentication, private issuance/witness, ledger,
+and finalized-time providers are runtime-only dependencies.
+
+The remaining local release blocker is `V1-BLOCK-POP-RUNTIME-01`: the standard
+`irohad` entrypoint does not yet construct and inject the governed production
+provider bundle, and the repository has no deployable shared external-runtime
+or sidecar adapter for those providers. Enabling
+`torii.sorafs.storage.pop_credentials` without that injected runtime fails
+startup; no file-key, environment-key, software-signing, or process-clock
+fallback is permitted. The native registry remains available through signed
 transactions and typed queries. The authoritative moderation intake now pins
 its active root, revocation list, issuer-policy digest, and audit head; juror
 enrollment verifies exact-canonical Halo2 membership proofs against that
@@ -28,7 +47,8 @@ snapshot and persists only a proof digest, deterministic appeal nullifier,
 public eligibility class, expiry, and account binding. It rejects observers,
 expired credentials, wrong or rotated roots, revocations, duplicate accounts,
 and duplicate-person nullifiers before panel sortition. This integration is not
-an issuer daemon, private-key manager, holder client, or deployment claim.
+a claim that the missing external runtime adapter or reference deployment is
+complete.
 `scripts/check_sorafs_pop_credentials_rollout_evidence.py` now provides the
 SFM-4b1 promotion gate for future deployed evidence. It requires payload-free
 issuer-bundle, commitment-root, revocation-registry, enrollment-portal,
@@ -45,8 +65,8 @@ revocation-list digests, so rollout packets cannot mix evidence from different
 credential publication runs. Root or revocation-list disagreements mark the
 offending anchor and downstream artifacts invalid in the emitted summary, not
 only the top-level promotion status. This checker is a rollout gate; it does
-not replace the missing issuer/client runtime services, dedicated registry
-facade, or deployed verifier integration.
+not replace the missing standard-`irohad` external-runtime adapter, HSM/KMS
+integration, or deployed verifier evidence.
 Verifier-service artifacts also publish `policy_digest_hex`; governance
 approval artifacts must bind `policy_digest_hex` to that valid verifier policy
 digest, and the checker emits those valid verifier policy digests as
@@ -298,32 +318,62 @@ all accept/reject results are deterministic across supported hardware.
 
 | Component | Responsibility | Local state |
 |-----------|----------------|-------------|
-| Enrollment portal | Captures candidate attestations and issuer approvals. | Not shipped. |
-| Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Payload signatures, a local issued-credential bundle helper, bounded issuer policy, and authorised native publication ISIs are shipped; daemon and production key management are not shipped. |
-| Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned commitment/root/revocation/audit state and typed queries are shipped; a dedicated service facade and deployed multi-peer evidence are not shipped. |
-| Juror client | Stores credentials, syncs revocations, and generates proofs. | Not shipped. |
-| Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local Halo2/IPA prover and production verifier, native authoritative moderation-intake/sortition verification, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the deployed service facade is not shipped. |
+| Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API and durable encrypted workflow are shipped; operator UI, WebAuthn enrollment ceremony, and the deployable external authenticator adapter remain open. |
+| Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, and retry-safe outbox are shipped; standard-`irohad` HSM/KMS/provider wiring and deployment evidence remain open. |
+| Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, and durable reconciliation are shipped; standard-daemon transaction/reader adapters and multi-peer evidence remain open. |
+| Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, and local proof APIs are shipped; a deployable KMS/witness adapter and operator client remain open. |
+| Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the external runtime adapter and reviewed deployment evidence remain open. |
 
 Do not document `sorafs pop sync`, `sorafs pop status`,
 `sorafs pop prove`, or `sorafs pop revoke` as shipped commands until the CLI
 handlers and backing services exist. The standalone `sorafs-validate pop`
 reference validator is shipped only for local/CI payload validation.
 
+## Runtime Adapter Blocker Runbook
+
+`V1-BLOCK-POP-RUNTIME-01` blocks local completion and promotion. The standard
+daemon builds `ToriiRuntimeDeps` in `crates/irohad/src/main.rs`, but no
+production caller currently supplies
+`PopCredentialRuntimeSecretsV1`. The missing deployable shared
+external-runtime/sidecar adapter must provide:
+
+- the runtime-only enrollment and wallet hybrid recipient secrets;
+- the governed issuer HSM signer and KMS/PKCS#11 wallet-key wrapper;
+- the action/request-bound API authenticator;
+- the ledger transaction submitter and finalized registry reader;
+- private issuance-draft and wallet-witness providers; and
+- the finalized-chain time provider with an independent clock observation.
+
+The adapter must bind every non-secret handle and public key to the exact
+`iroha_config` policy, use the local queue/state or an authenticated equivalent
+for transaction submission and finalized reads, participate in supervised
+startup/shutdown, and expose only stable payload-free failures. Secret bytes,
+PINs, bearer material, credentials, witnesses, attestations, and PII must not
+come from `iroha_config`, environment overrides, repository files, or logs.
+
+Closure requires a standard-`irohad` or explicitly packaged reference-daemon
+startup test with PoP enabled, provider-unavailable and config/runtime-mismatch
+negatives, HSM/KMS/authenticator and finalized-time rotation/rollback tests,
+restart reconciliation, and a four-validator reference deployment run. Until
+those checks pass, operators must leave
+`torii.sorafs.storage.pop_credentials.enabled = false`; the intentional
+enabled-without-runtime startup failure must not be bypassed.
+
 ## Remaining Production Gates
 
-- Build the credential issuer daemon and enrollment approval workflow around
-  the native registry, including HSM/threshold key management, retry-safe
-  transaction submission, operator observability, and disaster recovery.
+- Resolve `V1-BLOCK-POP-RUNTIME-01` with the shared deployable external-runtime
+  adapter described above; do not add a software-key, file-key, environment, or
+  process-clock fallback.
 - Deploy the native registry on a reviewed multi-validator environment and
-  collect restart, reconciliation, rollback-rejection, and audit-head evidence;
-  add a dedicated Torii registry facade only if the operator/client contract
-  requires one.
-- Build juror client storage, revocation sync, proof generation, and local
-  credential rotation. The private Halo2 prover/verifier primitive is shipped;
-  holder-wallet custody and service integration remain open.
-- Extend service-level negative tests around issuer authorization, registry
-  rollback, juror-wallet proof generation, deployed moderation submission,
-  multi-peer restart reconciliation, and operator retry behavior. Native
+  collect restart, reconciliation, rollback-rejection, key/time rotation, and
+  audit-head evidence through the shipped Torii facade.
+- Package the operator/juror client around the shipped encrypted wallet,
+  revocation synchronization, and local proof APIs without exposing private
+  custody material.
+- Extend deployment-level negatives around external-provider outage, issuer
+  authorization, registry rollback, juror-wallet proof generation, deployed
+  moderation submission, multi-peer restart reconciliation, and operator retry
+  behavior. Native
   moderation coverage already rejects malformed/noncanonical proofs, wrong and
   rotated roots, replayed nullifiers, observer/expired credentials,
   biased/duplicate rosters, deadline violations, and failed transactions
@@ -355,8 +405,8 @@ reference validator is shipped only for local/CI payload validation.
   transcript consistency digest. The aggregate production-readiness
   gate also rechecks `valid_juror_sync_bindings` against `valid_root_digests`
   and `valid_revocation_list_digests` before final promotion can report ready.
-- Publish operator and juror docs only after the service CLI/API and verifier
-  paths exist.
+- Publish operator and juror command documentation only after the still-open
+  CLI and shared external-runtime adapter exist.
 
 ## Validation
 
@@ -368,13 +418,16 @@ cargo test -p iroha_data_model policy_jury
 cargo test -p iroha_data_model pop_registry
 cargo test -p sorafs_manifest pop -- --nocapture
 cargo test -p iroha_core sorafs_pop_registry -- --nocapture
+cargo test --locked -p sorafs_node pop_credentials --lib -- --nocapture
+cargo test --locked -p iroha_torii --features app_api sorafs::pop_api::tests --lib
 cargo test -p connect_norito_bridge sorafs_reference_pop -- --nocapture
 python3 -m pytest -q scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py \
   scripts/tests/run_sorafs_pop_credentials_rollout_evidence_test.py \
   scripts/tests/build_sorafs_pop_credentials_canary_test.py
 ```
 
-Add daemon, client, dedicated service-facade, multi-peer deployment, and
-deployed-verifier tests when those remaining integrations land.
+Add the standard-daemon external-runtime adapter, operator client,
+multi-peer deployment, and deployed-verifier tests when those remaining
+integrations land.
 
 The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier. The shared runner plan guard also rejects non-canonical nested required-kind, threshold, external-evidence, evidence-contract, and command-step shapes before dry-run output or verifier execution.

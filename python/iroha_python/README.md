@@ -598,18 +598,22 @@ print(
     snapshot.leader,
 )
 print(
-    "lane artifacts",
-    len(snapshot.lane_payload_ownerships),
-    len(snapshot.committed_lane_blocks),
-    len(snapshot.lane_block_sessions),
+    "reducer liveness",
+    snapshot.liveness.generation,
+    snapshot.liveness.no_progress_age_ms,
 )
-if snapshot.safety_halt.active:
-    print("consensus safety halt:", snapshot.safety_halt.reason)
-print("transaction queue saturated:", any((
-    snapshot.operator.tx_queue.saturated_by_count,
-    snapshot.operator.tx_queue.saturated_by_bytes,
-    snapshot.operator.tx_queue.saturated_by_age,
-)))
+
+# Fetch non-authoritative operator and lane evidence separately.
+diagnostics = client.get_sumeragi_diagnostics_typed()
+print(
+    "lane artifacts",
+    len(diagnostics.lane_payload_ownerships),
+    len(diagnostics.committed_lane_blocks),
+    len(diagnostics.lane_block_sessions),
+)
+print("transaction queue saturated:", diagnostics.tx_queue_saturated)
+for application in diagnostics.native_amx_participant_applications:
+    print(application.lane_id, application.participant_height, application.state)
 
 # `get_status_snapshot_typed()` below is the generic node/operational status
 # surface. Its lane commitment and governance fields are intentionally distinct

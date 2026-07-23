@@ -258,6 +258,66 @@ certificate round.
   second generation increment, and `ResumeVote` reconstructs the historical
   signing request. The deliberately violated negated predicate is a regression
   witness, not a release invariant or deductive proof.
+- `SumeragiV2AutoscaleLifecycle.tla`,
+  `SumeragiV2NativeApplicationEvidence.tla`, and
+  `SumeragiV2AutonomousReservationCarrier.tla` are the bounded multilane
+  closure kernels. Their fixed configurations check storage-before-activation,
+  evidence-aware retirement, fresh incarnation reuse, durable Native
+  publication/pruning order, same-route control-only treatment, unchanged
+  reservation identity, single ownership, a control-only autonomous anchor,
+  durable full-candidate authorization, ordered two-phase release, ABA-safe
+  recreation, and at-most-once canonical application. Thirteen `_bug.cfg`
+  controls deliberately weaken one boundary each and must produce the named
+  invariant counterexample.
+  `multilane_source_bindings.json` binds each kernel to current Rust items and
+  semantic tokens; `check_sumeragi_v2_multilane_models.py` validates that
+  structure before the default TLC matrix. The Native binding includes the
+  QC-authenticated manifest builder, manifest-before-receipt publication,
+  atomic latest-index write/readback, bounded latest lookup, and the
+  Kura-before-WSV application boundary. The autonomous binding includes
+  exclusion-aware FIFO reservation, the durable Queue/Kura release barrier,
+  and exact full-candidate signing authorization.
+
+  `run_sumeragi_v2_multilane_apalache.sh` is the second bounded positive
+  checker. It accepts no length argument or environment length override,
+  requires the exact source-binding check first, validates the pinned Apalache 0.52.2
+  launcher and jar hashes, typechecks all three complete modules, and
+  requires one exact `NoError` result at these reviewed bounds:
+
+  | Kernel | Fixed configuration | `Next` bound |
+  | --- | --- | ---: |
+  | autoscale lifecycle | `multilane_autoscale_lifecycle_fixed.cfg` | 8 |
+  | Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |
+  | autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |
+
+  Eight runner-contract negative controls reject tool-version or checksum
+  drift, source-binding bypass, a reduced autoscale bound, mutation
+  substitution, a weakened success marker, and a length override. The default
+  `run_sumeragi_v2_tlc.sh` release matrix invokes this Apalache gate after the
+  thirteen exact TLC mutation witnesses. Apalache does not run those mutations:
+  their named-counterexample contract is owned by the deterministic TLC
+  runner, while the Apalache leg accepts positive `NoError` only.
+
+  Install and run the pinned toolchain with:
+
+  ```sh
+  bash scripts/formal/install_apalache.sh 0.52.2
+  bash scripts/formal/run_sumeragi_v2_multilane_apalache.sh
+  ```
+
+  `APALACHE_INSTALL_ROOT` may relocate the verified installation, and
+  `APALACHE_BIN` may point at that relocated launcher; the runner still
+  verifies the exact launcher, jar, and reported version. A successful run
+  writes current logs under
+  `target/formal/sumeragi_v2/multilane_apalache/` and atomically publishes
+  `target/formal/sumeragi_v2/multilane_apalache_evidence.tsv`. The evidence
+  source-seals every model, configuration, formal runner/checker, binding
+  ledger, and bound production source before and after checking, then records
+  each model/config/log hash, bound length, and exact `NoError` result. A
+  failed or source-drifting run removes or withholds the completion evidence.
+  These finite checks constrain the three `specified_unproved`
+  production-refinement obligations in `proof_coverage.json`; they are not TLAPS
+  or cross-tool proof evidence and do not change proof-ledger status.
 
 ## Exact protocol abstractions
 

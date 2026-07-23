@@ -17540,6 +17540,707 @@ impl SorafsAppealFinanceSettlement {
     }
 }
 
+/// One governed PoP dual-control approval signer.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsPopApprovalSigner {
+    /// Stable payload-free signer identifier.
+    pub signer_id: String,
+    /// Raw Ed25519 public key as 64 lowercase hexadecimal characters.
+    pub public_key_hex: String,
+    /// Finalized revocation epoch, if revoked.
+    pub revoked_at_epoch: Option<u64>,
+}
+
+/// User configuration for the authenticated PoP credential service.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsPopCredentialService {
+    /// Enable the canonical PoP API and reconciliation worker.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::ENABLED")]
+    pub enabled: bool,
+    /// Durable issuer checkpoint directory.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::issuer_state_dir()")]
+    pub issuer_state_dir: PathBuf,
+    /// Encrypted wallet-vault directory.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::wallet_state_dir()")]
+    pub wallet_state_dir: PathBuf,
+    /// Exact active issuer-policy digest as lowercase hexadecimal.
+    pub issuer_policy_digest_hex: Option<String>,
+    /// Governed issuer identifier.
+    pub issuer_id: Option<String>,
+    /// Non-secret runtime HSM key handle.
+    pub issuer_hsm_key_id: Option<String>,
+    /// Governed raw Ed25519 issuer public key as lowercase hexadecimal.
+    pub issuer_public_key_hex: Option<String>,
+    /// Non-secret runtime hybrid recipient-key handle.
+    pub enrollment_recipient_key_id: Option<String>,
+    /// Required distinct active approval count.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::APPROVAL_QUORUM")]
+    pub approval_quorum: u8,
+    /// Canonically signer-id-ordered governed approvers.
+    #[config(default = "Vec::new()")]
+    pub approval_signers: Vec<SorafsPopApprovalSigner>,
+    /// Maximum pending encrypted enrollments.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::MAX_PENDING_ENROLLMENTS")]
+    pub max_pending_enrollments: u32,
+    /// Maximum durable registry outbox entries.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::MAX_OUTBOX_ENTRIES")]
+    pub max_outbox_entries: u32,
+    /// Maximum durable dead letters.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::MAX_DEAD_LETTERS")]
+    pub max_dead_letters: u32,
+    /// Maximum consumed membership-proof nullifiers.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::MAX_SEEN_NULLIFIERS")]
+    pub max_seen_nullifiers: u32,
+    /// Submission attempts before terminal dead-lettering.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::MAX_SUBMISSION_ATTEMPTS")]
+    pub max_submission_attempts: u16,
+    /// Registry submission/reconciliation cadence.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::WORKER_INTERVAL_MS")]
+    pub worker_interval_ms: u64,
+    /// Maximum absolute skew between finalized and runtime clock time.
+    #[config(default = "defaults::sorafs::storage::pop_credentials::MAX_FINALIZED_TIME_SKEW_SECS")]
+    pub max_finalized_time_skew_secs: u64,
+}
+
+impl Default for SorafsPopCredentialService {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::pop_credentials::ENABLED,
+            issuer_state_dir: defaults::sorafs::storage::pop_credentials::issuer_state_dir(),
+            wallet_state_dir: defaults::sorafs::storage::pop_credentials::wallet_state_dir(),
+            issuer_policy_digest_hex: None,
+            issuer_id: None,
+            issuer_hsm_key_id: None,
+            issuer_public_key_hex: None,
+            enrollment_recipient_key_id: None,
+            approval_quorum: defaults::sorafs::storage::pop_credentials::APPROVAL_QUORUM,
+            approval_signers: Vec::new(),
+            max_pending_enrollments:
+                defaults::sorafs::storage::pop_credentials::MAX_PENDING_ENROLLMENTS,
+            max_outbox_entries: defaults::sorafs::storage::pop_credentials::MAX_OUTBOX_ENTRIES,
+            max_dead_letters: defaults::sorafs::storage::pop_credentials::MAX_DEAD_LETTERS,
+            max_seen_nullifiers: defaults::sorafs::storage::pop_credentials::MAX_SEEN_NULLIFIERS,
+            max_submission_attempts:
+                defaults::sorafs::storage::pop_credentials::MAX_SUBMISSION_ATTEMPTS,
+            worker_interval_ms: defaults::sorafs::storage::pop_credentials::WORKER_INTERVAL_MS,
+            max_finalized_time_skew_secs:
+                defaults::sorafs::storage::pop_credentials::MAX_FINALIZED_TIME_SKEW_SECS,
+        }
+    }
+}
+
+impl SorafsPopCredentialService {
+    fn parse(
+        self,
+        storage_enabled: bool,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SorafsPopCredentialService> {
+        const MAX_COLLECTION: u32 = 65_536;
+        const MAX_WORKER_INTERVAL_MS: u64 = 60 * 60 * 1_000;
+        const MAX_FINALIZED_TIME_SKEW_SECS: u64 = 5 * 60;
+
+        fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+        }
+
+        fn clean_text(value: &str) -> bool {
+            !value.is_empty()
+                && value == value.trim()
+                && value.len() <= 256
+                && !value.chars().any(char::is_control)
+        }
+
+        fn parse_digest(
+            emitter: &mut Emitter<ParseError>,
+            path: &str,
+            value: Option<&str>,
+        ) -> Option<[u8; 32]> {
+            let Some(value) = value else {
+                emit(emitter, format!("{path} is required when enabled"));
+                return None;
+            };
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                emit(
+                    emitter,
+                    format!("{path} must be exactly 64 lowercase hexadecimal characters"),
+                );
+                return None;
+            }
+            let mut digest = [0_u8; 32];
+            hex::decode_to_slice(value, &mut digest)
+                .expect("validated lowercase 32-byte hexadecimal");
+            if digest == [0; 32] {
+                emit(emitter, format!("{path} must be nonzero"));
+                return None;
+            }
+            Some(digest)
+        }
+
+        let authority_fields_present = self.issuer_policy_digest_hex.is_some()
+            || self.issuer_id.is_some()
+            || self.issuer_hsm_key_id.is_some()
+            || self.issuer_public_key_hex.is_some()
+            || self.enrollment_recipient_key_id.is_some()
+            || !self.approval_signers.is_empty();
+        if !self.enabled {
+            if authority_fields_present {
+                emit(
+                    emitter,
+                    "torii.sorafs.storage.pop_credentials authority fields must be absent when disabled",
+                );
+            }
+            return None;
+        }
+        if !storage_enabled {
+            emit(
+                emitter,
+                "torii.sorafs.storage.pop_credentials.enabled requires storage.enabled",
+            );
+        }
+        if self.issuer_state_dir.as_os_str().is_empty()
+            || self.wallet_state_dir.as_os_str().is_empty()
+            || self.issuer_state_dir == self.wallet_state_dir
+            || !self.issuer_state_dir.is_absolute()
+            || !self.wallet_state_dir.is_absolute()
+        {
+            emit(
+                emitter,
+                "torii.sorafs.storage.pop_credentials issuer_state_dir and wallet_state_dir must be distinct non-empty absolute paths",
+            );
+        }
+
+        let issuer_policy_digest = parse_digest(
+            emitter,
+            "torii.sorafs.storage.pop_credentials.issuer_policy_digest_hex",
+            self.issuer_policy_digest_hex.as_deref(),
+        );
+        let issuer_public_key = parse_digest(
+            emitter,
+            "torii.sorafs.storage.pop_credentials.issuer_public_key_hex",
+            self.issuer_public_key_hex.as_deref(),
+        );
+        for (path, value) in [
+            (
+                "torii.sorafs.storage.pop_credentials.issuer_id",
+                self.issuer_id.as_deref(),
+            ),
+            (
+                "torii.sorafs.storage.pop_credentials.issuer_hsm_key_id",
+                self.issuer_hsm_key_id.as_deref(),
+            ),
+            (
+                "torii.sorafs.storage.pop_credentials.enrollment_recipient_key_id",
+                self.enrollment_recipient_key_id.as_deref(),
+            ),
+        ] {
+            match value {
+                Some(value) if clean_text(value) => {}
+                _ => emit(
+                    emitter,
+                    format!("{path} is required and must be canonical bounded text"),
+                ),
+            }
+        }
+        if let Some(public_key) = issuer_public_key
+            && PublicKey::from_bytes(Algorithm::Ed25519, &public_key).is_err()
+        {
+            emit(
+                emitter,
+                "torii.sorafs.storage.pop_credentials.issuer_public_key_hex is not a valid Ed25519 public key",
+            );
+        }
+
+        let mut approval_signers = Vec::with_capacity(self.approval_signers.len());
+        let mut previous_signer_id: Option<&str> = None;
+        let mut public_keys = BTreeSet::new();
+        for (index, signer) in self.approval_signers.iter().enumerate() {
+            if !clean_text(&signer.signer_id)
+                || previous_signer_id.is_some_and(|previous| previous >= signer.signer_id.as_str())
+            {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.pop_credentials.approval_signers[{index}].signer_id must be canonical and strictly ordered"
+                    ),
+                );
+            }
+            let public_key = parse_digest(
+                emitter,
+                &format!(
+                    "torii.sorafs.storage.pop_credentials.approval_signers[{index}].public_key_hex"
+                ),
+                Some(&signer.public_key_hex),
+            );
+            if let Some(public_key) = public_key {
+                if PublicKey::from_bytes(Algorithm::Ed25519, &public_key).is_err() {
+                    emit(
+                        emitter,
+                        format!(
+                            "torii.sorafs.storage.pop_credentials.approval_signers[{index}].public_key_hex is not a valid Ed25519 public key"
+                        ),
+                    );
+                }
+                if !public_keys.insert(public_key) {
+                    emit(
+                        emitter,
+                        "torii.sorafs.storage.pop_credentials approval public keys must be distinct",
+                    );
+                }
+                approval_signers.push(actual::SorafsPopApprovalSigner {
+                    signer_id: signer.signer_id.clone(),
+                    public_key,
+                    revoked_at_epoch: signer.revoked_at_epoch,
+                });
+            }
+            if signer.revoked_at_epoch == Some(0) {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.pop_credentials.approval_signers[{index}].revoked_at_epoch must be nonzero"
+                    ),
+                );
+            }
+            previous_signer_id = Some(&signer.signer_id);
+        }
+        if self.approval_quorum < 2 || usize::from(self.approval_quorum) > approval_signers.len() {
+            emit(
+                emitter,
+                "torii.sorafs.storage.pop_credentials.approval_quorum must require at least two and not exceed the governed signer count",
+            );
+        }
+        for (field, value) in [
+            ("max_pending_enrollments", self.max_pending_enrollments),
+            ("max_outbox_entries", self.max_outbox_entries),
+            ("max_dead_letters", self.max_dead_letters),
+            ("max_seen_nullifiers", self.max_seen_nullifiers),
+        ] {
+            if value == 0 || value > MAX_COLLECTION {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.pop_credentials.{field} must be within 1..={MAX_COLLECTION}"
+                    ),
+                );
+            }
+        }
+        if self.max_submission_attempts == 0 {
+            emit(
+                emitter,
+                "torii.sorafs.storage.pop_credentials.max_submission_attempts must be nonzero",
+            );
+        }
+        if self.worker_interval_ms == 0 || self.worker_interval_ms > MAX_WORKER_INTERVAL_MS {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.pop_credentials.worker_interval_ms must be within 1..={MAX_WORKER_INTERVAL_MS}"
+                ),
+            );
+        }
+        if self.max_finalized_time_skew_secs > MAX_FINALIZED_TIME_SKEW_SECS {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.pop_credentials.max_finalized_time_skew_secs must be within 0..={MAX_FINALIZED_TIME_SKEW_SECS}"
+                ),
+            );
+        }
+
+        Some(actual::SorafsPopCredentialService {
+            issuer_state_dir: self.issuer_state_dir,
+            wallet_state_dir: self.wallet_state_dir,
+            issuer_policy_digest: issuer_policy_digest?,
+            issuer_id: self.issuer_id?,
+            issuer_hsm_key_id: self.issuer_hsm_key_id?,
+            issuer_public_key: issuer_public_key?,
+            enrollment_recipient_key_id: self.enrollment_recipient_key_id?,
+            approval_quorum: self.approval_quorum,
+            approval_signers,
+            max_pending_enrollments: self.max_pending_enrollments,
+            max_outbox_entries: self.max_outbox_entries,
+            max_dead_letters: self.max_dead_letters,
+            max_seen_nullifiers: self.max_seen_nullifiers,
+            max_submission_attempts: self.max_submission_attempts,
+            worker_interval: Duration::from_millis(self.worker_interval_ms),
+            max_finalized_time_skew: Duration::from_secs(self.max_finalized_time_skew_secs),
+        })
+    }
+}
+
+/// User configuration for finalized-chain moderation orchestration.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsModerationOrchestrator {
+    /// Enable authenticated native moderation routes and reconciliation.
+    #[config(default = "defaults::sorafs::storage::moderation_orchestrator::ENABLED")]
+    pub enabled: bool,
+    /// Private canonical checkpoint path.
+    #[config(default = "defaults::sorafs::storage::moderation_orchestrator::checkpoint_path()")]
+    pub checkpoint_path: PathBuf,
+    /// Canonical governance account used for deadline maintenance.
+    pub maintenance_authority: Option<String>,
+    /// Maximum appeals and activated cases in a complete finalized snapshot.
+    #[config(default = "defaults::sorafs::storage::moderation_orchestrator::MAX_CASES")]
+    pub max_cases: u32,
+    /// Maximum finalized typed events retained in one snapshot.
+    #[config(default = "defaults::sorafs::storage::moderation_orchestrator::MAX_EVENTS")]
+    pub max_events: u32,
+    /// Maximum pending native transactions.
+    #[config(default = "defaults::sorafs::storage::moderation_orchestrator::MAX_OUTBOX_ENTRIES")]
+    pub max_outbox_entries: u32,
+    /// Maximum stable operation identities and terminal dead letters.
+    #[config(
+        default = "defaults::sorafs::storage::moderation_orchestrator::MAX_IDEMPOTENCY_RECORDS"
+    )]
+    pub max_idempotency_records: u32,
+    /// Maximum settlement/publication handoff identities.
+    #[config(default = "defaults::sorafs::storage::moderation_orchestrator::MAX_HANDOFFS")]
+    pub max_handoffs: u32,
+    /// Safe attempts under one unchanged operation identity.
+    #[config(default = "defaults::sorafs::storage::moderation_orchestrator::MAX_SUBMIT_ATTEMPTS")]
+    pub max_submit_attempts: u16,
+    /// Maximum canonical checkpoint size.
+    #[config(default = "defaults::sorafs::storage::moderation_orchestrator::CHECKPOINT_MAX_BYTES")]
+    pub checkpoint_max_bytes: Bytes<u64>,
+    /// Finalized reconciliation and maintenance cadence.
+    #[config(default = "defaults::sorafs::storage::moderation_orchestrator::WORKER_INTERVAL_MS")]
+    pub worker_interval_ms: u64,
+    /// Maximum native maintenance actions emitted in one scan.
+    #[config(
+        default = "defaults::sorafs::storage::moderation_orchestrator::MAINTENANCE_BATCH_LIMIT"
+    )]
+    pub maintenance_batch_limit: u32,
+}
+
+impl Default for SorafsModerationOrchestrator {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::moderation_orchestrator::ENABLED,
+            checkpoint_path: defaults::sorafs::storage::moderation_orchestrator::checkpoint_path(),
+            maintenance_authority: None,
+            max_cases: defaults::sorafs::storage::moderation_orchestrator::MAX_CASES,
+            max_events: defaults::sorafs::storage::moderation_orchestrator::MAX_EVENTS,
+            max_outbox_entries:
+                defaults::sorafs::storage::moderation_orchestrator::MAX_OUTBOX_ENTRIES,
+            max_idempotency_records:
+                defaults::sorafs::storage::moderation_orchestrator::MAX_IDEMPOTENCY_RECORDS,
+            max_handoffs: defaults::sorafs::storage::moderation_orchestrator::MAX_HANDOFFS,
+            max_submit_attempts:
+                defaults::sorafs::storage::moderation_orchestrator::MAX_SUBMIT_ATTEMPTS,
+            checkpoint_max_bytes:
+                defaults::sorafs::storage::moderation_orchestrator::CHECKPOINT_MAX_BYTES,
+            worker_interval_ms:
+                defaults::sorafs::storage::moderation_orchestrator::WORKER_INTERVAL_MS,
+            maintenance_batch_limit:
+                defaults::sorafs::storage::moderation_orchestrator::MAINTENANCE_BATCH_LIMIT,
+        }
+    }
+}
+
+impl SorafsModerationOrchestrator {
+    fn parse(
+        self,
+        storage_enabled: bool,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SorafsModerationOrchestrator> {
+        const MAX_COLLECTION: u32 = 1_000_000;
+        const MAX_CHECKPOINT_BYTES: u64 = 32 * 1024 * 1024;
+        const MAX_WORKER_INTERVAL_MS: u64 = 60 * 60 * 1_000;
+
+        fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+        }
+
+        if !self.enabled {
+            if self.maintenance_authority.is_some() {
+                emit(
+                    emitter,
+                    "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be absent when disabled",
+                );
+            }
+            return None;
+        }
+        if !storage_enabled {
+            emit(
+                emitter,
+                "torii.sorafs.storage.moderation_orchestrator.enabled requires storage.enabled",
+            );
+        }
+        if !self.checkpoint_path.is_absolute()
+            || self.checkpoint_path.file_name().is_none()
+            || self.checkpoint_path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            })
+        {
+            emit(
+                emitter,
+                "torii.sorafs.storage.moderation_orchestrator.checkpoint_path must be an absolute file path without dot components",
+            );
+        }
+        for (field, value) in [
+            ("max_cases", self.max_cases),
+            ("max_events", self.max_events),
+            ("max_outbox_entries", self.max_outbox_entries),
+            ("max_idempotency_records", self.max_idempotency_records),
+            ("max_handoffs", self.max_handoffs),
+            ("maintenance_batch_limit", self.maintenance_batch_limit),
+        ] {
+            if value == 0 || value > MAX_COLLECTION {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.moderation_orchestrator.{field} must be within 1..={MAX_COLLECTION}"
+                    ),
+                );
+            }
+        }
+        if self.max_submit_attempts == 0 {
+            emit(
+                emitter,
+                "torii.sorafs.storage.moderation_orchestrator.max_submit_attempts must be nonzero",
+            );
+        }
+        if self.checkpoint_max_bytes.0 == 0 || self.checkpoint_max_bytes.0 > MAX_CHECKPOINT_BYTES {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.moderation_orchestrator.checkpoint_max_bytes must be within 1..={MAX_CHECKPOINT_BYTES}"
+                ),
+            );
+        }
+        if self.worker_interval_ms == 0 || self.worker_interval_ms > MAX_WORKER_INTERVAL_MS {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.moderation_orchestrator.worker_interval_ms must be within 1..={MAX_WORKER_INTERVAL_MS}"
+                ),
+            );
+        }
+
+        let maintenance_authority = match self.maintenance_authority.as_deref() {
+            Some(raw) => match AccountId::parse_encoded(raw) {
+                Ok(parsed) if parsed.canonical() == raw => Some(parsed.into_account_id()),
+                Ok(_) | Err(_) => {
+                    emit(
+                        emitter,
+                        "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
+                    );
+                    None
+                }
+            },
+            None => {
+                emit(
+                    emitter,
+                    "torii.sorafs.storage.moderation_orchestrator.maintenance_authority is required when enabled",
+                );
+                None
+            }
+        };
+
+        Some(actual::SorafsModerationOrchestrator {
+            checkpoint_path: self.checkpoint_path,
+            maintenance_authority: maintenance_authority?,
+            max_cases: usize::try_from(self.max_cases).unwrap_or(usize::MAX),
+            max_events: usize::try_from(self.max_events).unwrap_or(usize::MAX),
+            max_outbox_entries: usize::try_from(self.max_outbox_entries).unwrap_or(usize::MAX),
+            max_idempotency_records: usize::try_from(self.max_idempotency_records)
+                .unwrap_or(usize::MAX),
+            max_handoffs: usize::try_from(self.max_handoffs).unwrap_or(usize::MAX),
+            max_submit_attempts: u32::from(self.max_submit_attempts),
+            checkpoint_max_bytes: self.checkpoint_max_bytes,
+            worker_interval: Duration::from_millis(self.worker_interval_ms),
+            maintenance_batch_limit: usize::try_from(self.maintenance_batch_limit)
+                .unwrap_or(usize::MAX),
+        })
+    }
+}
+
+#[cfg(test)]
+mod sorafs_moderation_orchestrator_tests {
+    use super::*;
+
+    fn maintenance_authority() -> String {
+        let keypair =
+            KeyPair::try_from_seed(vec![0x6D; 32], Algorithm::Ed25519).expect("test keypair");
+        AccountId::new(keypair.public_key().clone()).to_string()
+    }
+
+    fn valid_config() -> SorafsModerationOrchestrator {
+        SorafsModerationOrchestrator {
+            enabled: true,
+            checkpoint_path: PathBuf::from("/var/lib/iroha/sorafs/moderation/orchestrator.norito"),
+            maintenance_authority: Some(maintenance_authority()),
+            ..SorafsModerationOrchestrator::default()
+        }
+    }
+
+    #[test]
+    fn disabled_default_is_inert() {
+        let mut emitter = Emitter::new();
+        assert!(
+            SorafsModerationOrchestrator::default()
+                .parse(false, &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_ok());
+    }
+
+    #[test]
+    fn enabled_policy_parses_without_runtime_secrets() {
+        let mut emitter = Emitter::new();
+        let parsed = valid_config()
+            .parse(true, &mut emitter)
+            .expect("enabled policy");
+        assert!(emitter.into_result().is_ok());
+        assert!(parsed.checkpoint_path.is_absolute());
+        assert_eq!(
+            parsed.maintenance_authority.to_string(),
+            maintenance_authority()
+        );
+        assert_eq!(
+            parsed.max_cases,
+            usize::try_from(defaults::sorafs::storage::moderation_orchestrator::MAX_CASES)
+                .expect("default fits usize")
+        );
+        assert_eq!(
+            parsed.checkpoint_max_bytes.0,
+            defaults::sorafs::storage::moderation_orchestrator::CHECKPOINT_MAX_BYTES.0
+        );
+        assert_eq!(parsed.worker_interval, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn enabled_policy_fails_closed_on_storage_path_and_bound_violations() {
+        let mut config = valid_config();
+        config.checkpoint_path = PathBuf::from("relative/orchestrator.norito");
+        config.max_cases = 0;
+        config.max_events = 1_000_001;
+        config.max_outbox_entries = 0;
+        config.max_idempotency_records = 0;
+        config.max_handoffs = 0;
+        config.max_submit_attempts = 0;
+        config.checkpoint_max_bytes = Bytes(32 * 1024 * 1024 + 1);
+        config.worker_interval_ms = 0;
+        config.maintenance_batch_limit = 0;
+
+        let mut emitter = Emitter::new();
+        let _ = config.parse(false, &mut emitter);
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn disabled_policy_rejects_stale_authority_claims() {
+        let mut config = SorafsModerationOrchestrator::default();
+        config.maintenance_authority = Some(maintenance_authority());
+        let mut emitter = Emitter::new();
+        assert!(config.parse(false, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn enabled_policy_requires_canonical_authority() {
+        let mut config = valid_config();
+        config.maintenance_authority = Some("not-an-account".to_owned());
+        let mut emitter = Emitter::new();
+        assert!(config.parse(true, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[cfg(test)]
+mod sorafs_pop_credential_service_tests {
+    use super::*;
+
+    fn ed25519_public_hex(seed: u8) -> String {
+        let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key");
+        hex::encode(key.public_key().to_bytes().1)
+    }
+
+    fn valid_config() -> SorafsPopCredentialService {
+        SorafsPopCredentialService {
+            enabled: true,
+            issuer_state_dir: PathBuf::from("/var/lib/iroha/sorafs/pop/issuer"),
+            wallet_state_dir: PathBuf::from("/var/lib/iroha/sorafs/pop/wallet"),
+            issuer_policy_digest_hex: Some("41".repeat(32)),
+            issuer_id: Some("pop-issuer-sora-foundation".to_owned()),
+            issuer_hsm_key_id: Some("pkcs11:object=pop-issuer-v1".to_owned()),
+            issuer_public_key_hex: Some(ed25519_public_hex(0x11)),
+            enrollment_recipient_key_id: Some("kms://pop/enrollment/primary".to_owned()),
+            approval_quorum: 2,
+            approval_signers: vec![
+                SorafsPopApprovalSigner {
+                    signer_id: "approver-a".to_owned(),
+                    public_key_hex: ed25519_public_hex(0x21),
+                    revoked_at_epoch: None,
+                },
+                SorafsPopApprovalSigner {
+                    signer_id: "approver-b".to_owned(),
+                    public_key_hex: ed25519_public_hex(0x22),
+                    revoked_at_epoch: None,
+                },
+            ],
+            ..SorafsPopCredentialService::default()
+        }
+    }
+
+    #[test]
+    fn governed_pop_policy_parses_without_runtime_secrets() {
+        let mut emitter = Emitter::new();
+        let parsed = valid_config()
+            .parse(true, &mut emitter)
+            .expect("enabled policy");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(parsed.issuer_policy_digest, [0x41; 32]);
+        assert_eq!(parsed.approval_quorum, 2);
+        assert_eq!(parsed.approval_signers.len(), 2);
+        assert_eq!(parsed.worker_interval, Duration::from_secs(1));
+        assert_eq!(parsed.max_finalized_time_skew, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn disabled_pop_policy_rejects_stale_authority_claims() {
+        let mut config = SorafsPopCredentialService::default();
+        config.issuer_id = Some("stale-authority".to_owned());
+        let mut emitter = Emitter::new();
+        assert!(config.parse(false, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn unsafe_pop_policy_fails_closed() {
+        let mut config = valid_config();
+        config.issuer_state_dir = PathBuf::from("relative/issuer");
+        config.issuer_policy_digest_hex = Some("AA".repeat(32));
+        config.approval_signers[1].signer_id = "approver-a".to_owned();
+        config.approval_signers[1].public_key_hex =
+            config.approval_signers[0].public_key_hex.clone();
+        config.approval_signers[1].revoked_at_epoch = Some(0);
+        config.max_seen_nullifiers = 0;
+        config.worker_interval_ms = 0;
+        config.max_finalized_time_skew_secs = 301;
+
+        let mut emitter = Emitter::new();
+        assert!(config.parse(true, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn enabled_pop_policy_requires_storage_and_dual_control() {
+        let mut config = valid_config();
+        config.approval_quorum = 1;
+        config.approval_signers.truncate(1);
+        let mut emitter = Emitter::new();
+        let _ = config.parse(false, &mut emitter);
+        assert!(emitter.into_result().is_err());
+    }
+}
+
 /// User-level configuration container for the embedded SoraFS storage worker.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsStorage {
@@ -17573,6 +18274,19 @@ pub struct SorafsStorage {
     /// Aggregate in-memory budget for canonical PDP tree indexes.
     #[config(default = "defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES")]
     pub pdp_tree_memory_limit_bytes: Bytes<u64>,
+    /// Enables authenticated moderation-screening admission.
+    #[config(default = "defaults::sorafs::storage::MODERATION_SCREENING_ENABLED")]
+    pub moderation_screening_enabled: bool,
+    /// Canonical non-secret Norito authority bundle.
+    pub moderation_screening_authority_bundle_path: Option<PathBuf>,
+    /// Reviewed BLAKE3 digest of the exact canonical authority bundle bytes.
+    pub moderation_screening_authority_bundle_digest_hex: Option<String>,
+    /// Governed non-secret PoP credential-service policy.
+    #[config(nested)]
+    pub pop_credentials: SorafsPopCredentialService,
+    /// Finalized-chain moderation orchestrator policy.
+    #[config(nested)]
+    pub moderation_orchestrator: SorafsModerationOrchestrator,
     /// Durable admission-bound PDP provider protocol policy.
     #[config(nested)]
     pub pdp_provider: SorafsPdpProviderPolicy,
@@ -17641,6 +18355,11 @@ impl Default for SorafsStorage {
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
             pdp_sample_window: defaults::sorafs::storage::PDP_SAMPLE_WINDOW,
             pdp_tree_memory_limit_bytes: defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES,
+            moderation_screening_enabled: defaults::sorafs::storage::MODERATION_SCREENING_ENABLED,
+            moderation_screening_authority_bundle_path: None,
+            moderation_screening_authority_bundle_digest_hex: None,
+            pop_credentials: SorafsPopCredentialService::default(),
+            moderation_orchestrator: SorafsModerationOrchestrator::default(),
             pdp_provider: SorafsPdpProviderPolicy::default(),
             runtime: SorafsRuntimeRetentionConfig::default(),
             alias: defaults::sorafs::storage::alias(),
@@ -17680,6 +18399,58 @@ impl SorafsStorage {
                 "torii.sorafs.storage.pdp_tree_memory_limit_bytes must be greater than zero",
             ));
         }
+        let moderation_screening_authority_bundle_digest =
+            self.moderation_screening_authority_bundle_digest_hex
+                .as_deref()
+                .and_then(|raw| {
+                    if raw.len() != 64
+                        || raw.bytes().any(|byte| {
+                            !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte)
+                        })
+                    {
+                        emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                            "torii.sorafs.storage.moderation_screening_authority_bundle_digest_hex must be 64 lowercase hex characters",
+                        ));
+                        return None;
+                    }
+                    let decoded = hex::decode(raw).expect("validated lowercase hex");
+                    let mut digest = [0_u8; 32];
+                    digest.copy_from_slice(&decoded);
+                    if digest.iter().all(|byte| *byte == 0) {
+                        emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                            "torii.sorafs.storage.moderation_screening_authority_bundle_digest_hex must be nonzero",
+                        ));
+                        return None;
+                    }
+                    Some(digest)
+                });
+        if self.moderation_screening_enabled {
+            if !self.enabled {
+                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                    "torii.sorafs.storage.moderation_screening_enabled requires storage.enabled",
+                ));
+            }
+            match self.moderation_screening_authority_bundle_path.as_deref() {
+                None => {
+                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                        "torii.sorafs.storage.moderation_screening_authority_bundle_path is required when moderation screening is enabled",
+                    ));
+                }
+                Some(path) if !path.is_absolute() => {
+                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                        "torii.sorafs.storage.moderation_screening_authority_bundle_path must be absolute",
+                    ));
+                }
+                Some(_) => {}
+            }
+            if moderation_screening_authority_bundle_digest.is_none() {
+                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                    "torii.sorafs.storage.moderation_screening_authority_bundle_digest_hex is required when moderation screening is enabled",
+                ));
+            }
+        }
+        let pop_credentials = self.pop_credentials.parse(self.enabled, emitter);
+        let moderation_orchestrator = self.moderation_orchestrator.parse(self.enabled, emitter);
         actual::SorafsStorage {
             enabled: self.enabled,
             data_dir: self.data_dir,
@@ -17689,6 +18460,12 @@ impl SorafsStorage {
             por_sample_interval_secs: self.por_sample_interval_secs,
             pdp_sample_window: self.pdp_sample_window,
             pdp_tree_memory_limit_bytes: self.pdp_tree_memory_limit_bytes,
+            moderation_screening_enabled: self.moderation_screening_enabled,
+            moderation_screening_authority_bundle_path: self
+                .moderation_screening_authority_bundle_path,
+            moderation_screening_authority_bundle_digest,
+            pop_credentials,
+            moderation_orchestrator,
             pdp_provider: self.pdp_provider.parse(emitter),
             runtime: self.runtime.parse(),
             alias: self.alias.or_else(super::defaults::sorafs::storage::alias),
@@ -17699,7 +18476,7 @@ impl SorafsStorage {
             reputation_trust_policy_path: self.reputation_trust_policy_path,
             pricing_trust_policy_path: self.pricing_trust_policy_path,
             hedging_feed_trust_policy_path: self.hedging_feed_trust_policy_path,
-            privacy_aggregates: self.privacy_aggregates.parse(),
+            privacy_aggregates: self.privacy_aggregates.parse(emitter),
             evidence_viewer_audits: self.evidence_viewer_audits.parse(),
             reserve_lifecycle: self.reserve_lifecycle.parse(),
             pin: self.pin.parse(),
@@ -18313,7 +19090,7 @@ impl SorafsOrderbookConfig {
 }
 
 /// Local SFM-4c privacy aggregate publication scheduler.
-#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsPrivacyAggregateScheduleConfig {
     /// Whether config-backed due-cycle publication is enabled.
     #[config(default = "defaults::sorafs::storage::privacy_aggregates::ENABLED")]
@@ -18324,6 +19101,43 @@ pub struct SorafsPrivacyAggregateScheduleConfig {
     /// Delay after a cycle closes before publication, in seconds.
     #[config(default = "defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS")]
     pub publish_delay_seconds: u64,
+    /// Public aggregate identifier prefix.
+    #[config(
+        default = "defaults::sorafs::storage::privacy_aggregates::AGGREGATE_ID_PREFIX.to_string()"
+    )]
+    pub aggregate_id_prefix: String,
+    /// Governed privacy mode.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::PRIVACY_MODE.to_string()")]
+    pub privacy_mode: String,
+    /// Reduced governed epsilon numerator.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::EPSILON_NUMERATOR")]
+    pub epsilon_numerator: u64,
+    /// Reduced governed epsilon denominator.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::EPSILON_DENOMINATOR")]
+    pub epsilon_denominator: u64,
+    /// Maximum contribution from one private subject to one metric.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::PER_SUBJECT_METRIC_CAP")]
+    pub per_subject_metric_cap: u64,
+    /// Minimum distinct-subject count required for publication.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::SUPPRESSION_THRESHOLD")]
+    pub suppression_threshold: u64,
+    /// Reviewed governed privacy-policy digest as 64 lowercase hex characters.
+    pub policy_digest_hex: Option<String>,
+    /// Reduced composed-epsilon budget numerator.
+    #[config(
+        default = "defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_EPSILON_NUMERATOR"
+    )]
+    pub composition_budget_epsilon_numerator: u64,
+    /// Reduced composed-epsilon budget denominator.
+    #[config(
+        default = "defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_EPSILON_DENOMINATOR"
+    )]
+    pub composition_budget_epsilon_denominator: u64,
+    /// Maximum publications under one composition-budget policy.
+    #[config(
+        default = "defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_MAX_PUBLICATIONS"
+    )]
+    pub composition_budget_max_publications: u64,
 }
 
 impl Default for SorafsPrivacyAggregateScheduleConfig {
@@ -18333,16 +19147,141 @@ impl Default for SorafsPrivacyAggregateScheduleConfig {
             cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
             publish_delay_seconds:
                 defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
+            aggregate_id_prefix:
+                defaults::sorafs::storage::privacy_aggregates::AGGREGATE_ID_PREFIX.to_string(),
+            privacy_mode:
+                defaults::sorafs::storage::privacy_aggregates::PRIVACY_MODE.to_string(),
+            epsilon_numerator:
+                defaults::sorafs::storage::privacy_aggregates::EPSILON_NUMERATOR,
+            epsilon_denominator:
+                defaults::sorafs::storage::privacy_aggregates::EPSILON_DENOMINATOR,
+            per_subject_metric_cap:
+                defaults::sorafs::storage::privacy_aggregates::PER_SUBJECT_METRIC_CAP,
+            suppression_threshold:
+                defaults::sorafs::storage::privacy_aggregates::SUPPRESSION_THRESHOLD,
+            policy_digest_hex:
+                defaults::sorafs::storage::privacy_aggregates::policy_digest_hex(),
+            composition_budget_epsilon_numerator:
+                defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_EPSILON_NUMERATOR,
+            composition_budget_epsilon_denominator:
+                defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_EPSILON_DENOMINATOR,
+            composition_budget_max_publications:
+                defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_MAX_PUBLICATIONS,
         }
     }
 }
 
 impl SorafsPrivacyAggregateScheduleConfig {
-    fn parse(self) -> actual::SorafsPrivacyAggregateSchedule {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsPrivacyAggregateSchedule {
+        fn gcd(mut left: u64, mut right: u64) -> u64 {
+            while right != 0 {
+                let remainder = left % right;
+                left = right;
+                right = remainder;
+            }
+            left
+        }
+        let invalid = |message: String, emitter: &mut Emitter<ParseError>| {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message));
+        };
+        if self.aggregate_id_prefix.trim() != self.aggregate_id_prefix
+            || self.aggregate_id_prefix.is_empty()
+            || self.aggregate_id_prefix.len() > 128
+            || self.aggregate_id_prefix.chars().any(char::is_control)
+        {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates.aggregate_id_prefix is invalid"
+                    .to_string(),
+                emitter,
+            );
+        }
+        if !matches!(
+            self.privacy_mode.as_str(),
+            "differential_privacy" | "suppression" | "differential_privacy_with_suppression"
+        ) {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates.privacy_mode is invalid".to_string(),
+                emitter,
+            );
+        }
+        if self.epsilon_numerator == 0
+            || self.epsilon_denominator == 0
+            || gcd(self.epsilon_numerator, self.epsilon_denominator) != 1
+        {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates epsilon must be a reduced positive rational"
+                    .to_string(),
+                emitter,
+            );
+        }
+        if self.per_subject_metric_cap == 0 || self.suppression_threshold == 0 {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates contribution cap and suppression threshold must be positive"
+                    .to_string(),
+                emitter,
+            );
+        }
+        if self.composition_budget_epsilon_numerator == 0
+            || self.composition_budget_epsilon_denominator == 0
+            || gcd(
+                self.composition_budget_epsilon_numerator,
+                self.composition_budget_epsilon_denominator,
+            ) != 1
+            || self.composition_budget_max_publications == 0
+            || self.composition_budget_max_publications > 4_096
+        {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates composition budget is invalid".to_string(),
+                emitter,
+            );
+        }
+        let policy_digest = self.policy_digest_hex.as_deref().and_then(|raw| {
+            if raw.len() != 64
+                || raw.bytes().any(|byte| {
+                    !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte)
+                })
+            {
+                invalid(
+                    "torii.sorafs.storage.privacy_aggregates.policy_digest_hex must be 64 lowercase hex characters"
+                        .to_string(),
+                    emitter,
+                );
+                return None;
+            }
+            let decoded = hex::decode(raw).expect("validated lowercase hex");
+            let mut digest = [0_u8; 32];
+            digest.copy_from_slice(&decoded);
+            if digest.iter().all(|byte| *byte == 0) {
+                invalid(
+                    "torii.sorafs.storage.privacy_aggregates.policy_digest_hex must be nonzero"
+                        .to_string(),
+                    emitter,
+                );
+                return None;
+            }
+            Some(digest)
+        });
+        if self.enabled && policy_digest.is_none() {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates.policy_digest_hex is required when enabled"
+                    .to_string(),
+                emitter,
+            );
+        }
         actual::SorafsPrivacyAggregateSchedule {
             enabled: self.enabled,
             cycle_seconds: self.cycle_seconds.max(1),
             publish_delay_seconds: self.publish_delay_seconds,
+            aggregate_id_prefix: self.aggregate_id_prefix,
+            privacy_mode: self.privacy_mode,
+            epsilon_numerator: self.epsilon_numerator,
+            epsilon_denominator: self.epsilon_denominator,
+            per_subject_metric_cap: self.per_subject_metric_cap,
+            suppression_threshold: self.suppression_threshold,
+            policy_digest,
+            composition_budget_epsilon_numerator: self.composition_budget_epsilon_numerator,
+            composition_budget_epsilon_denominator: self.composition_budget_epsilon_denominator,
+            composition_budget_max_publications: self.composition_budget_max_publications,
         }
     }
 }
@@ -21588,6 +22527,81 @@ hedging_feed_trust_policy_path = "/run/iroha/sorafs-hedging-policy.to"
     }
 
     #[test]
+    fn sorafs_moderation_screening_authority_config_is_digest_bound_and_fail_closed() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(&format!(
+            r#"
+[storage]
+enabled = true
+moderation_screening_enabled = true
+moderation_screening_authority_bundle_path = "/etc/iroha/sorafs-screening-authority.to"
+moderation_screening_authority_bundle_digest_hex = "{}"
+"#,
+            "11".repeat(32)
+        ))
+        .expect("parse moderation screening authority config");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+        let storage = load_root(table).torii.sorafs_storage;
+        assert!(storage.moderation_screening_enabled);
+        assert_eq!(
+            storage.moderation_screening_authority_bundle_path,
+            Some(PathBuf::from("/etc/iroha/sorafs-screening-authority.to"))
+        );
+        assert_eq!(
+            storage.moderation_screening_authority_bundle_digest,
+            Some([0x11; 32])
+        );
+
+        for invalid_storage in [
+            r#"
+[storage]
+enabled = true
+moderation_screening_enabled = true
+"#
+            .to_owned(),
+            format!(
+                r#"
+[storage]
+enabled = true
+moderation_screening_enabled = true
+moderation_screening_authority_bundle_path = "/etc/iroha/sorafs-screening-authority.to"
+moderation_screening_authority_bundle_digest_hex = "{}"
+"#,
+                "00".repeat(32)
+            ),
+            format!(
+                r#"
+[storage]
+enabled = false
+moderation_screening_enabled = true
+moderation_screening_authority_bundle_path = "/etc/iroha/sorafs-screening-authority.to"
+moderation_screening_authority_bundle_digest_hex = "{}"
+"#,
+                "11".repeat(32)
+            ),
+            format!(
+                r#"
+[storage]
+enabled = true
+moderation_screening_enabled = true
+moderation_screening_authority_bundle_path = "relative/sorafs-screening-authority.to"
+moderation_screening_authority_bundle_digest_hex = "{}"
+"#,
+                "11".repeat(32)
+            ),
+        ] {
+            let mut table = base_table();
+            let sorafs: Table =
+                toml::from_str(&invalid_storage).expect("parse invalid screening config fixture");
+            table.insert("sorafs".into(), Value::Table(sorafs));
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "invalid screening authority config must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn sorafs_storage_pdp_policy_parses_governed_bounds() {
         let mut table = base_table();
         let sorafs: Table = toml::from_str(
@@ -21694,17 +22708,27 @@ terminal_retention_secs = 7200
     }
 
     #[test]
-    fn sorafs_storage_privacy_aggregate_schedule_parses_and_clamps_cycle() {
+    fn sorafs_storage_privacy_aggregate_policy_parses_and_clamps_cycle() {
         let mut table = base_table();
         let sorafs: Table = toml::from_str(
-            r"
+            r#"
 [storage.privacy_aggregates]
 enabled = true
 cycle_seconds = 0
 publish_delay_seconds = 17
-",
+aggregate_id_prefix = "sfm4c-governed"
+privacy_mode = "differential_privacy_with_suppression"
+epsilon_numerator = 4
+epsilon_denominator = 5
+per_subject_metric_cap = 2
+suppression_threshold = 3
+policy_digest_hex = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+composition_budget_epsilon_numerator = 12
+composition_budget_epsilon_denominator = 1
+composition_budget_max_publications = 52
+"#,
         )
-        .expect("parse sorafs privacy aggregate schedule");
+        .expect("parse sorafs privacy aggregate policy");
         table.insert("sorafs".into(), Value::Table(sorafs));
 
         let actual = load_root(table);
@@ -21712,6 +22736,53 @@ publish_delay_seconds = 17
         assert!(schedule.enabled);
         assert_eq!(schedule.cycle_seconds, 1);
         assert_eq!(schedule.publish_delay_seconds, 17);
+        assert_eq!(schedule.aggregate_id_prefix, "sfm4c-governed");
+        assert_eq!(
+            schedule.privacy_mode,
+            "differential_privacy_with_suppression"
+        );
+        assert_eq!(schedule.epsilon_numerator, 4);
+        assert_eq!(schedule.epsilon_denominator, 5);
+        assert_eq!(schedule.per_subject_metric_cap, 2);
+        assert_eq!(schedule.suppression_threshold, 3);
+        assert_eq!(schedule.policy_digest, Some([0xC0; 32]));
+        assert_eq!(schedule.composition_budget_epsilon_numerator, 12);
+        assert_eq!(schedule.composition_budget_epsilon_denominator, 1);
+        assert_eq!(schedule.composition_budget_max_publications, 52);
+    }
+
+    #[test]
+    fn sorafs_storage_privacy_aggregate_policy_rejects_unsafe_config() {
+        for (policy, expected) in [
+            (
+                "enabled = true",
+                "policy_digest_hex is required when enabled",
+            ),
+            (
+                "epsilon_numerator = 2\nepsilon_denominator = 4",
+                "epsilon must be a reduced positive rational",
+            ),
+            (
+                "composition_budget_max_publications = 4097",
+                "composition budget is invalid",
+            ),
+            (
+                "policy_digest_hex = \"C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0\"",
+                "must be 64 lowercase hex characters",
+            ),
+        ] {
+            let mut table = base_table();
+            let sorafs: Table =
+                toml::from_str(&format!("[storage.privacy_aggregates]\n{policy}\n"))
+                    .expect("parse invalid SoraFS privacy policy fixture");
+            table.insert("sorafs".into(), Value::Table(sorafs));
+
+            let error = load_user_root(table)
+                .parse()
+                .expect_err("invalid privacy aggregate policy must fail config parsing");
+            let report = format!("{error:?}");
+            assert!(report.contains(expected), "{report}");
+        }
     }
 
     #[test]

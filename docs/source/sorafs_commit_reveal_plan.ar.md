@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_commit_reveal_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1cb8d684ffc7c896c64f6b094090dd0291d5e419b1e173193ca5c4d64f9669fe
+source_hash: e1126c590e174baf0751ae9c2f28effb30f485e0ffbf61319a85a32603d96cfd
 source_last_modified: "2026-07-04T15:39:59.807879+00:00"
 translation_last_reviewed: 2026-07-04
 ---

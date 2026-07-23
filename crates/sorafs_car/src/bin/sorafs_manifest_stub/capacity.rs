@@ -786,6 +786,7 @@ fn parse_capability_name(name: &str) -> Option<CapabilityType> {
             Some(CapabilityType::SoraNetHybridPq)
         }
         "range" | "chunk_range_fetch" => Some(CapabilityType::ChunkRangeFetch),
+        "potr_mldsa" | "potr-mldsa" => Some(CapabilityType::PotrMlDsa),
         "vendor" | "vendor_reserved" => Some(CapabilityType::VendorReserved),
         _ => None,
     }
@@ -1680,6 +1681,7 @@ fn capability_label(cap: &CapabilityType) -> &'static str {
         CapabilityType::QuicNoise => "quic_noise",
         CapabilityType::SoraNetHybridPq => "soranet_hybrid_pq",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
+        CapabilityType::PotrMlDsa => "potr_mldsa",
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }

@@ -2,7 +2,7 @@
 lang: es
 direction: ltr
 source: docs/source/sorafs_release_pipeline_plan.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: f256aaf61e64742a07cbc567fc5cef49e9028602037cdf80a4afd486e9ba9cf3
 source_last_modified: "2026-07-03T17:29:04.185345+00:00"

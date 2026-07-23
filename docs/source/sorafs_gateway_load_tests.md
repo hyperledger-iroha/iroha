@@ -6,11 +6,12 @@ summary: Deterministic load harness and follow-up tasks for the SF-5a trustless 
 # SoraFS Gateway Load Testing Plan
 
 The deterministic load harness ships with the gateway conformance replay suite.
-It does not open a live HTTP/3 gateway or sleep through a wall-clock soak test;
+It does not open a live gateway or sleep through a wall-clock soak test;
 instead, it replays canonical fixture-backed adapters through
 `HarnessContext::new()`. The default `LoadProfile` schedules 1,000 streams over a
 60-second profile window and records total requests, elapsed time, and P50/P95/P99
-latency per scenario.
+latency per scenario. HTTP/3 is explicitly non-applicable to V1 and is not a
+readiness dependency.
 
 The harness lives in `integration_tests/src/sorafs_gateway_conformance.rs`
 (`run_deterministic_load_test`) and is gated by the
@@ -73,7 +74,7 @@ capped at `10000` so impossible basis-point rates cannot satisfy promotion.
 | Signed evidence | Implemented | `generate_attestation`, `verify_attestation_envelope`, and `cargo xtask sorafs-gateway-attest --verify` cover signed report validation. |
 | Payload-free rollout canary builder | Implemented | `scripts/build_sorafs_gateway_load_canary.py` builds checked-in local conformance, staging load, telemetry/SLO, transport-scope, and governance approval evidence artifacts from reviewed rollout facts. |
 | Live staging load evidence | Rollout evidence | Capture against deployed gateways once the operator selects hardware, cache state, and duration. |
-| HTTP/3 gateway load coverage | Transport follow-up | No committed SoraFS HTTP/3 gateway endpoint is present in this checkout; add HTTP/3 scenarios only after the gateway exposes that transport. |
+| HTTP/3 gateway load coverage | Not applicable to V1 | V1 has no committed SoraFS HTTP/3 endpoint or release requirement. Any later transport work is separately scoped and cannot block or satisfy V1 readiness. |
 
 ## Scenario Matrix
 
@@ -136,8 +137,7 @@ applicable, reviewed staging provider names using
 `gateway-load-provider-*` labels whose unique inventory matches
 `--provider-count`, reviewed `gateway-load-hardware-*` hardware-profile labels,
 reviewed cache-state modes,
-rejects `--http3-endpoint-committed` until a reviewed SoraFS HTTP/3 gateway
-endpoint is committed,
+rejects `--http3-endpoint-committed` because HTTP/3 is outside the V1 contract,
 generated `gateway-load-stream-*` per-stream inventory labels matching
 `--stream-count`, suite/staging
 digest bindings, SLO threshold facts, and
@@ -192,10 +192,8 @@ before final promotion can report ready.
    cache state, duration, and gateway version alongside the signed report.
 3. Add a live-target adapter if operators need the integration test to exercise a
    deployed gateway instead of the fixture-backed adapter.
-4. Add HTTP/3 scenarios only after the SoraFS gateway exposes a committed HTTP/3
-   endpoint and configuration surface.
-5. Record cold-cache SLO baselines after the staging hardware profile is chosen.
+4. Record cold-cache SLO baselines after the staging hardware profile is chosen.
 
 The checked-in canary builder and examples do not replace live staging load
-execution, signed local conformance report archival, or future HTTP/3 transport
-coverage once a committed gateway endpoint exists.
+execution or signed local conformance report archival. A later HTTP/3 transport
+project is outside this V1 plan.

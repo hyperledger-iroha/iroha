@@ -15,6 +15,8 @@ The architecture contract lives in `docs/source/sorafs_architecture_rfc.md`.
 Milestone history lives in `docs/source/sorafs/migration_ledger.md`. Repository
 checks establish local conformance; only reviewed, deployment-bound evidence can
 establish production readiness.
+The implementation, test, documentation, and evidence mapping for every active
+first-release item lives in `docs/source/sorafs/v1_closure_ledger.md`.
 
 ## Milestone Overview
 
@@ -99,23 +101,29 @@ tokens, private keys, authorization headers, or arbitrary payload fields.
 
 ## L2 — Production Promotion
 
-Invoke the runner with exactly one reviewed summary for every required lane and
-explicit final deployment context:
+Prepare an owner-private response file containing exactly one reviewed summary
+for every required lane, the signed foundational envelope and its trusted
+signer/continuity values, an explicit `--now-unix`, and the final deployment
+context. Use the runner's real response-file interface:
 
 ```bash
 python3 scripts/run_sorafs_production_readiness.py \
-  --deployment-id <reviewed-production-deployment-id> \
-  --environment production \
-  --summary <lane-summary.json> \
-  --summary <next-lane-summary.json> \
-  --output artifacts/sorafs/production-readiness/sorafs-production-readiness-summary.json
+  @artifacts/sorafs/production-readiness/reviewed-collection.args \
+  --dry-run
+
+python3 scripts/run_sorafs_production_readiness.py \
+  @artifacts/sorafs/production-readiness/reviewed-collection.args
 ```
 
-Use `--dry-run` first and review the schema-closed collection plan. Promotion is
-allowed only when the resulting aggregate reports `status=ready`, every required
-row is present, every lane has the same deployment ID and final environment,
-all artifact fingerprints and counts reconcile, and both aggregate and lane
-error lists are empty.
+`scripts/examples/sorafs_production_readiness_collection.args.example` lists the
+17 lane-specific summary flags and the complete foundational trust/continuity
+surface. Its public values are shape-only examples and must be replaced from the
+reviewed release record. Review the schema-closed dry-run plan before executing
+the second command. Promotion is allowed only when the resulting aggregate
+reports `status=ready`, `summary_file_count=17`,
+`recognized_summary_count=17`, every required row is present, every lane has
+the same deployment ID and final environment, all artifact fingerprints and
+counts reconcile, and both aggregate and lane error lists are empty.
 
 ## Ownership and Change Control
 

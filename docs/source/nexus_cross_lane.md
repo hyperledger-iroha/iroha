@@ -25,6 +25,8 @@ relay-settlement candidates.
 The flow below is the activation contract for autonomous execution, not a claim
 that its producer is enabled in the first release. The exact merge protocol and
 storage crash contract are specified in [Merge ledger](merge_ledger.md).
+Implementation, formal, and release obligations are tracked separately in the
+[Sumeragi V2 multilane closure ledger](sumeragi_v2_multilane_closure_ledger.md).
 
 ## End-to-end flow
 

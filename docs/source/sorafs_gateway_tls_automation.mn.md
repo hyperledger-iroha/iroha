@@ -21,11 +21,19 @@ outline and now focuses on day-to-day operator tasks: provisioning secrets,
 configuring ACME/ECH, understanding telemetry, meeting governance obligations,
 and executing the approved incident playbooks.
 
-The guidance assumes the gateway includes the automation controller in
-`iroha_torii::sorafs::gateway` and that the repository
+The guidance assumes the gateway embeds the generic automation controller in
+`iroha_torii::sorafs::gateway`, injects an independently audited
+`AcmeClient` implementation at runtime, and that the repository
 `scripts/sorafs_gateway_self_cert.sh` wrapper is available on the bastion host.
 The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 `cargo run -p xtask --bin xtask -- ...` when `cargo xtask` is not installed.
+
+> **Runtime ACME boundary (V1):** the repository does not ship a production
+> ACME client, DNS-provider adapter, account credential loader, or self-signed
+> fallback. `SelfSignedAcmeClient` exists only as a `cfg(test)` fixture.
+> Enabling `torii.sorafs_gateway.acme` without an audited runtime-injected
+> `AcmeClient` is a startup error. The `sorafs-gateway tls renew` compatibility
+> command fails closed and never writes certificate or private-key material.
 
 ## Quick Start Checklist
 

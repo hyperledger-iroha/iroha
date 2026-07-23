@@ -96,6 +96,18 @@ pub(crate) enum V2ReservationLifecycleError {
         /// Hash committed by the carrier's compact reference.
         entry_hash: HashOf<MergeLedgerEntry>,
     },
+    /// Queue retained a release barrier whose exact Kura retirement is absent.
+    #[error("queue release barrier {retirement_hash} has no exact durable Kura retirement")]
+    MissingReleaseRetirement {
+        /// Digest of the missing retirement identity.
+        retirement_hash: Hash,
+    },
+    /// Queue and Kura disagree on a release barrier's full slot/payload binding.
+    #[error("queue release barrier {retirement_hash} conflicts with durable Kura retirement")]
+    ReleaseRetirementMismatch {
+        /// Digest of the conflicting retirement identity.
+        retirement_hash: Hash,
+    },
 }
 
 fn finalize_certified_merge_reservations(
@@ -155,6 +167,39 @@ fn finalize_committed_block_merge_reservations(
     finalize_certified_merge_reservations(state, queue, &entry)
 }
 
+/// Execute or resume the complete crash-safe retirement/release hand-off.
+///
+/// This is the single production ordering implementation shared by live lane
+/// work and startup reconciliation:
+///
+/// 1. Kura persists the exact slot retirement and `ReleasePending` claims.
+/// 2. Queue persists the exact ordered barrier while reservations remain live.
+/// 3. Kura changes the exact claims to `Released`.
+/// 4. Queue completes ownership transfer, restores FIFO order, and forgets the
+///    replay barrier.
+pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
+    kura: &Kura,
+    queue: &Queue,
+    retirement: &crate::kura::AutonomousLaneSlotRetirementV1,
+    expected_chain_id_hash: Hash,
+    expected_epoch: u64,
+) -> Result<usize, V2ReservationLifecycleError> {
+    kura.persist_autonomous_lane_slot_retirement(
+        retirement,
+        expected_chain_id_hash,
+        expected_epoch,
+    )?;
+    let barrier = retirement.queue_release_barrier()?;
+    let _ = queue.prepare_lane_reservation_release_barrier(&barrier)?;
+    kura.finalize_autonomous_lane_slot_release(
+        retirement,
+        &barrier,
+        expected_chain_id_hash,
+        expected_epoch,
+    )?;
+    Ok(queue.finalize_lane_reservation_release_barrier(&barrier)?)
+}
+
 /// Reconcile replayed lane reservations against committed State and Kura.
 ///
 /// Committed transactions are consumed before orphan release so a crash after
@@ -166,7 +211,8 @@ pub(crate) fn reconcile_lane_reservation_ownership(
     chain_id: &ChainId,
 ) -> Result<(usize, usize), V2ReservationLifecycleError> {
     let recovered = queue.live_lane_reservations();
-    if recovered.is_empty() {
+    let recovered_release_barriers = queue.lane_reservation_release_barriers();
+    if recovered.is_empty() && recovered_release_barriers.is_empty() {
         return Ok((0, 0));
     }
 
@@ -209,6 +255,57 @@ pub(crate) fn reconcile_lane_reservation_ownership(
     let nexus = state.nexus_snapshot();
     let world = state.world_view();
     let chain_hash = Hash::new(chain_id.clone().into_inner().as_bytes());
+    let mut retired_slots = BTreeMap::new();
+    for reservation in &remaining {
+        let epoch =
+            crate::sumeragi::epoch_for_height_from_world(&world, reservation.proposal_height);
+        let Some(retirement) =
+            kura.autonomous_lane_retirement_matching_reservation(reservation, chain_hash, epoch)?
+        else {
+            continue;
+        };
+        retired_slots
+            .entry(retirement.digest()?)
+            .or_insert((retirement, epoch));
+    }
+    for barrier in recovered_release_barriers {
+        if barrier.chain_id_hash != chain_hash {
+            return Err(V2ReservationLifecycleError::ReleaseRetirementMismatch {
+                retirement_hash: barrier.retirement_hash,
+            });
+        }
+        let retirement = kura
+            .read_autonomous_lane_slot_retirement(
+                barrier.lane_id,
+                barrier.lane_block_height,
+                chain_hash,
+                barrier.epoch,
+            )?
+            .ok_or(V2ReservationLifecycleError::MissingReleaseRetirement {
+                retirement_hash: barrier.retirement_hash,
+            })?;
+        if retirement.queue_release_barrier()? != barrier {
+            return Err(V2ReservationLifecycleError::ReleaseRetirementMismatch {
+                retirement_hash: barrier.retirement_hash,
+            });
+        }
+        retired_slots
+            .entry(retirement.digest()?)
+            .or_insert((retirement, barrier.epoch));
+    }
+    let mut released_retired = 0usize;
+    for (retirement, epoch) in retired_slots.into_values() {
+        released_retired =
+            released_retired.saturating_add(retire_autonomous_lane_slot_and_release_reservations(
+                kura,
+                queue,
+                &retirement,
+                chain_hash,
+                epoch,
+            )?);
+    }
+
+    let remaining = queue.live_lane_reservations();
     let released_orphans =
         queue.reconcile_orphaned_lane_reservations(&remaining, |reservation| {
             state.lane_incarnation_at_height(reservation.lane_id, reservation.proposal_height)
@@ -227,7 +324,10 @@ pub(crate) fn reconcile_lane_reservation_ownership(
                     ),
                 )
         })?;
-    Ok((finalized_committed, released_orphans))
+    Ok((
+        finalized_committed,
+        released_retired.saturating_add(released_orphans),
+    ))
 }
 
 fn application_typed_identity<T>(
@@ -784,6 +884,7 @@ impl V2ApplyService {
             })?;
         let expected = super::lane_planner::prepare_v2_lane_payload_plan(
             self.state.as_ref(),
+            self.kura.as_ref(),
             context,
             view,
             &leader.validator,
@@ -955,6 +1056,35 @@ impl V2ApplyService {
             .executed_block_wire_hash()
             .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
 
+        // Repair or confirm the pre-WSV durable evidence boundary before any
+        // derived publication. Fresh application already crossed this boundary
+        // inside `validate_and_apply`; the calls are deliberately idempotent so
+        // restart can repair each individual artifact.
+        let receipt = self
+            .kura
+            .store_v2_finality_artifact(&artifact)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
+            })?;
+
+        // The strict restart-repair path authenticates Native AMX evidence
+        // against both finality and the post-WSV Kura metadata join. Publish
+        // that join first on every fresh or recovery attempt, then repair or
+        // confirm the exact manifests, receipts, and latest indexes while the
+        // prune guard keeps their canonical carrier stable.
+        self.persist_post_apply_metadata(context, task, &artifact)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
+            })?;
+        self.kura
+            .repair_native_amx_participant_application_evidence(committed_block.as_ref())
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Native AMX participant manifest/receipt repair",
+                    &error,
+                )
+            })?;
+
         self.publish_committed_block_merge_entry(committed_block.as_ref())?;
 
         // Queue ownership is a third durable boundary after Kura and WSV. An
@@ -971,29 +1101,6 @@ impl V2ApplyService {
             V2ApplyError::committed_recovery_required("merge reservation finalization", &error)
         })?;
 
-        // This is deliberately outside `validate_and_apply`: WSV commit and
-        // the Kura checkpoint/manifest are separate durable systems. A crash
-        // after WSV commit must retry these idempotent associations even
-        // though executing the block a second time is forbidden.
-        self.persist_post_apply_metadata(context, task, &artifact)
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
-            })?;
-
-        let receipt = self
-            .kura
-            .store_v2_finality_artifact(&artifact)
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
-            })?;
-        self.kura
-            .persist_native_amx_participant_application_receipts(committed_block.as_ref())
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required(
-                    "Native AMX participant receipt publication",
-                    &error,
-                )
-            })?;
         self.kura
             .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
             .map_err(|error| {
@@ -1143,11 +1250,12 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        let executed_block_wire_hash = valid
-            .as_ref()
-            .executed_block_wire_hash()
-            .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
-        crate::sumeragi::exec::execution_commitment_from_witness(&witness, executed_block_wire_hash)
+        let native_amx_manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+                valid.as_ref(),
+            )
+            .map_err(V2ApplyError::ExecutionCommitment)?;
+        crate::sumeragi::exec::execution_commitment_from_witness(&witness, &native_amx_manifest)
             .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))
     }
 
@@ -1193,13 +1301,14 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        let executed_block_wire_hash = valid_block
-            .as_ref()
-            .executed_block_wire_hash()
-            .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
+        let native_amx_manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+                valid_block.as_ref(),
+            )
+            .map_err(V2ApplyError::ExecutionCommitment)?;
         let actual_execution_commitment = crate::sumeragi::exec::execution_commitment_from_witness(
             &witness,
-            executed_block_wire_hash,
+            &native_amx_manifest,
         )
         .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))?;
         if actual_execution_commitment != expected_execution_commitment {
@@ -1233,6 +1342,9 @@ impl V2ApplyService {
             {
                 return Err(V2ApplyError::InjectedCrashAfterKuraStore);
             }
+            let _ = self.kura.store_v2_finality_artifact(artifact)?;
+            self.kura
+                .persist_native_amx_participant_application_evidence(committed_block.as_ref())?;
         }
         let commit_topology = context
             .roster
@@ -1658,6 +1770,7 @@ mod tests {
                 let entrypoint_hash = Hash::from(accepted.hash_as_entrypoint());
                 let lane_plan = super::super::lane_planner::prepare_v2_lane_payload_plan(
                     state.as_ref(),
+                    kura.as_ref(),
                     &context,
                     0,
                     &context.roster[usize::try_from(leader_index).expect("leader index")].validator,
@@ -2175,6 +2288,7 @@ mod tests {
             bitmap[index / 8] |= 1 << (index % 8);
         }
         MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: context.epoch,
             lane_catalog_hash: Hash::new(b"v2 apply decided-sidecar catalog"),
             active_lanes: Vec::new(),

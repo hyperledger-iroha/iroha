@@ -3586,6 +3586,18 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2ChainLivenessProofs",
         "HeightLivenessObligation",
     ),
+    "autoscale-lifecycle-production-refinement": (
+        "SumeragiV2AutoscaleLifecycle",
+        "AutoscaleLifecycleProductionRefinementObligation",
+    ),
+    "native-application-evidence-production-refinement": (
+        "SumeragiV2NativeApplicationEvidence",
+        "NativeApplicationEvidenceProductionRefinementObligation",
+    ),
+    "autonomous-reservation-carrier-production-refinement": (
+        "SumeragiV2AutonomousReservationCarrier",
+        "AutonomousReservationCarrierProductionRefinementObligation",
+    ),
     "cryptography": ("trusted-boundary", "cryptography"),
     "durability-system-call": ("trusted-boundary", "os-fsync"),
     "deterministic-execution": ("trusted-boundary", "deterministic-execution"),
@@ -3643,6 +3655,9 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2DurableDecisionRecoveryProofs",
     "SumeragiV2AsyncLivenessProofs",
     "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
+    "SumeragiV2AutoscaleLifecycle",
+    "SumeragiV2NativeApplicationEvidence",
+    "SumeragiV2AutonomousReservationCarrier",
     "SumeragiTimeoutIngressGuardTest",
 )
 

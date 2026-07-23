@@ -211,6 +211,8 @@ fn validate_builtin_initial_query_permission(
         | SingularQueryBox::FindSorafsOrderbookOrderById(_)
         | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
         | SingularQueryBox::FindSorafsOrderbookReceiptById(_)
+        | SingularQueryBox::FindSorafsOrderbookTradeById(_)
+        | SingularQueryBox::FindSorafsOrderbookChannelById(_)
         | SingularQueryBox::FindSorafsOrderbookStatus(_)
         | SingularQueryBox::FindSorafsOrderbookOrders(_)
         | SingularQueryBox::FindSorafsOrderbookReceipts(_) => {
@@ -225,6 +227,20 @@ fn validate_builtin_initial_query_permission(
             } else {
                 Err(ValidationFail::NotPermitted(
                     "Can't read authoritative SoraFS orderbook state".to_owned(),
+                ))
+            }
+        }
+        SingularQueryBox::FindSorafsReservePolicy(_)
+        | SingularQueryBox::FindSorafsReserveProviderById(_)
+        | SingularQueryBox::FindSorafsReserveMovementById(_)
+        | SingularQueryBox::FindSorafsReserveAppealById(_) => {
+            let can_set_reserve_policy: Permission =
+                executor_permission::sorafs::CanSetSorafsReservePolicy.into();
+            if authority_has_permission(world, authority, &can_set_reserve_policy)? {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "Can't read authoritative SoraFS reserve state".to_owned(),
                 ))
             }
         }
@@ -10569,6 +10585,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanIssueSorafsReplicationOrder",
     "CanCompleteSorafsReplicationOrder",
     "CanSetSorafsPricing",
+    "CanSetSorafsReservePolicy",
     "CanManageSorafsModeration",
     "CanManageSorafsPopRegistry",
     "CanOperateSorafsPopIssuer",

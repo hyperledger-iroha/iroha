@@ -5156,6 +5156,10 @@ export declare const SORAFS_PDP_PAYLOAD_KINDS: Readonly<{
   PROOF: "proof";
 }>;
 
+export declare const SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1: 64;
+export declare const SORAFS_REFERENCE_MAX_INPUT_BYTES_V1: 67108864;
+export declare const SORAFS_REFERENCE_MAX_LABEL_BYTES_V1: 1024;
+
 export type SorafsPdpPayloadKind =
   | "commitment"
   | "pdp-commitment"
@@ -5207,6 +5211,34 @@ export interface SorafsPdpPairValidationOptions {
   challenge_label?: string;
   proofLabel?: string;
   proof_label?: string;
+  generatedAtUnix?: number | bigint;
+  generated_at?: number | bigint;
+}
+
+export type SorafsReferenceBytesInput =
+  | ArrayBufferView
+  | ArrayBuffer
+  | Buffer;
+
+export interface SorafsGovernanceDagBlockInput {
+  payload?: SorafsReferenceBytesInput;
+  bytes?: SorafsReferenceBytesInput;
+  noritoBytes?: SorafsReferenceBytesInput;
+  norito_bytes?: SorafsReferenceBytesInput;
+  label?: string;
+}
+
+export interface SorafsGovernanceDagBlockValidationOptions {
+  label?: string;
+  expectedBlockCid?: SorafsReferenceBytesInput;
+  expected_block_cid?: SorafsReferenceBytesInput;
+  generatedAtUnix?: number | bigint;
+  generated_at?: number | bigint;
+}
+
+export interface SorafsGovernanceDagHeadValidationOptions {
+  headLabel?: string;
+  head_label?: string;
   generatedAtUnix?: number | bigint;
   generated_at?: number | bigint;
 }
@@ -5270,6 +5302,17 @@ export function validatePdpBundle(
   challengeBytes: ArrayBufferView | ArrayBuffer | Buffer,
   proofBytes: ArrayBufferView | ArrayBuffer | Buffer,
   options?: SorafsPdpPairValidationOptions,
+): SorafsValidationOutcome;
+
+export function validateGovernanceDagBlock(
+  bytes: SorafsReferenceBytesInput,
+  options?: SorafsGovernanceDagBlockValidationOptions,
+): SorafsValidationOutcome;
+
+export function validateGovernanceDagHeadChain(
+  headBytes: SorafsReferenceBytesInput,
+  blocks: ReadonlyArray<SorafsGovernanceDagBlockInput>,
+  options?: SorafsGovernanceDagHeadValidationOptions,
 ): SorafsValidationOutcome;
 
 export function captureSumeragiTelemetrySnapshot(
@@ -7498,6 +7541,9 @@ export interface ToriiSumeragiV2ExecutionCommitment {
   ordinary_writes_root: string;
   topup_anchor_root: string | null;
   topup_anchor_count: number;
+  native_amx_application_manifest_version: number;
+  native_amx_application_manifest_root: string;
+  native_amx_application_manifest_count: number;
   executed_block_wire_hash: string;
 }
 
@@ -7531,7 +7577,7 @@ export interface ToriiSumeragiV2HeightContextStatus {
   epoch: number;
   epoch_end_height: number;
   mode: ToriiSumeragiV2ConsensusMode;
-  epoch_seed: string;
+  epoch_seed: ReadonlyArray<number>;
   validator_count: number;
   quorum: Readonly<{
     min_signers: number;
@@ -7843,14 +7889,124 @@ export interface ToriiSumeragiStatus {
   height_context: ToriiSumeragiV2HeightContextStatus;
   last_commit_qc: ToriiSumeragiV2CommitQcStatus | null;
   liveness: ToriiSumeragiV2LivenessStatus;
-  safety_halt: ToriiSumeragiSafetyHaltStatus;
+}
+
+export interface ToriiSumeragiPipelineExecutionStatus {
+  tx_vertices_total: number;
+  tx_edges_total: number;
+  overlay_count_total: number;
+  overlay_instr_total: number;
+  overlay_bytes_total: number;
+  rbc_chunks_total: number;
+  rbc_bytes_total: number;
+  detached_prepared_total: number;
+  detached_merged_total: number;
+  detached_fallback_total: number;
+  detached_fallback_fee_postprocessing_total: number;
+  detached_fallback_user_executor_total: number;
+  detached_fallback_durable_state_total: number;
+  detached_fallback_unsupported_instruction_total: number;
+  detached_fallback_rejected_eval_total: number;
+  detached_fallback_overlay_error_total: number;
+  quarantine_executed_total: number;
+}
+
+export interface ToriiSumeragiNposDiagnostics {
+  epoch_length_blocks: number;
+  vrf_commit_deadline_offset: number;
+  vrf_reveal_deadline_offset: number;
+  epoch_seed: string;
+  prf_height: number;
+  prf_view: number;
+  vrf_penalty_epoch: number;
+  vrf_committed_no_reveal_total: number;
+  vrf_no_participation_total: number;
+  vrf_late_reveals_total: number;
+}
+
+export interface ToriiSumeragiDiagnosticLaneCommitment {
+  block_height: number;
+  lane_id: number;
+  tx_count: number;
+  total_chunks: number;
+  rbc_bytes_total: number;
+  teu_total: number;
+  block_hash: string;
+}
+
+export interface ToriiSumeragiDiagnosticDataspaceCommitment
+  extends ToriiSumeragiDiagnosticLaneCommitment {
+  dataspace_id: number;
+}
+
+export interface ToriiSumeragiDiagnosticRuntimeUpgrade {
+  allow: boolean;
+  require_metadata: boolean;
+  metadata_key: string | null;
+  allowed_ids: ReadonlyArray<string>;
+}
+
+export interface ToriiSumeragiDiagnosticLaneGovernance {
+  lane_id: number;
+  alias: string;
+  governance: string | null;
+  manifest_required: boolean;
+  manifest_ready: boolean;
+  manifest_path: string | null;
+  validator_ids: ReadonlyArray<string>;
+  quorum: number | null;
+  protected_namespaces: ReadonlyArray<string>;
+  runtime_upgrade: ToriiSumeragiDiagnosticRuntimeUpgrade | null;
+}
+
+export type ToriiSumeragiNativeAmxParticipantApplicationState =
+  | "certified_pending_carrier"
+  | "committed_evidence_pending"
+  | "durably_applied"
+  | "conflict";
+
+export interface ToriiSumeragiNativeAmxParticipantApplication {
+  lane_id: number;
+  dataspace_id: number;
+  lane_incarnation: string;
+  participant_height: number;
+  participant_view: number;
+  predecessor_height: number;
+  predecessor_descriptor_hash: string | null;
+  descriptor_hash: string;
+  proposal_hash: string;
+  settlement_hash: string;
+  source_count: number;
+  application_block_height: number | null;
+  application_block_hash: string | null;
+  state: ToriiSumeragiNativeAmxParticipantApplicationState;
+}
+
+export interface ToriiSumeragiDiagnostics {
+  pipeline_execution: ToriiSumeragiPipelineExecutionStatus;
+  tx_queue_depth: number;
+  tx_queue_capacity: number;
+  tx_queue_retained_bytes: number;
+  tx_queue_max_retained_bytes: number;
+  tx_queue_saturated: boolean;
+  tx_queue_saturated_by_count: boolean;
+  tx_queue_saturated_by_bytes: boolean;
+  tx_queue_saturated_by_age: boolean;
+  tx_queue_oldest_queued_age_ms: number;
+  npos: ToriiSumeragiNposDiagnostics | null;
+  lane_commitments: ReadonlyArray<ToriiSumeragiDiagnosticLaneCommitment>;
+  dataspace_commitments: ReadonlyArray<ToriiSumeragiDiagnosticDataspaceCommitment>;
   lane_settlement_commitments: ReadonlyArray<ToriiLaneSettlementCommitment>;
   lane_relay_envelopes: ReadonlyArray<ToriiLaneRelayEnvelope>;
   lane_payload_ownerships: ReadonlyArray<ToriiSumeragiLanePayloadOwnership>;
   committed_lane_blocks: ReadonlyArray<ToriiSumeragiCommittedLaneBlock>;
   lane_block_sessions: ReadonlyArray<ToriiSumeragiLaneBlockSessionStatus>;
-  local_peer_removed: boolean;
-  operator: ToriiSumeragiV2OperatorStatus;
+  lane_governance_sealed_total: number;
+  lane_governance_sealed_aliases: ReadonlyArray<string>;
+  lane_governance: ReadonlyArray<ToriiSumeragiDiagnosticLaneGovernance>;
+  native_amx_participant_applications: ReadonlyArray<
+    ToriiSumeragiNativeAmxParticipantApplication
+  >;
 }
 
 export interface ToriiConsensusCaps {
@@ -12177,6 +12333,7 @@ export declare class ToriiBrowserClient {
     options?: Record<string, unknown>,
   ): Promise<unknown>;
   getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
+  getSumeragiDiagnostics(options?: Record<string, unknown>): Promise<unknown>;
   getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
   getKaigiRelay(
@@ -13042,6 +13199,12 @@ export declare class ToriiClient {
   getSumeragiStatusTyped(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiStatus>;
+  getSumeragiDiagnostics(options?: {
+    signal?: AbortSignal;
+  }): Promise<Record<string, unknown>>;
+  getSumeragiDiagnosticsTyped(options?: {
+    signal?: AbortSignal;
+  }): Promise<ToriiSumeragiDiagnostics>;
   getSumeragiPacemaker(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiPacemakerResponse | null>;

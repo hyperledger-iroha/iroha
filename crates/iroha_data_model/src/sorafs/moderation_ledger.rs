@@ -1517,6 +1517,303 @@ pub struct ModerationLedgerStatusV1 {
     pub updated_at_unix_ms: u64,
 }
 
+/// First-release chain-authoritative repair-task record version.
+pub const REPAIR_LEDGER_TASK_VERSION_V1: u16 = 1;
+/// Shortest lease accepted by the chain-authoritative repair ledger.
+pub const REPAIR_LEDGER_MIN_LEASE_MS_V1: u64 = 1_000;
+/// Longest lease accepted by the chain-authoritative repair ledger.
+pub const REPAIR_LEDGER_MAX_LEASE_MS_V1: u64 = 24 * 60 * 60 * 1_000;
+/// Maximum idempotency receipts retained by one repair task.
+pub const REPAIR_LEDGER_MAX_RECEIPTS_V1: usize = 64;
+/// Maximum UTF-8 byte length of one repair idempotency key.
+pub const REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
+/// Maximum payload-free repair appeal reason length.
+pub const REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1: usize = 512;
+/// Domain separator for immutable repair-task identities.
+pub const REPAIR_LEDGER_TASK_ID_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-task-id.v1";
+/// Domain separator for repair action idempotency keys.
+pub const REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-idempotency-key.v1";
+/// Domain separator for repair appeal identities.
+pub const REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-appeal-id.v1";
+
+/// Derive the immutable task identity from a subsystem's exactly-once source identity.
+#[must_use]
+pub fn sorafs_repair_task_id_v1(source_identity: [u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_LEDGER_TASK_ID_DOMAIN_V1);
+    hasher.update(&source_identity);
+    *hasher.finalize().as_bytes()
+}
+
+/// Derive a task-scoped digest for a bounded idempotency key.
+#[must_use]
+pub fn sorafs_repair_idempotency_digest_v1(ticket_id: &str, key: &str) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1);
+    for value in [ticket_id, key] {
+        hasher.update(
+            &u64::try_from(value.len())
+                .expect("string length fits u64")
+                .to_le_bytes(),
+        );
+        hasher.update(value.as_bytes());
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// Consensus-owned repair worker lease.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerLeaseV1 {
+    /// Canonical account that exclusively owns the lease.
+    pub owner: AccountId,
+    /// Monotonic lease generation, incremented on every successful claim.
+    pub generation: u64,
+    /// Block timestamp at which the lease was acquired.
+    pub acquired_at_unix_ms: u64,
+    /// Block timestamp of the latest accepted claim or heartbeat.
+    pub renewed_at_unix_ms: u64,
+    /// Exclusive lease expiry; actions at or after this timestamp are rejected.
+    pub expires_at_unix_ms: u64,
+}
+
+/// Successful repair outcome payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerCompletedV1 {
+    /// Digest of the completion evidence.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub evidence_digest: [u8; 32],
+}
+
+/// Unsuccessful repair outcome payload without slashing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerFailedV1 {
+    /// Digest of the payload-free failure reason or external evidence.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub failure_digest: [u8; 32],
+}
+
+/// Escalated repair outcome payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerEscalatedV1 {
+    /// Digest of the exact canonical slash proposal.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub slash_proposal_digest: [u8; 32],
+}
+
+/// One immutable terminal repair outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", rename_all = "snake_case")
+)]
+pub enum RepairLedgerTerminalKindV1 {
+    /// Repair completed and the external verification evidence is committed by digest.
+    Completed(RepairLedgerCompletedV1),
+    /// Repair failed without a slash proposal.
+    Failed(RepairLedgerFailedV1),
+    /// Repair failed and atomically committed a slash proposal.
+    Escalated(RepairLedgerEscalatedV1),
+}
+
+/// Provenance for the single terminal outcome of a repair task.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerTerminalOutcomeV1 {
+    /// Terminal result.
+    pub kind: RepairLedgerTerminalKindV1,
+    /// Lease generation whose owner committed the result.
+    pub lease_generation: u64,
+    /// Worker account that committed the result.
+    pub finalized_by: AccountId,
+    /// Finalizing block timestamp.
+    pub finalized_at_unix_ms: u64,
+}
+
+/// Idempotent repair action accepted by consensus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerActionReceiptV1 {
+    /// Task-scoped idempotency key digest.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub idempotency_digest: [u8; 32],
+    /// Digest of the exact canonical action body.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub action_digest: [u8; 32],
+    /// Task revision produced by the action.
+    pub resulting_revision: u64,
+}
+
+/// Slash proposal committed atomically with an escalated terminal outcome.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerSlashRecordV1 {
+    /// Exact canonical `sorafs_manifest::repair::RepairSlashProposalV1` bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub canonical_proposal: Vec<u8>,
+    /// Digest of `canonical_proposal`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub proposal_digest: [u8; 32],
+    /// Worker that committed the proposal.
+    pub submitted_by: AccountId,
+    /// Committing block timestamp.
+    pub submitted_at_unix_ms: u64,
+}
+
+/// Provider appeal committed against one escalated repair slash proposal.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerAppealRecordV1 {
+    /// Deterministic appeal identity.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub appeal_id: [u8; 32],
+    /// Digest of the slash proposal being appealed.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub slash_proposal_digest: [u8; 32],
+    /// Provider-owner account that submitted the appeal.
+    pub appellant: AccountId,
+    /// Digest of external appeal evidence.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub evidence_digest: [u8; 32],
+    /// Bounded payload-free reason.
+    pub reason: String,
+    /// Committing block timestamp.
+    pub submitted_at_unix_ms: u64,
+}
+
+/// Derive the immutable identity of a repair slash appeal.
+#[must_use]
+pub fn sorafs_repair_appeal_id_v1(
+    task_id: [u8; 32],
+    slash_proposal_digest: [u8; 32],
+    appellant: &AccountId,
+    evidence_digest: [u8; 32],
+    reason: &str,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1);
+    hasher.update(&task_id);
+    hasher.update(&slash_proposal_digest);
+    let appellant = appellant.to_string();
+    for value in [appellant.as_str(), reason] {
+        hasher.update(
+            &u64::try_from(value.len())
+                .expect("string length fits u64")
+                .to_le_bytes(),
+        );
+        hasher.update(value.as_bytes());
+    }
+    hasher.update(&evidence_digest);
+    *hasher.finalize().as_bytes()
+}
+
+/// Chain-authoritative repair task, lease, terminal result, slash, and appeal.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerTaskV1 {
+    /// Schema version; must equal [`REPAIR_LEDGER_TASK_VERSION_V1`].
+    pub version: u16,
+    /// Immutable task identity derived from the exact canonical report.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub task_id: [u8; 32],
+    /// Non-zero exactly-once identity supplied by the originating proof subsystem.
+    ///
+    /// `PoTR` uses the signed receipt digest; other subsystems use an equally
+    /// stable canonical failure or handoff digest.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub source_identity: [u8; 32],
+    /// Canonical repair ticket identifier.
+    pub ticket_id: String,
+    /// Exact canonical `sorafs_manifest::repair::RepairReportV1` bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub canonical_report: Vec<u8>,
+    /// Manifest under repair.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub manifest_digest: [u8; 32],
+    /// Provider responsible for the affected replica.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub provider_id: [u8; 32],
+    /// Auditor account that admitted the task.
+    pub submitted_by: AccountId,
+    /// Admission block timestamp.
+    pub submitted_at_unix_ms: u64,
+    /// Monotonic task revision.
+    pub revision: u64,
+    /// Current exclusive worker lease, including an expired lease until reclaimed.
+    pub lease: Option<RepairLedgerLeaseV1>,
+    /// Immutable terminal outcome, when finalized.
+    pub terminal_outcome: Option<RepairLedgerTerminalOutcomeV1>,
+    /// Slash proposal committed with an escalated terminal outcome.
+    pub slash: Option<RepairLedgerSlashRecordV1>,
+    /// Single provider appeal against the committed slash proposal.
+    pub appeal: Option<RepairLedgerAppealRecordV1>,
+    /// Bounded idempotency receipts ordered by acceptance.
+    pub action_receipts: Vec<RepairLedgerActionReceiptV1>,
+    /// Block timestamp of the latest accepted mutation.
+    pub updated_at_unix_ms: u64,
+}
+
+/// Constant-time counters for the authoritative repair ledger.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerStatusV1 {
+    /// Admitted repair tasks.
+    pub tasks: u64,
+    /// Tasks that currently retain a lease record.
+    pub leased_tasks: u64,
+    /// Persisted terminal outcomes.
+    pub terminal_outcomes: u64,
+    /// Completed terminal outcomes.
+    pub completed: u64,
+    /// Failed terminal outcomes without a slash proposal.
+    pub failed: u64,
+    /// Escalated terminal outcomes with a slash proposal.
+    pub escalated: u64,
+    /// Committed slash proposals.
+    pub slash_proposals: u64,
+    /// Committed provider appeals.
+    pub appeals: u64,
+    /// Block timestamp of the latest mutation.
+    pub updated_at_unix_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
@@ -2002,5 +2299,56 @@ mod tests {
                 found: 2
             })
         ));
+    }
+
+    #[test]
+    fn repair_identity_and_ledger_roundtrip_are_stable() {
+        let source_identity = [0xA5; 32];
+        let task_id = sorafs_repair_task_id_v1(source_identity);
+        assert_eq!(task_id, sorafs_repair_task_id_v1(source_identity));
+        assert_ne!(task_id, sorafs_repair_task_id_v1([0xA6; 32]));
+        assert_ne!(
+            sorafs_repair_idempotency_digest_v1("REP-1", "claim-1"),
+            sorafs_repair_idempotency_digest_v1("REP-1", "claim-2")
+        );
+
+        let owner = account(21);
+        let task = RepairLedgerTaskV1 {
+            version: REPAIR_LEDGER_TASK_VERSION_V1,
+            task_id,
+            source_identity,
+            ticket_id: "REP-1".to_owned(),
+            canonical_report: norito::to_bytes(&"canonical-report").unwrap(),
+            manifest_digest: [0x11; 32],
+            provider_id: [0x22; 32],
+            submitted_by: owner.clone(),
+            submitted_at_unix_ms: 1_000,
+            revision: 2,
+            lease: Some(RepairLedgerLeaseV1 {
+                owner,
+                generation: 1,
+                acquired_at_unix_ms: 1_000,
+                renewed_at_unix_ms: 1_000,
+                expires_at_unix_ms: 2_000,
+            }),
+            terminal_outcome: None,
+            slash: None,
+            appeal: None,
+            action_receipts: vec![RepairLedgerActionReceiptV1 {
+                idempotency_digest: sorafs_repair_idempotency_digest_v1("REP-1", "claim-1"),
+                action_digest: [0x33; 32],
+                resulting_revision: 2,
+            }],
+            updated_at_unix_ms: 1_000,
+        };
+        let encoded = norito::to_bytes(&task).unwrap();
+        let decoded: RepairLedgerTaskV1 = norito::decode_from_bytes(&encoded).unwrap();
+        assert_eq!(decoded, task);
+
+        let appeal_a =
+            sorafs_repair_appeal_id_v1(task_id, [0x44; 32], &task.submitted_by, [0x55; 32], "why");
+        let appeal_b =
+            sorafs_repair_appeal_id_v1(task_id, [0x44; 32], &task.submitted_by, [0x55; 32], "why");
+        assert_eq!(appeal_a, appeal_b);
     }
 }

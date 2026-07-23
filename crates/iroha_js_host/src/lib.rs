@@ -223,7 +223,12 @@ use sorafs_manifest::{
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
-    sign_orderbook_payload_bytes_ed25519_v1, validate_orderbook_payload_bytes,
+    reference_ffi::{
+        SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1, SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1,
+        SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
+    },
+    sign_orderbook_payload_bytes_ed25519_v1, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_orderbook_payload_bytes,
     validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
     validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
     validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
@@ -659,6 +664,15 @@ pub struct JsReplicationOrder {
     pub sla: JsReplicationSla,
     /// Metadata entries attached to the order.
     pub metadata: Vec<JsReplicationMetadataEntry>,
+}
+
+/// One governance DAG block in an ordered contiguous tail supplied to head validation.
+#[napi(object)]
+pub struct JsSorafsGovernanceDagBlockInput {
+    /// Canonical `GovernanceDagBlockV1` Norito bytes.
+    pub bytes: Buffer,
+    /// UTF-8 diagnostic label preserved in `ValidationOutcomeV1.inputs`.
+    pub label: String,
 }
 
 /// Return the immutable source revision embedded by the release build.
@@ -6069,6 +6083,58 @@ fn parse_sorafs_generated_at_unix(generated_at_unix: i64) -> napi::Result<u64> {
     })
 }
 
+fn validate_sorafs_reference_label(label: &str, context: &str) -> napi::Result<()> {
+    if label.is_empty() || label.trim().is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must not be blank"),
+        ));
+    }
+    if label.trim() != label {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must not contain surrounding whitespace"),
+        ));
+    }
+    if label.chars().any(char::is_control) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must not contain control characters"),
+        ));
+    }
+    let maximum = SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1 as usize;
+    if label.len() > maximum {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be at most {maximum} UTF-8 bytes"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sorafs_reference_aggregate_bytes(
+    context: &str,
+    sizes: impl IntoIterator<Item = usize>,
+) -> napi::Result<()> {
+    let maximum = SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1 as usize;
+    let mut total = 0usize;
+    for size in sizes {
+        total = total.checked_add(size).ok_or_else(|| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("{context} aggregate byte length overflowed"),
+            )
+        })?;
+        if total > maximum {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("{context} inputs exceed {maximum} aggregate bytes"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn parse_sorafs_orderbook_payload_kind(
     kind: &str,
 ) -> napi::Result<OrderbookValidationPayloadKindV1> {
@@ -6473,6 +6539,76 @@ pub fn sorafs_validate_pdp_bundle_json(
     json::to_string(&outcome).map_err(norito_to_napi)
 }
 
+/// Validate one canonical governance DAG block and return outcome JSON.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_validate_governance_dag_block_json(
+    bytes: Uint8Array,
+    label: String,
+    expected_block_cid: Option<Uint8Array>,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    validate_sorafs_reference_label(&label, "label")?;
+    validate_sorafs_reference_aggregate_bytes(
+        "governance DAG block validation",
+        [
+            bytes.len(),
+            label.len(),
+            expected_block_cid.as_ref().map_or(0, Uint8Array::len),
+        ],
+    )?;
+    let expected_block_cid = expected_block_cid.as_ref().and_then(|cid| {
+        let cid: &[u8] = cid.as_ref();
+        (!cid.is_empty()).then_some(cid)
+    });
+    let outcome = validate_governance_dag_block_bytes(
+        bytes.as_ref(),
+        label,
+        expected_block_cid,
+        generated_at,
+    );
+    json::to_string(&outcome).map_err(norito_to_napi)
+}
+
+/// Validate a signed governance DAG head against an ordered contiguous block tail.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // N-API boundary requires owned inputs
+pub fn sorafs_validate_governance_dag_head_chain_json(
+    head: Uint8Array,
+    head_label: String,
+    blocks: Vec<JsSorafsGovernanceDagBlockInput>,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    let maximum_blocks = SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1 as usize;
+    if blocks.is_empty() || blocks.len() > maximum_blocks {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("blocks must contain 1..={maximum_blocks} entries"),
+        ));
+    }
+    validate_sorafs_reference_label(&head_label, "head_label")?;
+    let mut sizes = Vec::with_capacity(2 + blocks.len() * 2);
+    sizes.extend([head.len(), head_label.len()]);
+    for (index, block) in blocks.iter().enumerate() {
+        validate_sorafs_reference_label(&block.label, &format!("blocks[{index}].label"))?;
+        sizes.extend([block.bytes.len(), block.label.len()]);
+    }
+    validate_sorafs_reference_aggregate_bytes("governance DAG head-chain validation", sizes)?;
+    let block_payloads = blocks
+        .iter()
+        .map(|block| (block.bytes.as_ref(), block.label.clone()))
+        .collect::<Vec<_>>();
+    let outcome = validate_governance_dag_head_chain_bytes(
+        head.as_ref(),
+        head_label,
+        &block_payloads,
+        generated_at,
+    );
+    json::to_string(&outcome).map_err(norito_to_napi)
+}
+
 #[cfg(test)]
 mod sorafs_orderbook_validation_tests {
     use super::*;
@@ -6539,6 +6675,53 @@ mod sorafs_orderbook_validation_tests {
         for invalid in ["1.0", "0.0000000001", &"1".repeat(156)] {
             assert!(parse_sorafs_xor_quantity(invalid, "amount").is_err());
         }
+    }
+
+    #[test]
+    fn governance_dag_reference_bounds_are_enforced_before_native_dispatch() {
+        let maximum_label = SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1 as usize;
+        assert!(validate_sorafs_reference_label(&"a".repeat(maximum_label), "label").is_ok());
+        assert!(validate_sorafs_reference_label(&"a".repeat(maximum_label + 1), "label").is_err());
+
+        let maximum_input = SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1 as usize;
+        assert!(
+            validate_sorafs_reference_aggregate_bytes("governance DAG", [maximum_input]).is_ok()
+        );
+        assert!(
+            validate_sorafs_reference_aggregate_bytes("governance DAG", [maximum_input, 1])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn governance_dag_reference_fixtures_have_stable_positive_and_negative_outcomes() {
+        let root = include_bytes!("../../../fixtures/sorafs_manifest/governance/dag_block_0_v1.to");
+        let child =
+            include_bytes!("../../../fixtures/sorafs_manifest/governance/dag_block_1_v1.to");
+        let head = include_bytes!("../../../fixtures/sorafs_manifest/governance/dag_head_v1.to");
+
+        let block_outcome =
+            validate_governance_dag_block_bytes(root, "root.to", None, 1_700_001_234);
+        assert!(block_outcome.is_ok());
+        assert_eq!(block_outcome.generated_at, 1_700_001_234);
+
+        let blocks = [
+            (root.as_slice(), "root.to".to_owned()),
+            (child.as_slice(), "child.to".to_owned()),
+        ];
+        let chain_outcome =
+            validate_governance_dag_head_chain_bytes(head, "head.to", &blocks, 1_700_001_235);
+        assert!(chain_outcome.is_ok());
+        assert_eq!(chain_outcome.generated_at, 1_700_001_235);
+
+        let reordered = [
+            (child.as_slice(), "child.to".to_owned()),
+            (root.as_slice(), "root.to".to_owned()),
+        ];
+        let negative =
+            validate_governance_dag_head_chain_bytes(head, "head.to", &reordered, 1_700_001_236);
+        assert_eq!(negative.status.as_str(), "Error");
+        assert_eq!(negative.code, "SFS-GOV-006");
     }
 }
 

@@ -21,14 +21,27 @@ from check_sorafs_release_version_map import (  # noqa: E402
 
 
 SCHEMA = "sorafs.release.automation.v1"
+RELEASE_TARGET_RUNNERS: tuple[tuple[str, str], ...] = (
+    ("ubuntu-24.04", "x86_64-unknown-linux-gnu"),
+    ("ubuntu-24.04-arm", "aarch64-unknown-linux-gnu"),
+    ("macos-15-intel", "x86_64-apple-darwin"),
+    ("macos-14", "aarch64-apple-darwin"),
+    ("windows-latest", "x86_64-pc-windows-msvc"),
+)
 WORKFLOWS: dict[str, tuple[str, ...]] = {
     ".github/workflows/sorafs-cli-release.yml": (
         '"sorafs-cli-v*"',
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
         "scripts/check_sorafs_release_version_map.py",
+        "scripts/check_sorafs_reference_sdk_release_evidence.py",
+        "scripts/build_sorafs_reference_sdk_release_canary.py",
+        "scripts/run_sorafs_reference_sdk_release_evidence.py",
+        "scripts/check_workflow_action_pins.py",
         '- "scripts/requirements.txt"',
         "python3 -m pip install -r scripts/requirements.txt",
+        "python3 scripts/check_workflow_action_pins.py",
+        "scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py",
         "run: bash ci/check_sorafs_cli_release.sh",
         "scripts/package_sorafs_validate_release.sh",
         "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
@@ -37,10 +50,12 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "grype-version: v0.112.0",
         "severity-cutoff: high",
         "fail-build: true",
-        "cargo build --locked --release -p sorafs_orchestrator --bin sorafs_cli",
-        "cargo build --locked --release -p sorafs_car --features cli --bin sorafs_fetch",
-        "cargo build --locked --release -p sorafs_manifest --bin sorafs-validate",
-        "os: windows-latest",
+        'cargo build --locked --release -p sorafs_orchestrator --bin sorafs_cli --target "$target"',
+        'cargo build --locked --release -p sorafs_car --features cli --bin sorafs_fetch --target "$target"',
+        'cargo build --locked --release -p sorafs_manifest --bin sorafs-validate --target "$target"',
+        'if [[ "$host_target" != "$target" ]]; then',
+        "target: ${{ matrix.target }}",
+        '--target "${{ matrix.target }}"',
         'binary_suffix: ".exe"',
         "find . -type f ! -name SHA256SUMS -print",
         "done > SHA256SUMS",
@@ -50,13 +65,13 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "name: Generate platform binary SBOM",
         "name: Package reference validator and FFI header",
         "artifacts/sorafs-cli/reference-validator",
-        "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.platform }}.spdx.json",
+        "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}.spdx.json",
         "name: Scan platform binary SBOM",
-        "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.platform }}-vulnerabilities.sarif",
+        "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}-vulnerabilities.sarif",
         "name: Finalize platform checksums",
         "sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22",
         "name: Verify platform package checksums before signing",
-        '[[ "${#checksum_files[@]}" -ne 3 ]]',
+        '[[ "${#checksum_files[@]}" -ne 5 ]]',
         "sha256sum --check SHA256SUMS",
         "SHA256SUMS contains duplicate file entries",
         "SHA256SUMS does not cover the exact platform candidate file set",
@@ -116,6 +131,26 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             errors.append(f"{relative}: missing contract marker `{marker}`")
 
     if relative.endswith("sorafs-cli-release.yml"):
+        package_matrix = re.search(
+            r"(?ms)^  package:\n.*?^      matrix:\n"
+            r"(?P<matrix>.*?)^    runs-on: \$\{\{ matrix\.os \}\}",
+            source,
+        )
+        if package_matrix is None:
+            errors.append(f"{relative}: malformed native release matrix")
+        else:
+            target_runners = tuple(
+                re.findall(
+                    r"(?m)^          - os: ([^\s#]+)\n"
+                    r"            target: ([^\s#]+)$",
+                    package_matrix.group("matrix"),
+                )
+            )
+            if target_runners != RELEASE_TARGET_RUNNERS:
+                errors.append(
+                    f"{relative}: native release matrix must contain exactly the "
+                    "reviewed Linux, macOS, and Windows target/runner pairs"
+                )
         try:
             global_permissions = source[
                 source.index("permissions:") : source.index("concurrency:")
@@ -142,6 +177,29 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                     )
             if "if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') || inputs.sign_artifacts }}" not in sign_job:
                 errors.append(f"{relative}: signing job lacks the reviewed trigger guard")
+            required_targets = re.search(
+                r"(?ms)^\s+required_targets=\(\n"
+                r"(?P<targets>.*?)^\s+\)$",
+                sign_job,
+            )
+            expected_targets = tuple(
+                target for _runner, target in RELEASE_TARGET_RUNNERS
+            )
+            if required_targets is None:
+                errors.append(
+                    f"{relative}: signing job lacks the mandatory target inventory"
+                )
+            else:
+                signed_targets = tuple(
+                    line.strip()
+                    for line in required_targets.group("targets").splitlines()
+                    if line.strip()
+                )
+                if signed_targets != expected_targets:
+                    errors.append(
+                        f"{relative}: signing job target inventory must exactly "
+                        "match the native release matrix"
+                    )
             try:
                 verify_checksums = sign_job.index(
                     "name: Verify platform package checksums before signing"

@@ -2544,6 +2544,7 @@ mod tests {
             relay_envelope: None,
         };
         MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: 1,
             lane_catalog_hash: Hash::new(b"offline-status-merge-catalog"),
             active_lanes: vec![MergeLaneBinding {

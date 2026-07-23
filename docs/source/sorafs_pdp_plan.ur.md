@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_pdp_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bc24d4c18e37aa448fec644f34b11d4a002211cd370a4f7ef52c7bc5cc15c534
+source_hash: 081d0b3c5ed447615ee16364f76176d2eae91f7419938d4b8d24b5d2ffd833e5
 source_last_modified: "2026-07-06T19:29:26.838406+00:00"
 translation_last_reviewed: 2026-07-06
 source_mtime: 2026-07-06T19:29:26.838406+00:00

@@ -93,12 +93,21 @@ SORAFS_VALIDATE_CLI_TEST_RS = (
 IROHA_CLIENT_RS = REPO_ROOT / "crates" / "iroha" / "src" / "client.rs"
 TORII_LIB_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs"
 TORII_SORAFS_API_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs" / "api.rs"
+TORII_SORAFS_POP_API_RS = (
+    REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs" / "pop_api.rs"
+)
 TORII_OPENAPI_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
+TORII_ROUTE_CATALOG_RS = (
+    REPO_ROOT / "crates" / "iroha_torii_shared" / "src" / "route_catalog.rs"
+)
 IROHA_CLI_SORAFS_RS = REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs.rs"
 IROHA_P2P_PEER_RS = REPO_ROOT / "crates" / "iroha_p2p" / "src" / "peer.rs"
 IROHA_CORE_KISO_RS = REPO_ROOT / "crates" / "iroha_core" / "src" / "kiso.rs"
 IROHA_CONFIG_ACTUAL_RS = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "actual.rs"
+)
+IROHA_CONFIG_DEFAULTS_RS = (
+    REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "defaults.rs"
 )
 IROHA_CONFIG_USER_RS = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
@@ -1096,7 +1105,10 @@ def test_unshipped_matcher_helpers_have_negative_control_tests() -> None:
         if not tests
     }
 
-    assert len(helpers) == 43
+    # Governance DAG and PDP now have shipped public services, so both former
+    # route/CLI guard pairs left this inventory. PoP now has a shipped HTTP
+    # service as well, while its CLI guard intentionally remains active.
+    assert len(helpers) == 38
     assert missing_negative_controls == {}
 
 
@@ -1879,8 +1891,11 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "required: true" in user_config.split("fn parse(self) -> actual::SoranetPow", 1)[1].split(
         "/// Puzzle configuration supplied at the user level.", 1
     )[0]
-    assert "Some(actual::SoranetPuzzle" in user_config.split(
-        "fn parse(self) -> Option<actual::SoranetPuzzle>", 1
+    assert "puzzle: Some(puzzle.parse())" in user_config.split(
+        "fn parse(self) -> actual::SoranetPow", 1
+    )[1].split("/// Puzzle configuration supplied at the user level.", 1)[0]
+    assert "actual::SoranetPuzzle" in user_config.split(
+        "fn parse(self) -> actual::SoranetPuzzle", 1
     )[1].split("/// User-level configuration container for SoraNet privacy telemetry.", 1)[0]
 
     assert "SM handshake matching is mandatory" in apply_config_update
@@ -4458,6 +4473,14 @@ def test_top_level_sorafs_plan_localized_hashes_match_source() -> None:
         expected = hashlib.sha256(source.read_bytes()).hexdigest()
         for path in localized_paths:
             checked_localized += 1
+            status = next(
+                (
+                    line.split(":", 1)[1].strip()
+                    for line in read(path).splitlines()
+                    if line.startswith("status:")
+                ),
+                None,
+            )
             actual = next(
                 (
                     line.split(":", 1)[1].strip()
@@ -4466,8 +4489,12 @@ def test_top_level_sorafs_plan_localized_hashes_match_source() -> None:
                 ),
                 None,
             )
-            if actual != expected:
+            if status == "complete" and actual != expected:
                 mismatches[str(path.relative_to(REPO_ROOT))] = actual
+            elif status in {"needs-review", "needs-translation"} and actual == expected:
+                mismatches[str(path.relative_to(REPO_ROOT))] = "unreviewed-current"
+            elif status not in {"complete", "needs-review", "needs-translation"}:
+                mismatches[str(path.relative_to(REPO_ROOT))] = status
 
     assert checked_sources
     assert checked_localized
@@ -7895,7 +7922,8 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert "def write_open_flags" in packager
     assert "def write_manifest_no_follow" in packager
     assert "write_sha256_sidecar()" in packager
-    assert "safe_remove_manifest_signature_output()" in packager
+    assert "validate_new_manifest_signature_output()" in packager
+    assert "snapshot_release_signing_input()" in packager
     assert "install_manifest_signature()" in packager
     assert "def write_all(fd, chunk)" in packager
     assert packager.count("def sync_output_parent(") >= 2
@@ -7919,10 +7947,9 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert 'write_sha256_sidecar "$binary_sha_path"' in packager
     assert 'write_sha256_sidecar "$archive_sha_path"' in packager
     assert 'write_sha256_sidecar "$manifest_sha_path"' in packager
-    assert 'safe_remove_manifest_signature_output "$manifest_signature_path"' in packager
     assert '-out "$signature_tmp_path"' in packager
     assert (
-        'install_manifest_signature "$signature_tmp_path" "$manifest_signature_path" "$manifest_path"'
+        '"$signature_source_path" "$manifest_signature_path" "$manifest_path"'
         in packager
     )
     assert '-out "$manifest_signature_path"' not in packager
@@ -7967,6 +7994,10 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     )
     assert (
         "test_release_packager_rejects_symlinked_manifest_signature_output"
+        in packager_test
+    )
+    assert (
+        "test_release_packager_does_not_clobber_existing_manifest_signature_output"
         in packager_test
     )
     assert (
@@ -9273,9 +9304,15 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert 'ARGFILE_INSPECTION_DIAGNOSTIC = "@ARGFILE cannot be inspected"' in helper
     assert 'ARGFILE_READ_DIAGNOSTIC = "@ARGFILE cannot be read"' in helper
     assert 'ARGFILE_RESOLUTION_DIAGNOSTIC = "@ARGFILE cannot be resolved"' in helper
-    assert "os.open(path, _response_argfile_open_flags())" in helper
-    assert "os.fstat(fd).st_size" in helper
-    assert "os.fdopen(fd, \"rb\")" in helper
+    assert "def _open_response_argfile_parent(" in helper
+    assert "def _response_argfile_path_identity_matches(" in helper
+    assert "os.open(\n            leaf,\n            _response_argfile_open_flags()," in helper
+    assert "before = os.fstat(fd)" in helper
+    assert "after = os.fstat(fd)" in helper
+    assert "chunk = os.read(" in helper
+    assert "before.st_nlink != 1" in helper
+    assert "stat.S_IWGRP | stat.S_IWOTH" in helper
+    assert "ARGFILE_CHANGED_DIAGNOSTIC" in helper
     assert "os.close(fd)" in helper
     assert "must exist and be a file" in helper
     assert "@ARGFILE `{path_label}` must not be a symlink" not in helper
@@ -9300,6 +9337,8 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert "test_symlink_response_file_fails_before_read" in helper_test
     assert "test_response_file_parent_symlink_fails_before_read" in helper_test
     assert "test_response_file_read_uses_no_follow_open_flags" in helper_test
+    assert "test_response_file_parent_swap_during_read_fails_closed" in helper_test
+    assert "test_response_file_rejects_hardlinks_and_writable_inputs" in helper_test
     assert "test_response_file_non_utf8_bytes_fail_stably" in helper_test
     assert "test_response_file_stat_failure_sanitizes_malformed_error" in helper_test
     assert "test_response_file_read_failure_sanitizes_malformed_error" in helper_test
@@ -15164,18 +15203,20 @@ def test_pop_credentials_runtime_services_stay_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, and a consensus-owned issuer/registry foundation, but it is not yet shipped as a complete SoraFS proof-of-personhood credential service.",
-        "The repository still does not contain the enrollment portal, credential issuer daemon, juror wallet, dedicated credential-registry service facade, or deployed SoraFS verifier service described by the original plan.",
-        "This checker is a rollout gate; it does not replace the missing issuer/client runtime services, dedicated registry facade, or deployed verifier integration.",
-        "Enrollment portal | Captures candidate attestations and issuer approvals. | Not shipped.",
-        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Payload signatures, a local issued-credential bundle helper, bounded issuer policy, and authorised native publication ISIs are shipped; daemon and production key management are not shipped.",
-        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned commitment/root/revocation/audit state and typed queries are shipped; a dedicated service facade and deployed multi-peer evidence are not shipped.",
-        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Not shipped.",
-        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local Halo2/IPA prover and production verifier, native authoritative moderation-intake/sortition verification, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the deployed service facade is not shipped.",
-        "Build the credential issuer daemon and enrollment approval workflow around the native registry, including HSM/threshold key management, retry-safe transaction submission, operator observability, and disaster recovery.",
-        "Deploy the native registry on a reviewed multi-validator environment and collect restart, reconciliation, rollback-rejection, and audit-head evidence; add a dedicated Torii registry facade only if the operator/client contract requires one.",
-        "Build juror client storage, revocation sync, proof generation, and local credential rotation.",
-        "Publish operator and juror docs only after the service CLI/API and verifier paths exist.",
+        "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, a consensus-owned issuer/registry foundation, a durable issuer/wallet service, and the canonical authenticated Torii V1 API, but it is not yet deployable from the standard `irohad` binary.",
+        "`crates/sorafs_node/src/pop_credentials.rs` now owns encrypted enrollment, dual-control approval, HSM-backed issuance, durable registry outbox/dead-letter and finalized reconciliation, encrypted wallet custody, witness synchronization, local proof generation, and exactly-once nullifier consumption.",
+        "`crates/iroha_torii/src/sorafs/pop_api.rs` exposes the exact 14-route V1 family for enrollment, approval, issuance, revocation, registry, wallet, proof generation, and verification.",
+        "The remaining local release blocker is `V1-BLOCK-POP-RUNTIME-01`: the standard `irohad` entrypoint does not yet construct and inject the governed production provider bundle, and the repository has no deployable shared external-runtime or sidecar adapter for those providers.",
+        "This checker is a rollout gate; it does not replace the missing standard-`irohad` external-runtime adapter, HSM/KMS integration, or deployed verifier evidence.",
+        "Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API and durable encrypted workflow are shipped; operator UI, WebAuthn enrollment ceremony, and the deployable external authenticator adapter remain open.",
+        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, and retry-safe outbox are shipped; standard-`irohad` HSM/KMS/provider wiring and deployment evidence remain open.",
+        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, and durable reconciliation are shipped; standard-daemon transaction/reader adapters and multi-peer evidence remain open.",
+        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, and local proof APIs are shipped; a deployable KMS/witness adapter and operator client remain open.",
+        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the external runtime adapter and reviewed deployment evidence remain open.",
+        "`V1-BLOCK-POP-RUNTIME-01` blocks local completion and promotion.",
+        "Until those checks pass, operators must leave `torii.sorafs.storage.pop_credentials.enabled = false`; the intentional enabled-without-runtime startup failure must not be bypassed.",
+        "Resolve `V1-BLOCK-POP-RUNTIME-01` with the shared deployable external-runtime adapter described above; do not add a software-key, file-key, environment, or process-clock fallback.",
+        "Publish operator and juror command documentation only after the still-open CLI and shared external-runtime adapter exist.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -15608,19 +15649,91 @@ def test_pop_credentials_canary_builder_is_checked_in() -> None:
     assert "payload-free SFM-4b1 PoP credential canary builder" in docs
 
 
-UNSHIPPED_POP_CREDENTIALS_ROUTE_PATTERNS = (
-    "/v1/sorafs/pop/enrollment",
-    "/v1/sorafs/pop/enrollment-portal",
-    "/v1/sorafs/pop/issuer",
-    "/v1/sorafs/pop/credential-issuer",
-    "/v1/sorafs/pop/registry",
-    "/v1/sorafs/pop/credential-registry",
-    "/v1/sorafs/pop/juror-client",
-    "/v1/sorafs/pop/juror-wallet",
-    "/v1/sorafs/pop/proof-generator",
-    "/v1/sorafs/pop/verifier",
-    "/v1/sorafs/pop/verifier-service",
-    "/v1/sorafs/pop/promotion",
+SHIPPED_POP_CREDENTIALS_ROUTES = (
+    (
+        "POP_ENROLLMENT",
+        "/v1/sorafs/pop/enrollments",
+        "handle_post_pop_enrollment",
+        "POP_ENROLLMENT_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_ENROLLMENT_STATUS",
+        "/v1/sorafs/pop/enrollments/status",
+        "handle_post_pop_enrollment_status",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_APPROVAL",
+        "/v1/sorafs/pop/approvals",
+        "handle_post_pop_approval",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_ISSUE",
+        "/v1/sorafs/pop/issue",
+        "handle_post_pop_issue",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_REVOCATION",
+        "/v1/sorafs/pop/revocations",
+        "handle_post_pop_revocation",
+        "POP_ENROLLMENT_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_REGISTRY_SUBMIT",
+        "/v1/sorafs/pop/registry/submit-next",
+        "handle_post_pop_registry_submit",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_REGISTRY_RECONCILE",
+        "/v1/sorafs/pop/registry/reconcile-next",
+        "handle_post_pop_registry_reconcile",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_REGISTRY_PROJECTION",
+        "/v1/sorafs/pop/registry/projection",
+        "handle_post_pop_registry_projection",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_WALLET_DELIVERY",
+        "/v1/sorafs/pop/wallet/delivery",
+        "handle_post_pop_wallet_delivery",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_WALLET_IMPORT",
+        "/v1/sorafs/pop/wallet/import",
+        "handle_post_pop_wallet_import",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_WALLET_ACKNOWLEDGE",
+        "/v1/sorafs/pop/wallet/acknowledge",
+        "handle_post_pop_wallet_acknowledge",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_WALLET_SYNCHRONIZE",
+        "/v1/sorafs/pop/wallet/synchronize",
+        "handle_post_pop_wallet_synchronize",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_WALLET_PROVE",
+        "/v1/sorafs/pop/wallet/prove",
+        "handle_post_pop_wallet_prove",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_VERIFY",
+        "/v1/sorafs/pop/verify",
+        "handle_post_pop_verify",
+        "POP_PROOF_REQUEST_MAX_BYTES_V1",
+    ),
 )
 
 UNSHIPPED_POP_CREDENTIALS_CLI_SUBCOMMANDS = (
@@ -15645,14 +15758,6 @@ UNSHIPPED_POP_CREDENTIALS_NESTED_CLI_COMMANDS = (
 )
 
 
-def unshipped_pop_credentials_route_matches(source: str) -> list[str]:
-    return [
-        route
-        for route in UNSHIPPED_POP_CREDENTIALS_ROUTE_PATTERNS
-        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
-    ]
-
-
 def unshipped_pop_credentials_cli_matches(source: str) -> list[str]:
     hyphenated_matches = [
         subcommand
@@ -15667,13 +15772,226 @@ def unshipped_pop_credentials_cli_matches(source: str) -> list[str]:
     return hyphenated_matches + nested_matches
 
 
-def test_pop_credentials_service_surface_matcher_has_negative_controls() -> None:
-    shipped_local_route_candidates = (
-        "/v1/sorafs/pop/issuer-bundle",
-        "/v1/sorafs/pop/registry-snapshot",
-        "/v1/sorafs/pop/verifier-canary",
-        "/v1/sorafs/pop/promotion-canary",
+def pop_credentials_production_surface_errors(
+    route_catalog: str,
+    torii: str,
+    openapi: str,
+    pop_api: str,
+    config_defaults: str,
+    config_actual: str,
+    config_user: str,
+) -> list[str]:
+    errors: list[str] = []
+    expected_routes = [route for _, route, _, _ in SHIPPED_POP_CREDENTIALS_ROUTES]
+    catalog_routes = re.findall(r'"(/v1/sorafs/pop/[^"]+)"', route_catalog)
+    openapi_routes = re.findall(r'"(/v1/sorafs/pop/[^"]+)"', openapi)
+
+    if catalog_routes != expected_routes:
+        errors.append("route catalog does not contain the exact ordered PoP V1 inventory")
+    if openapi_routes != expected_routes:
+        errors.append("OpenAPI does not contain the exact ordered PoP V1 inventory")
+
+    for descriptor, route, _, _ in SHIPPED_POP_CREDENTIALS_ROUTES:
+        descriptor_matches = re.findall(
+            rf"pub const {re.escape(descriptor)}: RouteDescriptor\s*=\s*"
+            rf"(.*?)(?=\n\s*(?:pub const|const fn))",
+            route_catalog,
+            re.S,
+        )
+        if len(descriptor_matches) != 1:
+            errors.append(f"{descriptor} must have exactly one route descriptor")
+            continue
+        descriptor_source = descriptor_matches[0]
+        if descriptor_source.count(f'"{route}"') != 1:
+            errors.append(f"{descriptor} must bind exactly {route}")
+        if (
+            descriptor_source.count(
+                ".with_authentication(AuthenticationPolicy::ProtocolHandshake)"
+            )
+            != 1
+        ):
+            errors.append(f"{descriptor} must require ProtocolHandshake")
+
+    mounted = re.findall(
+        r"pop_post!\(\s*([A-Z0-9_]+),\s*"
+        r"sorafs::pop_api::([a-z0-9_]+),\s*"
+        r"sorafs::pop_api::([A-Z0-9_]+)\s*\);",
+        torii,
+        re.S,
     )
+    expected_mounts = [
+        (descriptor, handler, body_limit)
+        for descriptor, _, handler, body_limit in SHIPPED_POP_CREDENTIALS_ROUTES
+    ]
+    if mounted != expected_mounts:
+        errors.append("Torii does not mount the exact PoP descriptor/handler/limit inventory")
+
+    for _, _, handler, _ in SHIPPED_POP_CREDENTIALS_ROUTES:
+        if len(re.findall(rf"pub async fn {re.escape(handler)}\(", pop_api)) != 1:
+            errors.append(f"{handler} must have exactly one public handler")
+
+    required_openapi_markers = (
+        "pop_authorization_header_parameters(),",
+        '"Sora-PoP-Authorization"',
+        "PopV1 <base64url-no-pad>",
+    )
+    for marker in required_openapi_markers:
+        if marker not in openapi:
+            errors.append(f"OpenAPI is missing {marker}")
+
+    required_config_markers = (
+        (config_defaults, "pub mod pop_credentials {"),
+        (
+            config_defaults,
+            "pub const MAX_FINALIZED_TIME_SKEW_SECS: u64 = 30;",
+        ),
+        (
+            config_actual,
+            "pub pop_credentials: Option<SorafsPopCredentialService>,",
+        ),
+        (config_actual, "pub struct SorafsPopCredentialService {"),
+        (
+            config_actual,
+            "pub max_finalized_time_skew: Duration,",
+        ),
+        (config_user, "pub pop_credentials: SorafsPopCredentialService,"),
+        (
+            config_user,
+            "pub max_finalized_time_skew_secs: u64,",
+        ),
+        (
+            config_user,
+            "let pop_credentials = self.pop_credentials.parse(self.enabled, emitter);",
+        ),
+        (
+            pop_api,
+            "pub finalized_time_provider: Arc<dyn PopFinalizedTimeProviderV1>,",
+        ),
+        (
+            pop_api,
+            "validate_finalized_time_sample(",
+        ),
+        (
+            torii,
+            "torii.sorafs.storage.pop_credentials is enabled but runtime-only "
+            "enrollment/HSM/KMS/authentication dependencies were not injected",
+        ),
+        (
+            torii,
+            "a SoraFS PoP runtime was injected without enabling "
+            "torii.sorafs.storage.pop_credentials",
+        ),
+        (
+            torii,
+            "injected SoraFS PoP runtime does not match "
+            "torii.sorafs.storage.pop_credentials",
+        ),
+    )
+    for source, marker in required_config_markers:
+        if marker not in source:
+            errors.append(f"PoP config/runtime binding is missing {marker}")
+    if "SystemTime::now()" in pop_api:
+        errors.append("PoP runtime must not derive authorization time from process wall clock")
+
+    return errors
+
+
+def test_pop_credentials_production_surface_matcher_has_negative_controls() -> None:
+    route_catalog = read(TORII_ROUTE_CATALOG_RS)
+    torii = read(TORII_LIB_RS)
+    openapi = read(TORII_OPENAPI_RS)
+    pop_api = read(TORII_SORAFS_POP_API_RS)
+    config_defaults = read(IROHA_CONFIG_DEFAULTS_RS)
+    config_actual = read(IROHA_CONFIG_ACTUAL_RS)
+    config_user = read(IROHA_CONFIG_USER_RS)
+
+    def validate(
+        *,
+        catalog: str = route_catalog,
+        mounted: str = torii,
+        spec: str = openapi,
+        handlers: str = pop_api,
+        defaults: str = config_defaults,
+        actual: str = config_actual,
+        user: str = config_user,
+    ) -> list[str]:
+        return pop_credentials_production_surface_errors(
+            catalog,
+            mounted,
+            spec,
+            handlers,
+            defaults,
+            actual,
+            user,
+        )
+
+    assert validate() == []
+    assert validate(
+        catalog=route_catalog.replace(
+            '"/v1/sorafs/pop/enrollments"', '"/v1/sorafs/pop/enrollment"', 1
+        )
+    )
+    assert validate(
+        mounted=torii.replace(
+            "sorafs::pop_api::handle_post_pop_enrollment,",
+            "sorafs::pop_api::handle_post_pop_enrollment_status,",
+            1,
+        )
+    )
+    assert validate(
+        spec=openapi.replace(
+            '"/v1/sorafs/pop/verify",',
+            '"/v1/sorafs/pop/verify-extra",',
+            1,
+        )
+    )
+    assert validate(
+        handlers=pop_api.replace(
+            "pub async fn handle_post_pop_verify(",
+            "async fn handle_post_pop_verify(",
+            1,
+        )
+    )
+    assert validate(
+        handlers=pop_api.replace(
+            "pub finalized_time_provider: Arc<dyn PopFinalizedTimeProviderV1>,",
+            "pub finalized_time_provider: (),",
+            1,
+        )
+    )
+    assert validate(
+        actual=config_actual.replace(
+            "pub pop_credentials: Option<SorafsPopCredentialService>,",
+            "pub pop_credentials: SorafsPopCredentialService,",
+            1,
+        )
+    )
+    assert validate(
+        mounted=torii.replace(
+            "torii.sorafs.storage.pop_credentials is enabled but runtime-only "
+            "enrollment/HSM/KMS/authentication dependencies were not injected",
+            "runtime missing",
+            1,
+        )
+    )
+
+
+def test_pop_credentials_production_service_exposes_exact_canonical_v1_surface() -> None:
+    assert (
+        pop_credentials_production_surface_errors(
+            read(TORII_ROUTE_CATALOG_RS),
+            read(TORII_LIB_RS),
+            read(TORII_OPENAPI_RS),
+            read(TORII_SORAFS_POP_API_RS),
+            read(IROHA_CONFIG_DEFAULTS_RS),
+            read(IROHA_CONFIG_ACTUAL_RS),
+            read(IROHA_CONFIG_USER_RS),
+        )
+        == []
+    )
+
+
+def test_pop_credentials_cli_surface_matcher_has_negative_controls() -> None:
     shipped_local_subcommands = (
         "sorafs-validate pop",
         "pop-credential",
@@ -15689,21 +16007,6 @@ def test_pop_credentials_service_surface_matcher_has_negative_controls() -> None
         "pop revoke-canary",
     )
 
-    assert unshipped_pop_credentials_route_matches(
-        '"GET /v1/sorafs/pop/issuer/status" '
-        "`/v1/sorafs/pop/verifier-service` "
-        '"/v1/sorafs/pop/promotion?deployment_id=prod"'
-    ) == [
-        "/v1/sorafs/pop/issuer",
-        "/v1/sorafs/pop/verifier-service",
-        "/v1/sorafs/pop/promotion",
-    ]
-    assert (
-        unshipped_pop_credentials_route_matches(
-            " ".join(f'"{route}"' for route in shipped_local_route_candidates)
-        )
-        == []
-    )
     assert unshipped_pop_credentials_cli_matches(
         '"pop-issuer-serve" `pop-verifier-service` "pop-promote"'
     ) == ["pop-issuer-serve", "pop-verifier-service", "pop-promote"]
@@ -15718,14 +16021,8 @@ def test_pop_credentials_service_surface_matcher_has_negative_controls() -> None
     ) == []
 
 
-def test_unshipped_pop_credentials_service_surface_is_not_exposed() -> None:
+def test_unshipped_pop_credentials_cli_surface_is_not_exposed() -> None:
     exposed: dict[str, list[str]] = {}
-
-    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
-        source = read(path)
-        matched = unshipped_pop_credentials_route_matches(source)
-        if matched:
-            exposed[str(path.relative_to(REPO_ROOT))] = matched
 
     for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
         source = read(path)
@@ -20592,13 +20889,15 @@ def test_pdp_canary_builder_is_checked_in() -> None:
     assert "pdp-proof-02" in proof_generation_example
 
 
-UNSHIPPED_PDP_PROVIDER_ROUTE_PATTERNS = (
-    "/sorafs/pdp/challenge",
-    "/sorafs/pdp/next",
-    "/sorafs/pdp/proof",
+SHIPPED_PDP_PROVIDER_ROUTES = (
     "/v1/sorafs/pdp/challenge",
     "/v1/sorafs/pdp/next",
     "/v1/sorafs/pdp/proof",
+    "/v1/sorafs/pdp/status",
+    "/v1/sorafs/pdp/export",
+)
+
+RESERVED_PDP_PROVIDER_ROUTE_PATTERNS = (
     "/v1/sorafs/pdp/provider-transport",
     "/v1/sorafs/pdp/proof-generation",
     "/v1/sorafs/pdp/provider-signatures",
@@ -20609,7 +20908,7 @@ UNSHIPPED_PDP_PROVIDER_ROUTE_PATTERNS = (
     "/v1/sorafs/pdp/promotion",
 )
 
-UNSHIPPED_PDP_PROVIDER_CLI_SUBCOMMANDS = (
+RESERVED_PDP_PROVIDER_CLI_SUBCOMMANDS = (
     "pdp-challenge",
     "pdp-fetch",
     "pdp-respond",
@@ -20623,7 +20922,7 @@ UNSHIPPED_PDP_PROVIDER_CLI_SUBCOMMANDS = (
     "pdp-promote",
 )
 
-UNSHIPPED_PDP_PROVIDER_NESTED_CLI_COMMANDS = (
+RESERVED_PDP_PROVIDER_NESTED_CLI_COMMANDS = (
     "pdp challenge",
     "pdp fetch",
     "pdp respond",
@@ -20638,23 +20937,23 @@ UNSHIPPED_PDP_PROVIDER_NESTED_CLI_COMMANDS = (
 )
 
 
-def unshipped_pdp_provider_route_matches(source: str) -> list[str]:
+def reserved_pdp_provider_route_matches(source: str) -> list[str]:
     return [
         route
-        for route in UNSHIPPED_PDP_PROVIDER_ROUTE_PATTERNS
+        for route in RESERVED_PDP_PROVIDER_ROUTE_PATTERNS
         if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
-def unshipped_pdp_provider_cli_matches(source: str) -> list[str]:
+def reserved_pdp_provider_cli_matches(source: str) -> list[str]:
     hyphenated = [
         subcommand
-        for subcommand in UNSHIPPED_PDP_PROVIDER_CLI_SUBCOMMANDS
+        for subcommand in RESERVED_PDP_PROVIDER_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
     nested = [
         command
-        for command in UNSHIPPED_PDP_PROVIDER_NESTED_CLI_COMMANDS
+        for command in RESERVED_PDP_PROVIDER_NESTED_CLI_COMMANDS
         if re.search(
             rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])",
             source,
@@ -20663,7 +20962,7 @@ def unshipped_pdp_provider_cli_matches(source: str) -> list[str]:
     return [*hyphenated, *nested]
 
 
-def test_pdp_provider_protocol_surface_matcher_has_negative_controls() -> None:
+def test_reserved_pdp_provider_surface_matcher_has_negative_controls() -> None:
     shipped_local_routes = (
         "/v1/sorafs/proof/stream",
         "/v1/sorafs/proof/stream?proof_kind=pdp",
@@ -20688,44 +20987,39 @@ def test_pdp_provider_protocol_surface_matcher_has_negative_controls() -> None:
         "pdp-governance-archive-canary",
     )
 
-    assert unshipped_pdp_provider_route_matches(
+    assert reserved_pdp_provider_route_matches(
         '"POST /sorafs/pdp/challenge" '
         "`/v1/sorafs/pdp/proof` "
         '"/v1/sorafs/pdp/promotion?deployment_id=prod"'
     ) == [
-        "/sorafs/pdp/challenge",
-        "/v1/sorafs/pdp/proof",
         "/v1/sorafs/pdp/promotion",
     ]
     assert (
-        unshipped_pdp_provider_route_matches(
+        reserved_pdp_provider_route_matches(
             '"/v1/sorafs/pdp/challenge" "/v1/sorafs/pdp/proof"'
         )
-        == [
-            "/v1/sorafs/pdp/challenge",
-            "/v1/sorafs/pdp/proof",
-        ]
+        == []
     )
     assert (
-        unshipped_pdp_provider_route_matches(
+        reserved_pdp_provider_route_matches(
             " ".join(f'"{route}"' for route in shipped_local_routes)
         )
         == []
     )
     assert (
-        unshipped_pdp_provider_route_matches(
+        reserved_pdp_provider_route_matches(
             " ".join(f'"{route}"' for route in shipped_local_route_candidates)
         )
         == []
     )
-    assert unshipped_pdp_provider_cli_matches(
+    assert reserved_pdp_provider_cli_matches(
         '"pdp-challenge" `pdp-proof-generation` "pdp-promote"'
     ) == [
         "pdp-challenge",
         "pdp-proof-generation",
         "pdp-promote",
     ]
-    assert unshipped_pdp_provider_cli_matches(
+    assert reserved_pdp_provider_cli_matches(
         "`sorafs pdp challenge` "
         '"sorafs pdp fetch" '
         "`pdp respond` "
@@ -20740,23 +21034,38 @@ def test_pdp_provider_protocol_surface_matcher_has_negative_controls() -> None:
         "pdp status",
         "pdp export",
     ]
-    assert unshipped_pdp_provider_cli_matches(
+    assert reserved_pdp_provider_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
     ) == []
 
 
-def test_unshipped_pdp_provider_protocol_surface_is_not_exposed() -> None:
-    exposed: dict[str, list[str]] = {}
+def test_pdp_provider_protocol_exposes_only_the_canonical_v1_api_family() -> None:
+    api = read(TORII_SORAFS_API_RS)
+    openapi = read(TORII_OPENAPI_RS)
+    torii = read(TORII_LIB_RS)
 
+    for route in SHIPPED_PDP_PROVIDER_ROUTES:
+        assert f'"{route}"' in openapi
+    for handler in (
+        "handle_post_sorafs_pdp_challenge",
+        "handle_post_sorafs_pdp_next",
+        "handle_post_sorafs_pdp_proof",
+        "handle_post_sorafs_pdp_status",
+        "handle_post_sorafs_pdp_export",
+    ):
+        assert f"fn {handler}(" in api
+        assert f"sorafs::api::{handler}" in torii
+
+    exposed: dict[str, list[str]] = {}
     for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
         source = read(path)
-        matched = unshipped_pdp_provider_route_matches(source)
+        matched = reserved_pdp_provider_route_matches(source)
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
     for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
         source = read(path)
-        matched = unshipped_pdp_provider_cli_matches(source)
+        matched = reserved_pdp_provider_cli_matches(source)
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
@@ -25381,14 +25690,15 @@ def test_gateway_load_rollout_evidence_work_stays_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "It does not open a live HTTP/3 gateway or sleep through a wall-clock soak test",
+        "It does not open a live gateway or sleep through a wall-clock soak test",
+        "HTTP/3 is explicitly non-applicable to V1 and is not a readiness dependency.",
         "Live staging load evidence",
-        "No committed SoraFS HTTP/3 gateway endpoint is present in this checkout; add HTTP/3 scenarios only after the gateway exposes that transport.",
+        "V1 has no committed SoraFS HTTP/3 endpoint or release requirement. Any later transport work is separately scoped and cannot block or satisfy V1 readiness.",
         "Archive signed local conformance reports from `ci/check_sorafs_gateway_conformance.sh`",
         "Run a live staging load rig with the same fixture bundle",
         "Add a live-target adapter if operators need the integration test to exercise a deployed gateway instead of the fixture-backed adapter.",
-        "Add HTTP/3 scenarios only after the SoraFS gateway exposes a committed HTTP/3 endpoint and configuration surface.",
         "Record cold-cache SLO baselines after the staging hardware profile is chosen.",
+        "A later HTTP/3 transport project is outside this V1 plan.",
         "`scripts/check_sorafs_gateway_load_rollout_evidence.py` validates payload-free local conformance, live staging load, telemetry/SLO, transport-scope, and governance approval evidence before SF-5a load promotion.",
         "`scripts/run_sorafs_gateway_load_rollout_evidence.py` emits the matching collection plan and dry-run evidence contract",
         "runner validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
@@ -25559,12 +25869,12 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
     assert '"iroha-gateway 1.0.0"' in staging_example
     assert "scripts/build_sorafs_gateway_load_canary.py" in plan
     assert (
-        "rejects `--http3-endpoint-committed` until a reviewed SoraFS HTTP/3 "
-        "gateway endpoint is committed"
+        "rejects `--http3-endpoint-committed` because HTTP/3 is outside the V1 "
+        "contract"
     ) in normalized_plan
     assert (
-        "rejects `--http3-endpoint-committed` until a reviewed SoraFS HTTP/3 "
-        "gateway endpoint is committed"
+        "rejects `--http3-endpoint-committed` because HTTP/3 is outside the V1 "
+        "contract"
     ) in normalized_roadmap
     assert "scripts/build_sorafs_gateway_load_canary.py" in roadmap
     assert (
@@ -27964,25 +28274,22 @@ def test_unshipped_sorafs_proto_release_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_pdp_proof_stream_remains_fail_closed_until_provider_protocol_ships() -> None:
+def test_pdp_proof_stream_requires_an_explicit_bound_challenge_id() -> None:
     api = read(TORII_SORAFS_API_RS)
     openapi = read(TORII_OPENAPI_RS)
 
-    precheck_start = api.index("if matches!(proof_kind, ProofStreamKind::Pdp)")
-    precheck_end = api.index("let nonce = match decode_nonce", precheck_start)
-    precheck = api[precheck_start:precheck_end]
-    assert "return json_error(" in precheck
-    assert "StatusCode::BAD_REQUEST" in precheck
-    assert "unsupported proof_kind; expected `por` or `potr`" in precheck
-
-    dispatch_start = api.index("ProofStreamKind::Pdp => json_error(")
+    dispatch_start = api.index("ProofStreamKind::Pdp => {")
     dispatch_end = api.index("\n    }\n}", dispatch_start)
     dispatch = api[dispatch_start:dispatch_end]
-    assert "StatusCode::BAD_REQUEST" in dispatch
-    assert "unsupported proof_kind; expected `por` or `potr`" in dispatch
+    assert ".challenge_id" in dispatch
+    assert "validation guarantees challenge id for PDP" in dispatch
+    assert "challenge_status(&challenge_id)" in dispatch
+    assert "PDP challenge does not match the requested provider and manifest" in dispatch
+    assert "challenge_id_hex is required when requesting PDP proofs" in api
 
-    assert "`proof_kind=pdp` is reserved for future SF-13 work" in openapi
-    assert "rejected as an unsupported proof kind" in openapi
+    assert "PDP requires `challenge_id_hex`" in openapi
+    assert "`proof_kind=pdp` is reserved for future SF-13 work" not in openapi
+    assert "rejected as an unsupported proof kind" not in openapi
 
 
 def test_sorafs_localized_plan_mirrors_have_single_front_matter_block() -> None:
@@ -28011,13 +28318,15 @@ def test_sorafs_localized_plan_mirrors_match_source_hashes() -> None:
     localized_plan = re.compile(r"^sorafs_.+_plan\.[^.]+\.md$")
     source_re = re.compile(r"^source: (?P<source>.+)$", re.M)
     hash_re = re.compile(r"^source_hash: (?P<hash>[0-9a-f]{64})$", re.M)
+    status_re = re.compile(r"^status: (?P<status>[a-z-]+)$", re.M)
     for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_*_plan.*.md")):
         if localized_plan.match(path.name) is None:
             continue
         mirror = read(path)
         source_match = source_re.search(mirror)
         hash_match = hash_re.search(mirror)
-        if source_match is None or hash_match is None:
+        status_match = status_re.search(mirror)
+        if source_match is None or hash_match is None or status_match is None:
             mismatches[str(path.relative_to(REPO_ROOT))] = "missing source metadata"
             continue
         source_path = REPO_ROOT / source_match.group("source")
@@ -28025,7 +28334,19 @@ def test_sorafs_localized_plan_mirrors_match_source_hashes() -> None:
             mismatches[str(path.relative_to(REPO_ROOT))] = "source file missing"
             continue
         source_hash = hashlib.sha256(read(source_path).encode("utf-8")).hexdigest()
-        if hash_match.group("hash") != source_hash:
-            mismatches[str(path.relative_to(REPO_ROOT))] = "stale source_hash"
+        recorded_hash = hash_match.group("hash")
+        status = status_match.group("status")
+        if status == "complete":
+            if recorded_hash != source_hash:
+                mismatches[str(path.relative_to(REPO_ROOT))] = "stale complete mirror"
+        elif status in {"needs-review", "needs-translation"}:
+            if recorded_hash == source_hash:
+                mismatches[str(path.relative_to(REPO_ROOT))] = (
+                    "unreviewed mirror claims the current source hash"
+                )
+        else:
+            mismatches[str(path.relative_to(REPO_ROOT))] = (
+                f"unsupported translation status {status}"
+            )
 
     assert mismatches == {}

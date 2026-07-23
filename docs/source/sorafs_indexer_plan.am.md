@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_indexer_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0a8a3d1d36a0a2b37c6d9f2add236a38ca46ebd3e80773058f1be760be968c8b
+source_hash: 6b66f8fc50e6ac00712992dcd9c87d24416a87a7b2dd8e1890733e9dfaf175db
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-02-07
 title: Sora Network Indexer & Delegated Routing Plan

@@ -65,6 +65,8 @@ use crate::{
 pub const CAN_RESOLVE_ESCROW_DISPUTE: &str = "CanResolveEscrowDispute";
 
 const ESCROW_CUSTODY_SEED_LABEL: &str = "iroha-native-asset-escrow-v1";
+const ORDERBOOK_CHANNEL_LOCK_MARKER_KEY_PREFIX: &str = "sorafs_orderbook_channel_lock_marker_v1_";
+const ORDERBOOK_CHANNEL_LOCK_MARKER_VALUE: &[u8] = b"v1";
 
 fn validation_err(message: impl Into<String>) -> Error {
     iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
@@ -97,6 +99,49 @@ fn ensure_asset_lock(record: &AssetEscrowRecord) -> Result<(), Error> {
     if record.kind != AssetEscrowKind::Lock {
         return Err(validation_err("escrow is not a generic asset lock"));
     }
+    Ok(())
+}
+
+fn orderbook_channel_lock_marker_key(escrow_id: &EscrowId) -> Name {
+    format!(
+        "{ORDERBOOK_CHANNEL_LOCK_MARKER_KEY_PREFIX}{}",
+        hex::encode(escrow_id.as_hash().as_ref())
+    )
+    .parse()
+    .expect("static orderbook marker prefix plus lowercase hex is a valid state key")
+}
+
+pub(super) fn is_orderbook_channel_lock(
+    world: &impl WorldReadOnly,
+    escrow_id: &EscrowId,
+) -> Result<bool, Error> {
+    let Some(marker) = world
+        .smart_contract_state()
+        .get(&orderbook_channel_lock_marker_key(escrow_id))
+    else {
+        return Ok(false);
+    };
+    if marker != ORDERBOOK_CHANNEL_LOCK_MARKER_VALUE {
+        return Err(validation_err(
+            "orderbook channel asset-lock marker is corrupt",
+        ));
+    }
+    Ok(true)
+}
+
+pub(super) fn mark_orderbook_channel_lock(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    escrow_id: &EscrowId,
+) -> Result<(), Error> {
+    if is_orderbook_channel_lock(state_transaction.world(), escrow_id)? {
+        return Err(validation_err(
+            "orderbook settlement channel asset-lock marker already exists",
+        ));
+    }
+    state_transaction.world.smart_contract_state.insert(
+        orderbook_channel_lock_marker_key(escrow_id),
+        ORDERBOOK_CHANNEL_LOCK_MARKER_VALUE.to_vec(),
+    );
     Ok(())
 }
 
@@ -229,6 +274,179 @@ fn transfer_numeric_asset_for_escrow(
     Ok(delta)
 }
 
+/// Atomically partition an admitted bid lock into one provider-bound channel lock.
+///
+/// The child lock is funded custody-to-custody; no matcher or relayer account
+/// ever takes possession of the buyer's funds.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn partition_orderbook_asset_lock(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    parent_id: &EscrowId,
+    child_id: EscrowId,
+    provider: AccountId,
+    release_authority: AccountId,
+    amount: Quantity,
+    expires_at_ms: u64,
+) -> Result<(AssetEscrowRecord, AssetEscrowRecord), Error> {
+    ensure_positive(&amount)?;
+    if parent_id == &child_id {
+        return Err(validation_err(
+            "orderbook parent and channel asset-lock ids must differ",
+        ));
+    }
+    if state_transaction
+        .world
+        .asset_escrows
+        .get(&child_id)
+        .is_some()
+        || state_transaction
+            .world
+            .anonymous_asset_escrows
+            .get(&child_id)
+            .is_some()
+    {
+        return Err(validation_err(
+            "orderbook settlement channel asset lock already exists",
+        ));
+    }
+    if is_orderbook_channel_lock(state_transaction.world(), &child_id)? {
+        return Err(validation_err(
+            "orderbook settlement channel asset-lock marker already exists",
+        ));
+    }
+
+    let Some(mut parent) = state_transaction
+        .world
+        .asset_escrows
+        .get(parent_id)
+        .cloned()
+    else {
+        return Err(validation_err("orderbook bid asset lock not found"));
+    };
+    ensure_asset_lock(&parent)?;
+    if parent.id != *parent_id
+        || parent.status != AssetEscrowStatus::Locked
+        || parent.closed_at_ms.is_some()
+        || parent.remaining_amount.is_zero()
+        || parent.remaining_amount > parent.amount
+    {
+        return Err(validation_err(
+            "orderbook bid asset-lock metadata is inconsistent",
+        ));
+    }
+    if parent.buyer.as_ref() != Some(&parent.seller)
+        || parent.release_authority.as_ref() != Some(&parent.seller)
+    {
+        return Err(validation_err(
+            "orderbook bid asset lock is not bound to its buyer",
+        ));
+    }
+    let expected_parent_custody = escrow_custody_account_id(
+        state_transaction.chain_id(),
+        parent_id,
+        &parent.asset_definition,
+    )?;
+    if parent.custody != expected_parent_custody {
+        return Err(validation_err(
+            "orderbook bid asset-lock custody binding is invalid",
+        ));
+    }
+    if amount > parent.remaining_amount {
+        return Err(validation_err(
+            "orderbook channel partition exceeds remaining bid custody",
+        ));
+    }
+    let now_ms = state_transaction.block_unix_timestamp_ms();
+    if expires_at_ms <= now_ms
+        || parent
+            .expires_at_ms
+            .is_some_and(|parent_expiry| expires_at_ms > parent_expiry)
+    {
+        return Err(validation_err(
+            "orderbook channel expiry must be future and within bid-lock expiry",
+        ));
+    }
+    state_transaction.world.account(&provider)?;
+    state_transaction.world.account(&release_authority)?;
+    let spec = state_transaction
+        .numeric_spec_for(&parent.asset_definition)
+        .map_err(Error::from)?;
+    assert_numeric_spec_with(amount.as_numeric(), spec)?;
+
+    let child_custody = escrow_custody_account_id(
+        state_transaction.chain_id(),
+        &child_id,
+        &parent.asset_definition,
+    )?;
+    if child_custody == parent.custody
+        || child_custody == parent.seller
+        || child_custody == provider
+    {
+        return Err(validation_err(
+            "orderbook channel custody binding is invalid",
+        ));
+    }
+    let source = AssetId::new(parent.asset_definition.clone(), parent.custody.clone());
+    let destination = AssetId::new(parent.asset_definition.clone(), child_custody.clone());
+    let custody_created = ensure_custody_account(&child_custody, state_transaction)?;
+    let transfer = transfer_numeric_asset_for_escrow(
+        state_transaction,
+        &source,
+        &destination,
+        &amount,
+        NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+    );
+    if transfer.is_err() && custody_created {
+        state_transaction
+            .world
+            .accounts
+            .remove(child_custody.clone());
+    }
+    let delta = transfer?;
+    state_transaction.record_transfer_transcript(&release_authority, delta)?;
+
+    parent.remaining_amount = parent
+        .remaining_amount
+        .checked_sub(&amount)
+        .map_err(|_| validation_err("orderbook bid custody underflow"))?;
+    if parent.remaining_amount.is_zero() {
+        parent.status = AssetEscrowStatus::DrawnDown;
+        parent.closed_at_ms = Some(now_ms);
+    }
+    let child = AssetEscrowRecord {
+        id: child_id,
+        seller: parent.seller.clone(),
+        buyer: Some(provider),
+        asset_definition: parent.asset_definition.clone(),
+        amount: amount.clone(),
+        custody: child_custody,
+        status: AssetEscrowStatus::Locked,
+        kind: AssetEscrowKind::Lock,
+        remaining_amount: amount,
+        release_authority: Some(release_authority),
+        expires_at_ms: Some(expires_at_ms),
+        evidence_hashes: Vec::new(),
+        created_at_ms: now_ms,
+        accepted_at_ms: None,
+        payment_sent_at_ms: None,
+        disputed_at_ms: None,
+        closed_at_ms: None,
+        resolution: None,
+    };
+    state_transaction
+        .world
+        .insert_asset_escrow_entry(parent.clone());
+    state_transaction
+        .world
+        .insert_asset_escrow_entry(child.clone());
+    mark_orderbook_channel_lock(state_transaction, &child.id)?;
+    state_transaction.world.emit_events([
+        EscrowEvent::Released(parent.clone()),
+        EscrowEvent::Opened(child.clone()),
+    ]);
+    Ok((parent, child))
+}
+
 /// Atomically settle provider credit and treasury fee from a funded generic asset lock.
 ///
 /// The lock must name `authority` as its explicit release authority. Its seller
@@ -262,6 +480,11 @@ pub(crate) fn settle_orderbook_asset_lock(
         return Err(validation_err("orderbook settlement asset lock not found"));
     };
     ensure_asset_lock(&record)?;
+    if !is_orderbook_channel_lock(state_transaction.world(), escrow_id)? {
+        return Err(validation_err(
+            "orderbook settlement asset lock has no authoritative channel marker",
+        ));
+    }
     if &record.id != escrow_id
         || record.closed_at_ms.is_some()
         || record.accepted_at_ms.is_some()
@@ -1194,6 +1417,11 @@ impl Execute for DrawdownAssetLock {
             return Err(validation_err("escrow not found"));
         };
         ensure_asset_lock(&record)?;
+        if is_orderbook_channel_lock(state_transaction.world(), &self.escrow_id)? {
+            return Err(validation_err(
+                "orderbook channel asset locks require authoritative receipt settlement",
+            ));
+        }
         if record.status != AssetEscrowStatus::Locked {
             return Err(validation_err("only locked asset locks can be drawn down"));
         }
@@ -1259,6 +1487,11 @@ impl Execute for CancelAssetLock {
             return Err(validation_err("escrow not found"));
         };
         ensure_asset_lock(&record)?;
+        if is_orderbook_channel_lock(state_transaction.world(), &self.escrow_id)? {
+            return Err(validation_err(
+                "orderbook channel asset locks cannot be cancelled outside orderbook maintenance",
+            ));
+        }
         if record.status != AssetEscrowStatus::Locked {
             return Err(validation_err("only locked asset locks can be cancelled"));
         }

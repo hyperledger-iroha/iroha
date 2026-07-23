@@ -19,7 +19,13 @@ pub struct ProofStreamRequestV1 {
     pub provider_id: [u8; 32],
     /// Proof flavour requested by the client.
     pub proof_kind: ProofStreamKind,
-    /// Requested sample count (required for PoR/PDP).
+    /// Existing governed challenge identifier (required for PDP).
+    ///
+    /// PDP sampling is fixed by the recorded challenge. A request without this
+    /// binding must never be interpreted as permission to synthesize a new
+    /// challenge from client-controlled sampling inputs.
+    pub challenge_id: Option<[u8; 32]>,
+    /// Requested sample count (required for PoR and forbidden for PDP/PoTR).
     pub sample_count: Option<u32>,
     /// Deadline in milliseconds (required for PoTR).
     pub deadline_ms: Option<u32>,
@@ -46,7 +52,10 @@ impl ProofStreamRequestV1 {
             return Err(ProofStreamRequestError::InvalidNonce);
         }
         match self.proof_kind {
-            ProofStreamKind::Por | ProofStreamKind::Pdp => {
+            ProofStreamKind::Por => {
+                if self.challenge_id.is_some() {
+                    return Err(ProofStreamRequestError::UnexpectedChallengeId);
+                }
                 let count = self
                     .sample_count
                     .ok_or(ProofStreamRequestError::MissingSampleCount)?;
@@ -56,13 +65,42 @@ impl ProofStreamRequestV1 {
                 if count > MAX_PROOF_STREAM_SAMPLE_COUNT {
                     return Err(ProofStreamRequestError::SampleCountTooLarge);
                 }
+                if self.deadline_ms.is_some() {
+                    return Err(ProofStreamRequestError::UnexpectedDeadlineMs);
+                }
+            }
+            ProofStreamKind::Pdp => {
+                let challenge_id = self
+                    .challenge_id
+                    .ok_or(ProofStreamRequestError::MissingChallengeId)?;
+                if challenge_id.iter().all(|&byte| byte == 0) {
+                    return Err(ProofStreamRequestError::InvalidChallengeId);
+                }
+                if self.sample_count.is_some() {
+                    return Err(ProofStreamRequestError::UnexpectedSampleCount);
+                }
+                if self.deadline_ms.is_some() {
+                    return Err(ProofStreamRequestError::UnexpectedDeadlineMs);
+                }
+                if self.sample_seed.is_some() {
+                    return Err(ProofStreamRequestError::UnexpectedSampleSeed);
+                }
             }
             ProofStreamKind::Potr => {
+                if self.challenge_id.is_some() {
+                    return Err(ProofStreamRequestError::UnexpectedChallengeId);
+                }
                 let deadline = self
                     .deadline_ms
                     .ok_or(ProofStreamRequestError::MissingDeadlineMs)?;
                 if deadline == 0 {
                     return Err(ProofStreamRequestError::ZeroDeadlineMs);
+                }
+                if self.sample_count.is_some() {
+                    return Err(ProofStreamRequestError::UnexpectedSampleCount);
+                }
+                if self.sample_seed.is_some() {
+                    return Err(ProofStreamRequestError::UnexpectedSampleSeed);
                 }
             }
         }
@@ -123,10 +161,22 @@ pub enum ProofStreamRequestError {
     InvalidProviderId,
     #[error("nonce must be non-zero")]
     InvalidNonce,
-    #[error("PoR/PDP requests require a sample count")]
+    #[error("PDP requests require a non-zero governed challenge id")]
+    MissingChallengeId,
+    #[error("challenge id must be non-zero")]
+    InvalidChallengeId,
+    #[error("challenge id is only valid for PDP requests")]
+    UnexpectedChallengeId,
+    #[error("PoR requests require a sample count")]
     MissingSampleCount,
+    #[error("sample count is only valid for PoR requests")]
+    UnexpectedSampleCount,
     #[error("PoTR requests require a deadline")]
     MissingDeadlineMs,
+    #[error("deadline is only valid for PoTR requests")]
+    UnexpectedDeadlineMs,
+    #[error("sample seed is only valid for PoR requests")]
+    UnexpectedSampleSeed,
     #[error("sample count must be greater than zero")]
     ZeroSampleCount,
     #[error("sample count exceeds maximum")]
@@ -146,6 +196,7 @@ mod tests {
             manifest_digest: [0x11; 32],
             provider_id: [0x22; 32],
             proof_kind: ProofStreamKind::Por,
+            challenge_id: None,
             sample_count: Some(16),
             deadline_ms: None,
             sample_seed: Some(42),
@@ -186,6 +237,7 @@ mod tests {
         let mut request = base_request();
         request.proof_kind = ProofStreamKind::Potr;
         request.sample_count = None;
+        request.sample_seed = None;
         assert_eq!(
             request.validate(),
             Err(ProofStreamRequestError::MissingDeadlineMs)
@@ -197,6 +249,43 @@ mod tests {
         );
         request.deadline_ms = Some(90_000);
         assert_eq!(request.validate(), Ok(()));
+    }
+
+    #[test]
+    fn pdp_requires_a_non_zero_governed_challenge_id() {
+        let mut request = base_request();
+        request.proof_kind = ProofStreamKind::Pdp;
+        request.sample_count = None;
+        request.sample_seed = None;
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::MissingChallengeId)
+        );
+        request.challenge_id = Some([0; 32]);
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::InvalidChallengeId)
+        );
+        request.challenge_id = Some([0x55; 32]);
+        assert_eq!(request.validate(), Ok(()));
+    }
+
+    #[test]
+    fn non_pdp_requests_reject_challenge_ids() {
+        let mut request = base_request();
+        request.challenge_id = Some([0x55; 32]);
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::UnexpectedChallengeId)
+        );
+        request.proof_kind = ProofStreamKind::Potr;
+        request.sample_count = None;
+        request.sample_seed = None;
+        request.deadline_ms = Some(90_000);
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::UnexpectedChallengeId)
+        );
     }
 
     #[test]

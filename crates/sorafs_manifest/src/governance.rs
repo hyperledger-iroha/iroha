@@ -36,6 +36,15 @@ pub const GOVERNANCE_DAG_BLOCK_VERSION_V1: u8 = 1;
 /// Current public Governance DAG head manifest schema version.
 pub const GOVERNANCE_DAG_HEAD_VERSION_V1: u8 = 1;
 
+/// Exact byte length of every first-release Governance DAG CID.
+pub const GOVERNANCE_DAG_CID_BYTES_V1: usize = blake3::OUT_LEN;
+
+/// Maximum byte length of a first-release Governance DAG publisher peer ID.
+pub const GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1: usize = 128;
+
+/// Number of newest blocks committed by a checkpointed first-release head.
+pub const GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1: usize = 64;
+
 /// Current moderation ballot governance event schema version.
 pub const SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1: u16 = 1;
 
@@ -2251,7 +2260,7 @@ pub enum GovernanceLogPayloadV1 {
     /// Audit verdict for a challenge.
     AuditVerdict(AuditVerdictV1),
     /// Deal settlement snapshot.
-    DealSettlement(DealSettlementV1),
+    DealSettlement(Box<DealSettlementV1>),
     /// Externally authorized provider reputation snapshot and scoring evidence.
     SignedReputationSnapshot(SignedReputationSnapshotV1),
     /// SoraFS moderation ballot lifecycle event.
@@ -2432,17 +2441,17 @@ impl From<&GovernanceDagBlockV1> for GovernanceDagBlockSignaturePayloadV1 {
 pub struct GovernanceDagBlockV1 {
     /// Schema version (`GOVERNANCE_DAG_BLOCK_VERSION_V1`).
     pub version: u8,
-    /// Deterministic BLAKE3-256 CID bytes derived from the canonical block
-    /// payload excluding signatures.
+    /// Exact deterministic BLAKE3-256 CID bytes derived from the canonical
+    /// block payload excluding the block signature.
     pub block_cid: Vec<u8>,
-    /// Optional parent block CID.
+    /// Optional exact 32-byte parent block CID.
     #[norito(default)]
     pub prev_block_cid: Option<Vec<u8>>,
     /// Monotonic sequence number in the public DAG chain.
     pub sequence: u64,
     /// Unix timestamp (seconds) when this block was assembled.
     pub timestamp: u64,
-    /// Publisher peer identifier for the DAG builder/publisher.
+    /// Publisher peer identifier, bounded to 128 bytes.
     pub publisher_peer_id: Vec<u8>,
     /// Governance log node carried by this block.
     pub node: GovernanceLogNodeV1,
@@ -2474,15 +2483,17 @@ impl GovernanceDagBlockV1 {
                 found: self.version,
             });
         }
-        if self.block_cid.is_empty() {
-            return Err(GovernanceDagBlockValidationError::MissingBlockCid);
+        if self.block_cid.len() != GOVERNANCE_DAG_CID_BYTES_V1 {
+            return Err(GovernanceDagBlockValidationError::InvalidBlockCidLength {
+                length: self.block_cid.len(),
+            });
         }
-        if self
-            .prev_block_cid
-            .as_ref()
-            .is_some_and(|prev| prev.is_empty())
+        if let Some(prev) = self.prev_block_cid.as_ref()
+            && prev.len() != GOVERNANCE_DAG_CID_BYTES_V1
         {
-            return Err(GovernanceDagBlockValidationError::InvalidPrevBlockCid);
+            return Err(
+                GovernanceDagBlockValidationError::InvalidPrevBlockCidLength { length: prev.len() },
+            );
         }
         if self.sequence == 0 && self.prev_block_cid.is_some() {
             return Err(GovernanceDagBlockValidationError::RootHasParent);
@@ -2490,8 +2501,23 @@ impl GovernanceDagBlockV1 {
         if self.sequence > 0 && self.prev_block_cid.is_none() {
             return Err(GovernanceDagBlockValidationError::NonRootMissingParent);
         }
+        if self.sequence == 0 && self.node.prev_cid.is_some() {
+            return Err(GovernanceDagBlockValidationError::RootNodeHasParent);
+        }
+        if self.sequence > 0 && self.node.prev_cid.is_none() {
+            return Err(GovernanceDagBlockValidationError::NonRootNodeMissingParent);
+        }
         if self.publisher_peer_id.is_empty() {
             return Err(GovernanceDagBlockValidationError::MissingPublisherPeerId);
+        }
+        if self.publisher_peer_id.len() > GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 {
+            return Err(GovernanceDagBlockValidationError::PublisherPeerIdTooLong {
+                length: self.publisher_peer_id.len(),
+                maximum: GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
+            });
+        }
+        if self.block_signature.algorithm != GovernanceSignatureAlgorithm::Ed25519 {
+            return Err(GovernanceDagBlockValidationError::NonEd25519BlockSignature);
         }
         self.block_signature
             .validate()
@@ -2499,6 +2525,18 @@ impl GovernanceDagBlockV1 {
         self.node
             .validate()
             .map_err(GovernanceDagBlockValidationError::Node)?;
+        if self.node.publisher_signature.algorithm != GovernanceSignatureAlgorithm::Ed25519 {
+            return Err(GovernanceDagBlockValidationError::NonEd25519NodeSignature);
+        }
+        if self.node.publisher_peer_id != self.publisher_peer_id {
+            return Err(GovernanceDagBlockValidationError::NodePublisherPeerMismatch);
+        }
+        if self.node.publisher_signature.public_key != self.block_signature.public_key {
+            return Err(GovernanceDagBlockValidationError::NodePublisherKeyMismatch);
+        }
+        if self.node.timestamp > self.timestamp {
+            return Err(GovernanceDagBlockValidationError::NodeTimestampAfterBlock);
+        }
         self.node
             .verify_publisher_signature()
             .map_err(GovernanceDagBlockValidationError::NodeSignature)?;
@@ -2578,15 +2616,18 @@ impl From<&GovernanceDagHeadV1> for GovernanceDagHeadSignaturePayloadV1 {
 pub struct GovernanceDagHeadV1 {
     /// Schema version (`GOVERNANCE_DAG_HEAD_VERSION_V1`).
     pub version: u8,
-    /// Current head block CID.
+    /// Exact 32-byte current head block CID.
     pub head_block_cid: Vec<u8>,
     /// Number of blocks in the chain this head advertises.
     pub block_count: u64,
     /// Unix timestamp (seconds) when this head manifest was generated.
     pub generated_at: u64,
-    /// Publisher peer identifier for the head signer.
+    /// Publisher peer identifier, bounded to 128 bytes.
     pub publisher_peer_id: Vec<u8>,
-    /// Optional trusted checkpoint or previous public head CID.
+    /// First block CID in the newest 64-block window.
+    ///
+    /// This is absent when `block_count <= 64` and present otherwise. It never
+    /// identifies a previous head manifest.
     #[norito(default)]
     pub checkpoint_cid: Option<Vec<u8>>,
     /// Publisher signature over the canonical head manifest payload.
@@ -2606,21 +2647,39 @@ impl GovernanceDagHeadV1 {
                 found: self.version,
             });
         }
-        if self.head_block_cid.is_empty() {
-            return Err(GovernanceDagHeadValidationError::MissingHeadBlockCid);
+        if self.head_block_cid.len() != GOVERNANCE_DAG_CID_BYTES_V1 {
+            return Err(
+                GovernanceDagHeadValidationError::InvalidHeadBlockCidLength {
+                    length: self.head_block_cid.len(),
+                },
+            );
         }
         if self.block_count == 0 {
             return Err(GovernanceDagHeadValidationError::EmptyBlockCount);
         }
+        if self.generated_at == 0 {
+            return Err(GovernanceDagHeadValidationError::MissingGeneratedAt);
+        }
         if self.publisher_peer_id.is_empty() {
             return Err(GovernanceDagHeadValidationError::MissingPublisherPeerId);
         }
-        if self
-            .checkpoint_cid
-            .as_ref()
-            .is_some_and(|checkpoint| checkpoint.is_empty())
+        if self.publisher_peer_id.len() > GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 {
+            return Err(GovernanceDagHeadValidationError::PublisherPeerIdTooLong {
+                length: self.publisher_peer_id.len(),
+                maximum: GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
+            });
+        }
+        if let Some(checkpoint) = self.checkpoint_cid.as_ref()
+            && checkpoint.len() != GOVERNANCE_DAG_CID_BYTES_V1
         {
-            return Err(GovernanceDagHeadValidationError::InvalidCheckpointCid);
+            return Err(
+                GovernanceDagHeadValidationError::InvalidCheckpointCidLength {
+                    length: checkpoint.len(),
+                },
+            );
+        }
+        if self.head_signature.algorithm != GovernanceSignatureAlgorithm::Ed25519 {
+            return Err(GovernanceDagHeadValidationError::NonEd25519HeadSignature);
         }
         self.head_signature
             .validate()
@@ -2702,14 +2761,14 @@ pub enum GovernanceSignatureAlgorithm {
 pub struct GovernanceLogNodeV1 {
     /// Schema version (`GOVERNANCE_LOG_VERSION_V1`).
     pub version: u8,
-    /// CID of this node (multihash bytes).
+    /// Exact deterministic BLAKE3-256 CID bytes for this canonical node.
     pub node_cid: Vec<u8>,
-    /// Optional previous CID in the chain.
+    /// Optional exact 32-byte previous node CID in the chain.
     #[norito(default)]
     pub prev_cid: Option<Vec<u8>>,
     /// Unix timestamp (seconds) when this node was published.
     pub timestamp: u64,
-    /// Publisher peer identifier (e.g., libp2p peer ID).
+    /// Publisher peer identifier (e.g., libp2p peer ID), bounded to 128 bytes.
     pub publisher_peer_id: Vec<u8>,
     /// Payload carried by this node.
     pub payload: GovernanceLogPayloadV1,
@@ -2725,17 +2784,35 @@ impl GovernanceLogNodeV1 {
                 found: self.version,
             });
         }
-        if self.node_cid.is_empty() {
-            return Err(GovernanceLogValidationError::MissingNodeCid);
+        if self.node_cid.len() != GOVERNANCE_DAG_CID_BYTES_V1 {
+            return Err(GovernanceLogValidationError::InvalidNodeCidLength {
+                length: self.node_cid.len(),
+            });
         }
-        if self.prev_cid.as_ref().is_some_and(|prev| prev.is_empty()) {
-            return Err(GovernanceLogValidationError::InvalidPrevCid);
+        if let Some(prev) = self.prev_cid.as_ref()
+            && prev.len() != GOVERNANCE_DAG_CID_BYTES_V1
+        {
+            return Err(GovernanceLogValidationError::InvalidPrevCidLength { length: prev.len() });
         }
         if self.publisher_peer_id.is_empty() {
             return Err(GovernanceLogValidationError::MissingPublisherPeerId);
         }
+        if self.publisher_peer_id.len() > GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 {
+            return Err(GovernanceLogValidationError::PublisherPeerIdTooLong {
+                length: self.publisher_peer_id.len(),
+                maximum: GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
+            });
+        }
         self.publisher_signature.validate()?;
         self.payload.validate(self.timestamp)?;
+        let expected_cid =
+            self.recompute_node_cid()
+                .map_err(|err| GovernanceLogValidationError::CidEncoding {
+                    reason: err.to_string(),
+                })?;
+        if self.node_cid != expected_cid {
+            return Err(GovernanceLogValidationError::InvalidNodeCid);
+        }
         Ok(())
     }
 
@@ -2886,14 +2963,22 @@ fn verify_mldsa_governance_signature(
 pub enum GovernanceLogValidationError {
     #[error("unsupported governance log version {found}")]
     UnsupportedVersion { found: u8 },
-    #[error("node CID must not be empty")]
-    MissingNodeCid,
-    #[error("previous CID must be None or non-empty")]
-    InvalidPrevCid,
+    #[error("governance log node CID must be {GOVERNANCE_DAG_CID_BYTES_V1} bytes, got {length}")]
+    InvalidNodeCidLength { length: usize },
+    #[error(
+        "previous governance log node CID must be {GOVERNANCE_DAG_CID_BYTES_V1} bytes, got {length}"
+    )]
+    InvalidPrevCidLength { length: usize },
     #[error("publisher peer ID must not be empty")]
     MissingPublisherPeerId,
+    #[error("publisher peer ID is {length} bytes, maximum is {maximum}")]
+    PublisherPeerIdTooLong { length: usize, maximum: usize },
     #[error("publisher signature missing key or signature bytes")]
     InvalidSignature,
+    #[error("failed to encode canonical governance log node CID payload: {reason}")]
+    CidEncoding { reason: String },
+    #[error("governance log node CID does not match the canonical node payload")]
+    InvalidNodeCid,
     #[error("advert validation failed: {0}")]
     Advert(crate::provider_advert::AdvertValidationError),
     #[error("replication order validation failed: {0}")]
@@ -3589,16 +3674,32 @@ pub enum SoraFsAppealFinanceWeeklyRollupValidationError {
 pub enum GovernanceDagBlockValidationError {
     #[error("unsupported governance DAG block version {found}")]
     UnsupportedVersion { found: u8 },
-    #[error("block CID must not be empty")]
-    MissingBlockCid,
-    #[error("previous block CID must be None or non-empty")]
-    InvalidPrevBlockCid,
+    #[error("block CID must be {GOVERNANCE_DAG_CID_BYTES_V1} bytes, got {length}")]
+    InvalidBlockCidLength { length: usize },
+    #[error("previous block CID must be {GOVERNANCE_DAG_CID_BYTES_V1} bytes, got {length}")]
+    InvalidPrevBlockCidLength { length: usize },
     #[error("root governance DAG block must not carry a previous block CID")]
     RootHasParent,
     #[error("non-root governance DAG block must carry a previous block CID")]
     NonRootMissingParent,
+    #[error("root governance DAG block node must not carry a previous node CID")]
+    RootNodeHasParent,
+    #[error("non-root governance DAG block node must carry a previous node CID")]
+    NonRootNodeMissingParent,
     #[error("publisher peer ID must not be empty")]
     MissingPublisherPeerId,
+    #[error("publisher peer ID is {length} bytes, maximum is {maximum}")]
+    PublisherPeerIdTooLong { length: usize, maximum: usize },
+    #[error("governance DAG block signature must use Ed25519")]
+    NonEd25519BlockSignature,
+    #[error("embedded governance node signature must use Ed25519")]
+    NonEd25519NodeSignature,
+    #[error("embedded governance node publisher peer ID differs from the block publisher")]
+    NodePublisherPeerMismatch,
+    #[error("embedded governance node publisher key differs from the block publisher key")]
+    NodePublisherKeyMismatch,
+    #[error("embedded governance node timestamp exceeds its containing block timestamp")]
+    NodeTimestampAfterBlock,
     #[error("block signature missing key or signature bytes")]
     InvalidSignature,
     #[error("embedded governance node validation failed: {0}")]
@@ -3618,14 +3719,22 @@ pub enum GovernanceDagBlockValidationError {
 pub enum GovernanceDagHeadValidationError {
     #[error("unsupported governance DAG head version {found}")]
     UnsupportedVersion { found: u8 },
-    #[error("head block CID must not be empty")]
-    MissingHeadBlockCid,
+    #[error("head block CID must be {GOVERNANCE_DAG_CID_BYTES_V1} bytes, got {length}")]
+    InvalidHeadBlockCidLength { length: usize },
     #[error("head manifest block count must be greater than zero")]
     EmptyBlockCount,
+    #[error("head manifest generated-at timestamp must be greater than zero")]
+    MissingGeneratedAt,
     #[error("publisher peer ID must not be empty")]
     MissingPublisherPeerId,
-    #[error("checkpoint CID must be None or non-empty")]
-    InvalidCheckpointCid,
+    #[error("publisher peer ID is {length} bytes, maximum is {maximum}")]
+    PublisherPeerIdTooLong { length: usize, maximum: usize },
+    #[error(
+        "checkpoint CID must be {GOVERNANCE_DAG_CID_BYTES_V1} bytes when present, got {length}"
+    )]
+    InvalidCheckpointCidLength { length: usize },
+    #[error("governance DAG head signature must use Ed25519")]
+    NonEd25519HeadSignature,
     #[error("head signature missing key or signature bytes")]
     InvalidSignature,
     #[error("governance DAG head signature validation failed: {0}")]
@@ -3644,18 +3753,28 @@ pub enum GovernanceDagChainValidationError {
     },
     #[error("duplicate governance DAG block CID at index {index}")]
     DuplicateBlockCid { index: usize },
-    #[error("block at index {index} references a missing parent")]
-    MissingParent { index: usize },
+    #[error("duplicate governance DAG node CID at block index {index}")]
+    DuplicateNodeCid { index: usize },
     #[error("block at index {index} has sequence {sequence}, expected {expected}")]
     SequenceGap {
         index: usize,
         expected: u64,
         sequence: u64,
     },
+    #[error("block sequence overflows before index {index}")]
+    SequenceOverflow { index: usize },
     #[error("block at index {index} has timestamp earlier than its parent")]
     TimestampRegression { index: usize },
-    #[error("expected exactly one governance DAG head, found {count}")]
-    HeadCount { count: usize },
+    #[error("governance node at block index {index} has timestamp earlier than its parent")]
+    NodeTimestampRegression { index: usize },
+    #[error("block at index {index} is not in canonical root-to-head order")]
+    NonCanonicalOrder { index: usize },
+    #[error("governance node at block index {index} does not reference its predecessor node")]
+    NodeParentMismatch { index: usize },
+    #[error("block at index {index} uses a different publisher peer ID")]
+    PublisherPeerMismatch { index: usize },
+    #[error("block at index {index} uses a different Ed25519 publisher key")]
+    PublisherKeyMismatch { index: usize },
     #[error("governance DAG head does not match expected CID")]
     ExpectedHeadMismatch,
 }
@@ -3669,9 +3788,39 @@ pub enum GovernanceDagHeadChainValidationError {
     Chain(GovernanceDagChainValidationError),
     #[error("head block count {head_count} does not match chain block count {chain_count}")]
     BlockCountMismatch { head_count: u64, chain_count: u64 },
+    #[error("governance DAG block slice length cannot be represented as u64")]
+    BlockCountOverflow,
+    #[error("checkpoint must be absent for a full history of at most 64 blocks")]
+    UnexpectedCheckpoint,
+    #[error("checkpoint is required for a history containing more than 64 blocks")]
+    MissingCheckpoint,
+    #[error("checkpoint does not identify the first block in the newest 64-block window")]
+    CheckpointMismatch,
+    #[error("checkpoint tail must contain exactly 64 blocks, got {count}")]
+    CheckpointWindowLength { count: usize },
+    #[error("checkpoint tail requires a total block count greater than 64, got {block_count}")]
+    InvalidCheckpointBlockCount { block_count: u64 },
+    #[error("checkpoint tail starts at sequence {sequence}, expected {expected}")]
+    CheckpointStartSequence { expected: u64, sequence: u64 },
+    #[error("head publisher peer ID differs from the block and node publisher peer ID")]
+    PublisherPeerMismatch,
+    #[error("head Ed25519 publisher key differs from the block and node publisher key")]
+    PublisherKeyMismatch,
+    #[error(
+        "head generated-at timestamp {head_generated_at} precedes tip block timestamp {tip_timestamp}"
+    )]
+    HeadTimestampBeforeTip {
+        head_generated_at: u64,
+        tip_timestamp: u64,
+    },
 }
 
-/// Validates a public Governance DAG chain and optional expected head CID.
+/// Validates a canonical contiguous Governance DAG history or checkpoint tail.
+///
+/// A root history begins at sequence zero. A checkpoint tail may begin at a
+/// non-zero sequence and leave the first block and node parent references
+/// outside the supplied slice. Every later block and node must link exactly to
+/// its predecessor in the supplied root-to-head order.
 pub fn validate_governance_dag_chain_v1(
     blocks: &[GovernanceDagBlockV1],
     expected_head_cid: Option<&[u8]>,
@@ -3680,32 +3829,43 @@ pub fn validate_governance_dag_chain_v1(
         return Err(GovernanceDagChainValidationError::Empty);
     }
 
-    let mut block_by_cid = BTreeMap::<Vec<u8>, usize>::new();
-    let mut referenced_parents = BTreeSet::<Vec<u8>>::new();
+    let mut block_cids = BTreeSet::<Vec<u8>>::new();
+    let mut node_cids = BTreeSet::<Vec<u8>>::new();
+    let first = &blocks[0];
+    let publisher_peer_id = &first.publisher_peer_id;
+    let publisher_public_key = &first.block_signature.public_key;
     for (index, block) in blocks.iter().enumerate() {
         block
             .validate()
             .map_err(|source| GovernanceDagChainValidationError::InvalidBlock { index, source })?;
-        if block_by_cid
-            .insert(block.block_cid.clone(), index)
-            .is_some()
-        {
+        if !block_cids.insert(block.block_cid.clone()) {
             return Err(GovernanceDagChainValidationError::DuplicateBlockCid { index });
         }
-        if let Some(prev) = &block.prev_block_cid {
-            referenced_parents.insert(prev.clone());
+        if !node_cids.insert(block.node.node_cid.clone()) {
+            return Err(GovernanceDagChainValidationError::DuplicateNodeCid { index });
         }
-    }
+        if block.publisher_peer_id != *publisher_peer_id {
+            return Err(GovernanceDagChainValidationError::PublisherPeerMismatch { index });
+        }
+        if block.block_signature.public_key != *publisher_public_key {
+            return Err(GovernanceDagChainValidationError::PublisherKeyMismatch { index });
+        }
 
-    for (index, block) in blocks.iter().enumerate() {
-        let Some(prev) = &block.prev_block_cid else {
+        if index == 0 {
             continue;
-        };
-        let Some(parent_index) = block_by_cid.get(prev).copied() else {
-            return Err(GovernanceDagChainValidationError::MissingParent { index });
-        };
-        let parent = &blocks[parent_index];
-        let expected = parent.sequence.saturating_add(1);
+        }
+
+        let parent = &blocks[index - 1];
+        if block.prev_block_cid.as_deref() != Some(parent.block_cid.as_slice()) {
+            return Err(GovernanceDagChainValidationError::NonCanonicalOrder { index });
+        }
+        if block.node.prev_cid.as_deref() != Some(parent.node.node_cid.as_slice()) {
+            return Err(GovernanceDagChainValidationError::NodeParentMismatch { index });
+        }
+        let expected = parent
+            .sequence
+            .checked_add(1)
+            .ok_or(GovernanceDagChainValidationError::SequenceOverflow { index })?;
         if block.sequence != expected {
             return Err(GovernanceDagChainValidationError::SequenceGap {
                 index,
@@ -3716,26 +3876,26 @@ pub fn validate_governance_dag_chain_v1(
         if block.timestamp < parent.timestamp {
             return Err(GovernanceDagChainValidationError::TimestampRegression { index });
         }
-    }
-
-    let mut heads = Vec::<&[u8]>::new();
-    for block in blocks {
-        if !referenced_parents.contains(&block.block_cid) {
-            heads.push(block.block_cid.as_slice());
+        if block.node.timestamp < parent.node.timestamp {
+            return Err(GovernanceDagChainValidationError::NodeTimestampRegression { index });
         }
     }
-    if heads.len() != 1 {
-        return Err(GovernanceDagChainValidationError::HeadCount { count: heads.len() });
-    }
+
     if let Some(expected_head_cid) = expected_head_cid
-        && heads[0] != expected_head_cid
+        && blocks.last().map(|block| block.block_cid.as_slice()) != Some(expected_head_cid)
     {
         return Err(GovernanceDagChainValidationError::ExpectedHeadMismatch);
     }
     Ok(())
 }
 
-/// Validates a signed head manifest against its advertised block chain.
+/// Validates a signed head against a full history or its exact newest checkpoint window.
+///
+/// Full histories start at sequence zero and contain `head.block_count`
+/// blocks. Histories of at most 64 blocks omit the checkpoint; longer
+/// histories commit the first block in their newest 64-block window. A bounded
+/// checkpoint replay supplies exactly those newest 64 blocks, beginning at
+/// sequence `head.block_count - 64`.
 pub fn validate_governance_dag_head_against_chain_v1(
     head: &GovernanceDagHeadV1,
     blocks: &[GovernanceDagBlockV1],
@@ -3744,12 +3904,94 @@ pub fn validate_governance_dag_head_against_chain_v1(
         .map_err(GovernanceDagHeadChainValidationError::Head)?;
     validate_governance_dag_chain_v1(blocks, Some(&head.head_block_cid))
         .map_err(GovernanceDagHeadChainValidationError::Chain)?;
-    let chain_count = u64::try_from(blocks.len()).unwrap_or(u64::MAX);
-    if head.block_count != chain_count {
-        return Err(GovernanceDagHeadChainValidationError::BlockCountMismatch {
-            head_count: head.block_count,
-            chain_count,
-        });
+
+    let first = blocks
+        .first()
+        .ok_or(GovernanceDagHeadChainValidationError::Chain(
+            GovernanceDagChainValidationError::Empty,
+        ))?;
+    if head.publisher_peer_id != first.publisher_peer_id {
+        return Err(GovernanceDagHeadChainValidationError::PublisherPeerMismatch);
+    }
+    if head.head_signature.public_key != first.block_signature.public_key {
+        return Err(GovernanceDagHeadChainValidationError::PublisherKeyMismatch);
+    }
+    let tip = blocks
+        .last()
+        .ok_or(GovernanceDagHeadChainValidationError::Chain(
+            GovernanceDagChainValidationError::Empty,
+        ))?;
+    if head.generated_at < tip.timestamp {
+        return Err(
+            GovernanceDagHeadChainValidationError::HeadTimestampBeforeTip {
+                head_generated_at: head.generated_at,
+                tip_timestamp: tip.timestamp,
+            },
+        );
+    }
+
+    let chain_count = u64::try_from(blocks.len())
+        .map_err(|_| GovernanceDagHeadChainValidationError::BlockCountOverflow)?;
+    let window_count = u64::try_from(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
+        .map_err(|_| GovernanceDagHeadChainValidationError::BlockCountOverflow)?;
+    if first.sequence == 0 {
+        if head.block_count != chain_count {
+            return Err(GovernanceDagHeadChainValidationError::BlockCountMismatch {
+                head_count: head.block_count,
+                chain_count,
+            });
+        }
+        if blocks.len() <= GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 {
+            if head.checkpoint_cid.is_some() {
+                return Err(GovernanceDagHeadChainValidationError::UnexpectedCheckpoint);
+            }
+        } else {
+            let checkpoint_index = blocks
+                .len()
+                .checked_sub(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
+                .ok_or(GovernanceDagHeadChainValidationError::BlockCountOverflow)?;
+            let checkpoint = head
+                .checkpoint_cid
+                .as_deref()
+                .ok_or(GovernanceDagHeadChainValidationError::MissingCheckpoint)?;
+            if checkpoint != blocks[checkpoint_index].block_cid {
+                return Err(GovernanceDagHeadChainValidationError::CheckpointMismatch);
+            }
+        }
+    } else {
+        if blocks.len() != GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 {
+            return Err(
+                GovernanceDagHeadChainValidationError::CheckpointWindowLength {
+                    count: blocks.len(),
+                },
+            );
+        }
+        if head.block_count <= window_count {
+            return Err(
+                GovernanceDagHeadChainValidationError::InvalidCheckpointBlockCount {
+                    block_count: head.block_count,
+                },
+            );
+        }
+        let expected = head
+            .block_count
+            .checked_sub(window_count)
+            .ok_or(GovernanceDagHeadChainValidationError::BlockCountOverflow)?;
+        if first.sequence != expected {
+            return Err(
+                GovernanceDagHeadChainValidationError::CheckpointStartSequence {
+                    expected,
+                    sequence: first.sequence,
+                },
+            );
+        }
+        let checkpoint = head
+            .checkpoint_cid
+            .as_deref()
+            .ok_or(GovernanceDagHeadChainValidationError::MissingCheckpoint)?;
+        if checkpoint != first.block_cid {
+            return Err(GovernanceDagHeadChainValidationError::CheckpointMismatch);
+        }
     }
     Ok(())
 }
@@ -3832,10 +4074,10 @@ mod tests {
     }
 
     fn governance_node_for_signing() -> GovernanceLogNodeV1 {
-        GovernanceLogNodeV1 {
+        let mut node = GovernanceLogNodeV1 {
             version: GOVERNANCE_LOG_VERSION_V1,
-            node_cid: b"bafygovernancelognode".to_vec(),
-            prev_cid: Some(b"bafypreviouscid".to_vec()),
+            node_cid: Vec::new(),
+            prev_cid: Some([0x31; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
             timestamp: 1_700_000_300,
             publisher_peer_id: b"12D3KooWGovernancePeer".to_vec(),
             payload: signed_por_proof_payload(),
@@ -3844,13 +4086,17 @@ mod tests {
                 public_key: vec![0x99; 64],
                 signature: vec![0xAA; 160],
             },
-        }
+        };
+        node.node_cid = node
+            .recompute_node_cid()
+            .expect("derive canonical governance log node CID");
+        node
     }
 
     #[test]
     fn governance_log_node_cid_is_stable_and_input_sensitive() {
         let payload = signed_por_proof_payload();
-        let prev_cid = b"bafypreviouscid";
+        let prev_cid = [0x41; GOVERNANCE_DAG_CID_BYTES_V1];
         let publisher_peer_id = b"12D3KooWGovernancePeer";
         let first = governance_log_node_cid_v1(
             Some(prev_cid.as_slice()),
@@ -3970,18 +4216,20 @@ mod tests {
 
     fn signed_governance_block(
         prev_block_cid: Option<Vec<u8>>,
+        prev_node_cid: Option<Vec<u8>>,
         sequence: u64,
         timestamp: u64,
     ) -> GovernanceDagBlockV1 {
         let mut node = governance_node_for_signing();
-        node.node_cid = format!("bafygovernancelognode{sequence}").into_bytes();
-        node.prev_cid = sequence
-            .checked_sub(1)
-            .map(|prev| format!("bafygovernancelognode{prev}").into_bytes());
+        node.prev_cid = prev_node_cid;
         node.timestamp = timestamp;
-        sign_governance_node(&mut node, &[0xA5; 32]);
-
         let publisher_peer_id = b"12D3KooWGovernanceDagPublisher".to_vec();
+        node.publisher_peer_id.clone_from(&publisher_peer_id);
+        node.node_cid = node
+            .recompute_node_cid()
+            .expect("derive governance DAG node CID");
+        sign_governance_node(&mut node, &[0xC7; 32]);
+
         let block_cid = governance_dag_block_cid_v1(
             prev_block_cid.as_deref(),
             sequence,
@@ -4006,17 +4254,48 @@ mod tests {
 
     fn signed_governance_head(blocks: &[GovernanceDagBlockV1]) -> GovernanceDagHeadV1 {
         let head_block_cid = blocks.last().expect("at least one block").block_cid.clone();
+        let checkpoint_cid =
+            (blocks.len() > GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1).then(|| {
+                let checkpoint_index = blocks
+                    .len()
+                    .checked_sub(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
+                    .expect("long fixture history contains a checkpoint window");
+                blocks[checkpoint_index].block_cid.clone()
+            });
         let mut head = GovernanceDagHeadV1 {
             version: GOVERNANCE_DAG_HEAD_VERSION_V1,
             head_block_cid,
-            block_count: blocks.len() as u64,
+            block_count: u64::try_from(blocks.len()).expect("fixture block count fits u64"),
             generated_at: 1_700_001_000,
             publisher_peer_id: b"12D3KooWGovernanceDagPublisher".to_vec(),
-            checkpoint_cid: None,
+            checkpoint_cid,
             head_signature: empty_ed25519_signature(),
         };
-        sign_governance_head(&mut head, &[0xD9; 32]);
+        sign_governance_head(&mut head, &[0xC7; 32]);
         head
+    }
+
+    fn signed_governance_chain(start_sequence: u64, count: usize) -> Vec<GovernanceDagBlockV1> {
+        assert!(count > 0);
+        let mut blocks = Vec::with_capacity(count);
+        let mut prev_block_cid =
+            (start_sequence > 0).then(|| [0x81; GOVERNANCE_DAG_CID_BYTES_V1].to_vec());
+        let mut prev_node_cid =
+            (start_sequence > 0).then(|| [0x82; GOVERNANCE_DAG_CID_BYTES_V1].to_vec());
+        for offset in 0..count {
+            let offset = u64::try_from(offset).expect("fixture offset fits u64");
+            let sequence = start_sequence
+                .checked_add(offset)
+                .expect("fixture sequence does not overflow");
+            let timestamp = 1_700_000_400_u64
+                .checked_add(offset)
+                .expect("fixture timestamp does not overflow");
+            let block = signed_governance_block(prev_block_cid, prev_node_cid, sequence, timestamp);
+            prev_block_cid = Some(block.block_cid.clone());
+            prev_node_cid = Some(block.node.node_cid.clone());
+            blocks.push(block);
+        }
+        blocks
     }
     use crate::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
@@ -4094,10 +4373,10 @@ mod tests {
         );
         let advert = builder.build().expect("valid advert");
 
-        let node = GovernanceLogNodeV1 {
+        let mut node = GovernanceLogNodeV1 {
             version: GOVERNANCE_LOG_VERSION_V1,
-            node_cid: b"bafygovernancenodecid".to_vec(),
-            prev_cid: Some(b"bafypreviouscid".to_vec()),
+            node_cid: Vec::new(),
+            prev_cid: Some([0x32; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
             timestamp: 1_700_000_100,
             publisher_peer_id: b"12D3KooWGovernancePeer".to_vec(),
             payload: GovernanceLogPayloadV1::ProviderAdvert(advert),
@@ -4107,6 +4386,9 @@ mod tests {
                 signature: vec![12; 160],
             },
         };
+        node.node_cid = node
+            .recompute_node_cid()
+            .expect("derive governance log node CID");
 
         assert!(node.validate().is_ok());
     }
@@ -4270,7 +4552,7 @@ mod tests {
 
     #[test]
     fn governance_dag_block_derives_cid_and_verifies_signature() {
-        let block = signed_governance_block(None, 0, 1_700_000_400);
+        let block = signed_governance_block(None, None, 0, 1_700_000_400);
 
         block.validate().expect("valid governance DAG block");
         assert_eq!(
@@ -4286,7 +4568,7 @@ mod tests {
 
     #[test]
     fn governance_dag_block_rejects_all_zero_signature_material() {
-        let mut block = signed_governance_block(None, 0, 1_700_000_400);
+        let mut block = signed_governance_block(None, None, 0, 1_700_000_400);
         block.block_signature.signature.fill(0);
 
         let err = block
@@ -4301,7 +4583,7 @@ mod tests {
 
     #[test]
     fn governance_dag_block_signature_payload_excludes_signature() {
-        let block = signed_governance_block(None, 0, 1_700_000_400);
+        let block = signed_governance_block(None, None, 0, 1_700_000_400);
         let mut different_signature = block.clone();
         different_signature.block_signature.signature = vec![0xEE; 64];
 
@@ -4328,7 +4610,7 @@ mod tests {
 
     #[test]
     fn governance_dag_block_rejects_tampered_cid() {
-        let mut block = signed_governance_block(None, 0, 1_700_000_400);
+        let mut block = signed_governance_block(None, None, 0, 1_700_000_400);
         block.block_cid[0] ^= 0x01;
 
         assert!(matches!(
@@ -4338,9 +4620,146 @@ mod tests {
     }
 
     #[test]
+    fn governance_log_node_requires_exact_cids_and_bounded_peer_id() {
+        let mut node = governance_node_for_signing();
+        node.node_cid.pop();
+        assert!(matches!(
+            node.validate(),
+            Err(GovernanceLogValidationError::InvalidNodeCidLength { length: 31 })
+        ));
+
+        let mut node = governance_node_for_signing();
+        node.prev_cid = Some(vec![0x41; GOVERNANCE_DAG_CID_BYTES_V1 + 1]);
+        assert!(matches!(
+            node.validate(),
+            Err(GovernanceLogValidationError::InvalidPrevCidLength { length: 33 })
+        ));
+
+        let mut node = governance_node_for_signing();
+        node.publisher_peer_id = vec![0x42; GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 + 1];
+        assert!(matches!(
+            node.validate(),
+            Err(GovernanceLogValidationError::PublisherPeerIdTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn governance_log_node_rejects_noncanonical_cid() {
+        let mut node = governance_node_for_signing();
+        node.node_cid[0] ^= 0x01;
+
+        assert!(matches!(
+            node.validate(),
+            Err(GovernanceLogValidationError::InvalidNodeCid)
+        ));
+    }
+
+    #[test]
+    fn governance_dag_block_requires_exact_cids_and_one_ed25519_identity() {
+        let block = signed_governance_block(None, None, 0, 1_700_000_400);
+
+        let mut invalid_cid = block.clone();
+        invalid_cid.block_cid.push(0);
+        assert!(matches!(
+            invalid_cid.validate(),
+            Err(GovernanceDagBlockValidationError::InvalidBlockCidLength { length: 33 })
+        ));
+
+        let mut invalid_prev = signed_governance_block(
+            Some([0x61; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
+            Some([0x62; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
+            1,
+            1_700_000_401,
+        );
+        invalid_prev.prev_block_cid = Some(vec![0x61; 31]);
+        assert!(matches!(
+            invalid_prev.validate(),
+            Err(GovernanceDagBlockValidationError::InvalidPrevBlockCidLength { length: 31 })
+        ));
+
+        let mut oversized_peer = block.clone();
+        oversized_peer.publisher_peer_id =
+            vec![0x42; GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 + 1];
+        assert!(matches!(
+            oversized_peer.validate(),
+            Err(GovernanceDagBlockValidationError::PublisherPeerIdTooLong { .. })
+        ));
+
+        let mut invalid_algorithm = block.clone();
+        invalid_algorithm.block_signature.algorithm = GovernanceSignatureAlgorithm::Dilithium3;
+        assert!(matches!(
+            invalid_algorithm.validate(),
+            Err(GovernanceDagBlockValidationError::NonEd25519BlockSignature)
+        ));
+
+        let mut invalid_peer = block.clone();
+        invalid_peer.node.publisher_peer_id[0] ^= 0x01;
+        invalid_peer.node.node_cid = invalid_peer
+            .node
+            .recompute_node_cid()
+            .expect("recompute node CID");
+        sign_governance_node(&mut invalid_peer.node, &[0xC7; 32]);
+        assert!(matches!(
+            invalid_peer.validate(),
+            Err(GovernanceDagBlockValidationError::NodePublisherPeerMismatch)
+        ));
+
+        let mut invalid_key = block;
+        sign_governance_node(&mut invalid_key.node, &[0xD7; 32]);
+        invalid_key.block_cid = invalid_key
+            .recompute_block_cid()
+            .expect("recompute block CID");
+        sign_governance_block(&mut invalid_key, &[0xC7; 32]);
+        assert!(matches!(
+            invalid_key.validate(),
+            Err(GovernanceDagBlockValidationError::NodePublisherKeyMismatch)
+        ));
+    }
+
+    #[test]
+    fn governance_dag_head_requires_exact_cids_bounded_peer_and_ed25519() {
+        let blocks = signed_governance_chain(0, 1);
+        let head = signed_governance_head(&blocks);
+
+        let mut invalid_cid = head.clone();
+        invalid_cid.head_block_cid.pop();
+        assert!(matches!(
+            invalid_cid.validate(),
+            Err(GovernanceDagHeadValidationError::InvalidHeadBlockCidLength { length: 31 })
+        ));
+
+        let mut invalid_checkpoint = head.clone();
+        invalid_checkpoint.checkpoint_cid = Some(vec![0x55; 31]);
+        assert!(matches!(
+            invalid_checkpoint.validate(),
+            Err(GovernanceDagHeadValidationError::InvalidCheckpointCidLength { length: 31 })
+        ));
+
+        let mut oversized_peer = head.clone();
+        oversized_peer.publisher_peer_id =
+            vec![0x44; GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 + 1];
+        assert!(matches!(
+            oversized_peer.validate(),
+            Err(GovernanceDagHeadValidationError::PublisherPeerIdTooLong { .. })
+        ));
+
+        let mut invalid_algorithm = head;
+        invalid_algorithm.head_signature.algorithm = GovernanceSignatureAlgorithm::Dilithium3;
+        assert!(matches!(
+            invalid_algorithm.validate(),
+            Err(GovernanceDagHeadValidationError::NonEd25519HeadSignature)
+        ));
+    }
+
+    #[test]
     fn governance_dag_chain_validates_parent_linkage_and_head() {
-        let root = signed_governance_block(None, 0, 1_700_000_400);
-        let child = signed_governance_block(Some(root.block_cid.clone()), 1, 1_700_000_500);
+        let root = signed_governance_block(None, None, 0, 1_700_000_400);
+        let child = signed_governance_block(
+            Some(root.block_cid.clone()),
+            Some(root.node.node_cid.clone()),
+            1,
+            1_700_000_500,
+        );
         let blocks = vec![root, child];
         let expected_head = blocks[1].block_cid.clone();
 
@@ -4349,19 +4768,134 @@ mod tests {
     }
 
     #[test]
-    fn governance_dag_chain_rejects_missing_parent() {
-        let block = signed_governance_block(Some(vec![0xA5; 32]), 1, 1_700_000_500);
+    fn governance_dag_chain_accepts_external_tail_anchors() {
+        let block =
+            signed_governance_block(Some(vec![0xA5; 32]), Some(vec![0x5A; 32]), 1, 1_700_000_500);
+
+        validate_governance_dag_chain_v1(&[block], None)
+            .expect("the first checkpoint-tail block may reference external parents");
+    }
+
+    #[test]
+    fn governance_dag_chain_rejects_noncanonical_order() {
+        let root = signed_governance_block(None, None, 0, 1_700_000_400);
+        let child = signed_governance_block(
+            Some(root.block_cid.clone()),
+            Some(root.node.node_cid.clone()),
+            1,
+            1_700_000_500,
+        );
+        let blocks = vec![child, root];
 
         assert!(matches!(
-            validate_governance_dag_chain_v1(&[block], None),
-            Err(GovernanceDagChainValidationError::MissingParent { index: 0 })
+            validate_governance_dag_chain_v1(&blocks, None),
+            Err(GovernanceDagChainValidationError::NonCanonicalOrder { index: 1 })
+        ));
+    }
+
+    #[test]
+    fn governance_dag_chain_rejects_duplicate_node_cid() {
+        let first = signed_governance_block(None, None, 0, 1_700_000_400);
+        let mut duplicate = first.clone();
+        duplicate.timestamp = duplicate
+            .timestamp
+            .checked_add(1)
+            .expect("fixture timestamp does not overflow");
+        duplicate.block_cid = duplicate
+            .recompute_block_cid()
+            .expect("recompute duplicate-node block CID");
+        sign_governance_block(&mut duplicate, &[0xC7; 32]);
+
+        assert!(matches!(
+            validate_governance_dag_chain_v1(&[first, duplicate], None),
+            Err(GovernanceDagChainValidationError::DuplicateNodeCid { index: 1 })
+        ));
+    }
+
+    #[test]
+    fn governance_dag_chain_rejects_node_parent_discontinuity() {
+        let root = signed_governance_block(None, None, 0, 1_700_000_400);
+        let child = signed_governance_block(
+            Some(root.block_cid.clone()),
+            Some([0x52; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
+            1,
+            1_700_000_500,
+        );
+
+        assert!(matches!(
+            validate_governance_dag_chain_v1(&[root, child], None),
+            Err(GovernanceDagChainValidationError::NodeParentMismatch { index: 1 })
+        ));
+    }
+
+    #[test]
+    fn governance_dag_chain_rejects_publisher_peer_or_key_drift() {
+        let blocks = signed_governance_chain(0, 2);
+
+        let mut peer_drift = blocks.clone();
+        let child = &mut peer_drift[1];
+        child.publisher_peer_id = b"12D3KooWGovernanceDagPublisherOther".to_vec();
+        child
+            .node
+            .publisher_peer_id
+            .clone_from(&child.publisher_peer_id);
+        child.node.node_cid = child
+            .node
+            .recompute_node_cid()
+            .expect("recompute peer-drift node CID");
+        sign_governance_node(&mut child.node, &[0xC7; 32]);
+        child.block_cid = child
+            .recompute_block_cid()
+            .expect("recompute peer-drift block CID");
+        sign_governance_block(child, &[0xC7; 32]);
+        assert!(matches!(
+            validate_governance_dag_chain_v1(&peer_drift, None),
+            Err(GovernanceDagChainValidationError::PublisherPeerMismatch { index: 1 })
+        ));
+
+        let mut key_drift = blocks;
+        let child = &mut key_drift[1];
+        sign_governance_node(&mut child.node, &[0xD7; 32]);
+        child.block_cid = child
+            .recompute_block_cid()
+            .expect("recompute key-drift block CID");
+        sign_governance_block(child, &[0xD7; 32]);
+        assert!(matches!(
+            validate_governance_dag_chain_v1(&key_drift, None),
+            Err(GovernanceDagChainValidationError::PublisherKeyMismatch { index: 1 })
+        ));
+    }
+
+    #[test]
+    fn governance_dag_chain_rejects_sequence_overflow() {
+        let first = signed_governance_block(
+            Some([0x91; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
+            Some([0x92; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
+            u64::MAX,
+            1_700_000_400,
+        );
+        let second = signed_governance_block(
+            Some(first.block_cid.clone()),
+            Some(first.node.node_cid.clone()),
+            u64::MAX,
+            1_700_000_401,
+        );
+
+        assert!(matches!(
+            validate_governance_dag_chain_v1(&[first, second], None),
+            Err(GovernanceDagChainValidationError::SequenceOverflow { index: 1 })
         ));
     }
 
     #[test]
     fn governance_dag_head_manifest_signs_and_binds_chain() {
-        let root = signed_governance_block(None, 0, 1_700_000_400);
-        let child = signed_governance_block(Some(root.block_cid.clone()), 1, 1_700_000_500);
+        let root = signed_governance_block(None, None, 0, 1_700_000_400);
+        let child = signed_governance_block(
+            Some(root.block_cid.clone()),
+            Some(root.node.node_cid.clone()),
+            1,
+            1_700_000_500,
+        );
         let blocks = vec![root, child];
         let head = signed_governance_head(&blocks);
 
@@ -4373,8 +4907,168 @@ mod tests {
     }
 
     #[test]
+    fn governance_dag_head_binds_full_history_checkpoint_window() {
+        let blocks = signed_governance_chain(
+            0,
+            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1
+                .checked_add(1)
+                .expect("fixture count does not overflow"),
+        );
+        let head = signed_governance_head(&blocks);
+        let checkpoint_index = blocks
+            .len()
+            .checked_sub(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
+            .expect("full history contains checkpoint window");
+
+        assert_eq!(
+            head.checkpoint_cid.as_deref(),
+            Some(blocks[checkpoint_index].block_cid.as_slice())
+        );
+        validate_governance_dag_head_against_chain_v1(&head, &blocks)
+            .expect("full history binds its newest checkpoint window");
+    }
+
+    #[test]
+    fn governance_dag_head_accepts_exact_checkpoint_tail() {
+        let full = signed_governance_chain(
+            0,
+            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1
+                .checked_add(1)
+                .expect("fixture count does not overflow"),
+        );
+        let head = signed_governance_head(&full);
+        let tail_start = full
+            .len()
+            .checked_sub(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
+            .expect("full history contains checkpoint window");
+        let tail = &full[tail_start..];
+
+        validate_governance_dag_head_against_chain_v1(&head, tail)
+            .expect("exact newest checkpoint tail binds the signed head");
+    }
+
+    #[test]
+    fn governance_dag_head_rejects_short_or_misanchored_checkpoint_tail() {
+        let full = signed_governance_chain(
+            0,
+            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1
+                .checked_add(1)
+                .expect("fixture count does not overflow"),
+        );
+        let mut head = signed_governance_head(&full);
+        let tail_start = full
+            .len()
+            .checked_sub(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
+            .expect("full history contains checkpoint window");
+        let tail = &full[tail_start..];
+
+        assert!(matches!(
+            validate_governance_dag_head_against_chain_v1(&head, &tail[1..]),
+            Err(GovernanceDagHeadChainValidationError::CheckpointWindowLength { count: 63 })
+        ));
+
+        head.checkpoint_cid = Some([0xE5; GOVERNANCE_DAG_CID_BYTES_V1].to_vec());
+        sign_governance_head(&mut head, &[0xC7; 32]);
+        assert!(matches!(
+            validate_governance_dag_head_against_chain_v1(&head, tail),
+            Err(GovernanceDagHeadChainValidationError::CheckpointMismatch)
+        ));
+    }
+
+    #[test]
+    fn governance_dag_head_rejects_checkpoint_tail_sequence_mismatch() {
+        let full = signed_governance_chain(
+            0,
+            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1
+                .checked_add(1)
+                .expect("fixture count does not overflow"),
+        );
+        let mut head = signed_governance_head(&full);
+        head.block_count = head
+            .block_count
+            .checked_add(1)
+            .expect("fixture block count does not overflow");
+        sign_governance_head(&mut head, &[0xC7; 32]);
+        let tail_start = full
+            .len()
+            .checked_sub(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
+            .expect("full history contains checkpoint window");
+
+        assert!(matches!(
+            validate_governance_dag_head_against_chain_v1(&head, &full[tail_start..]),
+            Err(
+                GovernanceDagHeadChainValidationError::CheckpointStartSequence {
+                    expected: 2,
+                    sequence: 1
+                }
+            )
+        ));
+
+        let mut missing_generated_at = head.clone();
+        missing_generated_at.generated_at = 0;
+        assert!(matches!(
+            missing_generated_at.validate(),
+            Err(GovernanceDagHeadValidationError::MissingGeneratedAt)
+        ));
+    }
+
+    #[test]
+    fn governance_dag_head_rejects_checkpoint_for_short_full_history() {
+        let blocks = signed_governance_chain(0, 2);
+        let mut head = signed_governance_head(&blocks);
+        head.checkpoint_cid = Some(blocks[0].block_cid.clone());
+        sign_governance_head(&mut head, &[0xC7; 32]);
+
+        assert!(matches!(
+            validate_governance_dag_head_against_chain_v1(&head, &blocks),
+            Err(GovernanceDagHeadChainValidationError::UnexpectedCheckpoint)
+        ));
+    }
+
+    #[test]
+    fn governance_dag_head_rejects_signer_identity_drift() {
+        let blocks = signed_governance_chain(0, 2);
+        let mut head = signed_governance_head(&blocks);
+        sign_governance_head(&mut head, &[0xD9; 32]);
+
+        assert!(matches!(
+            validate_governance_dag_head_against_chain_v1(&head, &blocks),
+            Err(GovernanceDagHeadChainValidationError::PublisherKeyMismatch)
+        ));
+
+        let mut head = signed_governance_head(&blocks);
+        head.publisher_peer_id = b"12D3KooWGovernanceDagPublisherOther".to_vec();
+        sign_governance_head(&mut head, &[0xC7; 32]);
+        assert!(matches!(
+            validate_governance_dag_head_against_chain_v1(&head, &blocks),
+            Err(GovernanceDagHeadChainValidationError::PublisherPeerMismatch)
+        ));
+    }
+
+    #[test]
+    fn governance_dag_head_rejects_generated_at_before_tip() {
+        let blocks = signed_governance_chain(0, 2);
+        let mut head = signed_governance_head(&blocks);
+        let tip_timestamp = blocks.last().expect("fixture has tip").timestamp;
+        head.generated_at = tip_timestamp
+            .checked_sub(1)
+            .expect("fixture tip timestamp is positive");
+        sign_governance_head(&mut head, &[0xC7; 32]);
+
+        assert!(matches!(
+            validate_governance_dag_head_against_chain_v1(&head, &blocks),
+            Err(
+                GovernanceDagHeadChainValidationError::HeadTimestampBeforeTip {
+                    head_generated_at,
+                    tip_timestamp: observed_tip
+                }
+            ) if head_generated_at.checked_add(1) == Some(observed_tip)
+        ));
+    }
+
+    #[test]
     fn governance_dag_head_rejects_all_zero_signature_material() {
-        let root = signed_governance_block(None, 0, 1_700_000_400);
+        let root = signed_governance_block(None, None, 0, 1_700_000_400);
         let blocks = vec![root];
         let mut head = signed_governance_head(&blocks);
         head.head_signature.signature.fill(0);
@@ -4391,11 +5085,11 @@ mod tests {
 
     #[test]
     fn governance_dag_head_rejects_block_count_mismatch() {
-        let root = signed_governance_block(None, 0, 1_700_000_400);
+        let root = signed_governance_block(None, None, 0, 1_700_000_400);
         let blocks = vec![root];
         let mut head = signed_governance_head(&blocks);
         head.block_count += 1;
-        sign_governance_head(&mut head, &[0xD9; 32]);
+        sign_governance_head(&mut head, &[0xC7; 32]);
 
         assert!(matches!(
             validate_governance_dag_head_against_chain_v1(&head, &blocks),
@@ -4459,7 +5153,7 @@ mod tests {
             audit_notes: None,
         };
         settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
-        let payload = GovernanceLogPayloadV1::DealSettlement(settlement);
+        let payload = GovernanceLogPayloadV1::DealSettlement(Box::new(settlement));
         payload.validate(1_700_200_200).expect("valid settlement");
     }
 

@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::queue::RoutingDecision;
+use crate::queue::{LaneQueueReservationScopeV1, RoutingDecision};
 use iroha_config::parameters::actual::Nexus;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -25,6 +25,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayQuorumContext},
     peer::PeerId,
 };
+use norito::codec::Encode;
 use thiserror::Error;
 
 use crate::{kura::Kura, state::State};
@@ -2082,6 +2083,238 @@ pub(crate) struct V2LanePayloadPlan {
     pub(crate) unavailable_indices: BTreeSet<usize>,
 }
 
+/// Transaction-independent ownership coordinates for the next autonomous lane slot.
+///
+/// This plan is derived only from committed state and one frozen global height
+/// context. Queue selection happens after the plan is fixed, so neither the
+/// rotating author nor either reservation identity can be ground by changing
+/// transaction contents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AutonomousLaneReservationSlotPlan {
+    /// Lane allowed to reserve the queued work.
+    pub(crate) lane_id: LaneId,
+    /// Dataspace bound to the active lane route.
+    pub(crate) dataspace_id: DataSpaceId,
+    /// Exact active incarnation at `proposal_height`.
+    pub(crate) lane_incarnation: Hash,
+    /// Frozen global height that authorizes this reservation.
+    pub(crate) proposal_height: u64,
+    /// Latest durably applied lane-local height.
+    pub(crate) previous_lane_block_height: u64,
+    /// Exact descriptor hash of the latest applied lane-local block.
+    pub(crate) previous_lane_block_descriptor_hash: Option<Hash>,
+    /// Contiguous lane-local height reserved for the next batch.
+    pub(crate) lane_block_height: u64,
+    /// Fresh autonomous slots always begin at lane view zero.
+    pub(crate) lane_block_view: u64,
+    /// Canonically ordered frozen committee.
+    pub(crate) validator_set: Vec<PeerId>,
+    /// Hash of the exact canonical validator order.
+    pub(crate) validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Canonical quorum for `validator_set`.
+    pub(crate) quorum: LaneRelayQuorumContext,
+    /// Height-context-separated lane QC domain.
+    pub(crate) qc_mode_tag: String,
+    /// Height-rotated deterministic producer for this slot.
+    pub(crate) author: PeerId,
+    /// Stable identity of the author/session taking queue ownership.
+    pub(crate) reservation_owner_hash: Hash,
+    /// Stable provisional slot identity, independent of selected transactions.
+    pub(crate) proposal_identity_hash: Hash,
+}
+
+impl AutonomousLaneReservationSlotPlan {
+    /// Convert the plan into the exact scope accepted by the durable queue.
+    #[must_use]
+    pub(crate) fn reservation_scope(&self) -> LaneQueueReservationScopeV1 {
+        LaneQueueReservationScopeV1 {
+            lane_id: self.lane_id,
+            dataspace_id: self.dataspace_id,
+            lane_incarnation: self.lane_incarnation,
+            proposal_height: self.proposal_height,
+            lane_block_height: self.lane_block_height,
+            lane_block_view: self.lane_block_view,
+            reservation_owner_hash: self.reservation_owner_hash,
+            proposal_identity_hash: self.proposal_identity_hash,
+        }
+    }
+}
+
+/// Failure while deriving an autonomous queue-reservation slot.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub(crate) enum AutonomousLaneReservationSlotPlanError {
+    /// The supplied global context is structurally invalid.
+    #[error("invalid frozen height context: {reason}")]
+    InvalidHeightContext {
+        /// Structural validation failure.
+        reason: String,
+    },
+    /// The context belongs to a different chain than committed state.
+    #[error("frozen height context belongs to a different chain")]
+    ChainIdMismatch,
+    /// The context is not the exact next height over committed state.
+    #[error(
+        "stale autonomous reservation context at height {context_height}; committed height is {committed_height}"
+    )]
+    StaleHeightContext {
+        /// Height carried by the frozen context.
+        context_height: u64,
+        /// Current committed state height.
+        committed_height: u64,
+    },
+    /// The requested lane has no active non-zero incarnation.
+    #[error("active lane incarnation is unavailable")]
+    MissingLaneIncarnation {
+        /// Lane requested by the scheduler.
+        lane_id: LaneId,
+    },
+    /// The lane/dataspace/incarnation tuple is not active at the frozen height.
+    #[error("lane reservation route is inactive at the frozen height")]
+    InactiveRoute {
+        /// Requested lane.
+        lane_id: LaneId,
+        /// Requested dataspace.
+        dataspace_id: DataSpaceId,
+    },
+    /// A predecessor artifact or certificate has not crossed its application boundary.
+    #[error("lane reservation predecessor is not durably applied")]
+    BlockedPredecessor {
+        /// Blocked lane.
+        lane_id: LaneId,
+        /// Blocked dataspace.
+        dataspace_id: DataSpaceId,
+    },
+    /// Durable sources disagree about the latest predecessor identity.
+    #[error("lane reservation predecessor identity is conflicting")]
+    ConflictingPredecessor {
+        /// Conflicting lane.
+        lane_id: LaneId,
+        /// Conflicting dataspace.
+        dataspace_id: DataSpaceId,
+    },
+    /// A non-genesis predecessor lacks its exact descriptor hash.
+    #[error("lane reservation predecessor at height {previous_lane_block_height} has no hash")]
+    MissingPredecessorHash {
+        /// Height whose descriptor identity is unavailable.
+        previous_lane_block_height: u64,
+    },
+    /// A height-zero lane unexpectedly carries a predecessor descriptor hash.
+    #[error("fresh lane reservation carries an unexpected predecessor hash")]
+    UnexpectedGenesisPredecessorHash,
+    /// The next contiguous lane-local height cannot be represented.
+    #[error("lane reservation height overflow")]
+    LaneBlockHeightOverflow,
+    /// No authoritative validator set exists for the active route.
+    #[error("lane reservation committee is unavailable")]
+    MissingCommittee {
+        /// Lane missing an authoritative committee.
+        lane_id: LaneId,
+    },
+    /// The authoritative validator set is empty, duplicated, or otherwise malformed.
+    #[error("invalid lane reservation committee: {reason}")]
+    InvalidCommittee {
+        /// Committee validation failure.
+        reason: String,
+    },
+    /// The canonical quorum cannot be represented for this validator set.
+    #[error("lane reservation quorum is unavailable")]
+    InvalidQuorum,
+    /// The state or Kura frontier changed while the plan was being assembled.
+    #[error("lane reservation inputs changed during planning")]
+    PlanningSnapshotChanged,
+    /// A versioned identity preimage could not be encoded.
+    #[error("lane reservation identity encoding failed")]
+    IdentityEncode,
+}
+
+#[derive(Encode)]
+struct AutonomousLaneReservationSlotIdentityV1 {
+    identity_version: u16,
+    chain_id_hash: Hash,
+    height_context_id: wire::HeightContextId,
+    epoch: u64,
+    proposal_height: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    previous_lane_block_height: u64,
+    previous_lane_block_descriptor_hash: Option<Hash>,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_count: u32,
+    min_quorum: u32,
+    qc_mode_tag: String,
+}
+
+#[derive(Encode)]
+struct AutonomousLaneReservationOwnerIdentityV1 {
+    identity_version: u16,
+    proposal_identity_hash: Hash,
+    author: PeerId,
+}
+
+const AUTONOMOUS_LANE_RESERVATION_SLOT_IDENTITY_VERSION_V1: u16 = 1;
+const AUTONOMOUS_LANE_RESERVATION_OWNER_IDENTITY_VERSION_V1: u16 = 1;
+
+fn encode_autonomous_lane_reservation_identity_hashes(
+    identity: AutonomousLaneReservationSlotIdentityV1,
+    author: &PeerId,
+) -> Result<(Hash, Hash), AutonomousLaneReservationSlotPlanError> {
+    let proposal_identity_hash = Hash::new(
+        norito::to_bytes(&identity)
+            .map_err(|_| AutonomousLaneReservationSlotPlanError::IdentityEncode)?,
+    );
+    let reservation_owner_hash = Hash::new(
+        norito::to_bytes(&AutonomousLaneReservationOwnerIdentityV1 {
+            identity_version: AUTONOMOUS_LANE_RESERVATION_OWNER_IDENTITY_VERSION_V1,
+            proposal_identity_hash,
+            author: author.clone(),
+        })
+        .map_err(|_| AutonomousLaneReservationSlotPlanError::IdentityEncode)?,
+    );
+    Ok((reservation_owner_hash, proposal_identity_hash))
+}
+
+/// Recompute the canonical queue-ownership identities advertised by an
+/// autonomous proposal.
+///
+/// This verifier-side entry point contains no proposer-local state. Admission
+/// callers first validate the proposal's route, incarnation, predecessor,
+/// committee, quorum, QC tag, and deterministic author against their own
+/// frozen height context, then compare every reservation key with the returned
+/// pair.
+pub(crate) fn autonomous_lane_reservation_identity_hashes_for_proposal(
+    chain_id_hash: Hash,
+    height_context_id: wire::HeightContextId,
+    epoch: u64,
+    proposal: &LaneBlockProposalV1,
+    author: &PeerId,
+) -> Result<(Hash, Hash), AutonomousLaneReservationSlotPlanError> {
+    let descriptor = &proposal.descriptor;
+    encode_autonomous_lane_reservation_identity_hashes(
+        AutonomousLaneReservationSlotIdentityV1 {
+            identity_version: AUTONOMOUS_LANE_RESERVATION_SLOT_IDENTITY_VERSION_V1,
+            chain_id_hash,
+            height_context_id,
+            epoch,
+            proposal_height: descriptor.proposal_height,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            previous_lane_block_height: descriptor.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            validator_set_hash: descriptor.validator_set_hash,
+            validator_count: descriptor.validator_count,
+            min_quorum: descriptor.min_quorum,
+            qc_mode_tag: descriptor.qc_mode_tag.clone(),
+        },
+        author,
+    )
+}
+
 /// Failure while deriving lane-local work from one frozen v2 context.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[error("{message}")]
@@ -2095,6 +2328,285 @@ impl V2LanePayloadPlanError {
             message: message.into(),
         }
     }
+}
+
+fn v2_lane_context_mode_tag(context: &wire::HeightContext) -> String {
+    let base_mode_tag = match context.mode {
+        wire::ConsensusMode::Permissioned => wire::PERMISSIONED_TAG,
+        wire::ConsensusMode::Npos => wire::NPOS_TAG,
+    };
+    format!(
+        "{base_mode_tag}::height-context:{}::epoch:{}",
+        hex::encode(context.id().0.as_ref()),
+        context.epoch
+    )
+}
+
+fn autonomous_lane_predecessor_blocked(
+    state: &State,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> bool {
+    state
+        .unapplied_lane_block_artifact_heights_snapshot_cached()
+        .contains_key(&(lane_id, dataspace_id))
+        || state
+            .unapplied_certified_lane_block_heights_snapshot_cached()
+            .contains_key(&(lane_id, dataspace_id))
+}
+
+fn validate_autonomous_lane_reservation_eligibility(
+    context_height: u64,
+    committed_height: u64,
+    route_active: bool,
+    predecessor_blocked: bool,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> Result<(), AutonomousLaneReservationSlotPlanError> {
+    if committed_height.checked_add(1) != Some(context_height) {
+        return Err(AutonomousLaneReservationSlotPlanError::StaleHeightContext {
+            context_height,
+            committed_height,
+        });
+    }
+    if !route_active {
+        return Err(AutonomousLaneReservationSlotPlanError::InactiveRoute {
+            lane_id,
+            dataspace_id,
+        });
+    }
+    if predecessor_blocked {
+        return Err(AutonomousLaneReservationSlotPlanError::BlockedPredecessor {
+            lane_id,
+            dataspace_id,
+        });
+    }
+    Ok(())
+}
+
+fn autonomous_lane_reservation_committee(
+    state: &State,
+    context: &wire::HeightContext,
+    lane_id: LaneId,
+) -> Result<Vec<PeerId>, AutonomousLaneReservationSlotPlanError> {
+    let nexus = state.nexus_snapshot();
+    let shared_committee = !nexus.enabled || !proposal_lookahead_enabled(&nexus, context.height);
+    let validators = if shared_committee {
+        context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>()
+    } else {
+        state.authoritative_lane_peer_ids_at_height(lane_id, context.height)
+    };
+    if validators.is_empty() {
+        return Err(AutonomousLaneReservationSlotPlanError::MissingCommittee { lane_id });
+    }
+    canonical_validator_set(lane_id, &validators).map_err(|error| {
+        AutonomousLaneReservationSlotPlanError::InvalidCommittee {
+            reason: format!("{error:?}"),
+        }
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assemble_autonomous_lane_reservation_slot(
+    context: &wire::HeightContext,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    previous_lane_block_height: u64,
+    previous_lane_block_descriptor_hash: Option<Hash>,
+    validator_set: Vec<PeerId>,
+) -> Result<AutonomousLaneReservationSlotPlan, AutonomousLaneReservationSlotPlanError> {
+    if previous_lane_block_height == 0 && previous_lane_block_descriptor_hash.is_some() {
+        return Err(AutonomousLaneReservationSlotPlanError::UnexpectedGenesisPredecessorHash);
+    }
+    if previous_lane_block_height > 0 && previous_lane_block_descriptor_hash.is_none() {
+        return Err(
+            AutonomousLaneReservationSlotPlanError::MissingPredecessorHash {
+                previous_lane_block_height,
+            },
+        );
+    }
+    let lane_block_height = previous_lane_block_height
+        .checked_add(1)
+        .ok_or(AutonomousLaneReservationSlotPlanError::LaneBlockHeightOverflow)?;
+    let lane_block_view = 0;
+    let validator_set = canonical_validator_set(lane_id, &validator_set).map_err(|error| {
+        AutonomousLaneReservationSlotPlanError::InvalidCommittee {
+            reason: format!("{error:?}"),
+        }
+    })?;
+    let validator_count = u32::try_from(validator_set.len())
+        .map_err(|_| AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
+    let min_quorum = canonical_lane_commit_quorum(validator_set.len())
+        .ok_or(AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
+    let quorum = LaneRelayQuorumContext::new(validator_count, min_quorum)
+        .map_err(|_| AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
+    let validator_set_hash = HashOf::new(&validator_set);
+    let author_index =
+        usize::try_from(lane_block_height.saturating_sub(1) % u64::from(validator_count))
+            .map_err(|_| AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
+    let author = validator_set
+        .get(author_index)
+        .cloned()
+        .ok_or(AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
+    let qc_mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
+        lane_id,
+        dataspace_id,
+        &v2_lane_context_mode_tag(context),
+    );
+    let (reservation_owner_hash, proposal_identity_hash) =
+        encode_autonomous_lane_reservation_identity_hashes(
+            AutonomousLaneReservationSlotIdentityV1 {
+                identity_version: AUTONOMOUS_LANE_RESERVATION_SLOT_IDENTITY_VERSION_V1,
+                chain_id_hash: Hash::new(context.chain_id.as_str().as_bytes()),
+                height_context_id: context.id(),
+                epoch: context.epoch,
+                proposal_height: context.height,
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+                previous_lane_block_height,
+                previous_lane_block_descriptor_hash,
+                lane_block_height,
+                lane_block_view,
+                validator_set_hash,
+                validator_count,
+                min_quorum,
+                qc_mode_tag: qc_mode_tag.clone(),
+            },
+            &author,
+        )?;
+
+    Ok(AutonomousLaneReservationSlotPlan {
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+        proposal_height: context.height,
+        previous_lane_block_height,
+        previous_lane_block_descriptor_hash,
+        lane_block_height,
+        lane_block_view,
+        validator_set,
+        validator_set_hash,
+        quorum,
+        qc_mode_tag,
+        author,
+        reservation_owner_hash,
+        proposal_identity_hash,
+    })
+}
+
+/// Plan the exact next autonomous lane slot before selecting queue contents.
+///
+/// The state must still be at the parent of `context.height`. Any unapplied
+/// lane artifact/certificate blocks planning, and a non-genesis predecessor
+/// must have one exact descriptor hash. The returned author rotates by
+/// `(lane_block_height - 1) mod validator_count`.
+///
+/// # Errors
+///
+/// Returns [`AutonomousLaneReservationSlotPlanError`] when the context is
+/// stale, the route/incarnation/committee is not authoritative, the predecessor
+/// is unavailable, or the observed state changes while the plan is assembled.
+pub(crate) fn plan_autonomous_lane_reservation_slot(
+    state: &State,
+    kura: &Kura,
+    context: &wire::HeightContext,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> Result<AutonomousLaneReservationSlotPlan, AutonomousLaneReservationSlotPlanError> {
+    context.validate().map_err(|error| {
+        AutonomousLaneReservationSlotPlanError::InvalidHeightContext {
+            reason: error.to_string(),
+        }
+    })?;
+    if state.chain_id_ref() != &context.chain_id {
+        return Err(AutonomousLaneReservationSlotPlanError::ChainIdMismatch);
+    }
+    let committed_height = u64::try_from(state.committed_height()).map_err(|_| {
+        AutonomousLaneReservationSlotPlanError::StaleHeightContext {
+            context_height: context.height,
+            committed_height: u64::MAX,
+        }
+    })?;
+    let lane_incarnation = state
+        .lane_incarnation_at_height(lane_id, context.height)
+        .ok_or(AutonomousLaneReservationSlotPlanError::MissingLaneIncarnation { lane_id })?;
+    let route_active = state.lane_route_and_incarnation_active_at_height(
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+        context.height,
+    );
+    let predecessor_blocked = autonomous_lane_predecessor_blocked(state, lane_id, dataspace_id);
+    validate_autonomous_lane_reservation_eligibility(
+        context.height,
+        committed_height,
+        route_active,
+        predecessor_blocked,
+        lane_id,
+        dataspace_id,
+    )?;
+    let (previous_lane_block_height, previous_lane_block_descriptor_hash) =
+        v2_known_lane_tip_for_route(
+            state,
+            kura,
+            context.height,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+        .ok_or(
+            AutonomousLaneReservationSlotPlanError::ConflictingPredecessor {
+                lane_id,
+                dataspace_id,
+            },
+        )?;
+    let validator_set = autonomous_lane_reservation_committee(state, context, lane_id)?;
+    let plan = assemble_autonomous_lane_reservation_slot(
+        context,
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+        previous_lane_block_height,
+        previous_lane_block_descriptor_hash,
+        validator_set,
+    )?;
+
+    let committed_height_after = u64::try_from(state.committed_height())
+        .map_err(|_| AutonomousLaneReservationSlotPlanError::PlanningSnapshotChanged)?;
+    let exact_tip_after = v2_known_lane_tip_for_route(
+        state,
+        kura,
+        context.height,
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+    );
+    let exact_committee_after = autonomous_lane_reservation_committee(state, context, lane_id).ok();
+    if committed_height_after != committed_height
+        || state.lane_incarnation_at_height(lane_id, context.height) != Some(lane_incarnation)
+        || !state.lane_route_and_incarnation_active_at_height(
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            context.height,
+        )
+        || autonomous_lane_predecessor_blocked(state, lane_id, dataspace_id)
+        || exact_tip_after
+            != Some((
+                previous_lane_block_height,
+                previous_lane_block_descriptor_hash,
+            ))
+        || exact_committee_after.as_ref() != Some(&plan.validator_set)
+    {
+        return Err(AutonomousLaneReservationSlotPlanError::PlanningSnapshotChanged);
+    }
+    Ok(plan)
 }
 
 /// Derive deterministic lane-local RBC ownership and proposal artifacts for a
@@ -2113,6 +2625,7 @@ impl V2LanePayloadPlanError {
 /// reduced into canonical lane descriptors.
 pub(crate) fn prepare_v2_lane_payload_plan(
     state: &State,
+    kura: &Kura,
     context: &wire::HeightContext,
     view: wire::View,
     _local_peer: &PeerId,
@@ -2181,21 +2694,12 @@ pub(crate) fn prepare_v2_lane_payload_plan(
     .map_err(|error| {
         V2LanePayloadPlanError::new(format!("lane committee planning failed: {error:?}"))
     })?;
-    let base_mode_tag = match context.mode {
-        wire::ConsensusMode::Permissioned => wire::PERMISSIONED_TAG,
-        wire::ConsensusMode::Npos => wire::NPOS_TAG,
-    };
-    let context_mode_tag = format!(
-        "{base_mode_tag}::height-context:{}::epoch:{}",
-        hex::encode(context.id().0.as_ref()),
-        context.epoch
-    );
+    let context_mode_tag = v2_lane_context_mode_tag(context);
     let domains =
         plan_lane_consensus_domains(routing_decisions, &schedule, &committees, &context_mode_tag)
             .map_err(|error| {
             V2LanePayloadPlanError::new(format!("lane consensus-domain planning failed: {error:?}"))
         })?;
-    let tips = v2_known_lane_tips(state, context.height);
     let lane_incarnations = domains
         .iter()
         .map(|domain| {
@@ -2211,6 +2715,41 @@ pub(crate) fn prepare_v2_lane_payload_plan(
                 })
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let tips = domains
+        .iter()
+        .map(|domain| {
+            let lane_incarnation = *lane_incarnations.get(&domain.lane_id).ok_or_else(|| {
+                V2LanePayloadPlanError::new(format!(
+                    "lane {} has no planned incarnation at height {}",
+                    domain.lane_id.as_u32(),
+                    context.height
+                ))
+            })?;
+            let (latest_lane_block_height, latest_lane_block_descriptor_hash) =
+                v2_known_lane_tip_for_route(
+                    state,
+                    kura,
+                    context.height,
+                    domain.lane_id,
+                    domain.dataspace_id,
+                    lane_incarnation,
+                )
+                .ok_or_else(|| {
+                    V2LanePayloadPlanError::new(format!(
+                        "lane {} has conflicting durable predecessor evidence at height {}",
+                        domain.lane_id.as_u32(),
+                        context.height
+                    ))
+                })?;
+            Ok(LaneBlockTip {
+                lane_id: domain.lane_id,
+                dataspace_id: domain.dataspace_id,
+                lane_incarnation,
+                latest_lane_block_height,
+                latest_lane_block_descriptor_hash,
+            })
+        })
+        .collect::<Result<Vec<_>, V2LanePayloadPlanError>>()?;
     // A fresh lane height always originates at lane view zero. The global
     // proposal view is carried separately in the ownership/hint below; binding
     // it into the lane view would make every global reproposal look like an
@@ -3123,6 +3662,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
+        ChainId,
         block::consensus::SumeragiLanePayloadOwnership,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
@@ -3258,6 +3798,41 @@ mod tests {
         PeerId::new(key_pair.public_key().clone())
     }
 
+    fn autonomous_reservation_height_context(validators: &[PeerId]) -> wire::HeightContext {
+        let mut roster = validators
+            .iter()
+            .cloned()
+            .map(|validator| wire::ValidatorPower {
+                validator,
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        wire::HeightContext {
+            chain_id: ChainId::from("autonomous-reservation-slot-test"),
+            protocol_version: wire::PROTOCOL_VERSION,
+            height: 1,
+            epoch: 7,
+            epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
+            mode: wire::ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: wire::DualQuorum::from_roster(&roster).expect("valid frozen quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"autonomous reservation nexus context"),
+            da_layout: wire::DataAvailabilityLayout {
+                encoding: wire::PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 1024 * 1024,
+                max_chunk_count: 1024,
+            },
+            leader_seed: [0xA7; 32],
+        }
+    }
+
     fn tx_hash(seed: u8) -> Hash {
         Hash::prehashed([seed; Hash::LENGTH])
     }
@@ -3380,6 +3955,175 @@ mod tests {
         proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
         proposal.proposal_hash = proposal.computed_proposal_hash();
         proposal
+    }
+
+    #[test]
+    fn autonomous_reservation_slot_is_canonical_and_transaction_independent() {
+        let lane_id = LaneId::new(3);
+        let dataspace_id = DataSpaceId::new(33);
+        let lane_incarnation = Hash::new(b"autonomous reservation active incarnation");
+        let predecessor_hash = Hash::new(b"autonomous reservation predecessor");
+        let validators = vec![test_peer(4), test_peer(1), test_peer(3), test_peer(2)];
+        let context = autonomous_reservation_height_context(&validators);
+        context.validate().expect("valid frozen height context");
+
+        let plan = assemble_autonomous_lane_reservation_slot(
+            &context,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            3,
+            Some(predecessor_hash),
+            validators.clone(),
+        )
+        .expect("canonical autonomous reservation slot");
+        let repeated = assemble_autonomous_lane_reservation_slot(
+            &context,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            3,
+            Some(predecessor_hash),
+            validators,
+        )
+        .expect("same transaction-independent slot");
+
+        let mut expected_validators = vec![test_peer(4), test_peer(1), test_peer(3), test_peer(2)];
+        expected_validators.sort();
+        assert_eq!(plan, repeated);
+        assert_eq!(plan.previous_lane_block_height, 3);
+        assert_eq!(
+            plan.previous_lane_block_descriptor_hash,
+            Some(predecessor_hash)
+        );
+        assert_eq!(plan.lane_block_height, 4);
+        assert_eq!(plan.lane_block_view, 0);
+        assert_eq!(plan.validator_set, expected_validators);
+        assert_eq!(plan.validator_set_hash, HashOf::new(&plan.validator_set));
+        assert_eq!(plan.author, plan.validator_set[3]);
+        assert_eq!(
+            plan.qc_mode_tag,
+            LaneRelayEnvelope::lane_qc_mode_tag_for(
+                lane_id,
+                dataspace_id,
+                &v2_lane_context_mode_tag(&context),
+            )
+        );
+        assert_eq!(
+            plan.reservation_scope(),
+            LaneQueueReservationScopeV1 {
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+                proposal_height: context.height,
+                lane_block_height: 4,
+                lane_block_view: 0,
+                reservation_owner_hash: plan.reservation_owner_hash,
+                proposal_identity_hash: plan.proposal_identity_hash,
+            }
+        );
+
+        let mut other_context = context.clone();
+        other_context.leader_seed[0] ^= 1;
+        let other_context_plan = assemble_autonomous_lane_reservation_slot(
+            &other_context,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            3,
+            Some(predecessor_hash),
+            plan.validator_set.clone(),
+        )
+        .expect("context-separated autonomous reservation slot");
+        assert_ne!(
+            plan.proposal_identity_hash,
+            other_context_plan.proposal_identity_hash
+        );
+        assert_ne!(
+            plan.reservation_owner_hash,
+            other_context_plan.reservation_owner_hash
+        );
+    }
+
+    #[test]
+    fn autonomous_reservation_eligibility_rejects_stale_blocked_and_inactive() {
+        let lane_id = LaneId::new(3);
+        let dataspace_id = DataSpaceId::new(33);
+        assert_eq!(
+            validate_autonomous_lane_reservation_eligibility(
+                8,
+                7,
+                true,
+                false,
+                lane_id,
+                dataspace_id,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_autonomous_lane_reservation_eligibility(
+                8,
+                8,
+                true,
+                false,
+                lane_id,
+                dataspace_id,
+            ),
+            Err(AutonomousLaneReservationSlotPlanError::StaleHeightContext {
+                context_height: 8,
+                committed_height: 8,
+            })
+        );
+        assert_eq!(
+            validate_autonomous_lane_reservation_eligibility(
+                8,
+                7,
+                false,
+                false,
+                lane_id,
+                dataspace_id,
+            ),
+            Err(AutonomousLaneReservationSlotPlanError::InactiveRoute {
+                lane_id,
+                dataspace_id,
+            })
+        );
+        assert_eq!(
+            validate_autonomous_lane_reservation_eligibility(
+                8,
+                7,
+                true,
+                true,
+                lane_id,
+                dataspace_id,
+            ),
+            Err(AutonomousLaneReservationSlotPlanError::BlockedPredecessor {
+                lane_id,
+                dataspace_id,
+            })
+        );
+    }
+
+    #[test]
+    fn autonomous_reservation_requires_exact_non_genesis_predecessor_hash() {
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3), test_peer(4)];
+        let context = autonomous_reservation_height_context(&validators);
+        assert_eq!(
+            assemble_autonomous_lane_reservation_slot(
+                &context,
+                LaneId::new(3),
+                DataSpaceId::new(33),
+                Hash::new(b"autonomous reservation active incarnation"),
+                1,
+                None,
+                validators,
+            ),
+            Err(
+                AutonomousLaneReservationSlotPlanError::MissingPredecessorHash {
+                    previous_lane_block_height: 1,
+                }
+            )
+        );
     }
 
     #[test]

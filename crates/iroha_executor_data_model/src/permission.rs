@@ -868,6 +868,12 @@ pub mod sorafs {
     }
 
     permission! {
+        /// Permission to govern the authoritative `SoraFS` reserve and rent ledger.
+        #[derive(Copy)]
+        pub struct CanSetSorafsReservePolicy;
+    }
+
+    permission! {
         /// Permission to configure, open, resolve, and finalize authoritative `SoraFS` moderation ballots.
         #[derive(Copy)]
         pub struct CanManageSorafsModeration;

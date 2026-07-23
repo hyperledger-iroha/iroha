@@ -181,12 +181,19 @@ public struct SumeragiV2BlockSubject: Equatable, Sendable {
 public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
     /// Maximum number of Kagemusha top-up anchors committed by one block.
     public static let maximumTopUpAnchorCount: UInt32 = 16
+    /// Canonical Native AMX application-manifest wire version.
+    public static let canonicalNativeAmxApplicationManifestVersion: UInt16 = 1
+    /// Maximum participant route/incarnation leaves committed by one global block.
+    public static let maximumNativeAmxApplicationManifestLeafCount: UInt32 = 1024
 
     public let parentStateRoot: SumeragiV2Hash
     public let postStateRoot: SumeragiV2Hash
     public let ordinaryWritesRoot: SumeragiV2Hash
     public let topUpAnchorRoot: SumeragiV2Hash?
     public let topUpAnchorCount: UInt32
+    public let nativeAmxApplicationManifestVersion: UInt16
+    public let nativeAmxApplicationManifestRoot: SumeragiV2Hash
+    public let nativeAmxApplicationManifestCount: UInt32
     public let executedBlockWireHash: SumeragiV2Hash
 
     public init(
@@ -195,6 +202,9 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         ordinaryWritesRoot: SumeragiV2Hash,
         topUpAnchorRoot: SumeragiV2Hash?,
         topUpAnchorCount: UInt32,
+        nativeAmxApplicationManifestVersion: UInt16,
+        nativeAmxApplicationManifestRoot: SumeragiV2Hash,
+        nativeAmxApplicationManifestCount: UInt32,
         executedBlockWireHash: SumeragiV2Hash
     ) throws {
         guard (topUpAnchorCount == 0) == (topUpAnchorRoot == nil) else {
@@ -217,12 +227,34 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
                 )
             }
         }
+        guard nativeAmxApplicationManifestVersion ==
+            Self.canonicalNativeAmxApplicationManifestVersion else {
+            throw SumeragiV2WireError.invalid(
+                "execution commitment has an unsupported Native AMX application-manifest version"
+            )
+        }
+        guard nativeAmxApplicationManifestCount <=
+            Self.maximumNativeAmxApplicationManifestLeafCount else {
+            throw SumeragiV2WireError.invalid(
+                "execution commitment has too many Native AMX application-manifest leaves"
+            )
+        }
+        let emptyManifestRoot = Self.nativeAmxApplicationManifestEmptyRootBytes()
+        guard (nativeAmxApplicationManifestCount == 0) ==
+            (nativeAmxApplicationManifestRoot.bytes == emptyManifestRoot) else {
+            throw SumeragiV2WireError.invalid(
+                "execution commitment Native AMX application-manifest count and root disagree"
+            )
+        }
 
         self.parentStateRoot = parentStateRoot
         self.postStateRoot = postStateRoot
         self.ordinaryWritesRoot = ordinaryWritesRoot
         self.topUpAnchorRoot = topUpAnchorRoot
         self.topUpAnchorCount = topUpAnchorCount
+        self.nativeAmxApplicationManifestVersion = nativeAmxApplicationManifestVersion
+        self.nativeAmxApplicationManifestRoot = nativeAmxApplicationManifestRoot
+        self.nativeAmxApplicationManifestCount = nativeAmxApplicationManifestCount
         self.executedBlockWireHash = executedBlockWireHash
     }
 
@@ -233,6 +265,9 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             ordinaryWritesRoot.bytes,
             sumeragiV2Option(topUpAnchorRoot?.bytes),
             sumeragiV2U32(topUpAnchorCount),
+            sumeragiV2U16(nativeAmxApplicationManifestVersion),
+            nativeAmxApplicationManifestRoot.bytes,
+            sumeragiV2U32(nativeAmxApplicationManifestCount),
             executedBlockWireHash.bytes
         )
     }
@@ -251,6 +286,15 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             ),
             topUpAnchorCount: sumeragiV2DecodeU32(
                 reader.field("execution commitment top-up count")
+            ),
+            nativeAmxApplicationManifestVersion: sumeragiV2DecodeU16(
+                reader.field("execution commitment Native AMX application-manifest version")
+            ),
+            nativeAmxApplicationManifestRoot: SumeragiV2Hash(
+                reader.field("execution commitment Native AMX application-manifest root")
+            ),
+            nativeAmxApplicationManifestCount: sumeragiV2DecodeU32(
+                reader.field("execution commitment Native AMX application-manifest count")
             ),
             executedBlockWireHash: SumeragiV2Hash(
                 reader.field("execution commitment executed block wire hash")
@@ -271,6 +315,13 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         preimage.append(ordinaryWritesRoot.bytes)
         preimage.append(topUpAnchorRoot.bytes)
         return IrohaHash.hash(preimage)
+    }
+
+    /// Canonical root bytes for a global block with no separate Native AMX applications.
+    public static func nativeAmxApplicationManifestEmptyRootBytes() -> Data {
+        IrohaHash.hash(
+            Data("iroha:sumeragi:v2:native-amx-application-manifest:v1:empty".utf8)
+        )
     }
 }
 

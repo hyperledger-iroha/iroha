@@ -112,7 +112,7 @@ pow_vrf_seed_enabled = true
 
 [sorafs.discovery]
 discovery_enabled = true
-known_capabilities = ["torii_gateway", "chunk_range_fetch"]
+known_capabilities = ["torii_gateway", "chunk_range_fetch", "potr_mldsa"]
 
 [sorafs.discovery.admission]
 envelopes_dir = "configs/soranexus/taira/sorafs_admission"

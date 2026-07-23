@@ -1382,8 +1382,12 @@ pub fn validate_governance_log_node_bytes(
         && node.node_cid.as_slice() != expected_node_cid
     {
         context.push(ValidationContextFieldV1::new(
-            "expected_node_cid",
-            String::from_utf8_lossy(expected_node_cid).to_string(),
+            "expected_node_cid_hex",
+            bounded_governance_cid_hex(expected_node_cid),
+        ));
+        context.push(ValidationContextFieldV1::new(
+            "expected_node_cid_len",
+            expected_node_cid.len().to_string(),
         ));
         return ValidationOutcomeV1::error(
             "SFS-GOV-003",
@@ -1520,12 +1524,12 @@ pub fn validate_governance_dag_block_bytes(
         && block.block_cid.as_slice() != expected_block_cid
     {
         context.push(ValidationContextFieldV1::new(
-            "expected_block_cid",
-            String::from_utf8_lossy(expected_block_cid).to_string(),
+            "expected_block_cid_hex",
+            bounded_governance_cid_hex(expected_block_cid),
         ));
         context.push(ValidationContextFieldV1::new(
-            "expected_block_cid_hex",
-            hex::encode(expected_block_cid),
+            "expected_block_cid_len",
+            expected_block_cid.len().to_string(),
         ));
         return ValidationOutcomeV1::error(
             "SFS-GOV-004",
@@ -1654,7 +1658,7 @@ pub fn validate_governance_dag_head_chain_bytes(
     for (index, block) in blocks.iter().enumerate() {
         context.push(ValidationContextFieldV1::new(
             format!("block_{index}_cid_hex"),
-            hex::encode(&block.block_cid),
+            bounded_governance_cid_hex(&block.block_cid),
         ));
     }
 
@@ -1699,13 +1703,21 @@ fn governance_log_node_context(node: &GovernanceLogNodeV1) -> Vec<ValidationCont
         ValidationContextFieldV1::new("version", node.version.to_string()),
         ValidationContextFieldV1::new(
             "node_cid",
-            String::from_utf8_lossy(&node.node_cid).to_string(),
+            bounded_governance_bytes(&node.node_cid, crate::GOVERNANCE_DAG_CID_BYTES_V1),
         ),
-        ValidationContextFieldV1::new("node_cid_hex", hex::encode(&node.node_cid)),
+        ValidationContextFieldV1::new("node_cid_hex", bounded_governance_cid_hex(&node.node_cid)),
+        ValidationContextFieldV1::new("node_cid_len", node.node_cid.len().to_string()),
         ValidationContextFieldV1::new("timestamp", node.timestamp.to_string()),
         ValidationContextFieldV1::new(
             "publisher_peer_id",
-            String::from_utf8_lossy(&node.publisher_peer_id).to_string(),
+            bounded_governance_bytes(
+                &node.publisher_peer_id,
+                crate::GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
+            ),
+        ),
+        ValidationContextFieldV1::new(
+            "publisher_peer_id_len",
+            node.publisher_peer_id.len().to_string(),
         ),
         ValidationContextFieldV1::new("payload_kind", governance_payload_kind(&node.payload)),
         ValidationContextFieldV1::new(
@@ -1724,11 +1736,15 @@ fn governance_log_node_context(node: &GovernanceLogNodeV1) -> Vec<ValidationCont
     if let Some(prev_cid) = &node.prev_cid {
         context.push(ValidationContextFieldV1::new(
             "prev_cid",
-            String::from_utf8_lossy(prev_cid).to_string(),
+            bounded_governance_bytes(prev_cid, crate::GOVERNANCE_DAG_CID_BYTES_V1),
         ));
         context.push(ValidationContextFieldV1::new(
             "prev_cid_hex",
-            hex::encode(prev_cid),
+            bounded_governance_cid_hex(prev_cid),
+        ));
+        context.push(ValidationContextFieldV1::new(
+            "prev_cid_len",
+            prev_cid.len().to_string(),
         ));
     }
     context
@@ -1738,14 +1754,29 @@ fn governance_dag_block_context(block: &GovernanceDagBlockV1) -> Vec<ValidationC
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "GovernanceDagBlockV1"),
         ValidationContextFieldV1::new("version", block.version.to_string()),
-        ValidationContextFieldV1::new("block_cid_hex", hex::encode(&block.block_cid)),
+        ValidationContextFieldV1::new(
+            "block_cid_hex",
+            bounded_governance_cid_hex(&block.block_cid),
+        ),
+        ValidationContextFieldV1::new("block_cid_len", block.block_cid.len().to_string()),
         ValidationContextFieldV1::new("sequence", block.sequence.to_string()),
         ValidationContextFieldV1::new("timestamp", block.timestamp.to_string()),
         ValidationContextFieldV1::new(
             "publisher_peer_id",
-            String::from_utf8_lossy(&block.publisher_peer_id).to_string(),
+            bounded_governance_bytes(
+                &block.publisher_peer_id,
+                crate::GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
+            ),
         ),
-        ValidationContextFieldV1::new("node_cid_hex", hex::encode(&block.node.node_cid)),
+        ValidationContextFieldV1::new(
+            "publisher_peer_id_len",
+            block.publisher_peer_id.len().to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "node_cid_hex",
+            bounded_governance_cid_hex(&block.node.node_cid),
+        ),
+        ValidationContextFieldV1::new("node_cid_len", block.node.node_cid.len().to_string()),
         ValidationContextFieldV1::new(
             "node_payload_kind",
             governance_payload_kind(&block.node.payload),
@@ -1766,7 +1797,11 @@ fn governance_dag_block_context(block: &GovernanceDagBlockV1) -> Vec<ValidationC
     if let Some(prev) = &block.prev_block_cid {
         context.push(ValidationContextFieldV1::new(
             "prev_block_cid_hex",
-            hex::encode(prev),
+            bounded_governance_cid_hex(prev),
+        ));
+        context.push(ValidationContextFieldV1::new(
+            "prev_block_cid_len",
+            prev.len().to_string(),
         ));
     }
     context
@@ -1776,12 +1811,23 @@ fn governance_dag_head_context(head: &GovernanceDagHeadV1) -> Vec<ValidationCont
     let mut context = vec![
         ValidationContextFieldV1::new("schema", "GovernanceDagHeadV1"),
         ValidationContextFieldV1::new("version", head.version.to_string()),
-        ValidationContextFieldV1::new("head_block_cid_hex", hex::encode(&head.head_block_cid)),
+        ValidationContextFieldV1::new(
+            "head_block_cid_hex",
+            bounded_governance_cid_hex(&head.head_block_cid),
+        ),
+        ValidationContextFieldV1::new("head_block_cid_len", head.head_block_cid.len().to_string()),
         ValidationContextFieldV1::new("block_count", head.block_count.to_string()),
         ValidationContextFieldV1::new("generated_at", head.generated_at.to_string()),
         ValidationContextFieldV1::new(
             "publisher_peer_id",
-            String::from_utf8_lossy(&head.publisher_peer_id).to_string(),
+            bounded_governance_bytes(
+                &head.publisher_peer_id,
+                crate::GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
+            ),
+        ),
+        ValidationContextFieldV1::new(
+            "publisher_peer_id_len",
+            head.publisher_peer_id.len().to_string(),
         ),
         ValidationContextFieldV1::new(
             "head_signature_algorithm",
@@ -1799,10 +1845,30 @@ fn governance_dag_head_context(head: &GovernanceDagHeadV1) -> Vec<ValidationCont
     if let Some(checkpoint) = &head.checkpoint_cid {
         context.push(ValidationContextFieldV1::new(
             "checkpoint_cid_hex",
-            hex::encode(checkpoint),
+            bounded_governance_cid_hex(checkpoint),
+        ));
+        context.push(ValidationContextFieldV1::new(
+            "checkpoint_cid_len",
+            checkpoint.len().to_string(),
         ));
     }
     context
+}
+
+fn bounded_governance_cid_hex(bytes: &[u8]) -> String {
+    if bytes.len() == crate::GOVERNANCE_DAG_CID_BYTES_V1 {
+        hex::encode(bytes)
+    } else {
+        format!("<invalid-length:{}>", bytes.len())
+    }
+}
+
+fn bounded_governance_bytes(bytes: &[u8], maximum: usize) -> String {
+    if bytes.len() <= maximum {
+        String::from_utf8_lossy(bytes).into_owned()
+    } else {
+        format!("<oversized:{}>", bytes.len())
+    }
 }
 
 fn order_request_context(order: &OrderRequestV1) -> Vec<ValidationContextFieldV1> {
@@ -2369,6 +2435,8 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
     match error {
         GovernanceLogValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
         GovernanceLogValidationError::InvalidSignature => "SFS-SIG-005",
+        GovernanceLogValidationError::CidEncoding { .. } => "SFS-INT-001",
+        GovernanceLogValidationError::InvalidNodeCid => "SFS-GOV-003",
         GovernanceLogValidationError::Advert(error) => advert_validation_code(error),
         GovernanceLogValidationError::ReplicationOrder(error) => {
             replication_order_validation_code(error)
@@ -2386,9 +2454,10 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         | GovernanceLogValidationError::AppealFinanceSettlementReceipt(_)
         | GovernanceLogValidationError::OrderbookSettlementReceipt(_)
         | GovernanceLogValidationError::ExternalPayload(_)
-        | GovernanceLogValidationError::MissingNodeCid
-        | GovernanceLogValidationError::InvalidPrevCid
-        | GovernanceLogValidationError::MissingPublisherPeerId => "SFS-GOV-001",
+        | GovernanceLogValidationError::InvalidNodeCidLength { .. }
+        | GovernanceLogValidationError::InvalidPrevCidLength { .. }
+        | GovernanceLogValidationError::MissingPublisherPeerId
+        | GovernanceLogValidationError::PublisherPeerIdTooLong { .. } => "SFS-GOV-001",
     }
 }
 
@@ -2396,6 +2465,7 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
     match error {
         GovernanceLogValidationError::UnsupportedVersion { .. } => CATEGORY_VALIDATION,
         GovernanceLogValidationError::InvalidSignature => CATEGORY_SIGNATURE,
+        GovernanceLogValidationError::CidEncoding { .. } => CATEGORY_INTERNAL,
         GovernanceLogValidationError::Advert(error) => advert_validation_category(error),
         GovernanceLogValidationError::ReplicationOrder(error) => {
             replication_order_validation_category(error)
@@ -2415,9 +2485,11 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         | GovernanceLogValidationError::AppealFinanceSettlementReceipt(_)
         | GovernanceLogValidationError::OrderbookSettlementReceipt(_)
         | GovernanceLogValidationError::ExternalPayload(_)
-        | GovernanceLogValidationError::MissingNodeCid
-        | GovernanceLogValidationError::InvalidPrevCid
-        | GovernanceLogValidationError::MissingPublisherPeerId => CATEGORY_VALIDATION,
+        | GovernanceLogValidationError::InvalidNodeCidLength { .. }
+        | GovernanceLogValidationError::InvalidPrevCidLength { .. }
+        | GovernanceLogValidationError::MissingPublisherPeerId
+        | GovernanceLogValidationError::PublisherPeerIdTooLong { .. }
+        | GovernanceLogValidationError::InvalidNodeCid => CATEGORY_VALIDATION,
     }
 }
 
@@ -2446,13 +2518,21 @@ fn governance_signature_verification_category(
 fn governance_dag_block_validation_code(error: &GovernanceDagBlockValidationError) -> &'static str {
     match error {
         GovernanceDagBlockValidationError::UnsupportedVersion { .. }
-        | GovernanceDagBlockValidationError::MissingBlockCid
-        | GovernanceDagBlockValidationError::InvalidPrevBlockCid
+        | GovernanceDagBlockValidationError::InvalidBlockCidLength { .. }
+        | GovernanceDagBlockValidationError::InvalidPrevBlockCidLength { .. }
         | GovernanceDagBlockValidationError::RootHasParent
         | GovernanceDagBlockValidationError::NonRootMissingParent
+        | GovernanceDagBlockValidationError::RootNodeHasParent
+        | GovernanceDagBlockValidationError::NonRootNodeMissingParent
         | GovernanceDagBlockValidationError::MissingPublisherPeerId
+        | GovernanceDagBlockValidationError::PublisherPeerIdTooLong { .. }
+        | GovernanceDagBlockValidationError::NodeTimestampAfterBlock
         | GovernanceDagBlockValidationError::Node(_) => "SFS-GOV-005",
         GovernanceDagBlockValidationError::InvalidSignature
+        | GovernanceDagBlockValidationError::NonEd25519BlockSignature
+        | GovernanceDagBlockValidationError::NonEd25519NodeSignature
+        | GovernanceDagBlockValidationError::NodePublisherPeerMismatch
+        | GovernanceDagBlockValidationError::NodePublisherKeyMismatch
         | GovernanceDagBlockValidationError::NodeSignature(_)
         | GovernanceDagBlockValidationError::BlockSignature(_) => "SFS-SIG-006",
         GovernanceDagBlockValidationError::CidEncoding { .. } => "SFS-INT-001",
@@ -2465,6 +2545,10 @@ fn governance_dag_block_validation_category(
 ) -> &'static str {
     match error {
         GovernanceDagBlockValidationError::InvalidSignature
+        | GovernanceDagBlockValidationError::NonEd25519BlockSignature
+        | GovernanceDagBlockValidationError::NonEd25519NodeSignature
+        | GovernanceDagBlockValidationError::NodePublisherPeerMismatch
+        | GovernanceDagBlockValidationError::NodePublisherKeyMismatch
         | GovernanceDagBlockValidationError::NodeSignature(_)
         | GovernanceDagBlockValidationError::BlockSignature(_) => CATEGORY_SIGNATURE,
         GovernanceDagBlockValidationError::CidEncoding { .. } => CATEGORY_INTERNAL,
@@ -2475,11 +2559,14 @@ fn governance_dag_block_validation_category(
 fn governance_dag_head_validation_code(error: &GovernanceDagHeadValidationError) -> &'static str {
     match error {
         GovernanceDagHeadValidationError::UnsupportedVersion { .. }
-        | GovernanceDagHeadValidationError::MissingHeadBlockCid
+        | GovernanceDagHeadValidationError::InvalidHeadBlockCidLength { .. }
         | GovernanceDagHeadValidationError::EmptyBlockCount
+        | GovernanceDagHeadValidationError::MissingGeneratedAt
         | GovernanceDagHeadValidationError::MissingPublisherPeerId
-        | GovernanceDagHeadValidationError::InvalidCheckpointCid => "SFS-GOV-007",
-        GovernanceDagHeadValidationError::InvalidSignature
+        | GovernanceDagHeadValidationError::PublisherPeerIdTooLong { .. }
+        | GovernanceDagHeadValidationError::InvalidCheckpointCidLength { .. } => "SFS-GOV-007",
+        GovernanceDagHeadValidationError::NonEd25519HeadSignature
+        | GovernanceDagHeadValidationError::InvalidSignature
         | GovernanceDagHeadValidationError::HeadSignature(_) => "SFS-SIG-007",
     }
 }
@@ -2488,7 +2575,8 @@ fn governance_dag_head_validation_category(
     error: &GovernanceDagHeadValidationError,
 ) -> &'static str {
     match error {
-        GovernanceDagHeadValidationError::InvalidSignature
+        GovernanceDagHeadValidationError::NonEd25519HeadSignature
+        | GovernanceDagHeadValidationError::InvalidSignature
         | GovernanceDagHeadValidationError::HeadSignature(_) => CATEGORY_SIGNATURE,
         _ => CATEGORY_VALIDATION,
     }
@@ -2501,11 +2589,16 @@ fn governance_dag_chain_validation_code(error: &GovernanceDagChainValidationErro
         }
         GovernanceDagChainValidationError::Empty
         | GovernanceDagChainValidationError::DuplicateBlockCid { .. }
-        | GovernanceDagChainValidationError::MissingParent { .. }
+        | GovernanceDagChainValidationError::DuplicateNodeCid { .. }
         | GovernanceDagChainValidationError::SequenceGap { .. }
+        | GovernanceDagChainValidationError::SequenceOverflow { .. }
         | GovernanceDagChainValidationError::TimestampRegression { .. }
-        | GovernanceDagChainValidationError::HeadCount { .. }
+        | GovernanceDagChainValidationError::NodeTimestampRegression { .. }
+        | GovernanceDagChainValidationError::NonCanonicalOrder { .. }
+        | GovernanceDagChainValidationError::NodeParentMismatch { .. }
         | GovernanceDagChainValidationError::ExpectedHeadMismatch => "SFS-GOV-006",
+        GovernanceDagChainValidationError::PublisherPeerMismatch { .. }
+        | GovernanceDagChainValidationError::PublisherKeyMismatch { .. } => "SFS-SIG-006",
     }
 }
 
@@ -2516,6 +2609,8 @@ fn governance_dag_chain_validation_category(
         GovernanceDagChainValidationError::InvalidBlock { source, .. } => {
             governance_dag_block_validation_category(source)
         }
+        GovernanceDagChainValidationError::PublisherPeerMismatch { .. }
+        | GovernanceDagChainValidationError::PublisherKeyMismatch { .. } => CATEGORY_SIGNATURE,
         _ => CATEGORY_VALIDATION,
     }
 }
@@ -2530,7 +2625,17 @@ fn governance_dag_head_chain_validation_code(
         GovernanceDagHeadChainValidationError::Chain(error) => {
             governance_dag_chain_validation_code(error)
         }
-        GovernanceDagHeadChainValidationError::BlockCountMismatch { .. } => "SFS-GOV-008",
+        GovernanceDagHeadChainValidationError::PublisherPeerMismatch
+        | GovernanceDagHeadChainValidationError::PublisherKeyMismatch => "SFS-SIG-007",
+        GovernanceDagHeadChainValidationError::BlockCountMismatch { .. }
+        | GovernanceDagHeadChainValidationError::BlockCountOverflow
+        | GovernanceDagHeadChainValidationError::UnexpectedCheckpoint
+        | GovernanceDagHeadChainValidationError::MissingCheckpoint
+        | GovernanceDagHeadChainValidationError::CheckpointMismatch
+        | GovernanceDagHeadChainValidationError::CheckpointWindowLength { .. }
+        | GovernanceDagHeadChainValidationError::InvalidCheckpointBlockCount { .. }
+        | GovernanceDagHeadChainValidationError::CheckpointStartSequence { .. }
+        | GovernanceDagHeadChainValidationError::HeadTimestampBeforeTip { .. } => "SFS-GOV-008",
     }
 }
 
@@ -2544,7 +2649,19 @@ fn governance_dag_head_chain_validation_category(
         GovernanceDagHeadChainValidationError::Chain(error) => {
             governance_dag_chain_validation_category(error)
         }
-        GovernanceDagHeadChainValidationError::BlockCountMismatch { .. } => CATEGORY_VALIDATION,
+        GovernanceDagHeadChainValidationError::PublisherPeerMismatch
+        | GovernanceDagHeadChainValidationError::PublisherKeyMismatch => CATEGORY_SIGNATURE,
+        GovernanceDagHeadChainValidationError::BlockCountMismatch { .. }
+        | GovernanceDagHeadChainValidationError::BlockCountOverflow
+        | GovernanceDagHeadChainValidationError::UnexpectedCheckpoint
+        | GovernanceDagHeadChainValidationError::MissingCheckpoint
+        | GovernanceDagHeadChainValidationError::CheckpointMismatch
+        | GovernanceDagHeadChainValidationError::CheckpointWindowLength { .. }
+        | GovernanceDagHeadChainValidationError::InvalidCheckpointBlockCount { .. }
+        | GovernanceDagHeadChainValidationError::CheckpointStartSequence { .. }
+        | GovernanceDagHeadChainValidationError::HeadTimestampBeforeTip { .. } => {
+            CATEGORY_VALIDATION
+        }
     }
 }
 
@@ -6981,16 +7098,19 @@ mod tests {
 
     fn signed_governance_dag_block(
         prev_block_cid: Option<Vec<u8>>,
+        prev_node_cid: Option<Vec<u8>>,
         sequence: u64,
         timestamp: u64,
     ) -> GovernanceDagBlockV1 {
         let mut node = ed25519_signed_governance_node();
-        node.node_cid = format!("bafygovernancelognode{sequence}").into_bytes();
-        node.prev_cid = sequence
-            .checked_sub(1)
-            .map(|previous| format!("bafygovernancelognode{previous}").into_bytes());
+        node.prev_cid = prev_node_cid;
         node.timestamp = timestamp;
-        let signing_key = SigningKey::from_bytes(&[0xA6; 32]);
+        let publisher_peer_id = b"12D3KooWGovernanceDagPublisher".to_vec();
+        node.publisher_peer_id.clone_from(&publisher_peer_id);
+        node.node_cid = node
+            .recompute_node_cid()
+            .expect("derive governance DAG node CID");
+        let signing_key = SigningKey::from_bytes(&[0xC7; 32]);
         let node_payload = node
             .signature_payload_bytes()
             .expect("encode governance node signing payload");
@@ -7001,7 +7121,6 @@ mod tests {
             signature: node_signature.to_bytes().to_vec(),
         };
 
-        let publisher_peer_id = b"12D3KooWGovernanceDagPublisher".to_vec();
         let block_cid = crate::governance_dag_block_cid_v1(
             prev_block_cid.as_deref(),
             sequence,
@@ -7025,8 +7144,13 @@ mod tests {
     }
 
     fn signed_governance_dag_chain() -> (Vec<GovernanceDagBlockV1>, GovernanceDagHeadV1) {
-        let first = signed_governance_dag_block(None, 0, 1_700_000_300);
-        let second = signed_governance_dag_block(Some(first.block_cid.clone()), 1, 1_700_000_360);
+        let first = signed_governance_dag_block(None, None, 0, 1_700_000_300);
+        let second = signed_governance_dag_block(
+            Some(first.block_cid.clone()),
+            Some(first.node.node_cid.clone()),
+            1,
+            1_700_000_360,
+        );
         let blocks = vec![first, second];
         let mut head = GovernanceDagHeadV1 {
             version: crate::GOVERNANCE_DAG_HEAD_VERSION_V1,
@@ -7041,8 +7165,17 @@ mod tests {
             checkpoint_cid: None,
             head_signature: empty_ed25519_governance_signature(),
         };
-        sign_governance_dag_head(&mut head, &[0xD9; 32]);
+        sign_governance_dag_head(&mut head, &[0xC7; 32]);
         (blocks, head)
+    }
+
+    fn assert_bounded_governance_outcome(outcome: &ValidationOutcomeV1) {
+        let json = norito::json::to_string(outcome).expect("encode validation outcome JSON");
+        assert!(
+            json.len() < 16 * 1024,
+            "malformed governance input amplified to {} outcome bytes",
+            json.len()
+        );
     }
 
     fn orderbook_signature() -> crate::OrderbookSignatureV1 {
@@ -7394,7 +7527,7 @@ mod tests {
     }
 
     fn potr_receipt() -> PotrReceiptV1 {
-        PotrReceiptV1 {
+        let receipt = PotrReceiptV1 {
             version: POTR_RECEIPT_VERSION_V1,
             manifest_digest: [0x11; 32],
             provider_id: [0x22; 32],
@@ -7412,7 +7545,22 @@ mod tests {
             note: Some("ok".to_owned()),
             gateway_signature: None,
             provider_signature: None,
-        }
+        };
+        let gateway_key = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
+            .expect("fixture gateway key");
+        let provider_key =
+            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::MlDsa).expect("fixture provider key");
+        crate::sign_potr_receipt_v1(receipt, &gateway_key, &provider_key)
+            .expect("sign PoTR fixture")
+    }
+
+    fn resign_potr_receipt(receipt: &mut PotrReceiptV1) {
+        let gateway_key = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
+            .expect("fixture gateway key");
+        let provider_key =
+            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::MlDsa).expect("fixture provider key");
+        *receipt = crate::sign_potr_receipt_v1(receipt.clone(), &gateway_key, &provider_key)
+            .expect("re-sign PoTR fixture");
     }
 
     fn repair_evidence() -> RepairEvidenceV1 {
@@ -7834,6 +7982,7 @@ mod tests {
         let mut receipt = potr_receipt();
         receipt.manifest_digest = [0x99; 32];
         receipt.provider_id = [0x10; 32];
+        resign_potr_receipt(&mut receipt);
         let order_bytes = to_bytes(&order).expect("encode order");
         let receipt_bytes = to_bytes(&receipt).expect("encode receipt");
         let payloads = [
@@ -7862,6 +8011,7 @@ mod tests {
         let mut receipt = potr_receipt();
         receipt.manifest_digest = order.manifest_digest;
         receipt.provider_id = [0x99; 32];
+        resign_potr_receipt(&mut receipt);
         let order_bytes = to_bytes(&order).expect("encode order");
         let receipt_bytes = to_bytes(&receipt).expect("encode receipt");
         let payloads = [
@@ -7891,7 +8041,7 @@ mod tests {
         let outcome = validate_governance_log_node_bytes(
             &bytes,
             "governance-node.to",
-            Some(b"bafygovernancelognode"),
+            Some(node.node_cid.as_slice()),
             46,
         );
 
@@ -7915,6 +8065,9 @@ mod tests {
 
         let mut tampered = node;
         tampered.publisher_peer_id.extend_from_slice(b"-tampered");
+        tampered.node_cid = tampered
+            .recompute_node_cid()
+            .expect("recompute tampered governance node CID");
         let bytes = to_bytes(&tampered).expect("encode tampered governance node");
         let outcome =
             validate_governance_log_node_bytes(&bytes, "tampered-governance-node.to", None, 48);
@@ -7933,6 +8086,9 @@ mod tests {
 
         let mut tampered = node;
         tampered.timestamp += 1;
+        tampered.node_cid = tampered
+            .recompute_node_cid()
+            .expect("recompute tampered governance node CID");
         let bytes = to_bytes(&tampered).expect("encode tampered governance node");
         let outcome =
             validate_governance_log_node_bytes(&bytes, "tampered-governance-node.to", None, 48);
@@ -7980,6 +8136,48 @@ mod tests {
     }
 
     #[test]
+    fn governance_reference_outcomes_bound_malformed_cid_and_peer_context() {
+        const ADVERSARIAL_BYTES: usize = 256 * 1024;
+
+        let mut node = governance_node();
+        node.node_cid = vec![0xA5; ADVERSARIAL_BYTES];
+        let node_bytes = to_bytes(&node).expect("encode oversized governance node");
+        let outcome =
+            validate_governance_log_node_bytes(&node_bytes, "oversized-node.to", None, 49);
+        assert!(!outcome.is_ok());
+        assert_bounded_governance_outcome(&outcome);
+
+        let mut block = signed_governance_dag_block(None, None, 0, 1_700_000_300);
+        block.publisher_peer_id = vec![0x5A; ADVERSARIAL_BYTES];
+        let block_bytes = to_bytes(&block).expect("encode oversized governance block");
+        let outcome =
+            validate_governance_dag_block_bytes(&block_bytes, "oversized-block.to", None, 49);
+        assert!(!outcome.is_ok());
+        assert_bounded_governance_outcome(&outcome);
+
+        let (blocks, mut head) = signed_governance_dag_chain();
+        head.checkpoint_cid = Some(vec![0xC3; ADVERSARIAL_BYTES]);
+        let head_bytes = to_bytes(&head).expect("encode oversized governance head");
+        let block_bytes = blocks
+            .iter()
+            .map(|block| to_bytes(block).expect("encode governance block"))
+            .collect::<Vec<_>>();
+        let block_inputs = block_bytes
+            .iter()
+            .enumerate()
+            .map(|(index, bytes)| (bytes.as_slice(), format!("block-{index}.to")))
+            .collect::<Vec<_>>();
+        let outcome = validate_governance_dag_head_chain_bytes(
+            &head_bytes,
+            "oversized-head.to",
+            &block_inputs,
+            49,
+        );
+        assert!(!outcome.is_ok());
+        assert_bounded_governance_outcome(&outcome);
+    }
+
+    #[test]
     fn pdp_archive_governance_errors_have_stable_reference_mappings() {
         let errors = [
             GovernanceLogValidationError::PdpArchive(
@@ -8002,7 +8200,7 @@ mod tests {
 
     #[test]
     fn validate_governance_dag_block_bytes_accepts_signed_block() {
-        let block = signed_governance_dag_block(None, 0, 1_700_000_300);
+        let block = signed_governance_dag_block(None, None, 0, 1_700_000_300);
         let bytes = to_bytes(&block).expect("encode governance DAG block");
         let outcome = validate_governance_dag_block_bytes(
             &bytes,
@@ -8024,7 +8222,7 @@ mod tests {
 
     #[test]
     fn validate_governance_dag_block_bytes_rejects_cid_mismatch() {
-        let block = signed_governance_dag_block(None, 0, 1_700_000_300);
+        let block = signed_governance_dag_block(None, None, 0, 1_700_000_300);
         let bytes = to_bytes(&block).expect("encode governance DAG block");
         let outcome = validate_governance_dag_block_bytes(
             &bytes,
@@ -8066,7 +8264,7 @@ mod tests {
     fn validate_governance_dag_head_chain_bytes_rejects_block_count_mismatch() {
         let (blocks, mut head) = signed_governance_dag_chain();
         head.block_count += 1;
-        sign_governance_dag_head(&mut head, &[0xD9; 32]);
+        sign_governance_dag_head(&mut head, &[0xC7; 32]);
         let head_bytes = to_bytes(&head).expect("encode governance DAG head");
         let block_bytes: Vec<Vec<u8>> = blocks
             .iter()
@@ -8087,6 +8285,109 @@ mod tests {
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-GOV-008");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
+    }
+
+    #[test]
+    fn validate_governance_dag_head_chain_bytes_rejects_head_before_tip() {
+        let (blocks, mut head) = signed_governance_dag_chain();
+        head.generated_at = blocks
+            .last()
+            .expect("fixture has tip")
+            .timestamp
+            .checked_sub(1)
+            .expect("fixture tip timestamp is positive");
+        sign_governance_dag_head(&mut head, &[0xC7; 32]);
+        let head_bytes = to_bytes(&head).expect("encode governance DAG head");
+        let block_bytes = blocks
+            .iter()
+            .map(|block| to_bytes(block).expect("encode governance DAG block"))
+            .collect::<Vec<_>>();
+        let block_refs = block_bytes
+            .iter()
+            .enumerate()
+            .map(|(index, bytes)| (bytes.as_slice(), format!("governance-block-{index}.to")))
+            .collect::<Vec<_>>();
+        let outcome = validate_governance_dag_head_chain_bytes(
+            &head_bytes,
+            "governance-head.to",
+            &block_refs,
+            53,
+        );
+
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-GOV-008");
+        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+    }
+
+    #[test]
+    fn committed_governance_dag_outcome_matches_reference_validator() {
+        let head_bytes = fs::read(workspace_fixture(
+            "fixtures/sorafs_manifest/governance/dag_head_v1.to",
+        ))
+        .expect("read governance DAG head fixture");
+        let block_bytes = (0..2)
+            .map(|index| {
+                fs::read(workspace_fixture(&format!(
+                    "fixtures/sorafs_manifest/governance/dag_block_{index}_v1.to"
+                )))
+                .expect("read governance DAG block fixture")
+            })
+            .collect::<Vec<_>>();
+        let block_inputs = block_bytes
+            .iter()
+            .enumerate()
+            .map(|(index, bytes)| (bytes.as_slice(), format!("dag_block_{index}_v1.to")))
+            .collect::<Vec<_>>();
+        let outcome = validate_governance_dag_head_chain_bytes(
+            &head_bytes,
+            "dag_head_v1.to",
+            &block_inputs,
+            123,
+        );
+        let actual = format!(
+            "{}\n",
+            norito::json::to_string_pretty(&outcome).expect("encode outcome JSON")
+        );
+        let expected = fs::read_to_string(workspace_fixture(
+            "fixtures/sorafs_manifest/governance/dag_head_validation_outcome_v1.json",
+        ))
+        .expect("read governance DAG outcome fixture");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn validate_governance_dag_head_chain_bytes_rejects_noncanonical_order() {
+        let (blocks, head) = signed_governance_dag_chain();
+        let head_bytes = to_bytes(&head).expect("encode governance DAG head");
+        let block_bytes: Vec<Vec<u8>> = blocks
+            .iter()
+            .rev()
+            .map(|block| to_bytes(block).expect("encode governance DAG block"))
+            .collect();
+        let block_refs: Vec<(&[u8], String)> = block_bytes
+            .iter()
+            .enumerate()
+            .map(|(index, bytes)| (bytes.as_slice(), format!("governance-block-{index}.to")))
+            .collect();
+        let outcome = validate_governance_dag_head_chain_bytes(
+            &head_bytes,
+            "governance-head.to",
+            &block_refs,
+            54,
+        );
+
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-GOV-006");
+        assert_eq!(outcome.category, CATEGORY_VALIDATION);
+        assert!(
+            outcome
+                .context
+                .iter()
+                .any(|field| field.key == "validation_error"
+                    && field.value.contains("canonical root-to-head order")),
+            "{outcome:?}"
+        );
     }
 
     #[test]

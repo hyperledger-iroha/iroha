@@ -44,6 +44,8 @@ pub mod sorafs_moderation;
 pub mod sorafs_orderbook;
 /// Authoritative `SoraFS` proof-of-personhood issuer and registry handlers.
 pub mod sorafs_pop_registry;
+/// Authoritative `SoraFS` reserve/rent instruction handlers.
+pub mod sorafs_reserve;
 pub mod space_directory;
 /// Public lane staking instruction handlers.
 pub mod staking;
@@ -200,7 +202,22 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MatchSorafsOrderbook>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MaintainSorafsOrderbook>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsReservePolicy>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterSorafsReserveAccount>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RequestSorafsReserveMovement>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::DecideSorafsReserveMovement>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ChargeSorafsReserveRent>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::AdvanceSorafsReserveLifecycle>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::DrawSorafsReserveCredit>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RepaySorafsReserveCredit>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsReserveAppeal>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::DecideSorafsReserveAppeal>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairTask>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList>,

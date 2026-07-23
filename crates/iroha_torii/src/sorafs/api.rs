@@ -75,10 +75,11 @@ use iroha_data_model::{
     sorafs::{
         gar::GarEnforcementReceiptV1,
         moderation::{
-            AdversarialCorpusManifestV1, ModerationReproManifestV1,
-            SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotCommitV1,
-            SoraFsModerationBallotContextV1, SoraFsModerationBallotRevealV1,
-            SoraFsModerationVoteChoice,
+            AdversarialCorpusManifestV1, MODERATION_COMMITTEE_MAX_RESULTS_V1,
+            ModerationCommitteeAggregateV1, ModerationReproManifestV1,
+            ModerationSignedScreeningResultV1, SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+            SoraFsModerationBallotCommitV1, SoraFsModerationBallotContextV1,
+            SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
         },
         pin_registry::{ManifestDigest, PinManifestRecord, PinStatus},
         reserve::{
@@ -86,9 +87,8 @@ use iroha_data_model::{
             ReserveQuote,
         },
         transparency::{
-            MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerCyclePublicationV1,
-            ModerationLedgerEntryKindV1, ModerationLedgerMetadataV1, ModerationPrivacyModeV1,
-            ModerationPrivacyParametersV1, ProofTokenIssuanceV1,
+            ModerationLedgerCyclePublicationV1, ModerationLedgerEntryKindV1,
+            ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
         },
     },
     transaction::{SignedTransaction, TransactionBuilder},
@@ -127,6 +127,10 @@ use sorafs_manifest::{
     decode_manifest_v1_canonical, decode_order_cancel_v1, decode_order_request_v1,
     decode_settlement_receipt_v1, derive_orderbook_order_id_v1,
     hedging::signed::SignedHedgingError,
+    pdp::{
+        PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+        PDP_PROOF_MAX_CANONICAL_BYTES_V1, PdpChallengeV1, PdpCommitmentV1,
+    },
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
     pricing::signed::GovernedPricingError,
@@ -134,7 +138,9 @@ use sorafs_manifest::{
     validate_manifest,
 };
 use sorafs_node::{
-    EconomicsRuntimeError, ModerationAppealDeposit, ModerationBallotAnnouncement,
+    EconomicsRuntimeError, ModerationAppealDeposit, ModerationAuthenticatedScreeningAdmissionError,
+    ModerationAuthenticatedScreeningEvidenceV1, ModerationAuthenticatedScreeningOutcomeV1,
+    ModerationAuthenticatedScreeningRequestV1, ModerationBallotAnnouncement,
     ModerationBallotChallengeDecision, ModerationBallotChallengeInput,
     ModerationBallotChallengeKind, ModerationBallotChallengeRecord,
     ModerationBallotChallengeResolution, ModerationBallotCommitOutcome, ModerationBallotEvent,
@@ -150,18 +156,17 @@ use sorafs_node::{
     ModerationQuarantineObjectInput, ModerationQuarantineObjectPayload,
     ModerationQuarantineObjectRecord, ModerationQuarantineRecord, ModerationQuarantineReleaseInput,
     ModerationQuarantineReviewInput, ModerationQuarantineState, ModerationReproRegistryRecord,
-    ModerationScreeningError, ModerationScreeningInput, ModerationScreeningOutcome,
-    ModerationScreeningRecord, ModerationScreeningSnapshot, ModerationScreeningVerdict,
-    NodeStorageError, OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind,
-    OrderbookReceiptOutcome, OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome,
-    PrivacyAggregateScheduleOutcome, PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
-    RepairEvent, ReserveAppealDecision, ReserveAppealOutcome, ReserveAppealRecord,
-    ReserveAppealRequest, ReserveAppealRuntimeError, ReserveAppealSnapshot, ReserveAppealStatus,
-    ReserveCreditLineSnapshot, ReserveLifecycleEvent, ReserveLifecyclePolicyOutcome,
-    ReserveLifecyclePolicyRecord, ReserveLifecyclePolicySnapshot, ReserveLifecyclePolicyUpdate,
-    ReserveLifecycleRuntimeError, ReserveLifecycleSnapshot, ReserveLifecycleUpdate,
-    ReserveMovementCustodyStatus, ReserveMovementCustodyUpdate, ReserveMovementKind,
-    ReserveMovementOutcome, ReserveMovementRecord, ReserveMovementRequest,
+    ModerationScreeningAuthenticationError, ModerationScreeningError, ModerationScreeningRecord,
+    ModerationScreeningSnapshot, NodeStorageError, OrderbookCancelOutcome, OrderbookEvent,
+    OrderbookEventKind, OrderbookReceiptOutcome, OrderbookRuntimeError, OrderbookSnapshot,
+    OrderbookSubmitOutcome, PrivacyAggregateScheduleOutcome, PrivacyAggregateSourceEvent,
+    PrivacyAggregateSourceMetric, RepairEvent, ReserveAppealDecision, ReserveAppealOutcome,
+    ReserveAppealRecord, ReserveAppealRequest, ReserveAppealRuntimeError, ReserveAppealSnapshot,
+    ReserveAppealStatus, ReserveCreditLineSnapshot, ReserveLifecycleEvent,
+    ReserveLifecyclePolicyOutcome, ReserveLifecyclePolicyRecord, ReserveLifecyclePolicySnapshot,
+    ReserveLifecyclePolicyUpdate, ReserveLifecycleRuntimeError, ReserveLifecycleSnapshot,
+    ReserveLifecycleUpdate, ReserveMovementCustodyStatus, ReserveMovementCustodyUpdate,
+    ReserveMovementKind, ReserveMovementOutcome, ReserveMovementRecord, ReserveMovementRequest,
     ReserveMovementRuntimeError, ReserveProviderBalance, ReserveProviderCreditLineState,
     ReserveProviderLifecycleSummary, TransparencyLedgerSourceEntry,
     appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
@@ -320,6 +325,8 @@ const MODERATION_ROUTE_MODEL_REGISTRY_REPRO: &str =
 const MODERATION_ROUTE_MODEL_REGISTRY_CORPORA: &str =
     "/v1/sorafs/moderation/model-registry/corpora";
 const MODERATION_ROUTE_SCREENING_RESULTS: &str = "/v1/sorafs/moderation/screening-results";
+const MODERATION_SCREENING_AUTHORITY_MAX_CANONICAL_BYTES: usize = 256 * 1024;
+const MODERATION_SCREENING_MEMBER_MAX_CANONICAL_BYTES: usize = 64 * 1024;
 const MODERATION_ROUTE_QUARANTINE: &str = "/v1/sorafs/moderation/quarantine";
 const MODERATION_ROUTE_VIEWER_AUDIT_REPORTS: &str = "/v1/sorafs/moderation/viewer-audit-reports";
 const MODERATION_ROUTE_VIEWER_AUDIT_REPORTS_PUBLISH_DUE: &str =
@@ -587,7 +594,7 @@ fn iroha_network_time_now_ms() -> u64 {
 struct PotrProbeParams {
     deadline_ms: u32,
     tier: ProofStreamTier,
-    request_id: Option<[u8; 16]>,
+    request_id: [u8; 16],
     trace_id: Option<[u8; 16]>,
 }
 
@@ -670,6 +677,12 @@ fn parse_potr_request_header(headers: &HeaderMap) -> Result<Option<PotrProbePara
         json_error(
             StatusCode::BAD_REQUEST,
             "sora-potr-request header missing tier parameter",
+        )
+    })?;
+    let request_id = request_id.ok_or_else(|| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "sora-potr-request header missing request-id parameter",
         )
     })?;
 
@@ -808,7 +821,7 @@ fn finalize_potr_receipt(
         recorded_at_ms,
         range_start,
         range_end,
-        request_id: probe.params.request_id,
+        request_id: Some(probe.params.request_id),
         trace_id: probe.params.trace_id,
         note,
         gateway_signature: None,
@@ -822,28 +835,94 @@ fn finalize_potr_receipt(
         )
     })?;
 
-    let receipt_bytes = norito::to_bytes(&receipt).map_err(|err| {
-        debug!(?err, "failed to encode PoTR receipt");
+    let admission = state
+        .sorafs_admission
+        .as_ref()
+        .and_then(|registry| registry.entry(provider_id))
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::FORBIDDEN,
+                "PoTR provider has no active council admission",
+            )
+        })?;
+    let provider_public_key = issuer.potr_provider_public_key_bytes().map_err(|err| {
+        error!(?err, "failed to load PoTR provider signing key");
+        json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PoTR provider signing is unavailable",
+        )
+    })?;
+    if admission.potr_mldsa_key() != Some(provider_public_key.as_slice()) {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "PoTR provider signing key is not council governed",
+        ));
+    }
+    let signing_payload = receipt.signing_payload_bytes().map_err(|err| {
+        debug!(?err, "failed to encode PoTR signing payload");
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to encode PoTR receipt",
         )
     })?;
-
-    let signature = issuer.sign_bytes(&receipt_bytes);
+    let signature = issuer.sign_bytes(&signing_payload);
     receipt.gateway_signature = Some(PotrSignatureV1 {
         algorithm: PotrSignatureAlgorithm::Ed25519,
         public_key: issuer.verifying_key_bytes().to_vec(),
         signature: signature.to_bytes().to_vec(),
     });
+    let provider_signature = issuer
+        .sign_potr_provider_bytes(&signing_payload)
+        .map_err(|err| {
+            error!(?err, "failed to sign PoTR receipt as provider");
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "PoTR provider signing is unavailable",
+            )
+        })?;
+    receipt.provider_signature = Some(PotrSignatureV1 {
+        algorithm: PotrSignatureAlgorithm::MlDsa65,
+        public_key: provider_public_key,
+        signature: provider_signature,
+    });
 
-    receipt.validate().map_err(|err| {
-        error!(?err, "generated PoTR receipt failed validation");
+    receipt
+        .validate_with_governed_keys(&issuer.verifying_key_bytes(), admission.as_ref())
+        .map_err(|err| {
+            error!(?err, "generated PoTR receipt failed validation");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "generated PoTR receipt failed validation",
+            )
+        })?;
+
+    let receipt_bytes = receipt.signed_receipt_bytes().map_err(|err| {
+        error!(?err, "failed to encode final signed PoTR receipt");
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "generated PoTR receipt failed validation",
+            "failed to encode final signed PoTR receipt",
         )
     })?;
+    match state.sorafs_node.record_potr_receipt(
+        receipt.clone(),
+        &issuer.verifying_key_bytes(),
+        admission.as_ref(),
+    ) {
+        Ok(_) => {}
+        Err(sorafs_node::PotrTrackerError::RepairHandoff(err)) => {
+            error!(
+                ?err,
+                "PoTR receipt is durable but its authoritative latency repair remains pending"
+            );
+        }
+        Err(err) => {
+            error!(?err, "failed to persist final signed PoTR receipt");
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to persist final signed PoTR receipt",
+            ));
+        }
+    }
 
     let receipt_b64 = BASE64_STANDARD.encode(receipt_bytes);
     let status_label = match status {
@@ -861,7 +940,7 @@ fn potr_signature_to_json(signature: &PotrSignatureV1) -> Value {
     let mut sig_map = Map::new();
     let algorithm = match signature.algorithm {
         PotrSignatureAlgorithm::Ed25519 => "ed25519",
-        PotrSignatureAlgorithm::Dilithium3 => "dilithium3",
+        PotrSignatureAlgorithm::MlDsa65 => "ml_dsa_65",
     };
     sig_map.insert("algorithm".into(), Value::from(algorithm));
     sig_map.insert(
@@ -1808,26 +1887,15 @@ pub struct ModerationModelRegistryManifestRequestDto {
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/moderation/screening-results`.
 pub struct ModerationScreeningResultRequestDto {
-    /// Gateway or content subject identifier.
-    pub subject: String,
-    /// Hex-encoded BLAKE3 digest of the screened payload or stable content reference.
-    pub subject_digest_hex: String,
-    /// Hex-encoded governance-approved reproducibility manifest id.
-    pub manifest_id_hex: String,
-    /// Hex-encoded BLAKE3 digest of the deterministic runner binary.
-    pub runner_hash_hex: String,
-    /// Combined moderation score in basis points.
-    pub combined_score_bps: u16,
-    /// Verdict label: pass, warn, quarantine, escalate, or block.
-    pub verdict: String,
-    /// Optional Unix timestamp (seconds) when screening completed.
-    pub screened_at_unix: Option<u64>,
-    /// Optional evidence digest encoded as hexadecimal.
-    pub evidence_digest_hex: Option<String>,
-    /// Optional policy/configuration digest encoded as hexadecimal.
-    pub policy_digest_hex: Option<String>,
-    /// Optional operator note.
-    pub notes: Option<String>,
+    /// Non-zero 32-byte idempotency key encoded as lowercase hexadecimal.
+    pub idempotency_key_hex: String,
+    /// Canonical evidence kind: `signed_result` or `committee_aggregate`.
+    pub evidence_kind: String,
+    /// Standard-base64 canonical Norito signed result or committee aggregate.
+    pub authority_b64: String,
+    /// Standard-base64 canonical Norito signed member results. This must be
+    /// empty for `signed_result` and complete for `committee_aggregate`.
+    pub committee_member_results_b64: Vec<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -1862,9 +1930,11 @@ pub struct ModerationQuarantineObjectStoreRequestDto {
     pub payload_b64: String,
     /// Optional Unix timestamp (seconds) when payload capture completed.
     pub captured_at_unix: Option<u64>,
-    /// Optional content type label for operator review.
+    /// Optional V1-allowlisted coarse media label. Parameters, filenames,
+    /// identities, and private data are forbidden.
     pub content_type: Option<String>,
-    /// Optional object-store note.
+    /// Reserved in V1 and required to be absent. Private notes must be carried
+    /// inside `payload_b64` so they are encrypted.
     pub notes: Option<String>,
 }
 
@@ -1982,6 +2052,7 @@ pub struct ModerationEvidenceViewerAuditReportPublishDueRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// One raw metric contribution in a SoraFS privacy aggregate source event.
 pub struct TransparencyPrivacyAggregateSourceMetricDto {
     /// Stable metric key.
@@ -1994,6 +2065,7 @@ pub struct TransparencyPrivacyAggregateSourceMetricDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// JSON payload accepted by `/v1/sorafs/transparency/privacy-aggregates/source-events`.
 pub struct TransparencyPrivacyAggregateSourceEventRequestDto {
     /// Stable event id used for duplicate suppression.
@@ -2004,6 +2076,8 @@ pub struct TransparencyPrivacyAggregateSourceEventRequestDto {
     pub population_label: String,
     /// Optional 32-byte private selector digest encoded as hexadecimal.
     pub population_digest_hex: Option<String>,
+    /// Required 32-byte private subject digest used for per-subject clipping.
+    pub subject_digest_hex: String,
     /// Raw source metrics for this event, sorted by key.
     pub metrics: Vec<TransparencyPrivacyAggregateSourceMetricDto>,
     /// Optional 32-byte policy digest encoded as hexadecimal.
@@ -2046,30 +2120,13 @@ pub struct TransparencyPublicSourceEntryRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// JSON payload accepted by `/v1/sorafs/transparency/privacy-aggregates/publish-due`.
 pub struct TransparencyPrivacyAggregatePublishDueRequestDto {
     /// Unix timestamp in seconds used to evaluate the configured due window.
     pub now_unix: u64,
-    /// Prefix used when deriving public aggregate identifiers.
-    pub aggregate_id_prefix: String,
-    /// Privacy mode: `suppression`, `differential_privacy`, or `differential_privacy_with_suppression`.
-    pub privacy_mode: String,
-    /// Epsilon encoded as fixed-point micros.
-    pub epsilon_micros: Option<u64>,
-    /// Delta encoded in parts per billion.
-    pub delta_ppb: Option<u64>,
-    /// Optional noise scale encoded as fixed-point micros.
-    pub noise_scale_micros: Option<u64>,
-    /// Minimum source-event count required before a bucket can be published.
-    pub suppression_threshold: Option<u64>,
-    /// Optional runtime-only deterministic noise seed encoded as hexadecimal.
-    pub noise_seed_hex: Option<String>,
-    /// Optional aggregate policy/configuration digest encoded as hexadecimal.
-    pub policy_digest_hex: Option<String>,
     /// Optional previous transparency block hash encoded as hexadecimal.
     pub previous_block_hash_hex: Option<String>,
-    /// Public metadata copied into every generated aggregate.
-    pub metadata: Option<Vec<TransparencyLedgerMetadataDto>>,
 }
 
 #[cfg(feature = "app_api")]
@@ -2092,9 +2149,11 @@ pub struct ProofStreamRequestDto {
     pub manifest_digest_hex: String,
     /// Hex-encoded provider identifier (32 bytes).
     pub provider_id_hex: String,
-    /// Proof kind requested (`por` or `potr`; `pdp` is reserved for future SF-13 work).
+    /// Proof kind requested (`por`, `pdp`, or `potr`).
     pub proof_kind: String,
-    /// Optional sample count (required for PoR; capped at 500).
+    /// Existing governed PDP challenge identifier encoded as 32-byte hex.
+    pub challenge_id_hex: Option<String>,
+    /// Optional sample count (required only for PoR; capped at 500).
     pub sample_count: Option<u32>,
     /// Optional deadline in milliseconds (required for PoTR).
     pub deadline_ms: Option<u32>,
@@ -2106,6 +2165,54 @@ pub struct ProofStreamRequestDto {
     pub orchestrator_job_id_hex: Option<String>,
     /// Optional tier hint (`hot`, `warm`, `archive`).
     pub tier: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// Authenticated request to enqueue one council-admitted PDP challenge.
+pub struct PdpChallengeEnqueueRequestDto {
+    /// Canonical Norito `PdpCommitmentV1`, base64 encoded.
+    pub commitment_b64: String,
+    /// Canonical Norito `PdpChallengeV1`, base64 encoded.
+    pub challenge_b64: String,
+    /// Governance scheduler epoch expected for the challenge.
+    pub expected_epoch_id: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// Authenticated request for the next pending PDP challenge.
+pub struct PdpNextChallengeRequestDto {
+    /// Council-governed provider identity encoded as 32-byte hex.
+    pub provider_id_hex: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// Authenticated, challenge-bound PDP proof submission.
+pub struct PdpProofSubmitRequestDto {
+    /// Governed challenge identity encoded as 32-byte hex.
+    pub challenge_id_hex: String,
+    /// Exact canonical Norito `PdpProofV1`, base64 encoded.
+    pub proof_b64: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// Authenticated request for one PDP challenge status.
+pub struct PdpChallengeStatusRequestDto {
+    /// Governed challenge identity encoded as 32-byte hex.
+    pub challenge_id_hex: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Copy, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// Authenticated bounded PDP status export request.
+pub struct PdpStatusExportRequestDto {
+    /// Return only records after this durable sequence.
+    pub after_sequence: Option<u64>,
+    /// Page size, from 1 through the protocol maximum.
+    pub limit: Option<u32>,
 }
 
 #[cfg(feature = "app_api")]
@@ -4339,7 +4446,7 @@ pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_publish_du
     {
         return response;
     }
-    let (now_unix, config, previous_block_hash) =
+    let (now_unix, previous_block_hash) =
         match privacy_aggregate_publish_due_request_from_body(body.as_ref()) {
             Ok(request) => request,
             Err(response) => return response,
@@ -4348,7 +4455,6 @@ pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_publish_du
         .sorafs_node
         .publish_due_configured_privacy_aggregate_cycle_from_source_events(
             now_unix,
-            config,
             previous_block_hash,
         ) {
         Ok(outcome) => outcome,
@@ -4785,6 +4891,7 @@ fn privacy_aggregate_source_event_from_request(
         request.population_digest_hex.as_deref(),
         "population_digest_hex",
     )?;
+    let subject_digest = decode_hex_32_field(&request.subject_digest_hex, "subject_digest_hex")?;
     let policy_digest =
         decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
     Ok(PrivacyAggregateSourceEvent {
@@ -4792,6 +4899,7 @@ fn privacy_aggregate_source_event_from_request(
         occurred_at_unix: request.occurred_at_unix,
         population_label: request.population_label,
         population_digest,
+        subject_digest,
         metrics: request
             .metrics
             .into_iter()
@@ -4839,6 +4947,10 @@ fn privacy_aggregate_source_event_ingest_json(
                 .unwrap_or(Value::Null),
         ),
         json_entry(
+            "subject_digest_hex",
+            Value::from(encode(event.subject_digest)),
+        ),
+        json_entry(
             "policy_digest_hex",
             event
                 .policy_digest
@@ -4856,14 +4968,7 @@ fn privacy_aggregate_source_event_ingest_json(
 
 fn privacy_aggregate_publish_due_request_from_body(
     body: &[u8],
-) -> Result<
-    (
-        u64,
-        sorafs_node::PrivacyAggregateCycleConfig,
-        Option<[u8; 32]>,
-    ),
-    Response,
-> {
+) -> Result<(u64, Option<[u8; 32]>), Response> {
     let request: TransparencyPrivacyAggregatePublishDueRequestDto = json::from_slice(body)
         .map_err(|err| {
             json_error(
@@ -4871,54 +4976,11 @@ fn privacy_aggregate_publish_due_request_from_body(
                 format!("failed to decode SoraFS privacy aggregate publish-due JSON: {err}"),
             )
         })?;
-    let privacy_mode = privacy_aggregate_mode_from_str(&request.privacy_mode)?;
-    let noise_seed =
-        decode_optional_hex_32_field(request.noise_seed_hex.as_deref(), "noise_seed_hex")?;
-    let policy_digest =
-        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
     let previous_block_hash = decode_optional_hex_32_field(
         request.previous_block_hash_hex.as_deref(),
         "previous_block_hash_hex",
     )?;
-    let metadata = request
-        .metadata
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| ModerationLedgerMetadataV1 {
-            key: item.key,
-            value: item.value,
-        })
-        .collect();
-    let config = sorafs_node::PrivacyAggregateCycleConfig {
-        aggregate_id_prefix: request.aggregate_id_prefix,
-        privacy: ModerationPrivacyParametersV1 {
-            version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
-            mode: privacy_mode,
-            epsilon_micros: request.epsilon_micros,
-            delta_ppb: request.delta_ppb,
-            noise_scale_micros: request.noise_scale_micros,
-            suppression_threshold: request.suppression_threshold,
-            suppressed_count: 0,
-        },
-        noise_seed,
-        policy_digest,
-        metadata,
-    };
-    Ok((request.now_unix, config, previous_block_hash))
-}
-
-fn privacy_aggregate_mode_from_str(raw: &str) -> Result<ModerationPrivacyModeV1, Response> {
-    match raw.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-        "differential_privacy" | "dp" => Ok(ModerationPrivacyModeV1::DifferentialPrivacy),
-        "suppression" => Ok(ModerationPrivacyModeV1::Suppression),
-        "differential_privacy_with_suppression" | "dp_with_suppression" => {
-            Ok(ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression)
-        }
-        _ => Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "unsupported SoraFS privacy aggregate privacy_mode",
-        )),
-    }
+    Ok((request.now_unix, previous_block_hash))
 }
 
 fn privacy_aggregate_publish_due_outcome_json(
@@ -5116,11 +5178,7 @@ fn privacy_aggregate_publication_summary_json(
 
 fn is_privacy_aggregate_publish_due_request_error(message: &str) -> bool {
     message.contains("invalid privacy")
-        || message.contains("runtime noise seed")
-        || message.contains("noise_seed")
-        || message.contains("policy_digest")
-        || message.contains("metadata")
-        || message.contains("aggregate_id_prefix")
+        || message.contains("composition budget")
         || message.contains("build scheduled privacy aggregate cycle")
 }
 
@@ -8897,17 +8955,22 @@ pub(crate) async fn handle_post_sorafs_moderation_screening_result(
             );
         }
     };
-    let input = match moderation_screening_input_from_request(request) {
-        Ok(input) => input,
+    let request = match authenticated_moderation_screening_request_from_dto(request) {
+        Ok(request) => request,
         Err(response) => return response,
     };
-    match state.sorafs_node.record_moderation_screening_result(input) {
+    match state
+        .sorafs_node
+        .record_authenticated_moderation_screening_result(
+            request,
+            iroha_network_time_now_ms() / 1_000,
+        ) {
         Ok(outcome) => (
             StatusCode::ACCEPTED,
-            JsonBody(moderation_screening_outcome_json(&outcome)),
+            JsonBody(authenticated_moderation_screening_outcome_json(&outcome)),
         )
             .into_response(),
-        Err(err) => moderation_screening_error_response(err),
+        Err(err) => authenticated_moderation_screening_error_response(err),
     }
 }
 
@@ -16766,49 +16829,148 @@ fn moderation_corpus_registry_record_json(record: &ModerationCorpusRegistryRecor
     ])
 }
 
-fn moderation_screening_input_from_request(
+fn authenticated_moderation_screening_request_from_dto(
     request: ModerationScreeningResultRequestDto,
-) -> Result<ModerationScreeningInput, Response> {
-    let subject_digest = decode_hex_32_field(&request.subject_digest_hex, "subject_digest_hex")?;
-    let manifest_id = parse_hex_fixed::<16>(&request.manifest_id_hex, "manifest_id_hex")
-        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
-    let runner_hash = decode_hex_32_field(&request.runner_hash_hex, "runner_hash_hex")?;
-    let verdict = parse_moderation_screening_verdict(&request.verdict)?;
-    let evidence_digest = decode_optional_hex_32_field(
-        request.evidence_digest_hex.as_deref(),
-        "evidence_digest_hex",
-    )?;
-    let policy_digest =
-        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
-    let screened_at_unix = request
-        .screened_at_unix
-        .unwrap_or_else(|| iroha_network_time_now_ms() / 1_000);
-    Ok(ModerationScreeningInput {
-        subject: request.subject,
-        subject_digest,
-        manifest_id,
-        runner_hash,
-        combined_score_bps: request.combined_score_bps,
-        verdict,
-        screened_at_unix,
-        evidence_digest,
-        policy_digest,
-        notes: request.notes,
+) -> Result<ModerationAuthenticatedScreeningRequestV1, Response> {
+    let idempotency_key =
+        parse_hex_fixed::<32>(&request.idempotency_key_hex, "idempotency_key_hex")
+            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    if idempotency_key == [0; 32] {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "idempotency_key_hex must not be all zeroes",
+        ));
+    }
+    let evidence = match request.evidence_kind.as_str() {
+        "signed_result" => {
+            if !request.committee_member_results_b64.is_empty() {
+                return Err(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "signed_result must not include committee_member_results_b64",
+                ));
+            }
+            ModerationAuthenticatedScreeningEvidenceV1::Signed(
+                decode_canonical_moderation_screening_authority(
+                    &request.authority_b64,
+                    "signed screening result",
+                    MODERATION_SCREENING_AUTHORITY_MAX_CANONICAL_BYTES,
+                )?,
+            )
+        }
+        "committee_aggregate" => {
+            if request.committee_member_results_b64.is_empty()
+                || request.committee_member_results_b64.len() > MODERATION_COMMITTEE_MAX_RESULTS_V1
+            {
+                return Err(json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "committee_member_results_b64 must contain 1..={MODERATION_COMMITTEE_MAX_RESULTS_V1} signed results"
+                    ),
+                ));
+            }
+            let aggregate = decode_canonical_moderation_screening_authority(
+                &request.authority_b64,
+                "moderation committee aggregate",
+                MODERATION_SCREENING_AUTHORITY_MAX_CANONICAL_BYTES,
+            )?;
+            let signed_results = request
+                .committee_member_results_b64
+                .iter()
+                .enumerate()
+                .map(|(index, encoded)| {
+                    decode_canonical_moderation_screening_authority(
+                        encoded,
+                        &format!("moderation committee member result {index}"),
+                        MODERATION_SCREENING_MEMBER_MAX_CANONICAL_BYTES,
+                    )
+                })
+                .collect::<Result<Vec<ModerationSignedScreeningResultV1>, _>>()?;
+            ModerationAuthenticatedScreeningEvidenceV1::Committee {
+                aggregate,
+                signed_results,
+            }
+        }
+        other => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "unknown moderation screening evidence_kind `{other}`; expected `signed_result` or `committee_aggregate`"
+                ),
+            ));
+        }
+    };
+    Ok(ModerationAuthenticatedScreeningRequestV1 {
+        idempotency_key,
+        evidence,
     })
 }
 
-fn parse_moderation_screening_verdict(value: &str) -> Result<ModerationScreeningVerdict, Response> {
-    match value.trim() {
-        "pass" => Ok(ModerationScreeningVerdict::Pass),
-        "warn" => Ok(ModerationScreeningVerdict::Warn),
-        "quarantine" => Ok(ModerationScreeningVerdict::Quarantine),
-        "escalate" => Ok(ModerationScreeningVerdict::Escalate),
-        "block" => Ok(ModerationScreeningVerdict::Block),
-        other => Err(json_error(
+fn decode_canonical_moderation_screening_authority<T>(
+    encoded: &str,
+    label: &str,
+    max_canonical_bytes: usize,
+) -> Result<T, Response>
+where
+    for<'de> T: norito::NoritoDeserialize<'de>,
+    T: norito::NoritoSerialize,
+{
+    let max_base64_bytes = max_canonical_bytes
+        .saturating_mul(4)
+        .div_ceil(3)
+        .saturating_add(4);
+    if encoded.is_empty() || encoded.len() > max_base64_bytes {
+        return Err(json_error(
             StatusCode::BAD_REQUEST,
-            format!("unknown SoraFS moderation screening verdict `{other}`"),
-        )),
+            format!("{label} base64 length must encode 1..={max_canonical_bytes} canonical bytes"),
+        ));
     }
+    let bytes = BASE64_STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid standard base64 for {label}: {error}"),
+            )
+        })?;
+    if bytes.is_empty() || bytes.len() > max_canonical_bytes {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} canonical length must be 1..={max_canonical_bytes} bytes"),
+        ));
+    }
+    if BASE64_STANDARD.encode(&bytes) != encoded {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} must use canonical padded standard base64"),
+        ));
+    }
+    let decode_limits = norito::DecodeLimits::new(
+        1_024,
+        max_canonical_bytes,
+        8_192,
+        max_canonical_bytes.saturating_mul(4),
+        64,
+    );
+    let value =
+        norito::decode_from_bytes_with_limits::<T>(&bytes, decode_limits).map_err(|error| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid bounded canonical Norito {label}: {error}"),
+            )
+        })?;
+    let canonical = norito::to_bytes(&value).map_err(|error| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("failed to re-encode canonical Norito {label}: {error}"),
+        )
+    })?;
+    if canonical != bytes {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} is not canonically encoded"),
+        ));
+    }
+    Ok(value)
 }
 
 fn moderation_quarantine_review_input_from_request(
@@ -17076,7 +17238,9 @@ fn ensure_evidence_viewer_access_binds_quarantine(
 fn moderation_screening_error_response(err: ModerationScreeningError) -> Response {
     let status = match err {
         ModerationScreeningError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
-        ModerationScreeningError::ConflictingRecord { .. } => StatusCode::CONFLICT,
+        ModerationScreeningError::ConflictingRecord { .. }
+        | ModerationScreeningError::ConflictingIdempotencyKey { .. }
+        | ModerationScreeningError::ReplayedAuthority { .. } => StatusCode::CONFLICT,
         ModerationScreeningError::UnknownQuarantine { .. } => StatusCode::NOT_FOUND,
         ModerationScreeningError::InvalidTransition { .. } => StatusCode::CONFLICT,
         ModerationScreeningError::InvalidInput { .. }
@@ -17085,6 +17249,41 @@ fn moderation_screening_error_response(err: ModerationScreeningError) -> Respons
         ModerationScreeningError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs moderation screening error: {err}"))
+}
+
+fn authenticated_moderation_screening_error_response(
+    err: ModerationAuthenticatedScreeningAdmissionError,
+) -> Response {
+    match err {
+        ModerationAuthenticatedScreeningAdmissionError::Runtime(error) => {
+            moderation_screening_error_response(error)
+        }
+        ModerationAuthenticatedScreeningAdmissionError::Authentication(error) => {
+            let status = match error {
+                ModerationScreeningAuthenticationError::AuthorityUnavailable { .. } => {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+                ModerationScreeningAuthenticationError::PolicyRollback { .. }
+                | ModerationScreeningAuthenticationError::PolicyEquivocation { .. } => {
+                    StatusCode::CONFLICT
+                }
+                ModerationScreeningAuthenticationError::MissingIdempotencyKey
+                | ModerationScreeningAuthenticationError::InvalidTrustPolicy { .. }
+                | ModerationScreeningAuthenticationError::CommitteeRequired { .. }
+                | ModerationScreeningAuthenticationError::InvalidSignedResult { .. }
+                | ModerationScreeningAuthenticationError::InvalidCommittee { .. }
+                | ModerationScreeningAuthenticationError::NonCanonicalAggregate
+                | ModerationScreeningAuthenticationError::UnsupportedVerdict { .. }
+                | ModerationScreeningAuthenticationError::PolicyDigest { .. } => {
+                    StatusCode::BAD_REQUEST
+                }
+            };
+            json_error(
+                status,
+                format!("sorafs authenticated moderation screening error: {error}"),
+            )
+        }
+    }
 }
 
 fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectError) -> Response {
@@ -17096,10 +17295,13 @@ fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectEr
         ModerationQuarantineObjectError::DigestMismatch { .. }
         | ModerationQuarantineObjectError::ConflictingObject { .. }
         | ModerationQuarantineObjectError::AuthenticationFailed { .. } => StatusCode::CONFLICT,
+        ModerationQuarantineObjectError::KeyWrapperUnavailable
+        | ModerationQuarantineObjectError::KeyWrapping { .. }
+        | ModerationQuarantineObjectError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
         ModerationQuarantineObjectError::InvalidInput { .. }
         | ModerationQuarantineObjectError::InvalidSnapshot { .. }
+        | ModerationQuarantineObjectError::InvalidRange { .. }
         | ModerationQuarantineObjectError::Codec { .. } => StatusCode::BAD_REQUEST,
-        ModerationQuarantineObjectError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
         ModerationQuarantineObjectError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(
@@ -17165,17 +17367,65 @@ fn moderation_resource_exhaustion_errors_map_to_too_many_requests() {
     }
 }
 
-fn moderation_screening_outcome_json(outcome: &ModerationScreeningOutcome) -> Value {
+#[cfg(test)]
+#[tokio::test]
+async fn moderation_quarantine_provider_error_detail_is_redacted_from_http() {
+    const SECRET_SENTINEL: &str = "SECRET-KMS-BEARER-DO-NOT-EMIT";
+    let error = ModerationQuarantineObjectError::redacted_key_operation_failure(
+        "kms:test/redacted-http".to_owned(),
+        SECRET_SENTINEL.to_owned(),
+    );
+    assert!(!error.to_string().contains(SECRET_SENTINEL));
+    assert!(!format!("{error:?}").contains(SECRET_SENTINEL));
+
+    let response = moderation_quarantine_object_error_response(error);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("collect redacted key-provider response");
+    let rendered = String::from_utf8(body.to_vec()).expect("HTTP error body must be UTF-8");
+    assert!(!rendered.contains(SECRET_SENTINEL));
+    assert!(!rendered.contains("BEARER"));
+}
+
+fn authenticated_moderation_screening_outcome_json(
+    outcome: &ModerationAuthenticatedScreeningOutcomeV1,
+) -> Value {
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.screening_result.ingest.v1"),
+            Value::from("sorafs.moderation.screening_result.authenticated_ingest.v1"),
         ),
         json_entry("status", Value::from("accepted")),
-        json_entry("record", moderation_screening_record_json(&outcome.record)),
+        json_entry(
+            "admission",
+            json_object(vec![
+                json_entry(
+                    "idempotency_key_hex",
+                    Value::from(encode(outcome.admission.idempotency_key)),
+                ),
+                json_entry(
+                    "authority_digest_hex",
+                    Value::from(encode(outcome.admission.authority_digest)),
+                ),
+                json_entry(
+                    "authority_kind",
+                    Value::from(outcome.admission.authority_kind.clone()),
+                ),
+                json_entry(
+                    "receipt_digest_hex",
+                    Value::from(encode(outcome.admission.receipt_digest)),
+                ),
+            ]),
+        ),
+        json_entry(
+            "record",
+            moderation_screening_record_json(&outcome.screening.record),
+        ),
         json_entry(
             "quarantine",
             outcome
+                .screening
                 .quarantine
                 .as_ref()
                 .map(moderation_quarantine_record_json)
@@ -17626,6 +17876,7 @@ fn moderation_screening_snapshot_json(
 ) -> Value {
     let screening_count = snapshot.screening_records.len();
     let quarantine_count = snapshot.quarantine_records.len();
+    let authenticated_admission_count = snapshot.authenticated_admissions.len();
     let records = snapshot
         .screening_records
         .iter()
@@ -17644,6 +17895,10 @@ fn moderation_screening_snapshot_json(
             Value::from("sorafs.moderation.screening_results.v1"),
         ),
         json_entry("source", Value::from("local")),
+        json_entry(
+            "authenticated_admission_count",
+            Value::from(authenticated_admission_count as u64),
+        ),
         json_entry("screening_count", Value::from(screening_count as u64)),
         json_entry(
             "returned_screening_count",
@@ -17726,14 +17981,6 @@ fn moderation_screening_record_json(record: &ModerationScreeningRecord) -> Value
             record
                 .policy_digest
                 .map(encode)
-                .map(Value::from)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "notes",
-            record
-                .notes
-                .as_deref()
                 .map(Value::from)
                 .unwrap_or(Value::Null),
         ),
@@ -17827,18 +18074,15 @@ fn moderation_quarantine_object_record_json(record: &ModerationQuarantineObjectR
                 .unwrap_or(Value::Null),
         ),
         json_entry(
-            "notes",
-            record
-                .notes
-                .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
             "encryption_algorithm",
             Value::from(record.encryption_algorithm.clone()),
         ),
-        json_entry("key_id_hex", Value::from(encode(record.key_id))),
+        json_entry("nonce_prefix_hex", Value::from(encode(record.nonce_prefix))),
+        json_entry(
+            "chunk_plaintext_bytes",
+            Value::from(record.chunk_plaintext_bytes),
+        ),
+        json_entry("chunk_count", Value::from(record.chunk_count)),
         json_entry("envelope_path", Value::from(record.envelope_path.clone())),
     ])
 }
@@ -27883,10 +28127,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
             latency_clamped,
             note,
         ) {
-            Ok((receipt, receipt_b64, status_label)) => {
-                if let Err(err) = state.sorafs_node.record_potr_receipt(receipt) {
-                    error!(?err, "failed to record PoTR receipt");
-                }
+            Ok((_receipt, receipt_b64, status_label)) => {
                 response_headers.insert(
                     HeaderName::from_static(HEADER_SORA_POTR_RECEIPT),
                     header_value(&receipt_b64, "Sora-PoTR-Receipt"),
@@ -28192,10 +28433,7 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
             latency_clamped,
             note,
         ) {
-            Ok((receipt, receipt_b64, status_label)) => {
-                if let Err(err) = state.sorafs_node.record_potr_receipt(receipt) {
-                    error!(?err, "failed to record PoTR receipt");
-                }
+            Ok((_receipt, receipt_b64, status_label)) => {
                 response_headers.insert(
                     HeaderName::from_static(HEADER_SORA_POTR_RECEIPT),
                     header_value(&receipt_b64, "Sora-PoTR-Receipt"),
@@ -28286,6 +28524,516 @@ pub(crate) async fn handle_post_sorafs_storage_por_sample(
 }
 
 #[cfg(feature = "app_api")]
+fn decode_bounded_pdp_base64(
+    encoded: &str,
+    max_bytes: usize,
+    field: &'static str,
+) -> Result<Vec<u8>, Response> {
+    let max_encoded = max_bytes.saturating_mul(4).div_ceil(3).saturating_add(4);
+    if encoded.is_empty() || encoded.len() > max_encoded {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} exceeds the bounded PDP payload size"),
+        ));
+    }
+    let bytes = BASE64_STANDARD.decode(encoded.as_bytes()).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} must be canonical base64"),
+        )
+    })?;
+    if bytes.is_empty() || bytes.len() > max_bytes {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} exceeds the bounded PDP payload size"),
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn pdp_decode_limits(max_bytes: usize) -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        max_bytes.max(1),
+        max_bytes,
+        max_bytes,
+        max_bytes.saturating_mul(4),
+        64,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn decode_pdp_commitment(encoded: &str) -> Result<PdpCommitmentV1, Response> {
+    let bytes = decode_bounded_pdp_base64(
+        encoded,
+        PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+        "commitment_b64",
+    )?;
+    let commitment: PdpCommitmentV1 = norito::decode_from_bytes_with_limits(
+        &bytes,
+        pdp_decode_limits(PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1),
+    )
+    .map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "commitment_b64 is not a valid canonical PDP commitment",
+        )
+    })?;
+    let canonical = norito::to_bytes(&commitment).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "commitment_b64 could not be canonicalized",
+        )
+    })?;
+    if canonical != bytes {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "commitment_b64 is not canonically encoded",
+        ));
+    }
+    Ok(commitment)
+}
+
+#[cfg(feature = "app_api")]
+fn decode_pdp_challenge(encoded: &str) -> Result<PdpChallengeV1, Response> {
+    let bytes = decode_bounded_pdp_base64(
+        encoded,
+        PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+        "challenge_b64",
+    )?;
+    let challenge: PdpChallengeV1 = norito::decode_from_bytes_with_limits(
+        &bytes,
+        pdp_decode_limits(PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1),
+    )
+    .map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "challenge_b64 is not a valid canonical PDP challenge",
+        )
+    })?;
+    let canonical = norito::to_bytes(&challenge).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "challenge_b64 could not be canonicalized",
+        )
+    })?;
+    if canonical != bytes {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "challenge_b64 is not canonically encoded",
+        ));
+    }
+    Ok(challenge)
+}
+
+#[cfg(feature = "app_api")]
+fn pdp_protocol_error_response(error: sorafs_node::PdpProviderProtocolError) -> Response {
+    use sorafs_node::PdpProviderProtocolError;
+
+    let (status, message) = match error {
+        PdpProviderProtocolError::UntrustedAdmission
+        | PdpProviderProtocolError::AdmissionProviderMismatch
+        | PdpProviderProtocolError::AdmissionInactive
+        | PdpProviderProtocolError::UnauthorizedProviderKey
+        | PdpProviderProtocolError::UnauthorizedProofSignature(_) => {
+            (StatusCode::FORBIDDEN, "PDP provider authentication failed")
+        }
+        PdpProviderProtocolError::UnknownChallenge => {
+            (StatusCode::NOT_FOUND, "PDP challenge was not found")
+        }
+        PdpProviderProtocolError::ChallengeConflict
+        | PdpProviderProtocolError::ChallengeScopeReplay
+        | PdpProviderProtocolError::TerminalReplayConflict
+        | PdpProviderProtocolError::ConcurrentTransition
+        | PdpProviderProtocolError::StaleCheckpoint => (
+            StatusCode::CONFLICT,
+            "PDP request conflicts with durable state",
+        ),
+        PdpProviderProtocolError::PendingRetentionExhausted { .. }
+        | PdpProviderProtocolError::TerminalRetentionExhausted { .. } => (
+            StatusCode::INSUFFICIENT_STORAGE,
+            "PDP durable retention is exhausted",
+        ),
+        PdpProviderProtocolError::ArchiveHandoff(_)
+        | PdpProviderProtocolError::RepairHandoff(_)
+        | PdpProviderProtocolError::CheckpointBusy => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP terminal handoff is durably pending",
+        ),
+        PdpProviderProtocolError::InvalidPolicy(_)
+        | PdpProviderProtocolError::InvalidCommitment(_)
+        | PdpProviderProtocolError::InvalidChallenge(_)
+        | PdpProviderProtocolError::InvalidProof(_)
+        | PdpProviderProtocolError::MalformedPayload { .. }
+        | PdpProviderProtocolError::NonCanonicalPayload { .. }
+        | PdpProviderProtocolError::PayloadTooLarge { .. }
+        | PdpProviderProtocolError::EpochMismatch { .. }
+        | PdpProviderProtocolError::ChallengeExpiredAtEnqueue
+        | PdpProviderProtocolError::ChallengeFromFuture
+        | PdpProviderProtocolError::InvalidResponseWindow
+        | PdpProviderProtocolError::ChallengeCommitmentMismatch
+        | PdpProviderProtocolError::InvalidLookup
+        | PdpProviderProtocolError::InvalidExportLimit { .. }
+        | PdpProviderProtocolError::ChallengeNotExpired
+        | PdpProviderProtocolError::InvalidTerminalTimestamp
+        | PdpProviderProtocolError::SampleCountOverflow => (
+            StatusCode::BAD_REQUEST,
+            "PDP request failed protocol validation",
+        ),
+        PdpProviderProtocolError::ChallengeRequiresExpiry { .. } => (
+            StatusCode::CONFLICT,
+            "PDP challenge must be expired through its terminal path",
+        ),
+        other => {
+            error!(?other, "PDP provider protocol failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "PDP provider protocol failed",
+            )
+        }
+    };
+    json_error(status, message)
+}
+
+#[cfg(feature = "app_api")]
+fn pdp_status_json(status: sorafs_node::PdpChallengeStatusV1) -> Value {
+    let lifecycle = match status.lifecycle {
+        sorafs_node::PdpChallengeLifecycleV1::Pending => "pending",
+        sorafs_node::PdpChallengeLifecycleV1::HandoffPending => "handoff_pending",
+        sorafs_node::PdpChallengeLifecycleV1::Terminal => "terminal",
+    };
+    let mut map = Map::new();
+    map.insert("sequence".into(), Value::from(status.sequence));
+    map.insert(
+        "challenge_id_hex".into(),
+        Value::from(hex::encode(status.challenge_id)),
+    );
+    map.insert(
+        "manifest_digest_hex".into(),
+        Value::from(hex::encode(status.manifest_digest)),
+    );
+    map.insert(
+        "provider_id_hex".into(),
+        Value::from(hex::encode(status.provider_id)),
+    );
+    map.insert("epoch_id".into(), Value::from(status.epoch_id));
+    map.insert("lifecycle".into(), Value::from(lifecycle));
+    if let Some(deadline) = status.response_deadline_unix {
+        map.insert("response_deadline_unix".into(), Value::from(deadline));
+    }
+    if let Some(proof_digest) = status.proof_digest {
+        map.insert(
+            "proof_digest_hex".into(),
+            Value::from(hex::encode(proof_digest)),
+        );
+    }
+    if let Some(decision) = status.decision {
+        let (decision_label, rejection_reason) = match decision {
+            sorafs_node::PdpTerminalDecisionV1::Accepted => ("accepted", None),
+            sorafs_node::PdpTerminalDecisionV1::Rejected(reason) => {
+                let reason = match reason {
+                    sorafs_node::PdpRejectionReasonV1::DeadlineExpired => "deadline_expired",
+                    sorafs_node::PdpRejectionReasonV1::SubmissionLate => "submission_late",
+                    sorafs_node::PdpRejectionReasonV1::FutureTimestamp => "future_timestamp",
+                    sorafs_node::PdpRejectionReasonV1::InvalidProof => "invalid_proof",
+                    sorafs_node::PdpRejectionReasonV1::AdmissionRevoked => "admission_revoked",
+                    sorafs_node::PdpRejectionReasonV1::AdmissionInactive => "admission_inactive",
+                    sorafs_node::PdpRejectionReasonV1::StorageUnavailable => "storage_unavailable",
+                };
+                ("rejected", Some(reason))
+            }
+        };
+        map.insert("decision".into(), Value::from(decision_label));
+        if let Some(reason) = rejection_reason {
+            map.insert("rejection_reason".into(), Value::from(reason));
+        }
+    }
+    Value::Object(map)
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_pdp_challenge(
+    State(state): State<SharedAppState>,
+    JsonOnly(req): JsonOnly<PdpChallengeEnqueueRequestDto>,
+) -> Response {
+    let Some(protocol) = state.sorafs_node.pdp_provider_protocol() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP provider protocol is unavailable",
+        );
+    };
+    let commitment = match decode_pdp_commitment(&req.commitment_b64) {
+        Ok(commitment) => commitment,
+        Err(response) => return response,
+    };
+    let challenge = match decode_pdp_challenge(&req.challenge_b64) {
+        Ok(challenge) => challenge,
+        Err(response) => return response,
+    };
+    let admission = match state
+        .sorafs_admission
+        .as_ref()
+        .and_then(|registry| registry.entry(&challenge.provider_id))
+    {
+        Some(admission) => admission,
+        None => {
+            return json_error(
+                StatusCode::FORBIDDEN,
+                "PDP provider has no active council admission",
+            );
+        }
+    };
+    let now_unix = match system_time_to_secs(SystemTime::now(), "PDP challenge admission") {
+        Ok(now) => now,
+        Err(response) => return response,
+    };
+    let challenge_id = challenge.challenge_id;
+    match protocol.enqueue_challenge(
+        commitment,
+        challenge,
+        admission.as_ref(),
+        req.expected_epoch_id,
+        now_unix,
+    ) {
+        Ok(outcome) => {
+            let (result, sequence) = match outcome {
+                sorafs_node::PdpChallengeEnqueueOutcome::Inserted { sequence } => {
+                    ("inserted", sequence)
+                }
+                sorafs_node::PdpChallengeEnqueueOutcome::Existing { sequence } => {
+                    ("existing", sequence)
+                }
+            };
+            (
+                StatusCode::OK,
+                JsonBody(json_object(vec![
+                    json_entry("result", Value::from(result)),
+                    json_entry("sequence", Value::from(sequence)),
+                    json_entry("challenge_id_hex", Value::from(hex::encode(challenge_id))),
+                ])),
+            )
+                .into_response()
+        }
+        Err(error) => pdp_protocol_error_response(error),
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_pdp_next(
+    State(state): State<SharedAppState>,
+    JsonOnly(req): JsonOnly<PdpNextChallengeRequestDto>,
+) -> Response {
+    let provider_id = match parse_hex_fixed::<32>(&req.provider_id_hex, "provider_id_hex") {
+        Ok(provider_id) => provider_id,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    if state
+        .sorafs_admission
+        .as_ref()
+        .and_then(|registry| registry.entry(&provider_id))
+        .is_none()
+    {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "PDP provider has no active council admission",
+        );
+    }
+    let Some(protocol) = state.sorafs_node.pdp_provider_protocol() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP provider protocol is unavailable",
+        );
+    };
+    let now_unix = match system_time_to_secs(SystemTime::now(), "PDP next challenge") {
+        Ok(now) => now,
+        Err(response) => return response,
+    };
+    match protocol.next_challenge(provider_id, now_unix) {
+        Ok(Some(next)) => {
+            let challenge_b64 = match norito::to_bytes(&next.challenge) {
+                Ok(bytes) => BASE64_STANDARD.encode(bytes),
+                Err(error) => {
+                    error!(?error, "failed to encode PDP next challenge");
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to encode PDP next challenge",
+                    );
+                }
+            };
+            (
+                StatusCode::OK,
+                JsonBody(json_object(vec![
+                    json_entry("sequence", Value::from(next.sequence)),
+                    json_entry(
+                        "challenge_id_hex",
+                        Value::from(hex::encode(next.challenge.challenge_id)),
+                    ),
+                    json_entry("challenge_b64", Value::from(challenge_b64)),
+                    json_entry("enqueued_at_unix", Value::from(next.enqueued_at_unix)),
+                ])),
+            )
+                .into_response()
+        }
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => pdp_protocol_error_response(error),
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_pdp_proof(
+    State(state): State<SharedAppState>,
+    JsonOnly(req): JsonOnly<PdpProofSubmitRequestDto>,
+) -> Response {
+    let challenge_id = match parse_hex_fixed::<32>(&req.challenge_id_hex, "challenge_id_hex") {
+        Ok(challenge_id) => challenge_id,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    let Some(protocol) = state.sorafs_node.pdp_provider_protocol() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP provider protocol is unavailable",
+        );
+    };
+    let challenge_status = match protocol.challenge_status(&challenge_id) {
+        Ok(Some(status)) => status,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "PDP challenge was not found"),
+        Err(error) => return pdp_protocol_error_response(error),
+    };
+    let now_unix = match system_time_to_secs(SystemTime::now(), "PDP proof submission") {
+        Ok(now) => now,
+        Err(response) => return response,
+    };
+    let admission = match state
+        .sorafs_admission
+        .as_ref()
+        .and_then(|registry| registry.entry(&challenge_status.provider_id))
+    {
+        Some(admission) => admission,
+        None => {
+            return match protocol.reject_revoked(challenge_id, now_unix, &state.sorafs_node) {
+                Ok(_) => match protocol.challenge_status(&challenge_id) {
+                    Ok(Some(status)) => {
+                        (StatusCode::OK, JsonBody(pdp_status_json(status))).into_response()
+                    }
+                    Ok(None) => json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "PDP challenge disappeared after admission revocation",
+                    ),
+                    Err(error) => pdp_protocol_error_response(error),
+                },
+                Err(error) => pdp_protocol_error_response(error),
+            };
+        }
+    };
+    // The explicit challenge identity is authenticated before decoding proof
+    // material. Even invalid base64 or an oversized proof is represented by a
+    // bounded malformed byte slice so the protocol can durably reject the
+    // named challenge and enqueue its authoritative repair.
+    let proof_bytes = match decode_bounded_pdp_base64(
+        &req.proof_b64,
+        PDP_PROOF_MAX_CANONICAL_BYTES_V1,
+        "proof_b64",
+    ) {
+        Ok(bytes) => bytes,
+        Err(_) => Vec::new(),
+    };
+    match protocol.submit_proof_for_challenge_bytes(
+        challenge_id,
+        &proof_bytes,
+        admission.as_ref(),
+        now_unix,
+        &state.sorafs_node,
+    ) {
+        Ok(_) => match protocol.challenge_status(&challenge_id) {
+            Ok(Some(status)) => (StatusCode::OK, JsonBody(pdp_status_json(status))).into_response(),
+            Ok(None) => json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "PDP challenge disappeared after proof submission",
+            ),
+            Err(error) => pdp_protocol_error_response(error),
+        },
+        Err(
+            sorafs_node::PdpProviderProtocolError::AdmissionInactive
+            | sorafs_node::PdpProviderProtocolError::UnauthorizedProviderKey,
+        ) => match protocol.reject_revoked(challenge_id, now_unix, &state.sorafs_node) {
+            Ok(_) => match protocol.challenge_status(&challenge_id) {
+                Ok(Some(status)) => {
+                    (StatusCode::OK, JsonBody(pdp_status_json(status))).into_response()
+                }
+                Ok(None) => json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "PDP challenge disappeared after admission rotation",
+                ),
+                Err(error) => pdp_protocol_error_response(error),
+            },
+            Err(error) => pdp_protocol_error_response(error),
+        },
+        Err(error) => pdp_protocol_error_response(error),
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_pdp_status(
+    State(state): State<SharedAppState>,
+    JsonOnly(req): JsonOnly<PdpChallengeStatusRequestDto>,
+) -> Response {
+    let challenge_id = match parse_hex_fixed::<32>(&req.challenge_id_hex, "challenge_id_hex") {
+        Ok(challenge_id) => challenge_id,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    let Some(protocol) = state.sorafs_node.pdp_provider_protocol() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP provider protocol is unavailable",
+        );
+    };
+    match protocol.challenge_status(&challenge_id) {
+        Ok(Some(status)) => (StatusCode::OK, JsonBody(pdp_status_json(status))).into_response(),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "PDP challenge was not found"),
+        Err(error) => pdp_protocol_error_response(error),
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_pdp_export(
+    State(state): State<SharedAppState>,
+    JsonOnly(req): JsonOnly<PdpStatusExportRequestDto>,
+) -> Response {
+    let limit = req.limit.unwrap_or(100);
+    let limit = match usize::try_from(limit) {
+        Ok(limit) => limit,
+        Err(_) => {
+            return json_error(StatusCode::BAD_REQUEST, "PDP export limit is invalid");
+        }
+    };
+    let Some(protocol) = state.sorafs_node.pdp_provider_protocol() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP provider protocol is unavailable",
+        );
+    };
+    match protocol.export_statuses(req.after_sequence.unwrap_or(0), limit) {
+        Ok(statuses) => {
+            let next_sequence = statuses
+                .last()
+                .map_or(req.after_sequence.unwrap_or(0), |status| status.sequence);
+            (
+                StatusCode::OK,
+                JsonBody(json_object(vec![
+                    json_entry(
+                        "items",
+                        Value::Array(statuses.into_iter().map(pdp_status_json).collect()),
+                    ),
+                    json_entry("next_sequence", Value::from(next_sequence)),
+                ])),
+            )
+                .into_response()
+        }
+        Err(error) => pdp_protocol_error_response(error),
+    }
+}
+
+#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_proof_stream(
     State(state): State<SharedAppState>,
     JsonOnly(req): JsonOnly<ProofStreamRequestDto>,
@@ -28315,17 +29063,10 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
         None => {
             return json_error(
                 StatusCode::BAD_REQUEST,
-                "unsupported proof_kind; expected `por` or `potr`",
+                "unsupported proof_kind; expected `por`, `pdp`, or `potr`",
             );
         }
     };
-
-    if matches!(proof_kind, ProofStreamKind::Pdp) {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "unsupported proof_kind; expected `por` or `potr`",
-        );
-    }
 
     let nonce = match decode_nonce(&req.nonce_b64) {
         Ok(nonce) => nonce,
@@ -28357,11 +29098,21 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
         Ok(id) => id,
         Err(err) => return json_error(StatusCode::BAD_REQUEST, &err),
     };
+    let challenge_id = match req
+        .challenge_id_hex
+        .as_ref()
+        .map(|value| parse_hex_fixed::<32>(value, "challenge_id_hex"))
+        .transpose()
+    {
+        Ok(challenge_id) => challenge_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, &err),
+    };
 
     let request = ProofStreamRequestV1 {
         manifest_digest,
         provider_id,
         proof_kind,
+        challenge_id,
         sample_count: req.sample_count,
         deadline_ms: req.deadline_ms,
         sample_seed: req.sample_seed,
@@ -28528,9 +29279,22 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
             });
 
             let receipts =
-                state
+                match state
                     .sorafs_node
-                    .potr_receipts(&manifest_digest, &provider_id, request.tier);
+                    .potr_receipts(&manifest_digest, &provider_id, request.tier)
+                {
+                    Ok(receipts) => receipts,
+                    Err(err) => {
+                        error!(?err, "failed to read durable PoTR receipts");
+                        state.telemetry.with_metrics(|metrics| {
+                            metrics.dec_sorafs_proof_stream_inflight("potr");
+                        });
+                        return json_error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "failed to read durable PoTR receipts",
+                        );
+                    }
+                };
 
             let orchestrator_job_hex = req
                 .orchestrator_job_id_hex
@@ -28678,10 +29442,74 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 .body(body)
                 .unwrap()
         }
-        ProofStreamKind::Pdp => json_error(
-            StatusCode::BAD_REQUEST,
-            "unsupported proof_kind; expected `por` or `potr`",
-        ),
+        ProofStreamKind::Pdp => {
+            let challenge_id = request
+                .challenge_id
+                .expect("validation guarantees challenge id for PDP");
+            let protocol = match state.sorafs_node.pdp_provider_protocol() {
+                Some(protocol) => protocol,
+                None => {
+                    return json_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "PDP provider protocol is unavailable",
+                    );
+                }
+            };
+            let status = match protocol.challenge_status(&challenge_id) {
+                Ok(Some(status)) => status,
+                Ok(None) => {
+                    return json_error(StatusCode::NOT_FOUND, "PDP challenge was not found");
+                }
+                Err(err) => {
+                    error!(?err, "failed to read PDP challenge status");
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to read PDP challenge status",
+                    );
+                }
+            };
+            if status.manifest_digest != manifest_digest || status.provider_id != provider_id {
+                return json_error(
+                    StatusCode::FORBIDDEN,
+                    "PDP challenge does not match the requested provider and manifest",
+                );
+            }
+            let lifecycle = match status.lifecycle {
+                sorafs_node::PdpChallengeLifecycleV1::Pending => "pending",
+                sorafs_node::PdpChallengeLifecycleV1::HandoffPending => "handoff_pending",
+                sorafs_node::PdpChallengeLifecycleV1::Terminal => "terminal",
+            };
+            let mut map = Map::new();
+            map.insert("proof_kind".into(), Value::from("pdp"));
+            map.insert("sequence".into(), Value::from(status.sequence));
+            map.insert(
+                "challenge_id_hex".into(),
+                Value::from(hex::encode(status.challenge_id)),
+            );
+            map.insert("lifecycle".into(), Value::from(lifecycle));
+            map.insert("epoch_id".into(), Value::from(status.epoch_id));
+            if let Some(deadline) = status.response_deadline_unix {
+                map.insert("response_deadline_unix".into(), Value::from(deadline));
+            }
+            if let Some(digest) = status.proof_digest {
+                map.insert("proof_digest_hex".into(), Value::from(hex::encode(digest)));
+            }
+            if let Some(decision) = status.decision {
+                let decision = match decision {
+                    sorafs_node::PdpTerminalDecisionV1::Accepted => "accepted",
+                    sorafs_node::PdpTerminalDecisionV1::Rejected(_) => "rejected",
+                };
+                map.insert("decision".into(), Value::from(decision));
+            }
+            let mut rendered =
+                json::to_vec(&Value::Object(map)).expect("serialize PDP proof status");
+            rendered.push(b'\n');
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/x-ndjson")
+                .body(Body::from(rendered))
+                .unwrap()
+        }
     }
 }
 
@@ -29984,10 +30812,28 @@ fn request_error_message(error: ProofStreamRequestError) -> Cow<'static, str> {
         }
         ProofStreamRequestError::InvalidNonce => Cow::Borrowed("nonce must be non-zero"),
         ProofStreamRequestError::MissingSampleCount => {
-            Cow::Borrowed("sample_count is required for PoR/PDP proof kinds")
+            Cow::Borrowed("sample_count is required when requesting PoR proofs")
+        }
+        ProofStreamRequestError::UnexpectedSampleCount => {
+            Cow::Borrowed("sample_count is only valid when requesting PoR proofs")
+        }
+        ProofStreamRequestError::MissingChallengeId => {
+            Cow::Borrowed("challenge_id_hex is required when requesting PDP proofs")
+        }
+        ProofStreamRequestError::InvalidChallengeId => {
+            Cow::Borrowed("challenge_id_hex must be non-zero")
+        }
+        ProofStreamRequestError::UnexpectedChallengeId => {
+            Cow::Borrowed("challenge_id_hex is only valid when requesting PDP proofs")
         }
         ProofStreamRequestError::MissingDeadlineMs => {
             Cow::Borrowed("deadline_ms is required when requesting PoTR proofs")
+        }
+        ProofStreamRequestError::UnexpectedDeadlineMs => {
+            Cow::Borrowed("deadline_ms is only valid when requesting PoTR proofs")
+        }
+        ProofStreamRequestError::UnexpectedSampleSeed => {
+            Cow::Borrowed("sample_seed is only valid when requesting PoR proofs")
         }
         ProofStreamRequestError::ZeroSampleCount => {
             Cow::Borrowed("sample_count must be greater than zero")
@@ -31046,9 +31892,14 @@ mod advert_tests {
             moderation::{
                 ADVERSARIAL_CORPUS_VERSION_V1, AdversarialCorpusManifestV1,
                 AdversarialPerceptualFamilyV1, AdversarialPerceptualVariantV1,
-                MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationModelFingerprintV1,
-                ModerationReproBodyV1, ModerationReproManifestV1, ModerationReproSignatureV1,
-                ModerationSeedMaterialV1, ModerationThresholdsV1,
+                MODERATION_REPRO_MANIFEST_VERSION_V1, MODERATION_SIGNED_RESULT_VERSION_V1,
+                MODERATION_TRUST_POLICY_VERSION_V1, ModerationModelFingerprintV1,
+                ModerationModelScoreV1, ModerationReproBodyV1, ModerationReproManifestV1,
+                ModerationReproSignatureV1, ModerationSeedMaterialV1,
+                ModerationSignedScreeningBodyV1, ModerationSignedScreeningResultV1,
+                ModerationThresholdsV1, ModerationTrustPolicyBodyV1,
+                ModerationTrustPolicySignatureV1, ModerationTrustPolicyV1,
+                ModerationTrustedSignerV1,
             },
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasRecord, ManifestDigest,
@@ -31091,10 +31942,10 @@ mod advert_tests {
             POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, PorReportIsoWeek,
             derive_challenge_id, derive_challenge_seed,
         },
-        potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus},
+        potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus, sign_potr_receipt_v1},
         proof_stream::ProofStreamTier,
     };
-    use sorafs_node::config::StorageConfig;
+    use sorafs_node::{ModerationQuarantineKeyWrapper, config::StorageConfig};
     use std::collections::{BTreeMap, HashSet};
     use tempfile::{NamedTempFile, TempDir};
     use tokio::net::TcpListener;
@@ -34660,6 +35511,29 @@ mod advert_tests {
         (app, temp_dir, auth)
     }
 
+    fn sorafs_app_state_with_orderbook_auth_without_screening_authority()
+    -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+        let auth = orderbook_auth_fixture();
+        let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .build();
+        let node = sorafs_node::NodeHandle::try_new_with_quarantine_key_wrapper(
+            cfg,
+            torii_test_quarantine_key_wrapper(),
+        )
+        .expect("initialise test node without screening authority");
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir, auth)
+    }
+
     fn sorafs_app_state_with_moderation_operator_auth()
     -> (SharedAppState, TempDir, OrderbookAuthFixture) {
         let auth = orderbook_auth_fixture();
@@ -34774,6 +35648,7 @@ mod advert_tests {
                 cycle_seconds: 100,
                 publish_delay_seconds: 10,
             }))
+            .privacy_aggregate_policy(Some(privacy_aggregate_api_policy_config()))
             .build();
         let node = sorafs_node::NodeHandle::new(cfg);
         assert!(node.has_governance_publisher());
@@ -34894,6 +35769,7 @@ mod advert_tests {
             occurred_at_unix,
             population_label: "jurisdiction-a".to_string(),
             population_digest_hex: Some(hex::encode([0xA0; 32])),
+            subject_digest_hex: hex::encode(blake3::hash(event_id.as_bytes()).as_bytes()),
             metrics: vec![
                 TransparencyPrivacyAggregateSourceMetricDto {
                     key: "appeals_upheld".to_string(),
@@ -34923,19 +35799,7 @@ mod advert_tests {
     ) -> TransparencyPrivacyAggregatePublishDueRequestDto {
         TransparencyPrivacyAggregatePublishDueRequestDto {
             now_unix,
-            aggregate_id_prefix: "torii-source".to_string(),
-            privacy_mode: "suppression".to_string(),
-            epsilon_micros: None,
-            delta_ppb: None,
-            noise_scale_micros: None,
-            suppression_threshold: Some(1),
-            noise_seed_hex: None,
-            policy_digest_hex: Some(hex::encode([0xC0; 32])),
             previous_block_hash_hex: None,
-            metadata: Some(vec![TransparencyLedgerMetadataDto {
-                key: "publisher".to_string(),
-                value: "torii".to_string(),
-            }]),
         }
     }
 
@@ -34954,16 +35818,32 @@ mod advert_tests {
                 version:
                     iroha_data_model::sorafs::transparency::MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                 mode: iroha_data_model::sorafs::transparency::ModerationPrivacyModeV1::Suppression,
-                epsilon_micros: None,
+                epsilon_numerator: None,
+                epsilon_denominator: None,
                 delta_ppb: None,
-                noise_scale_micros: None,
+                per_subject_metric_cap: None,
                 suppression_threshold: Some(1),
                 suppressed_count: 0,
             },
-            noise_seed: None,
             policy_digest: Some([0xC0; 32]),
             metadata: Vec::new(),
         }
+    }
+
+    fn privacy_aggregate_api_policy_config() -> sorafs_node::config::PrivacyAggregatePolicyConfig {
+        let cycle = privacy_aggregate_api_cycle_config();
+        sorafs_node::config::PrivacyAggregatePolicyConfig::new(
+            cycle.aggregate_id_prefix,
+            cycle.privacy,
+            cycle.policy_digest.expect("privacy API test policy digest"),
+            sorafs_node::PrivacyCompositionBudgetPolicyV1 {
+                budget_id: [0xC0; 32],
+                epsilon_limit_numerator: 10,
+                epsilon_limit_denominator: 1,
+                max_publications: 10,
+            },
+        )
+        .expect("privacy API test policy")
     }
 
     fn appeal_finance_weekly_rollup_body(rollup: SoraFsAppealFinanceWeeklyRollupV1) -> Bytes {
@@ -36910,30 +37790,6 @@ mod advert_tests {
             Some(1)
         );
         assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 1);
-
-        let publication = app
-            .sorafs_node
-            .publish_privacy_aggregate_cycle_from_source_events(
-                *b"cycle-prv-api001",
-                1_800_000_000,
-                1_800_604_800,
-                1_800_604_801,
-                None,
-                privacy_aggregate_api_cycle_config(),
-            )
-            .expect("publish privacy aggregate cycle from API source event");
-        assert_eq!(publication.block.entry_count, 1);
-        assert_eq!(publication.proofs.len(), 1);
-        assert_eq!(
-            publication.proofs[0].entry.kind,
-            ModerationLedgerEntryKindV1::PrivacyAggregate
-        );
-        assert!(
-            publication.proofs[0]
-                .entry
-                .subject
-                .contains("jurisdiction-a")
-        );
     }
 
     #[tokio::test]
@@ -36950,6 +37806,51 @@ mod advert_tests {
             post_privacy_aggregate_source_event(app.clone(), &auth.provider, body).await;
         assert_eq!(duplicate.status(), StatusCode::CONFLICT);
         assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 1);
+    }
+
+    #[test]
+    fn privacy_aggregate_source_event_requires_subject_digest() {
+        let body = norito::json::to_vec(&norito::json!({
+            "event_id": "privacy-event-a",
+            "occurred_at_unix": 1_800_000_010_u64,
+            "population_label": "jurisdiction-a",
+            "metrics": [
+                {"key": "appeals_upheld", "value": 1_u64, "unit": "count"}
+            ],
+        }))
+        .expect("encode source event without subject digest");
+
+        let response = privacy_aggregate_source_event_from_body(&body)
+            .expect_err("missing subject digest must be rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn privacy_aggregate_publish_due_rejects_caller_supplied_policy() {
+        let body = norito::json::to_vec(&norito::json!({
+            "now_unix": 211_u64,
+            "aggregate_id_prefix": "legacy-caller-policy",
+            "privacy_mode": "suppression",
+            "suppression_threshold": 1_u64,
+        }))
+        .expect("encode retired publish-due policy fields");
+
+        let response = privacy_aggregate_publish_due_request_from_body(&body)
+            .expect_err("caller-supplied privacy policy must be rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn privacy_aggregate_publish_due_rejects_caller_supplied_prf_output() {
+        let body = norito::json::to_vec(&norito::json!({
+            "now_unix": 211_u64,
+            "cycle_prf_output_hex": ("5a".repeat(32)),
+        }))
+        .expect("encode retired caller PRF field");
+
+        let response = privacy_aggregate_publish_due_request_from_body(&body)
+            .expect_err("caller-supplied PRF output must be rejected as an unknown field");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -37005,7 +37906,7 @@ mod advert_tests {
             value
                 .get("retained_source_event_count")
                 .and_then(Value::as_u64),
-            Some(1)
+            Some(0)
         );
         let window = value
             .get("window")
@@ -37139,6 +38040,7 @@ mod advert_tests {
             vec![
                 CapabilityType::ToriiGateway,
                 CapabilityType::ChunkRangeFetch,
+                CapabilityType::PotrMlDsa,
             ],
             Arc::new(admission),
         );
@@ -38185,6 +39087,98 @@ mod advert_tests {
         }
     }
 
+    fn moderation_screening_test_material() -> (
+        ModerationReproManifestV1,
+        ModerationTrustPolicyV1,
+        KeyPair,
+        BTreeSet<PublicKey>,
+    ) {
+        let manifest_key =
+            KeyPair::try_from_seed(vec![0xA8; 32], Algorithm::Ed25519).expect("manifest key");
+        let governance_key =
+            KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519).expect("governance key");
+        let runner_key =
+            KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519).expect("runner key");
+        let mut body = ModerationReproBodyV1 {
+            schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
+            manifest_id: [0x57; 16],
+            manifest_digest: [0; 32],
+            runner_hash: [0x67; 32],
+            runtime_version: "sorafs-ai-runner test-auth-v1".to_owned(),
+            issued_at_unix: 1_700_000_000,
+            seed_material: ModerationSeedMaterialV1 {
+                domain_tag: "sfm4a:test-auth".to_owned(),
+                seed_version: 1,
+                run_nonce: [0x44; 32],
+            },
+            thresholds: ModerationThresholdsV1 {
+                quarantine: 6_000,
+                escalate: 8_500,
+            },
+            models: vec![ModerationModelFingerprintV1 {
+                model_id: [0x55; 16],
+                artifact_path: "models/model-55.norito".to_owned(),
+                artifact_bytes: 1,
+                artifact_digest: [0x66; 32],
+                weights_digest: [0x77; 32],
+                engine: iroha_data_model::sorafs::moderation::ModerationModelEngineV1::DeterministicLinearV1,
+                feature_profile: iroha_data_model::sorafs::moderation::ModerationFeatureProfileV1::ByteHistogramAndBigramV1,
+                calibration_knot_count: 2,
+                max_input_bytes: 1024,
+                max_operations: 3073,
+                working_memory_bytes: 4096,
+                weight: Some(10_000),
+            }],
+            notes: Some("authenticated screening API fixture".to_owned()),
+        };
+        body.refresh_manifest_digest().expect("manifest digest");
+        let manifest = ModerationReproManifestV1 {
+            signatures: vec![ModerationReproSignatureV1 {
+                role: "council".to_owned(),
+                public_key: manifest_key.public_key().clone(),
+                signature: SignatureOf::try_new(manifest_key.private_key(), &body)
+                    .expect("sign manifest"),
+            }],
+            body,
+        };
+        let mut policy_body = ModerationTrustPolicyBodyV1 {
+            schema_version: MODERATION_TRUST_POLICY_VERSION_V1,
+            policy_id: [0xB1; 16],
+            policy_digest: [0; 32],
+            manifest_id: manifest.body.manifest_id,
+            manifest_digest: manifest.body.manifest_digest,
+            runner_hash: manifest.body.runner_hash,
+            issued_at_unix: 1_700_000_100,
+            valid_from_unix: 1_700_000_100,
+            valid_until_unix: 2_000_000_000,
+            result_quorum: 1,
+            governance_quorum: 1,
+            max_result_age_secs: 3_600,
+            max_result_ttl_secs: 600,
+            max_clock_skew_secs: 30,
+            trusted_signers: vec![ModerationTrustedSignerV1 {
+                role: "runner".to_owned(),
+                public_key: runner_key.public_key().clone(),
+                valid_from_unix: 1_700_000_100,
+                valid_until_unix: 2_000_000_000,
+                revoked_at_unix: None,
+            }],
+            notes: None,
+        };
+        policy_body.refresh_policy_digest().expect("policy digest");
+        let policy = ModerationTrustPolicyV1 {
+            signatures: vec![ModerationTrustPolicySignatureV1 {
+                role: "governance".to_owned(),
+                public_key: governance_key.public_key().clone(),
+                signature: SignatureOf::try_new(governance_key.private_key(), &policy_body)
+                    .expect("sign trust policy"),
+            }],
+            body: policy_body,
+        };
+        let anchors = BTreeSet::from([governance_key.public_key().clone()]);
+        (manifest, policy, runner_key, anchors)
+    }
+
     fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
         AdversarialCorpusManifestV1 {
             schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
@@ -38221,26 +39215,20 @@ mod advert_tests {
     fn moderation_screening_result_body(
         subject: &str,
         subject_digest_byte: u8,
-        manifest_id_byte: u8,
-        runner_hash_byte: u8,
+        _manifest_id_byte: u8,
+        _runner_hash_byte: u8,
         combined_score_bps: u16,
         verdict: &str,
         screened_at_unix: u64,
     ) -> Bytes {
-        Bytes::from(
-            norito::json::to_vec(&ModerationScreeningResultRequestDto {
-                subject: subject.to_owned(),
-                subject_digest_hex: hex::encode([subject_digest_byte; 32]),
-                manifest_id_hex: hex::encode([manifest_id_byte; 16]),
-                runner_hash_hex: hex::encode([runner_hash_byte; 32]),
-                combined_score_bps,
-                verdict: verdict.to_owned(),
-                screened_at_unix: Some(screened_at_unix),
-                evidence_digest_hex: Some(hex::encode([0xE4; 32])),
-                policy_digest_hex: Some(hex::encode([0xC7; 32])),
-                notes: Some("local screening API fixture".to_owned()),
-            })
-            .expect("encode screening result request"),
+        moderation_screening_result_body_with_subject_digest(
+            subject,
+            hex::encode([subject_digest_byte; 32]),
+            0,
+            0,
+            combined_score_bps,
+            verdict,
+            screened_at_unix,
         )
     }
 
@@ -38327,24 +39315,70 @@ mod advert_tests {
     fn moderation_screening_result_body_with_subject_digest(
         subject: &str,
         subject_digest_hex: String,
-        manifest_id_byte: u8,
-        runner_hash_byte: u8,
+        _manifest_id_byte: u8,
+        _runner_hash_byte: u8,
         combined_score_bps: u16,
         verdict: &str,
         screened_at_unix: u64,
     ) -> Bytes {
+        let (manifest, policy, runner_key, _) = moderation_screening_test_material();
+        let screened_at_unix_now = iroha_network_time_now_ms() / 1_000;
+        let expected_verdict = if combined_score_bps >= manifest.body.thresholds.escalate {
+            "escalate"
+        } else if combined_score_bps >= manifest.body.thresholds.quarantine {
+            "quarantine"
+        } else {
+            "pass"
+        };
+        assert_eq!(verdict, expected_verdict);
+        let mut signed_body = ModerationSignedScreeningBodyV1 {
+            schema_version: MODERATION_SIGNED_RESULT_VERSION_V1,
+            manifest_id: manifest.body.manifest_id,
+            manifest_digest: manifest.body.manifest_digest,
+            runner_hash: manifest.body.runner_hash,
+            trust_policy_id: policy.body.policy_id,
+            trust_policy_digest: policy.body.policy_digest,
+            subject: subject.to_owned(),
+            subject_digest: parse_hex_fixed::<32>(&subject_digest_hex, "subject_digest_hex")
+                .expect("fixture subject digest"),
+            model_scores: vec![ModerationModelScoreV1 {
+                model_id: manifest.body.models[0].model_id,
+                artifact_digest: manifest.body.models[0].artifact_digest,
+                score_bps: combined_score_bps,
+            }],
+            combined_score_bps,
+            verdict: verdict.to_owned(),
+            screened_at_unix: screened_at_unix_now,
+            expires_at_unix: screened_at_unix_now + 300,
+            policy_digest: manifest
+                .body
+                .computed_screening_policy_digest()
+                .expect("screening policy digest"),
+            evidence_digest: [0; 32],
+            notes: Some("authenticated screening API fixture".to_owned()),
+        };
+        signed_body
+            .refresh_evidence_digest()
+            .expect("evidence digest");
+        let signed_result = ModerationSignedScreeningResultV1 {
+            signer_public_key: runner_key.public_key().clone(),
+            signature: SignatureOf::try_new(runner_key.private_key(), &signed_body)
+                .expect("sign screening result"),
+            body: signed_body,
+        };
+        let mut idempotency_hasher = blake3::Hasher::new();
+        idempotency_hasher.update(b"sorafs.torii.test.screening.idempotency.v1");
+        idempotency_hasher.update(subject.as_bytes());
+        idempotency_hasher.update(&screened_at_unix.to_le_bytes());
+        idempotency_hasher.update(&combined_score_bps.to_le_bytes());
+        let authority_b64 = BASE64_STANDARD
+            .encode(norito::to_bytes(&signed_result).expect("encode signed screening result"));
         Bytes::from(
             norito::json::to_vec(&ModerationScreeningResultRequestDto {
-                subject: subject.to_owned(),
-                subject_digest_hex,
-                manifest_id_hex: hex::encode([manifest_id_byte; 16]),
-                runner_hash_hex: hex::encode([runner_hash_byte; 32]),
-                combined_score_bps,
-                verdict: verdict.to_owned(),
-                screened_at_unix: Some(screened_at_unix),
-                evidence_digest_hex: Some(hex::encode([0xE4; 32])),
-                policy_digest_hex: Some(hex::encode([0xC7; 32])),
-                notes: Some("local screening API fixture".to_owned()),
+                idempotency_key_hex: hex::encode(idempotency_hasher.finalize().as_bytes()),
+                evidence_kind: "signed_result".to_owned(),
+                authority_b64,
+                committee_member_results_b64: Vec::new(),
             })
             .expect("encode screening result request"),
         )
@@ -38356,7 +39390,7 @@ mod advert_tests {
                 payload_b64: BASE64_STANDARD.encode(payload),
                 captured_at_unix: Some(captured_at_unix),
                 content_type: Some("application/octet-stream".to_owned()),
-                notes: Some("object endpoint fixture".to_owned()),
+                notes: None,
             })
             .expect("encode quarantine object request"),
         )
@@ -40924,7 +41958,7 @@ mod advert_tests {
             norito::json::from_slice(&body_bytes).expect("decode screening quarantine body");
         assert_eq!(
             value.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.screening_result.ingest.v1")
+            Some("sorafs.moderation.screening_result.authenticated_ingest.v1")
         );
         assert_eq!(
             value
@@ -40980,6 +42014,12 @@ mod advert_tests {
         );
         assert_eq!(
             value.get("screening_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("authenticated_admission_count")
+                .and_then(Value::as_u64),
             Some(2)
         );
         assert_eq!(
@@ -41047,6 +42087,108 @@ mod advert_tests {
             quarantines[0].get("state").and_then(Value::as_str),
             Some("pending_review")
         );
+    }
+
+    #[tokio::test]
+    async fn moderation_screening_authenticated_ingest_is_idempotent_and_replay_safe() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let request_body = moderation_screening_result_body(
+            "bafy-authenticated-replay",
+            0x47,
+            0x57,
+            0x67,
+            7_250,
+            "quarantine",
+            1_800_000_120,
+        );
+
+        let response =
+            post_moderation_screening_result(app.clone(), &auth.provider, request_body.clone())
+                .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let first_body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect first authenticated screening response");
+        let first_value: Value =
+            norito::json::from_slice(&first_body).expect("decode first screening response");
+        let first_receipt_digest = first_value
+            .get("admission")
+            .and_then(|admission| admission.get("receipt_digest_hex"))
+            .and_then(Value::as_str)
+            .expect("first receipt digest")
+            .to_owned();
+
+        let response =
+            post_moderation_screening_result(app.clone(), &auth.provider, request_body.clone())
+                .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let retry_body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect idempotent authenticated screening response");
+        let retry_value: Value =
+            norito::json::from_slice(&retry_body).expect("decode idempotent screening response");
+        assert_eq!(
+            retry_value
+                .get("admission")
+                .and_then(|admission| admission.get("receipt_digest_hex"))
+                .and_then(Value::as_str),
+            Some(first_receipt_digest.as_str())
+        );
+
+        let mut replay_request: ModerationScreeningResultRequestDto =
+            norito::json::from_slice(request_body.as_ref()).expect("decode screening request");
+        replay_request.idempotency_key_hex = "48".repeat(32);
+        let replay_body = Bytes::from(
+            norito::json::to_vec(&replay_request).expect("encode replay screening request"),
+        );
+        let response = post_moderation_screening_result(app, &auth.provider, replay_body).await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn moderation_screening_authenticated_ingest_rejects_tampering_and_missing_authority() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let request_body = moderation_screening_result_body(
+            "bafy-authenticated-tamper",
+            0x49,
+            0x59,
+            0x69,
+            7_250,
+            "quarantine",
+            1_800_000_121,
+        );
+        let mut tampered_request: ModerationScreeningResultRequestDto =
+            norito::json::from_slice(request_body.as_ref()).expect("decode screening request");
+        let mut authority = BASE64_STANDARD
+            .decode(tampered_request.authority_b64.as_bytes())
+            .expect("decode signed authority");
+        let final_byte = authority
+            .last_mut()
+            .expect("signed screening authority is non-empty");
+        *final_byte ^= 1;
+        tampered_request.authority_b64 = BASE64_STANDARD.encode(authority);
+        let tampered_body = Bytes::from(
+            norito::json::to_vec(&tampered_request).expect("encode tampered screening request"),
+        );
+        let response = post_moderation_screening_result(app, &auth.provider, tampered_body).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth_without_screening_authority();
+        let response = post_moderation_screening_result(
+            app,
+            &auth.provider,
+            moderation_screening_result_body(
+                "bafy-authenticated-no-authority",
+                0x4A,
+                0x5A,
+                0x6A,
+                1_250,
+                "pass",
+                1_800_000_122,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
@@ -41598,6 +42740,29 @@ mod advert_tests {
         )
         .await;
 
+        let private_note = "SECRET-PRIVATE-OBJECT-NOTE-DO-NOT-EMIT";
+        let private_note_body = Bytes::from(
+            norito::json::to_vec(&ModerationQuarantineObjectStoreRequestDto {
+                payload_b64: BASE64_STANDARD.encode(payload),
+                captured_at_unix: Some(1_800_000_310),
+                content_type: Some("application/octet-stream".to_owned()),
+                notes: Some(private_note.to_owned()),
+            })
+            .expect("encode forbidden plaintext-note request"),
+        );
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            private_note_body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error_body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect plaintext-note rejection");
+        assert!(!String::from_utf8_lossy(&error_body).contains(private_note));
+
         let response = post_moderation_quarantine_object(
             app.clone(),
             &auth.provider,
@@ -41635,10 +42800,7 @@ mod advert_tests {
             record.get("content_type").and_then(Value::as_str),
             Some("application/octet-stream")
         );
-        assert_eq!(
-            record.get("notes").and_then(Value::as_str),
-            Some("object endpoint fixture")
-        );
+        assert!(record.get("notes").is_none());
         assert_eq!(
             record
                 .get("object_id_hex")
@@ -41653,6 +42815,18 @@ mod advert_tests {
                 .map(str::len),
             Some(64)
         );
+        assert_eq!(
+            record
+                .get("nonce_prefix_hex")
+                .and_then(Value::as_str)
+                .map(str::len),
+            Some(16)
+        );
+        assert_eq!(
+            record.get("chunk_plaintext_bytes").and_then(Value::as_u64),
+            Some(64 * 1024)
+        );
+        assert_eq!(record.get("chunk_count").and_then(Value::as_u64), Some(1));
         assert!(
             record
                 .get("envelope_path")
@@ -45500,7 +46674,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn proof_stream_rejects_pdp_as_bad_request() {
+    async fn proof_stream_rejects_pdp_without_challenge_identity() {
         let mut state = mk_app_state_for_tests();
         let (node, _dir) = sorafs_node_with_temp_storage();
         Arc::get_mut(&mut state)
@@ -45508,13 +46682,14 @@ mod advert_tests {
             .sorafs_node = node;
 
         let request = ProofStreamRequestDto {
-            manifest_digest_hex: "aa".to_string(),
-            provider_id_hex: "bb".to_string(),
+            manifest_digest_hex: "aa".repeat(32),
+            provider_id_hex: "bb".repeat(32),
             proof_kind: "pdp".to_string(),
-            sample_count: Some(1),
+            challenge_id_hex: None,
+            sample_count: None,
             deadline_ms: None,
             sample_seed: None,
-            nonce_b64: String::new(),
+            nonce_b64: BASE64_STANDARD.encode([0x33u8; 16]),
             orchestrator_job_id_hex: None,
             tier: None,
         };
@@ -45526,8 +46701,7 @@ mod advert_tests {
             .expect("collect response body")
             .to_bytes();
         let body_text = String::from_utf8(body_bytes.to_vec()).expect("utf8");
-        assert!(body_text.contains("unsupported proof_kind"));
-        assert!(body_text.contains("`por` or `potr`"));
+        assert!(body_text.contains("challenge_id_hex is required"));
     }
 
     #[tokio::test]
@@ -45542,6 +46716,7 @@ mod advert_tests {
             manifest_digest_hex: "11".repeat(32),
             provider_id_hex: "22".repeat(32),
             proof_kind: "por".to_string(),
+            challenge_id_hex: None,
             sample_count: Some(MAX_PROOF_STREAM_SAMPLE_COUNT + 1),
             deadline_ms: None,
             sample_seed: None,
@@ -45576,6 +46751,26 @@ mod advert_tests {
         let provider_id = [0xBB; 32];
         let trace_id = [0x44; 16];
         let state = state;
+        let provider_fixture = make_signed_advert_for_provider(provider_id);
+        let admission_registry = fixture_admission_registry([&provider_fixture.envelope]);
+        let admission = admission_registry
+            .entry(&provider_id)
+            .expect("governed provider admission");
+        let gateway_key = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+            .expect("derive fixture gateway key");
+        let provider_key = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::MlDsa)
+            .expect("derive fixture PoTR provider key");
+        let gateway_public_key: [u8; 32] = gateway_key
+            .public_key()
+            .to_bytes()
+            .1
+            .try_into()
+            .expect("Ed25519 fixture gateway key");
+        let success_requested_at_ms = provider_fixture
+            .issued_at()
+            .saturating_add(1)
+            .saturating_mul(1_000);
+        let failure_requested_at_ms = success_requested_at_ms.saturating_add(100_000);
 
         let payload = b"proof stream manifest payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
@@ -45616,58 +46811,69 @@ mod advert_tests {
         let provider_id_hex = hex::encode(provider_id);
         let trace_id_hex = hex::encode(trace_id);
 
-        let success_receipt = PotrReceiptV1 {
-            version: POTR_RECEIPT_VERSION_V1,
-            manifest_digest,
-            provider_id,
-            tier: ProofStreamTier::Hot,
-            deadline_ms: 90_000,
-            latency_ms: 45,
-            status: PotrStatus::Success,
-            requested_at_ms: 1_700_000_000_000,
-            responded_at_ms: 1_700_000_000_045,
-            recorded_at_ms: 1_700_000_000_050,
-            range_start: 0,
-            range_end: 4_194_303,
-            request_id: None,
-            trace_id: Some(trace_id),
-            note: None,
-            gateway_signature: None,
-            provider_signature: None,
-        };
+        let success_receipt = sign_potr_receipt_v1(
+            PotrReceiptV1 {
+                version: POTR_RECEIPT_VERSION_V1,
+                manifest_digest,
+                provider_id,
+                tier: ProofStreamTier::Hot,
+                deadline_ms: 90_000,
+                latency_ms: 45,
+                status: PotrStatus::Success,
+                requested_at_ms: success_requested_at_ms,
+                responded_at_ms: success_requested_at_ms + 45,
+                recorded_at_ms: success_requested_at_ms + 50,
+                range_start: 0,
+                range_end: 4_194_303,
+                request_id: Some([0x31; 16]),
+                trace_id: Some(trace_id),
+                note: None,
+                gateway_signature: None,
+                provider_signature: None,
+            },
+            &gateway_key,
+            &provider_key,
+        )
+        .expect("sign success receipt");
         state
             .sorafs_node
-            .record_potr_receipt(success_receipt)
+            .record_potr_receipt(success_receipt, &gateway_public_key, admission.as_ref())
             .expect("record PoTR receipt");
 
-        let failure_receipt = PotrReceiptV1 {
-            version: POTR_RECEIPT_VERSION_V1,
-            manifest_digest,
-            provider_id,
-            tier: ProofStreamTier::Hot,
-            deadline_ms: 90_000,
-            latency_ms: 120,
-            status: PotrStatus::MissedDeadline,
-            requested_at_ms: 1_700_000_100_000,
-            responded_at_ms: 1_700_000_100_120,
-            recorded_at_ms: 1_700_000_500_000,
-            range_start: 0,
-            range_end: 4_194_303,
-            request_id: None,
-            trace_id: None,
-            note: None,
-            gateway_signature: None,
-            provider_signature: None,
-        };
+        let failure_receipt = sign_potr_receipt_v1(
+            PotrReceiptV1 {
+                version: POTR_RECEIPT_VERSION_V1,
+                manifest_digest,
+                provider_id,
+                tier: ProofStreamTier::Hot,
+                deadline_ms: 90_000,
+                latency_ms: 120_000,
+                status: PotrStatus::MissedDeadline,
+                requested_at_ms: failure_requested_at_ms,
+                responded_at_ms: failure_requested_at_ms + 120_000,
+                recorded_at_ms: failure_requested_at_ms + 120_050,
+                range_start: 0,
+                range_end: 4_194_303,
+                request_id: Some([0x32; 16]),
+                trace_id: None,
+                note: None,
+                gateway_signature: None,
+                provider_signature: None,
+            },
+            &gateway_key,
+            &provider_key,
+        )
+        .expect("sign missed-deadline receipt");
         state
             .sorafs_node
-            .record_potr_receipt(failure_receipt)
+            .record_potr_receipt(failure_receipt, &gateway_public_key, admission.as_ref())
             .expect("record PoTR receipt");
 
         let request = ProofStreamRequestDto {
             manifest_digest_hex: manifest_digest_hex.clone(),
             provider_id_hex: provider_id_hex.clone(),
             proof_kind: "potr".to_string(),
+            challenge_id_hex: None,
             sample_count: None,
             deadline_ms: Some(90_000),
             sample_seed: None,
@@ -45710,7 +46916,7 @@ mod advert_tests {
         );
         assert_eq!(
             first.get("recorded_at_ms").and_then(json::Value::as_u64),
-            Some(1_700_000_000_050)
+            Some(success_requested_at_ms + 50)
         );
         assert!(
             matches!(first.get("failure_reason"), Some(json::Value::Null) | None),
@@ -46503,13 +47709,111 @@ mod advert_tests {
     }
     use tokio::sync::RwLock;
 
+    #[derive(Debug)]
+    struct ToriiTestQuarantineKeyWrapper {
+        key_id: String,
+        key: [u8; 32],
+    }
+
+    impl ToriiTestQuarantineKeyWrapper {
+        fn nonce(&self, context_digest: [u8; 32]) -> [u8; 12] {
+            let mut hasher = blake3::Hasher::new_keyed(&self.key);
+            hasher.update(b"sorafs.torii.test-quarantine-wrapper.nonce.v1");
+            hasher.update(self.key_id.as_bytes());
+            hasher.update(&context_digest);
+            let mut nonce = [0_u8; 12];
+            nonce.copy_from_slice(&hasher.finalize().as_bytes()[..12]);
+            nonce
+        }
+    }
+
+    impl ModerationQuarantineKeyWrapper for ToriiTestQuarantineKeyWrapper {
+        fn active_key_id(&self) -> &str {
+            &self.key_id
+        }
+
+        fn wrap_dek(&self, context_digest: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+            use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
+
+            SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.key)
+                .map_err(|error| error.to_string())?
+                .encrypt(
+                    self.nonce(context_digest).as_slice(),
+                    context_digest.as_slice(),
+                    dek.as_slice(),
+                )
+                .map_err(|error| error.to_string())
+        }
+
+        fn unwrap_dek(
+            &self,
+            key_id: &str,
+            context_digest: [u8; 32],
+            wrapped_dek: &[u8],
+        ) -> Result<[u8; 32], String> {
+            use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
+
+            if key_id != self.key_id {
+                return Err("unknown Torii test wrapping key handle".to_owned());
+            }
+            SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.key)
+                .map_err(|error| error.to_string())?
+                .decrypt(
+                    self.nonce(context_digest).as_slice(),
+                    context_digest.as_slice(),
+                    wrapped_dek,
+                )
+                .map_err(|error| error.to_string())?
+                .try_into()
+                .map_err(|_| "unwrapped Torii test DEK is not 32 bytes".to_owned())
+        }
+    }
+
+    fn torii_test_quarantine_key_wrapper() -> Arc<dyn ModerationQuarantineKeyWrapper> {
+        Arc::new(ToriiTestQuarantineKeyWrapper {
+            key_id: "kms:test/torii-quarantine-v1".to_owned(),
+            key: [0xA6; 32],
+        })
+    }
+
     fn sorafs_node_with_temp_storage() -> (sorafs_node::NodeHandle, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let temp_root = fs::canonicalize(temp_dir.path()).expect("canonicalize temp root");
+        let (manifest, policy, _, anchors) = moderation_screening_test_material();
+        let authority_bundle = sorafs_node::ModerationScreeningAuthorityBundleV1 {
+            version: sorafs_node::MODERATION_SCREENING_AUTHORITY_BUNDLE_VERSION_V1,
+            manifest,
+            policy,
+            governance_trust_anchors: anchors.into_iter().collect(),
+            minimum_governance_quorum: 1,
+        };
+        let authority_bundle_bytes =
+            norito::to_bytes(&authority_bundle).expect("encode screening authority bundle");
+        let authority_bundle_path = temp_root.join("moderation-screening-authority.to");
+        fs::write(&authority_bundle_path, &authority_bundle_bytes)
+            .expect("write screening authority bundle");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&authority_bundle_path, fs::Permissions::from_mode(0o600))
+                .expect("secure screening authority bundle permissions");
+        }
         let cfg = StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(temp_root.join("storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(authority_bundle_path))
+            .moderation_screening_authority_bundle_digest(Some(
+                *blake3::hash(&authority_bundle_bytes).as_bytes(),
+            ))
             .build();
-        (sorafs_node::NodeHandle::new(cfg), temp_dir)
+        let node = sorafs_node::NodeHandle::try_new_with_quarantine_key_wrapper(
+            cfg,
+            torii_test_quarantine_key_wrapper(),
+        )
+        .expect("initialise test node with quarantine key wrapper");
+        (node, temp_dir)
     }
 
     fn workspace_fixture(path: &str) -> std::path::PathBuf {
@@ -46665,6 +47969,7 @@ mod advert_tests {
             vec![
                 CapabilityType::ToriiGateway,
                 CapabilityType::ChunkRangeFetch,
+                CapabilityType::PotrMlDsa,
             ],
             Arc::new(admission),
         );
@@ -54896,6 +56201,7 @@ mod advert_tests {
             vec![
                 CapabilityType::ToriiGateway,
                 CapabilityType::ChunkRangeFetch,
+                CapabilityType::PotrMlDsa,
             ],
             Arc::new(admission),
         );
@@ -54926,6 +56232,7 @@ mod advert_tests {
             vec![
                 CapabilityType::ToriiGateway,
                 CapabilityType::ChunkRangeFetch,
+                CapabilityType::PotrMlDsa,
             ],
             Arc::new(admission),
         );
@@ -54966,6 +56273,13 @@ mod advert_tests {
         provider_id: [u8; 32],
     ) -> ProviderFixture {
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
+        let potr_provider_key = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::MlDsa)
+            .expect("derive fixture PoTR provider key");
+        let (potr_algorithm, potr_provider_public_key) = potr_provider_key
+            .public_key()
+            .try_to_bytes()
+            .expect("encode fixture PoTR provider key");
+        assert_eq!(potr_algorithm, Algorithm::MlDsa);
         let stake_pool_id = [0x21; 32];
         let capabilities = vec![
             CapabilityTlv {
@@ -54983,6 +56297,10 @@ mod advert_tests {
                 }
                 .to_bytes()
                 .expect("encode range capability"),
+            },
+            CapabilityTlv {
+                cap_type: CapabilityType::PotrMlDsa,
+                payload: potr_provider_public_key.to_vec(),
             },
         ];
 

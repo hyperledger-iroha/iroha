@@ -1630,7 +1630,7 @@ TypeScript consumers do not need ambient Node types.
 Sumeragi consensus status is the authoritative protocol-v2 reducer snapshot.
 Use the typed helper for operator or automation decisions: it rejects unsupported
 protocol versions, non-canonical frozen quorums, out-of-range leaders,
-inconsistent CommitQCs, impossible queue occupancy, and missing lane arrays.
+inconsistent CommitQCs, and malformed reducer liveness state.
 
 ```js
 const status = await torii.getSumeragiStatusTyped();
@@ -1648,27 +1648,27 @@ if (status.last_commit_qc) {
   );
 }
 
-for (const block of status.committed_lane_blocks) {
+const diagnostics = await torii.getSumeragiDiagnosticsTyped();
+for (const block of diagnostics.committed_lane_blocks) {
   console.log(
     `lane ${block.lane_id} incarnation=${block.lane_incarnation} ` +
     `height=${block.lane_block_height} status=${block.execution_status}`,
   );
 }
 
-const queue = status.operator.tx_queue;
 console.log(
-  `queue=${queue.queued_transactions}/${queue.capacity} ` +
-  `bytes=${queue.retained_bytes}/${queue.max_retained_bytes}`,
+  `queue=${diagnostics.tx_queue_depth}/${diagnostics.tx_queue_capacity} ` +
+  `bytes=${diagnostics.tx_queue_retained_bytes}/` +
+  `${diagnostics.tx_queue_max_retained_bytes}`,
 );
 ```
 
-The JSON endpoint flattens the authoritative reducer fields and adds
-`lane_settlement_commitments`, `lane_relay_envelopes`,
-`lane_payload_ownerships`, `committed_lane_blocks`, `lane_block_sessions`,
-`local_peer_removed`, and `operator`. The binary Norito response uses the
-typed envelope with those same reducer fields nested under `authoritative`.
-The general `GET /v1/status` API remains a separate operational-health
-snapshot and is not parsed as consensus authority.
+`GET /v1/sumeragi/status` contains only `SumeragiV2Status`. Bounded lane
+evidence, queue pressure, governance readiness, and Native AMX participant
+applications live on `GET /v1/sumeragi/diagnostics`; they are parsed by the
+separate `getSumeragiDiagnosticsTyped()` helper and are not consensus
+authority. The general `GET /v1/status` API remains another distinct
+operational-health snapshot.
 
 All Sumeragi status helpers accept the standard `{signal}` option:
 
@@ -1681,17 +1681,25 @@ const status = await torii.getSumeragiStatusTyped({
 const rawStatus = await torii.getSumeragiStatus({
   signal: abortController.signal,
 });
+
+const diagnostics = await torii.getSumeragiDiagnosticsTyped({
+  signal: abortController.signal,
+});
 ```
 
 The raw `getSumeragiStatus()` method returns Torii JSON unchanged. Prefer
 `getSumeragiStatusTyped()` for rollout and operator checks because it validates
 the protocol version, tagged phase/body state, certificate references, durable
-height ordering, and optional Nexus settlement/relay records:
+height ordering, and liveness geometry. Use diagnostics for Nexus and Native
+AMX evidence:
 
 ```js
-const typed = await torii.getSumeragiStatusTyped();
+const typed = await torii.getSumeragiDiagnosticsTyped();
 for (const commitment of typed.lane_settlement_commitments) {
   console.log(commitment.lane_id, commitment.total_xor_after_haircut);
+}
+for (const application of typed.native_amx_participant_applications) {
+  console.log(application.lane_id, application.participant_height, application.state);
 }
 ```
 

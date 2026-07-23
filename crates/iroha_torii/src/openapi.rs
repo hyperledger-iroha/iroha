@@ -5467,6 +5467,14 @@ fn operator_signature_header_parameters() -> Vec<Value> {
     ]
 }
 
+fn pop_authorization_header_parameters() -> Vec<Value> {
+    vec![string_header_param(
+        "Sora-PoP-Authorization",
+        "Required `PopV1 <base64url-no-pad>` opaque credential. The deployment authenticator cryptographically binds authorization to the exact PoP action and canonical request body.",
+        true,
+    )]
+}
+
 fn bounded_string_parameter(
     mut parameter: Value,
     minimum_length: Option<u64>,
@@ -6199,7 +6207,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Publish a due privacy aggregate cycle.",
-            "Evaluate the configured SoraFS privacy aggregate schedule at the caller-supplied timestamp and publish the oldest due unpublished cycle with locally retained source events, so delayed scheduler ticks catch up stale event-backed windows before reporting the latest due window as empty. Privacy policy, optional noise seed, optional policy digest, previous block hash, and public aggregate metadata are supplied as runtime-only request material and are not persisted as configuration. The response reports a structured published or skipped outcome with cycle/window metadata and publication hashes when a cycle is published. The request requires X-Iroha canonical app authentication.",
+            "Evaluate the configured SoraFS privacy aggregate schedule at the caller-supplied timestamp and publish the oldest due unpublished cycle with locally retained source events, so delayed scheduler ticks catch up stale event-backed windows before reporting the latest due window as empty. Governed privacy policy and composition budget come exclusively from iroha_config. Hidden differential-privacy randomness is derived independently for each exact policy/cycle/window request by the runtime-only threshold-PRF provider; only its commitment is published. The request accepts only now_unix and an optional predecessor block hash, and requires X-Iroha canonical app authentication.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -6416,8 +6424,8 @@ fn sorafs_paths() -> Map {
     );
     if let Some(Value::Object(post_operation)) = json_post_operation(
         "SoraFS",
-        "Record a local moderation screening result.",
-        "Record one local SFM-4a moderation screening result with deterministic BLAKE3 record digest material. `quarantine` and `escalate` verdicts create pending local quarantine records. The endpoint requires X-Iroha canonical app authentication.",
+        "Admit authenticated moderation screening evidence.",
+        "Admit one non-zero idempotency key plus either a canonical Norito runner-signed result or an exact committee aggregate with its complete bounded canonical signed-member inventory. The server verifies the config-pinned policy/manifest chain, signer uniqueness, authorization and revocation, subject/evidence bindings, score/verdict consistency, freshness, quorum, and replay before atomically checkpointing a payload-free admission receipt and local screening/quarantine projection. Unsigned screening JSON is rejected. The endpoint requires X-Iroha canonical app authentication.",
         "#/components/schemas/JsonValue",
         "#/components/schemas/JsonValue",
         Vec::new(),
@@ -6523,7 +6531,7 @@ fn sorafs_paths() -> Map {
     let mut quarantine_object = json_get_operation(
         "SoraFS",
         "Read a local encrypted quarantine payload object.",
-        "Read and decrypt one local SFM-4a quarantine payload object from the node-local encrypted object store. The endpoint verifies the object envelope, returns the payload as standard base64 for authorized operators, marks the response private/no-store with Vary over canonical auth headers, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "Read and decrypt one local SFM-4a quarantine payload object from a chunked iroha_crypto ChaCha20-Poly1305 envelope whose per-object DEK is wrapped by the runtime-only PKCS#11/KMS provider. The endpoint verifies the canonical envelope, every selected chunk and immutable AAD, returns the payload as standard base64 for authorized operators, marks the response private/no-store with Vary over canonical auth headers, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
         "#/components/schemas/JsonValue",
         vec![string_path_param(
             "quarantine_id_hex",
@@ -6533,7 +6541,7 @@ fn sorafs_paths() -> Map {
     if let Some(Value::Object(post_operation)) = json_post_operation(
         "SoraFS",
         "Store a local encrypted quarantine payload object.",
-        "Seal one base64 quarantined payload into the node-local encrypted SFM-4a quarantine object store. The plaintext BLAKE3 digest must match the quarantine record subject digest, the object index is persisted when storage is enabled, and the endpoint requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "Seal one base64 quarantined payload into independently authenticated chunked iroha_crypto ChaCha20-Poly1305 ciphertext using a fresh random per-object DEK and unique nonce prefix/chunk index. The runtime PKCS#11/KMS provider wraps the context-bound DEK; the plaintext BLAKE3 digest must match the quarantine record subject digest; private notes are forbidden outside the encrypted payload; and envelope/index persistence is atomic. The endpoint requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
         "#/components/schemas/JsonValue",
         "#/components/schemas/JsonValue",
         vec![string_path_param(
@@ -7057,12 +7065,135 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Stream proofs.",
-            "Request a PoR or PoTR proof stream payload. PoR `sample_count` must be between 1 and 500. `proof_kind=pdp` is reserved for future SF-13 work and is rejected as an unsupported proof kind.",
+            "Request an authenticated PoR, PDP, or PoTR proof stream payload. PoR `sample_count` must be between 1 and 500. PDP requires `challenge_id_hex` and rejects client-selected sampling inputs.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
+    for (path, summary, description) in [
+        (
+            "/v1/sorafs/pdp/challenge",
+            "Enqueue a PDP challenge.",
+            "Authenticate and durably enqueue one canonical commitment/challenge pair under the provider's active council admission.",
+        ),
+        (
+            "/v1/sorafs/pdp/next",
+            "Read the next PDP challenge.",
+            "Return the oldest non-expired pending challenge for one council-admitted provider.",
+        ),
+        (
+            "/v1/sorafs/pdp/proof",
+            "Submit a PDP proof.",
+            "Submit exact canonical proof bytes for one explicit challenge id. Every authenticated proof failure converges to governance archive and repair handoff.",
+        ),
+        (
+            "/v1/sorafs/pdp/status",
+            "Read PDP challenge status.",
+            "Return the compact durable lifecycle and terminal decision for one challenge id.",
+        ),
+        (
+            "/v1/sorafs/pdp/export",
+            "Export PDP statuses.",
+            "Return a bounded sequence-ordered page of retained PDP challenge statuses.",
+        ),
+    ] {
+        paths.insert(
+            path.to_owned(),
+            Value::Object(json_post_operation(
+                "SoraFS",
+                summary,
+                description,
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                operator_signature_header_parameters(),
+            )),
+        );
+    }
+    for (path, summary, description) in [
+        (
+            "/v1/sorafs/pop/enrollments",
+            "Submit an encrypted PoP enrollment.",
+            "Submit exact canonical native-Norito encrypted enrollment bytes in an unpadded base64url JSON/Norito envelope. Plaintext identity, attestation, holder, and wallet key material are never accepted by this route.",
+        ),
+        (
+            "/v1/sorafs/pop/enrollments/status",
+            "Read PoP enrollment status.",
+            "Return only payload-free durable lifecycle metadata for one non-zero request id.",
+        ),
+        (
+            "/v1/sorafs/pop/approvals",
+            "Record a PoP approval.",
+            "Record one exact canonical signed approval bound to the encrypted enrollment, finalized policy, distinct governed approver, and current revocation state.",
+        ),
+        (
+            "/v1/sorafs/pop/issue",
+            "Trigger PoP credential issuance.",
+            "Trigger server-resolved private issuance material by public request id. The HTTP request never contains a credential, witness, holder secret, or attestation; signing uses the injected governed HSM.",
+        ),
+        (
+            "/v1/sorafs/pop/revocations",
+            "Enqueue a PoP revocation successor.",
+            "Validate, HSM-sign, and durably enqueue an exact canonical strict-successor revocation snapshot.",
+        ),
+        (
+            "/v1/sorafs/pop/registry/submit-next",
+            "Submit the next PoP registry operation.",
+            "Run one bounded idempotent durable-outbox submission step through the injected ledger submitter.",
+        ),
+        (
+            "/v1/sorafs/pop/registry/reconcile-next",
+            "Reconcile the next PoP registry projection.",
+            "Consume at most one finalized-block projection and reconcile committed or rejected registry operations.",
+        ),
+        (
+            "/v1/sorafs/pop/registry/projection",
+            "Read the finalized PoP registry projection.",
+            "Return the current public finalized cursor, signed root/list payloads, operation digests, and revoked issuer keys.",
+        ),
+        (
+            "/v1/sorafs/pop/wallet/delivery",
+            "Fetch encrypted PoP wallet delivery.",
+            "Fetch only the canonical encrypted finalized wallet delivery; plaintext credential and witness material are never returned.",
+        ),
+        (
+            "/v1/sorafs/pop/wallet/import",
+            "Import PoP wallet delivery.",
+            "Decrypt and import one finalized delivery into local KMS/PKCS#11-wrapped wallet custody by request id.",
+        ),
+        (
+            "/v1/sorafs/pop/wallet/acknowledge",
+            "Acknowledge PoP wallet delivery.",
+            "Durably acknowledge delivery without deleting the recoverable encrypted ciphertext.",
+        ),
+        (
+            "/v1/sorafs/pop/wallet/synchronize",
+            "Synchronize a PoP wallet witness.",
+            "Resolve a private witness through the injected runtime provider and reject root/list rollback before atomically replacing encrypted wallet custody.",
+        ),
+        (
+            "/v1/sorafs/pop/wallet/prove",
+            "Generate a local PoP membership proof.",
+            "Generate a public Halo2 membership proof from local encrypted wallet custody for an exact challenge and bounded verifier context.",
+        ),
+        (
+            "/v1/sorafs/pop/verify",
+            "Verify a PoP membership proof.",
+            "Verify exact canonical proof bytes against the finalized signed roots and atomically consume the proof nullifier to prevent replay.",
+        ),
+    ] {
+        paths.insert(
+            path.to_owned(),
+            Value::Object(json_post_operation(
+                "SoraFS",
+                summary,
+                description,
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                pop_authorization_header_parameters(),
+            )),
+        );
+    }
     paths.insert(
         "/v1/sorafs/deal/fund-provider".to_owned(),
         Value::Object(json_post_operation(
@@ -14887,6 +15018,13 @@ fn sccp_governance_schemas(schemas: &mut Map) {
 fn bridge_finality_schemas(schemas: &mut Map) {
     let max_kagemusha_topups =
         u64::from(iroha_data_model::block::consensus_v2::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK);
+    let max_native_amx_application_manifest_leaves = u64::from(
+        iroha_data_model::block::consensus_v2::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES,
+    );
+    let native_amx_application_manifest_empty_root = norito::json::to_value(
+        &iroha_data_model::block::consensus_v2::native_amx_application_manifest_empty_root(),
+    )
+    .expect("canonical Native AMX application manifest empty root must serialize");
     let max_sumeragi_validators =
         u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
             .expect("Sumeragi validator bound must fit in an OpenAPI uint64");
@@ -15128,7 +15266,9 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "type": "object",
             "required": [
                 "parent_state_root", "post_state_root", "ordinary_writes_root",
-                "topup_anchor_count", "executed_block_wire_hash"
+                "topup_anchor_count", "native_amx_application_manifest_version",
+                "native_amx_application_manifest_root",
+                "native_amx_application_manifest_count", "executed_block_wire_hash"
             ],
             "additionalProperties": false,
             "properties": {
@@ -15139,6 +15279,16 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 "topup_anchor_count": {
                     "type": "integer", "format": "uint32", "minimum": 0,
                     "maximum": max_kagemusha_topups
+                },
+                "native_amx_application_manifest_version": {
+                    "type": "integer", "format": "uint16", "const": 1
+                },
+                "native_amx_application_manifest_root": {
+                    "$ref": "#/components/schemas/Hash"
+                },
+                "native_amx_application_manifest_count": {
+                    "type": "integer", "format": "uint32", "minimum": 0,
+                    "maximum": max_native_amx_application_manifest_leaves
                 },
                 "executed_block_wire_hash": { "$ref": "#/components/schemas/Hash" }
             },
@@ -15156,7 +15306,32 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     }
                 }
             ],
-            "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. A top-up root is present exactly when topup_anchor_count is non-zero."
+            "allOf": [{
+                "oneOf": [
+                    {
+                        "properties": {
+                            "native_amx_application_manifest_count": { "const": 0 },
+                            "native_amx_application_manifest_root": {
+                                "const": (native_amx_application_manifest_empty_root.clone())
+                            }
+                        }
+                    },
+                    {
+                        "properties": {
+                            "native_amx_application_manifest_count": {
+                                "minimum": 1,
+                                "maximum": max_native_amx_application_manifest_leaves
+                            },
+                            "native_amx_application_manifest_root": {
+                                "not": {
+                                    "const": (native_amx_application_manifest_empty_root.clone())
+                                }
+                            }
+                        }
+                    }
+                ]
+            }],
+            "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. A top-up root is present exactly when topup_anchor_count is non-zero. Native AMX application manifest version/root/count are mandatory; version is 1, count is bounded to 1,024, and count is zero exactly for the canonical empty root."
         }),
     );
     schemas.insert(
@@ -17590,6 +17765,81 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "SumeragiNativeAmxParticipantApplicationState".to_owned(),
+        norito::json!({
+            "type": "string",
+            "enum": [
+                "certified_pending_carrier",
+                "committed_evidence_pending",
+                "durably_applied",
+                "conflict"
+            ]
+        }),
+    );
+    schemas.insert(
+        "SumeragiNativeAmxParticipantApplication".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "lane_id", "dataspace_id", "lane_incarnation",
+                "participant_height", "participant_view", "predecessor_height",
+                "descriptor_hash", "proposal_hash", "settlement_hash",
+                "source_count", "state"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": {
+                    "type": "integer", "format": "uint32", "minimum": 0,
+                    "maximum": 4_294_967_295_u64
+                },
+                "dataspace_id": {
+                    "type": "integer", "format": "uint64", "minimum": 0
+                },
+                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
+                "participant_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1
+                },
+                "participant_view": {
+                    "type": "integer", "format": "uint64", "minimum": 0
+                },
+                "predecessor_height": {
+                    "type": "integer", "format": "uint64", "minimum": 0
+                },
+                "predecessor_descriptor_hash": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
+                "descriptor_hash": { "$ref": "#/components/schemas/Hash" },
+                "proposal_hash": { "$ref": "#/components/schemas/Hash" },
+                "settlement_hash": { "$ref": "#/components/schemas/Hash" },
+                "source_count": {
+                    "type": "integer", "format": "uint64",
+                    "minimum": 1, "maximum": 4_096
+                },
+                "application_block_height": {
+                    "anyOf": [
+                        {
+                            "type": "integer", "format": "uint64",
+                            "minimum": 1
+                        },
+                        { "type": "null" }
+                    ]
+                },
+                "application_block_hash": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
+                "state": {
+                    "$ref": "#/components/schemas/SumeragiNativeAmxParticipantApplicationState"
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "SumeragiDiagnosticsResponse".to_owned(),
         norito::json!({
             "type": "object",
@@ -17603,7 +17853,7 @@ fn openapi_schemas() -> Map {
                 "lane_relay_envelopes", "lane_payload_ownerships",
                 "committed_lane_blocks", "lane_block_sessions",
                 "lane_governance_sealed_total", "lane_governance_sealed_aliases",
-                "lane_governance"
+                "lane_governance", "native_amx_participant_applications"
             ],
             "additionalProperties": false,
             "properties": {
@@ -17627,7 +17877,14 @@ fn openapi_schemas() -> Map {
                 "lane_block_sessions": { "type": "array", "items": { "$ref": "#/components/schemas/SumeragiLaneBlockSessionStatus" } },
                 "lane_governance_sealed_total": { "type": "integer", "format": "uint32", "minimum": 0 },
                 "lane_governance_sealed_aliases": { "type": "array", "items": { "type": "string" } },
-                "lane_governance": { "type": "array", "items": { "$ref": "#/components/schemas/SumeragiLaneGovernance" } }
+                "lane_governance": { "type": "array", "items": { "$ref": "#/components/schemas/SumeragiLaneGovernance" } },
+                "native_amx_participant_applications": {
+                    "type": "array",
+                    "maxItems": 1024,
+                    "items": {
+                        "$ref": "#/components/schemas/SumeragiNativeAmxParticipantApplication"
+                    }
+                }
             }
         }),
     );
@@ -30205,6 +30462,8 @@ mod tests {
             "SumeragiV2CommitQcStatus",
             "SumeragiNposDiagnostics",
             "SumeragiPipelineExecutionDiagnostics",
+            "SumeragiNativeAmxParticipantApplicationState",
+            "SumeragiNativeAmxParticipantApplication",
             "SumeragiLaneCommitment",
             "SumeragiDataspaceCommitment",
             "SumeragiLanePayloadOwnership",
@@ -30234,6 +30493,60 @@ mod tests {
         ] {
             assert!(schemas.contains_key(key), "schema missing {key}");
         }
+    }
+
+    #[test]
+    fn native_amx_participant_diagnostics_schema_is_closed_and_bounded() {
+        let schemas = openapi_schemas();
+        let response = schemas
+            .get("SumeragiDiagnosticsResponse")
+            .and_then(Value::as_object)
+            .expect("diagnostics response schema");
+        let applications = response
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("native_amx_participant_applications"))
+            .and_then(Value::as_object)
+            .expect("Native AMX participant diagnostics vector schema");
+        assert_eq!(applications.get("maxItems"), Some(&Value::from(1_024_u64)));
+        assert_eq!(
+            applications
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiNativeAmxParticipantApplication")
+        );
+
+        let row = schemas
+            .get("SumeragiNativeAmxParticipantApplication")
+            .and_then(Value::as_object)
+            .expect("Native AMX participant diagnostics row schema");
+        assert_eq!(row.get("additionalProperties"), Some(&Value::from(false)));
+        let source_count = row
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("source_count"))
+            .and_then(Value::as_object)
+            .expect("source count schema");
+        assert_eq!(source_count.get("minimum"), Some(&Value::from(1_u64)));
+        assert_eq!(source_count.get("maximum"), Some(&Value::from(4_096_u64)));
+
+        let states = schemas
+            .get("SumeragiNativeAmxParticipantApplicationState")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("Native AMX participant diagnostics states");
+        assert_eq!(
+            states,
+            &vec![
+                Value::from("certified_pending_carrier"),
+                Value::from("committed_evidence_pending"),
+                Value::from("durably_applied"),
+                Value::from("conflict"),
+            ]
+        );
     }
 
     #[test]
@@ -30414,6 +30727,9 @@ mod tests {
                 "post_state_root",
                 "ordinary_writes_root",
                 "topup_anchor_count",
+                "native_amx_application_manifest_version",
+                "native_amx_application_manifest_root",
+                "native_amx_application_manifest_count",
                 "executed_block_wire_hash",
             ],
             &[
@@ -30422,6 +30738,9 @@ mod tests {
                 "ordinary_writes_root",
                 "topup_anchor_root",
                 "topup_anchor_count",
+                "native_amx_application_manifest_version",
+                "native_amx_application_manifest_root",
+                "native_amx_application_manifest_count",
                 "executed_block_wire_hash",
             ],
         );
@@ -30677,6 +30996,44 @@ mod tests {
                 .map(Vec::len),
             Some(2),
             "top-up root/count presence must be encoded as an exact two-branch contract"
+        );
+        let native_manifest_version = property(
+            &schemas,
+            "SumeragiV2ExecutionCommitment",
+            "native_amx_application_manifest_version",
+        );
+        assert_eq!(
+            native_manifest_version.get("const").and_then(Value::as_u64),
+            Some(u64::from(
+                iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            ))
+        );
+        let native_manifest_count = property(
+            &schemas,
+            "SumeragiV2ExecutionCommitment",
+            "native_amx_application_manifest_count",
+        );
+        assert_eq!(
+            native_manifest_count.get("minimum").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            native_manifest_count.get("maximum").and_then(Value::as_u64),
+            Some(u64::from(
+                iroha_data_model::block::consensus_v2::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES,
+            ))
+        );
+        assert_eq!(
+            schema(&schemas, "SumeragiV2ExecutionCommitment")
+                .get("allOf")
+                .and_then(Value::as_array)
+                .and_then(|all_of| all_of.first())
+                .and_then(Value::as_object)
+                .and_then(|manifest_contract| manifest_contract.get("oneOf"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2),
+            "Native AMX manifest count/root emptiness must be encoded as an exact two-branch contract"
         );
         assert_eq!(
             property(&schemas, "SumeragiV2CommitPhase", "phase")
@@ -30943,6 +31300,9 @@ mod tests {
             execution_fields,
             [
                 "executed_block_wire_hash",
+                "native_amx_application_manifest_count",
+                "native_amx_application_manifest_root",
+                "native_amx_application_manifest_version",
                 "ordinary_writes_root",
                 "parent_state_root",
                 "post_state_root",
@@ -30954,6 +31314,7 @@ mod tests {
             "parent_state_root",
             "post_state_root",
             "ordinary_writes_root",
+            "native_amx_application_manifest_root",
         ] {
             assert!(
                 execution_commitment
@@ -30968,6 +31329,28 @@ mod tests {
                 .get("topup_anchor_count")
                 .and_then(Value::as_u64),
             Some(0)
+        );
+        assert_eq!(
+            execution_commitment
+                .get("native_amx_application_manifest_version")
+                .and_then(Value::as_u64),
+            Some(u64::from(
+                iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            ))
+        );
+        assert_eq!(
+            execution_commitment
+                .get("native_amx_application_manifest_count")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        let expected_native_manifest_empty_root = norito::json::to_value(
+            &iroha_data_model::block::consensus_v2::native_amx_application_manifest_empty_root(),
+        )
+        .expect("serialize canonical Native AMX application manifest empty root");
+        assert_eq!(
+            execution_commitment.get("native_amx_application_manifest_root"),
+            Some(&expected_native_manifest_empty_root)
         );
         assert!(
             commit_qc

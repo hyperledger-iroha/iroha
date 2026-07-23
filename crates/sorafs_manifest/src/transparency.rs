@@ -97,8 +97,11 @@ pub const PROOF_TOKEN_MAX_ENTRY_IDS_V1: usize = 256;
 pub const PROOF_TOKEN_MAX_ENTRY_ID_BYTES_V1: usize = 256;
 /// Maximum number of metrics in one privacy aggregate.
 pub const MODERATION_PRIVACY_MAX_METRICS_V1: usize = 256;
-/// Maximum encoded `delta_ppb` value, equal to probability 1.0.
-pub const MODERATION_PRIVACY_DELTA_PPB_MAX: u64 = 1_000_000_000;
+/// Only permitted V1 `delta_ppb` value.
+///
+/// SoraFS V1 uses a pure differential-privacy mechanism, so delta is
+/// explicitly encoded and must be zero.
+pub const MODERATION_PRIVACY_DELTA_PPB_MAX: u64 = 0;
 
 const ENTRY_HASH_DOMAIN_V1: &[u8] = b"sorafs.transparency.entry.v1";
 const BLOCK_HASH_DOMAIN_V1: &[u8] = b"sorafs.transparency.block.v1";
@@ -196,21 +199,25 @@ pub enum ModerationPrivacyModeV1 {
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct ModerationPrivacyParametersV1 {
     /// Schema version; must equal [`MODERATION_PRIVACY_PARAMETERS_VERSION_V1`].
     pub version: u16,
     /// Privacy mode applied to the metrics.
     pub mode: ModerationPrivacyModeV1,
-    /// Epsilon encoded as fixed-point micros for deterministic publication.
+    /// Reduced positive numerator of the governed rational epsilon.
     #[norito(default)]
-    pub epsilon_micros: Option<u64>,
-    /// Delta encoded in parts per billion for deterministic publication.
+    pub epsilon_numerator: Option<u64>,
+    /// Reduced positive denominator of the governed rational epsilon.
+    #[norito(default)]
+    pub epsilon_denominator: Option<u64>,
+    /// Delta encoded in parts per billion; V1 requires this to be exactly zero.
     #[norito(default)]
     pub delta_ppb: Option<u64>,
-    /// Optional noise scale encoded as fixed-point micros.
+    /// Maximum contribution of one private subject to one metric.
     #[norito(default)]
-    pub noise_scale_micros: Option<u64>,
-    /// Minimum source-event count required before a bucket can be published.
+    pub per_subject_metric_cap: Option<u64>,
+    /// Minimum distinct-subject count required before a bucket can be published.
     #[norito(default)]
     pub suppression_threshold: Option<u64>,
     /// Number of source buckets suppressed before publication.
@@ -231,6 +238,7 @@ pub struct ModerationPrivacyParametersV1 {
     JsonSerialize,
     JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct ModerationPrivacyAggregateMetricV1 {
     /// Stable metric key.
     pub key: String,
@@ -244,6 +252,7 @@ pub struct ModerationPrivacyAggregateMetricV1 {
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct ModerationPrivacyAggregateV1 {
     /// Schema version; must equal [`MODERATION_PRIVACY_AGGREGATE_VERSION_V1`].
     pub version: u16,
@@ -264,6 +273,8 @@ pub struct ModerationPrivacyAggregateV1 {
     pub privacy: ModerationPrivacyParametersV1,
     /// Number of source events considered before privacy filtering/noising.
     pub source_event_count: u64,
+    /// Number of distinct private subjects considered before suppression.
+    pub source_subject_count: u64,
     /// BLAKE3 digest of the canonical source aggregate payload.
     #[norito(with = "fixed_bytes")]
     pub source_payload_digest: [u8; 32],
@@ -468,9 +479,9 @@ impl ModerationPrivacyParametersV1 {
         }
         match self.mode {
             ModerationPrivacyModeV1::DifferentialPrivacy => {
-                require_positive_parameter("epsilon_micros", self.epsilon_micros)?;
+                require_canonical_epsilon(self.epsilon_numerator, self.epsilon_denominator)?;
                 require_delta_parameter(self.delta_ppb)?;
-                require_positive_optional_parameter("noise_scale_micros", self.noise_scale_micros)?;
+                require_positive_parameter("per_subject_metric_cap", self.per_subject_metric_cap)?;
                 require_absent_parameter("suppression_threshold", self.suppression_threshold)?;
                 if self.suppressed_count != 0 {
                     return Err(TransparencyLedgerError::InvalidPrivacyParameter {
@@ -479,15 +490,16 @@ impl ModerationPrivacyParametersV1 {
                 }
             }
             ModerationPrivacyModeV1::Suppression => {
-                require_absent_parameter("epsilon_micros", self.epsilon_micros)?;
+                require_absent_parameter("epsilon_numerator", self.epsilon_numerator)?;
+                require_absent_parameter("epsilon_denominator", self.epsilon_denominator)?;
                 require_absent_parameter("delta_ppb", self.delta_ppb)?;
-                require_absent_parameter("noise_scale_micros", self.noise_scale_micros)?;
+                require_absent_parameter("per_subject_metric_cap", self.per_subject_metric_cap)?;
                 require_positive_parameter("suppression_threshold", self.suppression_threshold)?;
             }
             ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression => {
-                require_positive_parameter("epsilon_micros", self.epsilon_micros)?;
+                require_canonical_epsilon(self.epsilon_numerator, self.epsilon_denominator)?;
                 require_delta_parameter(self.delta_ppb)?;
-                require_positive_optional_parameter("noise_scale_micros", self.noise_scale_micros)?;
+                require_positive_parameter("per_subject_metric_cap", self.per_subject_metric_cap)?;
                 require_positive_parameter("suppression_threshold", self.suppression_threshold)?;
             }
         }
@@ -529,6 +541,11 @@ impl ModerationPrivacyAggregateV1 {
         if self.source_event_count == 0 {
             return Err(TransparencyLedgerError::InvalidPrivacyParameter {
                 field: "source_event_count",
+            });
+        }
+        if self.source_subject_count == 0 || self.source_subject_count > self.source_event_count {
+            return Err(TransparencyLedgerError::InvalidPrivacyParameter {
+                field: "source_subject_count",
             });
         }
         require_nonzero32("source_payload_digest", &self.source_payload_digest)?;
@@ -576,8 +593,19 @@ impl ModerationPrivacyAggregateV1 {
         if let Some(delta_ppb) = self.privacy.delta_ppb {
             insert_metadata(&mut metadata, "delta_ppb", delta_ppb.to_string())?;
         }
-        if let Some(epsilon_micros) = self.privacy.epsilon_micros {
-            insert_metadata(&mut metadata, "epsilon_micros", epsilon_micros.to_string())?;
+        if let Some(epsilon_denominator) = self.privacy.epsilon_denominator {
+            insert_metadata(
+                &mut metadata,
+                "epsilon_denominator",
+                epsilon_denominator.to_string(),
+            )?;
+        }
+        if let Some(epsilon_numerator) = self.privacy.epsilon_numerator {
+            insert_metadata(
+                &mut metadata,
+                "epsilon_numerator",
+                epsilon_numerator.to_string(),
+            )?;
         }
         insert_metadata(
             &mut metadata,
@@ -589,17 +617,22 @@ impl ModerationPrivacyAggregateV1 {
             "privacy_mode",
             privacy_mode_label(self.privacy.mode).to_string(),
         )?;
-        if let Some(noise_scale_micros) = self.privacy.noise_scale_micros {
+        if let Some(per_subject_metric_cap) = self.privacy.per_subject_metric_cap {
             insert_metadata(
                 &mut metadata,
-                "noise_scale_micros",
-                noise_scale_micros.to_string(),
+                "per_subject_metric_cap",
+                per_subject_metric_cap.to_string(),
             )?;
         }
         insert_metadata(
             &mut metadata,
             "source_event_count",
             self.source_event_count.to_string(),
+        )?;
+        insert_metadata(
+            &mut metadata,
+            "source_subject_count",
+            self.source_subject_count.to_string(),
         )?;
         if let Some(suppression_threshold) = self.privacy.suppression_threshold {
             insert_metadata(
@@ -1654,19 +1687,32 @@ fn require_positive_parameter(
     }
 }
 
-fn require_positive_optional_parameter(
-    field: &'static str,
-    value: Option<u64>,
+fn require_canonical_epsilon(
+    numerator: Option<u64>,
+    denominator: Option<u64>,
 ) -> Result<(), TransparencyLedgerError> {
-    if matches!(value, Some(0)) {
-        return Err(TransparencyLedgerError::InvalidPrivacyParameter { field });
+    let numerator = require_positive_parameter("epsilon_numerator", numerator)?;
+    let denominator = require_positive_parameter("epsilon_denominator", denominator)?;
+    if gcd_u64(numerator, denominator) != 1 {
+        return Err(TransparencyLedgerError::InvalidPrivacyParameter {
+            field: "epsilon_rational",
+        });
     }
     Ok(())
 }
 
+const fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
+}
+
 fn require_delta_parameter(value: Option<u64>) -> Result<u64, TransparencyLedgerError> {
     match value {
-        Some(value) if value <= MODERATION_PRIVACY_DELTA_PPB_MAX => Ok(value),
+        Some(0) => Ok(MODERATION_PRIVACY_DELTA_PPB_MAX),
         Some(_) => Err(TransparencyLedgerError::InvalidPrivacyParameter { field: "delta_ppb" }),
         None => Err(TransparencyLedgerError::MissingPrivacyParameter { field: "delta_ppb" }),
     }
@@ -1866,13 +1912,15 @@ mod tests {
             privacy: ModerationPrivacyParametersV1 {
                 version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                 mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
-                epsilon_micros: Some(750_000),
-                delta_ppb: Some(10),
-                noise_scale_micros: Some(1_250_000),
+                epsilon_numerator: Some(3),
+                epsilon_denominator: Some(4),
+                delta_ppb: Some(0),
+                per_subject_metric_cap: Some(2),
                 suppression_threshold: Some(25),
                 suppressed_count: 3,
             },
             source_event_count: 128,
+            source_subject_count: 96,
             source_payload_digest: digest(0xA1),
             metrics: vec![
                 ModerationPrivacyAggregateMetricV1 {
@@ -2198,12 +2246,14 @@ mod tests {
             vec![
                 "aggregate_id",
                 "delta_ppb",
-                "epsilon_micros",
-                "noise_scale_micros",
+                "epsilon_denominator",
+                "epsilon_numerator",
+                "per_subject_metric_cap",
                 "population_label",
                 "privacy_mode",
                 "publisher",
                 "source_event_count",
+                "source_subject_count",
                 "suppressed_count",
                 "suppression_threshold",
                 "window_end_unix",
@@ -2228,13 +2278,48 @@ mod tests {
     fn privacy_aggregate_rejects_missing_dp_parameters() {
         let mut aggregate = privacy_aggregate();
         aggregate.privacy.mode = ModerationPrivacyModeV1::DifferentialPrivacy;
-        aggregate.privacy.epsilon_micros = None;
+        aggregate.privacy.epsilon_numerator = None;
         aggregate.privacy.suppression_threshold = None;
         aggregate.privacy.suppressed_count = 0;
         assert_eq!(
             aggregate.validate(),
             Err(TransparencyLedgerError::MissingPrivacyParameter {
-                field: "epsilon_micros",
+                field: "epsilon_numerator",
+            })
+        );
+    }
+
+    #[test]
+    fn privacy_aggregate_rejects_nonzero_delta() {
+        let mut aggregate = privacy_aggregate();
+        aggregate.privacy.delta_ppb = Some(1);
+        assert_eq!(
+            aggregate.validate(),
+            Err(TransparencyLedgerError::InvalidPrivacyParameter { field: "delta_ppb" })
+        );
+    }
+
+    #[test]
+    fn privacy_aggregate_rejects_missing_per_subject_cap() {
+        let mut aggregate = privacy_aggregate();
+        aggregate.privacy.per_subject_metric_cap = None;
+        assert_eq!(
+            aggregate.validate(),
+            Err(TransparencyLedgerError::MissingPrivacyParameter {
+                field: "per_subject_metric_cap",
+            })
+        );
+    }
+
+    #[test]
+    fn privacy_aggregate_rejects_noncanonical_epsilon() {
+        let mut aggregate = privacy_aggregate();
+        aggregate.privacy.epsilon_numerator = Some(6);
+        aggregate.privacy.epsilon_denominator = Some(8);
+        assert_eq!(
+            aggregate.validate(),
+            Err(TransparencyLedgerError::InvalidPrivacyParameter {
+                field: "epsilon_rational",
             })
         );
     }
@@ -2264,9 +2349,10 @@ mod tests {
     fn privacy_aggregate_rejects_suppression_without_threshold() {
         let mut aggregate = privacy_aggregate();
         aggregate.privacy.mode = ModerationPrivacyModeV1::Suppression;
-        aggregate.privacy.epsilon_micros = None;
+        aggregate.privacy.epsilon_numerator = None;
+        aggregate.privacy.epsilon_denominator = None;
         aggregate.privacy.delta_ppb = None;
-        aggregate.privacy.noise_scale_micros = None;
+        aggregate.privacy.per_subject_metric_cap = None;
         aggregate.privacy.suppression_threshold = None;
         assert_eq!(
             aggregate.validate(),

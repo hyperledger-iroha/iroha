@@ -946,6 +946,7 @@ fn minimal_config_snapshot() {
                         enabled: false,
                         cycle_seconds: 604800,
                         publish_delay_seconds: 3600,
+                        ..SorafsPrivacyAggregateSchedule::default()
                     },
                     evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule {
                         enabled: false,

@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Shell syntax
         run: bash -n ci/check_kagemusha_candidate_android_lab.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh
       - name: Kotlin production reflection guard
@@ -65,8 +65,8 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
       - name: Resolve artifact version
@@ -107,7 +107,7 @@ jobs:
         run: swift test
       - name: Package Apple mobile SDK artifact
         run: bash scripts/package_mobile_sdk_artifacts.sh --apple --version "$MOBILE_SDK_VERSION"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: mobile-sdk-apple-${{ env.MOBILE_SDK_VERSION }}
           path: dist/mobile-sdk/*
@@ -119,12 +119,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
         with:
           distribution: temurin
           java-version: "21"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
       - name: Resolve artifact version
@@ -190,7 +190,7 @@ jobs:
         run: bash scripts/check_mobile_sdk_artifacts.sh --android-only --require-built-android
       - name: Package Android mobile SDK artifact
         run: bash scripts/package_mobile_sdk_artifacts.sh --android --version "$MOBILE_SDK_VERSION"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: mobile-sdk-android-${{ env.MOBILE_SDK_VERSION }}
           path: dist/mobile-sdk/*
@@ -205,7 +205,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: mobile-sdk-*
           path: release-assets

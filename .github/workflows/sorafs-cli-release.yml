@@ -10,13 +10,22 @@ on:
       - "ci/check_sorafs_cli_release.sh"
       - "scripts/check_sorafs_release_automation.py"
       - "scripts/check_sorafs_release_version_map.py"
+      - "scripts/check_sorafs_reference_sdk_release_evidence.py"
+      - "scripts/build_sorafs_reference_sdk_release_canary.py"
+      - "scripts/run_sorafs_reference_sdk_release_evidence.py"
+      - "scripts/check_workflow_action_pins.py"
+      - "scripts/examples/sorafs_reference_sdk_release_*.args.example"
       - "scripts/requirements.txt"
       - "scripts/package_sorafs_validate_release.sh"
       - "scripts/release_sorafs_cli.sh"
       - "scripts/tests/check_sorafs_release_version_map_test.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
+      - "scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py"
+      - "scripts/tests/build_sorafs_reference_sdk_release_canary_test.py"
+      - "scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py"
       - "scripts/tests/package_sorafs_validate_release_test.py"
       - "scripts/tests/release_sorafs_cli_test.py"
+      - "scripts/tests/check_workflow_action_pins_test.py"
       - "release/version-map.toml"
       - "crates/sorafs_car/**"
       - "crates/sorafs_chunker/**"
@@ -72,6 +81,7 @@ jobs:
         run: |
           python3 scripts/check_sorafs_release_automation.py | tee release-automation-summary.json
           python3 scripts/check_sorafs_release_version_map.py | tee version-map-summary.json
+          python3 scripts/check_workflow_action_pins.py
           release_version="$(python3 -c 'from scripts.check_sorafs_release_version_map import validate_version_map; from pathlib import Path; print(validate_version_map(Path.cwd())["release_version"])')"
           echo "version=${release_version}" >> "$GITHUB_OUTPUT"
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "sorafs-cli-v${release_version}" ]]; then
@@ -120,14 +130,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            platform: linux
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            binary_suffix: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary_suffix: ""
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
             binary_suffix: ""
           - os: macos-14
-            platform: macos
+            target: aarch64-apple-darwin
             binary_suffix: ""
           - os: windows-latest
-            platform: windows
+            target: x86_64-pc-windows-msvc
             binary_suffix: ".exe"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
@@ -137,12 +153,14 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          target: ${{ matrix.target }}
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          shared-key: sorafs-cli-package-${{ matrix.os }}
+          shared-key: sorafs-cli-package-${{ matrix.target }}
       - name: Download validated release evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -151,14 +169,20 @@ jobs:
       - name: Build CLI release binaries
         shell: bash
         run: |
-          cargo build --locked --release -p sorafs_orchestrator --bin sorafs_cli
-          cargo build --locked --release -p sorafs_car --features cli --bin sorafs_fetch
-          cargo build --locked --release -p sorafs_manifest --bin sorafs-validate
+          target="${{ matrix.target }}"
+          host_target="$(rustc -vV | sed -n 's/^host: //p')"
+          if [[ "$host_target" != "$target" ]]; then
+            echo "release runner host ${host_target} does not match required native target ${target}" >&2
+            exit 1
+          fi
+          cargo build --locked --release -p sorafs_orchestrator --bin sorafs_cli --target "$target"
+          cargo build --locked --release -p sorafs_car --features cli --bin sorafs_fetch --target "$target"
+          cargo build --locked --release -p sorafs_manifest --bin sorafs-validate --target "$target"
           mkdir -p artifacts/sorafs-cli
           suffix="${{ matrix.binary_suffix }}"
-          cp "target/release/sorafs_cli${suffix}" "artifacts/sorafs-cli/sorafs_cli${suffix}"
-          cp "target/release/sorafs_fetch${suffix}" "artifacts/sorafs-cli/sorafs_fetch${suffix}"
-          cp "target/release/sorafs-validate${suffix}" "artifacts/sorafs-cli/sorafs-validate${suffix}"
+          cp "target/${target}/release/sorafs_cli${suffix}" "artifacts/sorafs-cli/sorafs_cli${suffix}"
+          cp "target/${target}/release/sorafs_fetch${suffix}" "artifacts/sorafs-cli/sorafs_fetch${suffix}"
+          cp "target/${target}/release/sorafs-validate${suffix}" "artifacts/sorafs-cli/sorafs-validate${suffix}"
           "artifacts/sorafs-cli/sorafs_cli${suffix}" --help > artifacts/sorafs-cli/sorafs_cli.help.txt
           "artifacts/sorafs-cli/sorafs_fetch${suffix}" --help > artifacts/sorafs-cli/sorafs_fetch.help.txt
           "artifacts/sorafs-cli/sorafs-validate${suffix}" --help > artifacts/sorafs-cli/sorafs-validate.help.txt
@@ -172,6 +196,7 @@ jobs:
           suffix="${{ matrix.binary_suffix }}"
           bash scripts/package_sorafs_validate_release.sh \
             --version "${{ needs.release-gate.outputs.version }}" \
+            --target "${{ matrix.target }}" \
             --binary "artifacts/sorafs-cli/sorafs-validate${suffix}" \
             --out-dir dist/sorafs-validate-release
           mkdir -p artifacts/sorafs-cli/reference-validator
@@ -181,7 +206,7 @@ jobs:
         with:
           path: artifacts/sorafs-cli
           format: spdx-json
-          output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.platform }}.spdx.json
+          output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}.spdx.json
           syft-version: v1.44.0
           upload-artifact: false
           upload-release-assets: false
@@ -189,11 +214,11 @@ jobs:
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
           grype-version: v0.112.0
-          sbom: artifacts/sorafs-cli/sorafs-cli-${{ matrix.platform }}.spdx.json
+          sbom: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}.spdx.json
           fail-build: true
           severity-cutoff: high
           output-format: sarif
-          output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.platform }}-vulnerabilities.sarif
+          output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}-vulnerabilities.sarif
           cache-db: true
       - name: Finalize platform checksums
         shell: bash
@@ -210,7 +235,7 @@ jobs:
       - name: Upload unsigned release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sorafs-cli-${{ needs.release-gate.outputs.version }}-${{ matrix.platform }}
+          name: sorafs-cli-${{ needs.release-gate.outputs.version }}-${{ matrix.target }}
           path: artifacts/sorafs-cli/
           if-no-files-found: error
           retention-days: 30
@@ -234,10 +259,29 @@ jobs:
       - name: Verify platform package checksums before signing
         run: |
           mapfile -d '' checksum_files < <(find signed-input -type f -name SHA256SUMS -print0)
-          if [[ "${#checksum_files[@]}" -ne 3 ]]; then
-            echo "expected exactly three platform SHA256SUMS files" >&2
+          if [[ "${#checksum_files[@]}" -ne 5 ]]; then
+            echo "expected exactly five target-triple SHA256SUMS files" >&2
             exit 1
           fi
+          required_targets=(
+            x86_64-unknown-linux-gnu
+            aarch64-unknown-linux-gnu
+            x86_64-apple-darwin
+            aarch64-apple-darwin
+            x86_64-pc-windows-msvc
+          )
+          for target in "${required_targets[@]}"; do
+            matching=0
+            for checksum_file in "${checksum_files[@]}"; do
+              if [[ "$(basename "$(dirname "$checksum_file")")" == *-"${target}" ]]; then
+                matching=$((matching + 1))
+              fi
+            done
+            if [[ "$matching" -ne 1 ]]; then
+              echo "expected exactly one release candidate for target ${target}, found ${matching}" >&2
+              exit 1
+            fi
+          done
           for checksum_file in "${checksum_files[@]}"; do
             checksum_dir="$(dirname "$checksum_file")"
             (

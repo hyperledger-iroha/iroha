@@ -47,7 +47,7 @@ jobs:
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.event.inputs.checkout_ref }}
       - name: Resolve checkout metadata
@@ -59,12 +59,12 @@ jobs:
           if git_tag="$(git describe --tags --exact-match 2>/dev/null)"; then
             echo "tag=$git_tag" >>"$GITHUB_OUTPUT"
           fi
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Login to Soramitsu Harbor
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: docker.soramitsu.co.jp
           username: ${{ secrets.HARBOR_USERNAME }}
@@ -72,14 +72,14 @@ jobs:
       - name: Set up Docker Buildx
         id: buildx
         if: always()
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
           version: latest
           install: true
 
       # glibc
       - name: Build and push iroha:glibc image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         if: ${{ inputs.image_type == 'glibc' }}
         with:
           push: true
@@ -102,7 +102,7 @@ jobs:
           TAG=${RELEASE_VERSION#$PREFIX}
           echo "TAG=$TAG" >>$GITHUB_ENV
       - name: Build and push iroha:profiling-tag-sha image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         if: ${{ inputs.image_type == 'profiling' }}
         with:
           push: true
@@ -118,7 +118,7 @@ jobs:
       # Alpine (difference from glibc is the use of Dockerfile.musl)
       - name: Build and push iroha:alpine-sha image
         if: ${{ inputs.image_type == 'alpine' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           push: true
           tags: docker.soramitsu.co.jp/iroha2/iroha:alpine-${{ steps.checkout_meta.outputs.sha }}
@@ -133,7 +133,7 @@ jobs:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.event.inputs.checkout_ref }}
 
@@ -184,7 +184,7 @@ jobs:
           echo "short_sha=$(git rev-parse --short=12 HEAD)" >>"$GITHUB_OUTPUT"
 
       - name: Login to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -192,7 +192,7 @@ jobs:
       - name: Login to Soramitsu Harbor
         id: harbor_login
         continue-on-error: true
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: docker.soramitsu.co.jp
           username: ${{ secrets.HARBOR_USERNAME }}
@@ -200,7 +200,7 @@ jobs:
 
       - name: Set up Docker Buildx
         id: buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
           version: latest
           install: true
@@ -239,7 +239,7 @@ jobs:
 
       - name: Build local Taira smoke image
         if: ${{ !inputs.skip_taira_smoke }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
           load: true
@@ -261,7 +261,7 @@ jobs:
         run: bash scripts/taira_image_smoke.sh --image local/taira-validator:smoke --timeout 120
 
       - name: Build and push Taira validator image to Docker Hub
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
           push: true
@@ -283,7 +283,7 @@ jobs:
       - name: Build and push Taira validator image to Harbor
         if: ${{ steps.harbor_login.outcome == 'success' }}
         continue-on-error: true
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
           push: true

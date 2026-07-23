@@ -3474,7 +3474,7 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
 
 /// Canonical hash for the legacy checkpoint surface used before Space Directory manifests
 /// were included in durable snapshots.
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(crate) fn legacy_state_snapshot_hash_without_space_directory_manifests(
     state: &State,
 ) -> iroha_crypto::Hash {

@@ -11,7 +11,12 @@ use crate::sorafs::{
     pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
     pop_registry::PopIssuerPolicyV1,
     pricing::{PricingScheduleRecord, ProviderCreditRecord},
+    reserve::{
+        ReserveAuthorityPolicyV1, ReserveLifecycleStage, ReserveMovementKindV1,
+        ReserveProviderTermsV1,
+    },
 };
+use sorafs_manifest::deal::XorQuantity;
 
 isi! {
     /// Register a canonical `SoraFS` manifest with the paid pin registry.
@@ -275,6 +280,36 @@ isi! {
 impl crate::seal::Instruction for CancelSorafsOrderbookOrder {}
 
 isi! {
+    /// Execute one bounded deterministic price-time matching transition.
+    pub struct MatchSorafsOrderbook {
+        /// Exact active governance policy digest expected by the matcher.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+        /// Exact authoritative book revision on which the match was computed.
+        pub expected_book_revision: u64,
+        /// Maximum fills to commit in this transition.
+        pub max_fills: u32,
+    }
+}
+
+impl crate::seal::Instruction for MatchSorafsOrderbook {}
+
+isi! {
+    /// Retire expired orders and channels in one bounded authoritative transition.
+    pub struct MaintainSorafsOrderbook {
+        /// Exact active governance policy digest expected by the caller.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+        /// Exact authoritative book revision expected by the caller.
+        pub expected_book_revision: u64,
+        /// Maximum order/channel records to retire.
+        pub max_items: u32,
+    }
+}
+
+impl crate::seal::Instruction for MaintainSorafsOrderbook {}
+
+isi! {
     /// Settle a funded channel lock and record its signed receipt in the authoritative ledger.
     pub struct RecordSorafsOrderbookSettlementReceipt {
         /// Exact canonical Norito `sorafs_manifest::orderbook::SettlementReceiptV1` bytes.
@@ -287,6 +322,397 @@ isi! {
 }
 
 impl crate::seal::Instruction for RecordSorafsOrderbookSettlementReceipt {}
+
+isi! {
+    /// Activate the next chain-authoritative reserve/rent policy revision.
+    pub struct SetSorafsReservePolicy {
+        /// Governance policy to validate and activate.
+        pub policy: ReserveAuthorityPolicyV1,
+    }
+}
+
+impl crate::seal::Instruction for SetSorafsReservePolicy {}
+
+isi! {
+    /// Register one provider reserve partition and immutable underwriting terms.
+    pub struct RegisterSorafsReserveAccount {
+        /// Provider underwriting terms.
+        pub terms: ReserveProviderTermsV1,
+        /// Exact active reserve policy digest expected by governance.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+    }
+}
+
+impl crate::seal::Instruction for RegisterSorafsReserveAccount {}
+
+isi! {
+    /// Submit a provider-authenticated reserve top-up or withdrawal request.
+    pub struct RequestSorafsReserveMovement {
+        /// Globally unique request identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub movement_id: [u8; 32],
+        /// Provider reserve partition.
+        pub provider_id: ProviderId,
+        /// Top-up or withdrawal direction.
+        pub kind: ReserveMovementKindV1,
+        /// Exact non-zero movement amount.
+        pub amount: XorQuantity,
+        /// Provider account revision expected by the request.
+        pub expected_provider_revision: u64,
+        /// Exact active reserve policy digest expected by the request.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+    }
+}
+
+impl crate::seal::Instruction for RequestSorafsReserveMovement {}
+
+isi! {
+    /// Decide and atomically apply or reject a pending reserve movement.
+    pub struct DecideSorafsReserveMovement {
+        /// Pending movement identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub movement_id: [u8; 32],
+        /// Whether governance approves the movement.
+        pub approve: bool,
+        /// Bounded governance rationale.
+        pub rationale: String,
+    }
+}
+
+impl crate::seal::Instruction for DecideSorafsReserveMovement {}
+
+isi! {
+    /// Charge one or more deterministic rent periods to a provider.
+    pub struct ChargeSorafsReserveRent {
+        /// Provider reserve partition.
+        pub provider_id: ProviderId,
+        /// Provider account revision expected by the charge.
+        pub expected_provider_revision: u64,
+        /// Number of billing periods, bounded by native execution.
+        pub billing_periods: u16,
+        /// Exact active reserve policy digest expected by governance.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+    }
+}
+
+impl crate::seal::Instruction for ChargeSorafsReserveRent {}
+
+isi! {
+    /// Advance a provider's deterministic reserve lifecycle projection.
+    pub struct AdvanceSorafsReserveLifecycle {
+        /// Provider reserve partition.
+        pub provider_id: ProviderId,
+        /// Provider account revision expected by the transition.
+        pub expected_provider_revision: u64,
+        /// Deterministic days past due.
+        pub days_past_due: u16,
+        /// Exact active reserve policy digest expected by governance.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+    }
+}
+
+impl crate::seal::Instruction for AdvanceSorafsReserveLifecycle {}
+
+isi! {
+    /// Draw reserve credit under the provider's tier and global debt caps.
+    pub struct DrawSorafsReserveCredit {
+        /// Provider reserve partition.
+        pub provider_id: ProviderId,
+        /// Provider account revision expected by the draw.
+        pub expected_provider_revision: u64,
+        /// Exact non-zero draw amount.
+        pub amount: XorQuantity,
+        /// Exact active reserve policy digest expected by governance.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+    }
+}
+
+impl crate::seal::Instruction for DrawSorafsReserveCredit {}
+
+isi! {
+    /// Repay accrued reserve interest and then credit principal.
+    pub struct RepaySorafsReserveCredit {
+        /// Provider reserve partition.
+        pub provider_id: ProviderId,
+        /// Provider account revision expected by the repayment.
+        pub expected_provider_revision: u64,
+        /// Exact non-zero repayment amount.
+        pub amount: XorQuantity,
+        /// Exact active reserve policy digest expected by the provider.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+    }
+}
+
+impl crate::seal::Instruction for RepaySorafsReserveCredit {}
+
+isi! {
+    /// Submit a bounded provider-authenticated reserve lifecycle appeal.
+    pub struct SubmitSorafsReserveAppeal {
+        /// Globally unique appeal identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub appeal_id: [u8; 32],
+        /// Appealing provider.
+        pub provider_id: ProviderId,
+        /// Provider revision expected by the appeal.
+        pub expected_provider_revision: u64,
+        /// Requested lifecycle stage.
+        pub requested_stage: ReserveLifecycleStage,
+        /// Bounded provider reason.
+        pub reason: String,
+        /// Optional external evidence digest.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
+        pub evidence_digest: Option<[u8; 32]>,
+        /// Exact active reserve policy digest expected by the provider.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+    }
+}
+
+impl crate::seal::Instruction for SubmitSorafsReserveAppeal {}
+
+isi! {
+    /// Attach a terminal governance decision to a pending reserve appeal.
+    pub struct DecideSorafsReserveAppeal {
+        /// Pending appeal identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub appeal_id: [u8; 32],
+        /// Whether governance accepts and applies the requested stage.
+        pub accept: bool,
+        /// Bounded governance rationale.
+        pub rationale: String,
+    }
+}
+
+impl crate::seal::Instruction for DecideSorafsReserveAppeal {}
+
+/// Repair lease-claim action.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SorafsRepairClaimV1 {
+    /// Requested lease duration measured from the committing block time.
+    pub lease_duration_ms: u64,
+    /// Bounded caller key used for exact replay handling.
+    pub idempotency_key: String,
+}
+
+/// Repair lease-renewal action.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SorafsRepairRenewV1 {
+    /// Exact current lease generation.
+    pub lease_generation: u64,
+    /// Requested lease duration measured from the committing block time.
+    pub lease_duration_ms: u64,
+    /// Bounded caller key used for exact replay handling.
+    pub idempotency_key: String,
+}
+
+/// Successful repair terminal action.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SorafsRepairCompleteV1 {
+    /// Exact current lease generation.
+    pub lease_generation: u64,
+    /// Digest of external completion verification evidence.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub evidence_digest: [u8; 32],
+    /// Bounded caller key used for exact replay handling.
+    pub idempotency_key: String,
+}
+
+/// Failed repair terminal action without slashing.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SorafsRepairFailV1 {
+    /// Exact current lease generation.
+    pub lease_generation: u64,
+    /// Digest of the failure reason or external evidence.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub failure_digest: [u8; 32],
+    /// Bounded caller key used for exact replay handling.
+    pub idempotency_key: String,
+}
+
+/// Escalated repair terminal action with an atomic slash proposal.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SorafsRepairEscalateV1 {
+    /// Exact current lease generation.
+    pub lease_generation: u64,
+    /// Exact canonical `sorafs_manifest::repair::RepairSlashProposalV1` bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub slash_proposal_payload: Vec<u8>,
+    /// Bounded caller key used for exact replay handling.
+    pub idempotency_key: String,
+}
+
+/// Chain-authoritative mutation of one SoraFS repair task.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "action", content = "value", rename_all = "snake_case")
+)]
+pub enum SorafsRepairTaskActionV1 {
+    /// Acquire an absent or expired exclusive worker lease.
+    Claim(SorafsRepairClaimV1),
+    /// Extend the caller's unexpired lease.
+    Renew(SorafsRepairRenewV1),
+    /// Commit the task's single successful terminal outcome.
+    Complete(SorafsRepairCompleteV1),
+    /// Commit the task's single unsuccessful terminal outcome without slashing.
+    Fail(SorafsRepairFailV1),
+    /// Commit an escalated terminal outcome and slash proposal atomically.
+    Escalate(SorafsRepairEscalateV1),
+}
+
+impl SorafsRepairTaskActionV1 {
+    /// Return the caller-supplied idempotency key.
+    #[must_use]
+    pub fn idempotency_key(&self) -> &str {
+        match self {
+            Self::Claim(action) => &action.idempotency_key,
+            Self::Renew(action) => &action.idempotency_key,
+            Self::Complete(action) => &action.idempotency_key,
+            Self::Fail(action) => &action.idempotency_key,
+            Self::Escalate(action) => &action.idempotency_key,
+        }
+    }
+}
+
+isi! {
+    /// Admit one exact canonical repair report under a subsystem exactly-once identity.
+    pub struct SubmitSorafsRepairTask {
+        /// Non-zero source identity. `PoTR` uses the signed receipt digest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub source_identity: [u8; 32],
+        /// Exact canonical `sorafs_manifest::repair::RepairReportV1` bytes.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        pub report_payload: Vec<u8>,
+    }
+}
+
+impl crate::seal::Instruction for SubmitSorafsRepairTask {}
+
+isi! {
+    /// Apply one compare-and-set repair lease or terminal transition.
+    pub struct ApplySorafsRepairTaskAction {
+        /// Canonical repair ticket identifier.
+        pub ticket_id: String,
+        /// Exact task revision observed by the submitter.
+        pub expected_revision: u64,
+        /// Typed mutation to commit.
+        pub action: SorafsRepairTaskActionV1,
+    }
+}
+
+impl crate::seal::Instruction for ApplySorafsRepairTaskAction {}
+
+isi! {
+    /// Commit the provider owner's single appeal against an escalated repair slash.
+    pub struct SubmitSorafsRepairAppeal {
+        /// Canonical repair ticket identifier.
+        pub ticket_id: String,
+        /// Exact task revision observed by the submitter.
+        pub expected_revision: u64,
+        /// Digest of external appeal evidence.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub evidence_digest: [u8; 32],
+        /// Bounded payload-free appeal reason.
+        pub reason: String,
+        /// Bounded caller key used for exact replay handling.
+        pub idempotency_key: String,
+    }
+}
+
+impl crate::seal::Instruction for SubmitSorafsRepairAppeal {}
 
 isi! {
     /// Activate the next authoritative `SoraFS` moderation-ledger policy revision.
@@ -656,6 +1082,30 @@ impl CancelSorafsOrderbookOrder {
     }
 }
 
+impl MatchSorafsOrderbook {
+    /// Construct a bounded deterministic matching instruction.
+    #[must_use]
+    pub const fn new(policy_digest: [u8; 32], expected_book_revision: u64, max_fills: u32) -> Self {
+        Self {
+            policy_digest,
+            expected_book_revision,
+            max_fills,
+        }
+    }
+}
+
+impl MaintainSorafsOrderbook {
+    /// Construct a bounded order/channel expiry instruction.
+    #[must_use]
+    pub const fn new(policy_digest: [u8; 32], expected_book_revision: u64, max_items: u32) -> Self {
+        Self {
+            policy_digest,
+            expected_book_revision,
+            max_items,
+        }
+    }
+}
+
 impl RecordSorafsOrderbookSettlementReceipt {
     /// Construct a signed funded-lock settlement and receipt instruction.
     #[must_use]
@@ -663,6 +1113,215 @@ impl RecordSorafsOrderbookSettlementReceipt {
         Self {
             receipt_payload,
             policy_digest,
+        }
+    }
+}
+
+impl SetSorafsReservePolicy {
+    /// Construct an authoritative reserve policy activation.
+    #[must_use]
+    pub fn new(policy: ReserveAuthorityPolicyV1) -> Self {
+        Self { policy }
+    }
+}
+
+impl RegisterSorafsReserveAccount {
+    /// Construct a provider reserve-account registration.
+    #[must_use]
+    pub fn new(terms: ReserveProviderTermsV1, policy_digest: [u8; 32]) -> Self {
+        Self {
+            terms,
+            policy_digest,
+        }
+    }
+}
+
+impl RequestSorafsReserveMovement {
+    /// Construct a provider reserve movement request.
+    #[must_use]
+    pub fn new(
+        movement_id: [u8; 32],
+        provider_id: ProviderId,
+        kind: ReserveMovementKindV1,
+        amount: XorQuantity,
+        expected_provider_revision: u64,
+        policy_digest: [u8; 32],
+    ) -> Self {
+        Self {
+            movement_id,
+            provider_id,
+            kind,
+            amount,
+            expected_provider_revision,
+            policy_digest,
+        }
+    }
+}
+
+impl DecideSorafsReserveMovement {
+    /// Construct a terminal reserve movement decision.
+    #[must_use]
+    pub fn new(movement_id: [u8; 32], approve: bool, rationale: String) -> Self {
+        Self {
+            movement_id,
+            approve,
+            rationale,
+        }
+    }
+}
+
+impl ChargeSorafsReserveRent {
+    /// Construct a deterministic reserve rent charge.
+    #[must_use]
+    pub fn new(
+        provider_id: ProviderId,
+        expected_provider_revision: u64,
+        billing_periods: u16,
+        policy_digest: [u8; 32],
+    ) -> Self {
+        Self {
+            provider_id,
+            expected_provider_revision,
+            billing_periods,
+            policy_digest,
+        }
+    }
+}
+
+impl AdvanceSorafsReserveLifecycle {
+    /// Construct a reserve lifecycle transition.
+    #[must_use]
+    pub fn new(
+        provider_id: ProviderId,
+        expected_provider_revision: u64,
+        days_past_due: u16,
+        policy_digest: [u8; 32],
+    ) -> Self {
+        Self {
+            provider_id,
+            expected_provider_revision,
+            days_past_due,
+            policy_digest,
+        }
+    }
+}
+
+impl DrawSorafsReserveCredit {
+    /// Construct a capped reserve-credit draw.
+    #[must_use]
+    pub fn new(
+        provider_id: ProviderId,
+        expected_provider_revision: u64,
+        amount: XorQuantity,
+        policy_digest: [u8; 32],
+    ) -> Self {
+        Self {
+            provider_id,
+            expected_provider_revision,
+            amount,
+            policy_digest,
+        }
+    }
+}
+
+impl RepaySorafsReserveCredit {
+    /// Construct a reserve-credit repayment.
+    #[must_use]
+    pub fn new(
+        provider_id: ProviderId,
+        expected_provider_revision: u64,
+        amount: XorQuantity,
+        policy_digest: [u8; 32],
+    ) -> Self {
+        Self {
+            provider_id,
+            expected_provider_revision,
+            amount,
+            policy_digest,
+        }
+    }
+}
+
+impl SubmitSorafsReserveAppeal {
+    /// Construct a provider reserve lifecycle appeal.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new(
+        appeal_id: [u8; 32],
+        provider_id: ProviderId,
+        expected_provider_revision: u64,
+        requested_stage: ReserveLifecycleStage,
+        reason: String,
+        evidence_digest: Option<[u8; 32]>,
+        policy_digest: [u8; 32],
+    ) -> Self {
+        Self {
+            appeal_id,
+            provider_id,
+            expected_provider_revision,
+            requested_stage,
+            reason,
+            evidence_digest,
+            policy_digest,
+        }
+    }
+}
+
+impl DecideSorafsReserveAppeal {
+    /// Construct a terminal reserve appeal decision.
+    #[must_use]
+    pub fn new(appeal_id: [u8; 32], accept: bool, rationale: String) -> Self {
+        Self {
+            appeal_id,
+            accept,
+            rationale,
+        }
+    }
+}
+
+impl SubmitSorafsRepairTask {
+    /// Construct an exactly-once repair-task admission instruction.
+    #[must_use]
+    pub fn new(source_identity: [u8; 32], report_payload: Vec<u8>) -> Self {
+        Self {
+            source_identity,
+            report_payload,
+        }
+    }
+}
+
+impl ApplySorafsRepairTaskAction {
+    /// Construct a compare-and-set repair-task mutation.
+    #[must_use]
+    pub fn new(
+        ticket_id: String,
+        expected_revision: u64,
+        action: SorafsRepairTaskActionV1,
+    ) -> Self {
+        Self {
+            ticket_id,
+            expected_revision,
+            action,
+        }
+    }
+}
+
+impl SubmitSorafsRepairAppeal {
+    /// Construct a provider-owner repair slash appeal.
+    #[must_use]
+    pub fn new(
+        ticket_id: String,
+        expected_revision: u64,
+        evidence_digest: [u8; 32],
+        reason: String,
+        idempotency_key: String,
+    ) -> Self {
+        Self {
+            ticket_id,
+            expected_revision,
+            evidence_digest,
+            reason,
+            idempotency_key,
         }
     }
 }
@@ -954,9 +1613,108 @@ impl_sorafs_decode_from_slice!(CancelSorafsOrderbookOrder {
     policy_digest: [u8; 32],
 });
 
+impl_sorafs_decode_from_slice!(MatchSorafsOrderbook {
+    policy_digest: [u8; 32],
+    expected_book_revision: u64,
+    max_fills: u32,
+});
+
+impl_sorafs_decode_from_slice!(MaintainSorafsOrderbook {
+    policy_digest: [u8; 32],
+    expected_book_revision: u64,
+    max_items: u32,
+});
+
 impl_sorafs_decode_from_slice!(RecordSorafsOrderbookSettlementReceipt {
     receipt_payload: Vec<u8>,
     policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(SetSorafsReservePolicy {
+    policy: ReserveAuthorityPolicyV1,
+});
+
+impl_sorafs_decode_from_slice!(RegisterSorafsReserveAccount {
+    terms: ReserveProviderTermsV1,
+    policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(RequestSorafsReserveMovement {
+    movement_id: [u8; 32],
+    provider_id: ProviderId,
+    kind: ReserveMovementKindV1,
+    amount: XorQuantity,
+    expected_provider_revision: u64,
+    policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(DecideSorafsReserveMovement {
+    movement_id: [u8; 32],
+    approve: bool,
+    rationale: String,
+});
+
+impl_sorafs_decode_from_slice!(ChargeSorafsReserveRent {
+    provider_id: ProviderId,
+    expected_provider_revision: u64,
+    billing_periods: u16,
+    policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(AdvanceSorafsReserveLifecycle {
+    provider_id: ProviderId,
+    expected_provider_revision: u64,
+    days_past_due: u16,
+    policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(DrawSorafsReserveCredit {
+    provider_id: ProviderId,
+    expected_provider_revision: u64,
+    amount: XorQuantity,
+    policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(RepaySorafsReserveCredit {
+    provider_id: ProviderId,
+    expected_provider_revision: u64,
+    amount: XorQuantity,
+    policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(SubmitSorafsReserveAppeal {
+    appeal_id: [u8; 32],
+    provider_id: ProviderId,
+    expected_provider_revision: u64,
+    requested_stage: ReserveLifecycleStage,
+    reason: String,
+    evidence_digest: Option<[u8; 32]>,
+    policy_digest: [u8; 32],
+});
+
+impl_sorafs_decode_from_slice!(DecideSorafsReserveAppeal {
+    appeal_id: [u8; 32],
+    accept: bool,
+    rationale: String,
+});
+
+impl_sorafs_decode_from_slice!(SubmitSorafsRepairTask {
+    source_identity: [u8; 32],
+    report_payload: Vec<u8>,
+});
+
+impl_sorafs_decode_from_slice!(ApplySorafsRepairTaskAction {
+    ticket_id: String,
+    expected_revision: u64,
+    action: SorafsRepairTaskActionV1,
+});
+
+impl_sorafs_decode_from_slice!(SubmitSorafsRepairAppeal {
+    ticket_id: String,
+    expected_revision: u64,
+    evidence_digest: [u8; 32],
+    reason: String,
+    idempotency_key: String,
 });
 
 impl_sorafs_decode_from_slice!(SetSorafsModerationPolicy {
@@ -1154,6 +1912,43 @@ mod tests {
         }
     }
 
+    fn reserve_policy() -> ReserveAuthorityPolicyV1 {
+        let domain = crate::domain::DomainId::try_new("sora", "universal").expect("reserve domain");
+        ReserveAuthorityPolicyV1 {
+            version: crate::sorafs::reserve::RESERVE_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            economics: crate::sorafs::reserve::ReservePolicyV1::default(),
+            asset_definition: crate::asset::AssetDefinitionId::new(
+                domain,
+                "xor".parse().expect("reserve asset name"),
+            ),
+            custody_account: owner(),
+            treasury_account: AccountId::new(
+                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                    .parse()
+                    .expect("treasury public key"),
+            ),
+            grace_period_days: 7,
+            default_after_days: 30,
+            max_provider_debt: XorQuantity::try_from_micro(1_000_000_000)
+                .expect("reserve debt cap"),
+            max_pending_movements_per_provider: 4,
+            max_open_appeals_per_provider: 2,
+        }
+    }
+
+    fn reserve_terms() -> ReserveProviderTermsV1 {
+        ReserveProviderTermsV1 {
+            provider_id: provider(0x36),
+            provider_account: owner(),
+            tier: crate::sorafs::reserve::ReserveTier::TierA,
+            storage_class: crate::sorafs::pin_registry::StorageClass::Hot,
+            duration: crate::sorafs::reserve::ReserveDuration::Monthly,
+            capacity_gib: 16,
+        }
+    }
+
     fn pop_issuer_policy() -> PopIssuerPolicyV1 {
         PopIssuerPolicyV1 {
             version: crate::sorafs::pop_registry::POP_ISSUER_POLICY_VERSION_V1,
@@ -1307,9 +2102,107 @@ mod tests {
             vec![0x03, 0x04],
             [0x52; 32],
         ));
+        assert_slice_roundtrip(MatchSorafsOrderbook::new([0x53; 32], 7, 16));
+        assert_slice_roundtrip(MaintainSorafsOrderbook::new([0x54; 32], 8, 32));
         assert_slice_roundtrip(RecordSorafsOrderbookSettlementReceipt::new(
             vec![0x05, 0x06],
-            [0x53; 32],
+            [0x55; 32],
+        ));
+        assert_slice_roundtrip(SetSorafsReservePolicy::new(reserve_policy()));
+        assert_slice_roundtrip(RegisterSorafsReserveAccount::new(
+            reserve_terms(),
+            [0x56; 32],
+        ));
+        assert_slice_roundtrip(RequestSorafsReserveMovement::new(
+            [0x57; 32],
+            provider(0x36),
+            ReserveMovementKindV1::TopUp,
+            XorQuantity::try_from_micro(10_000_000).expect("movement amount"),
+            1,
+            [0x56; 32],
+        ));
+        assert_slice_roundtrip(DecideSorafsReserveMovement::new(
+            [0x57; 32],
+            true,
+            "approved".to_owned(),
+        ));
+        assert_slice_roundtrip(ChargeSorafsReserveRent::new(
+            provider(0x36),
+            2,
+            1,
+            [0x56; 32],
+        ));
+        assert_slice_roundtrip(AdvanceSorafsReserveLifecycle::new(
+            provider(0x36),
+            3,
+            8,
+            [0x56; 32],
+        ));
+        assert_slice_roundtrip(DrawSorafsReserveCredit::new(
+            provider(0x36),
+            4,
+            XorQuantity::try_from_micro(5_000_000).expect("credit amount"),
+            [0x56; 32],
+        ));
+        assert_slice_roundtrip(RepaySorafsReserveCredit::new(
+            provider(0x36),
+            5,
+            XorQuantity::try_from_micro(1_000_000).expect("repayment amount"),
+            [0x56; 32],
+        ));
+        assert_slice_roundtrip(SubmitSorafsReserveAppeal::new(
+            [0x58; 32],
+            provider(0x36),
+            6,
+            ReserveLifecycleStage::Warning,
+            "review delinquency evidence".to_owned(),
+            Some([0x59; 32]),
+            [0x56; 32],
+        ));
+        assert_slice_roundtrip(DecideSorafsReserveAppeal::new(
+            [0x58; 32],
+            false,
+            "evidence insufficient".to_owned(),
+        ));
+        assert_slice_roundtrip(SubmitSorafsRepairTask::new([0x70; 32], vec![0x01, 0x02]));
+        for action in [
+            SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
+                lease_duration_ms: 1_000,
+                idempotency_key: "claim-1".to_owned(),
+            }),
+            SorafsRepairTaskActionV1::Renew(SorafsRepairRenewV1 {
+                lease_generation: 1,
+                lease_duration_ms: 2_000,
+                idempotency_key: "renew-1".to_owned(),
+            }),
+            SorafsRepairTaskActionV1::Complete(SorafsRepairCompleteV1 {
+                lease_generation: 1,
+                evidence_digest: [0x71; 32],
+                idempotency_key: "complete-1".to_owned(),
+            }),
+            SorafsRepairTaskActionV1::Fail(SorafsRepairFailV1 {
+                lease_generation: 1,
+                failure_digest: [0x72; 32],
+                idempotency_key: "fail-1".to_owned(),
+            }),
+            SorafsRepairTaskActionV1::Escalate(SorafsRepairEscalateV1 {
+                lease_generation: 1,
+                slash_proposal_payload: vec![0x03, 0x04],
+                idempotency_key: "escalate-1".to_owned(),
+            }),
+        ] {
+            assert_slice_roundtrip(ApplySorafsRepairTaskAction::new(
+                "REP-1".to_owned(),
+                1,
+                action,
+            ));
+        }
+        assert_slice_roundtrip(SubmitSorafsRepairAppeal::new(
+            "REP-1".to_owned(),
+            3,
+            [0x73; 32],
+            "provider evidence".to_owned(),
+            "appeal-1".to_owned(),
         ));
         assert_slice_roundtrip(SetSorafsModerationPolicy::new(moderation_policy()));
         assert_slice_roundtrip(SubmitSorafsModerationAppeal::new(moderation_appeal_intake()));
@@ -1430,9 +2323,98 @@ mod tests {
             &registry,
             CancelSorafsOrderbookOrder::new(vec![0x03, 0x04], [0x52; 32]),
         );
+        assert_registry_decodes(&registry, MatchSorafsOrderbook::new([0x53; 32], 7, 16));
+        assert_registry_decodes(&registry, MaintainSorafsOrderbook::new([0x54; 32], 8, 32));
         assert_registry_decodes(
             &registry,
-            RecordSorafsOrderbookSettlementReceipt::new(vec![0x05, 0x06], [0x53; 32]),
+            RecordSorafsOrderbookSettlementReceipt::new(vec![0x05, 0x06], [0x55; 32]),
+        );
+        assert_registry_decodes(&registry, SetSorafsReservePolicy::new(reserve_policy()));
+        assert_registry_decodes(
+            &registry,
+            RegisterSorafsReserveAccount::new(reserve_terms(), [0x56; 32]),
+        );
+        assert_registry_decodes(
+            &registry,
+            RequestSorafsReserveMovement::new(
+                [0x57; 32],
+                provider(0x36),
+                ReserveMovementKindV1::TopUp,
+                XorQuantity::try_from_micro(10_000_000).expect("movement amount"),
+                1,
+                [0x56; 32],
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            DecideSorafsReserveMovement::new([0x57; 32], true, "approved".to_owned()),
+        );
+        assert_registry_decodes(
+            &registry,
+            ChargeSorafsReserveRent::new(provider(0x36), 2, 1, [0x56; 32]),
+        );
+        assert_registry_decodes(
+            &registry,
+            AdvanceSorafsReserveLifecycle::new(provider(0x36), 3, 8, [0x56; 32]),
+        );
+        assert_registry_decodes(
+            &registry,
+            DrawSorafsReserveCredit::new(
+                provider(0x36),
+                4,
+                XorQuantity::try_from_micro(5_000_000).expect("credit amount"),
+                [0x56; 32],
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            RepaySorafsReserveCredit::new(
+                provider(0x36),
+                5,
+                XorQuantity::try_from_micro(1_000_000).expect("repayment amount"),
+                [0x56; 32],
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            SubmitSorafsReserveAppeal::new(
+                [0x58; 32],
+                provider(0x36),
+                6,
+                ReserveLifecycleStage::Warning,
+                "review delinquency evidence".to_owned(),
+                Some([0x59; 32]),
+                [0x56; 32],
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            DecideSorafsReserveAppeal::new([0x58; 32], false, "evidence insufficient".to_owned()),
+        );
+        assert_registry_decodes(
+            &registry,
+            SubmitSorafsRepairTask::new([0x70; 32], vec![0x01, 0x02]),
+        );
+        assert_registry_decodes(
+            &registry,
+            ApplySorafsRepairTaskAction::new(
+                "REP-1".to_owned(),
+                1,
+                SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
+                    lease_duration_ms: 1_000,
+                    idempotency_key: "claim-1".to_owned(),
+                }),
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            SubmitSorafsRepairAppeal::new(
+                "REP-1".to_owned(),
+                3,
+                [0x73; 32],
+                "provider evidence".to_owned(),
+                "appeal-1".to_owned(),
+            ),
         );
         assert_registry_decodes(
             &registry,

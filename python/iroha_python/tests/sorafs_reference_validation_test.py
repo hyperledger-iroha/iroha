@@ -5,13 +5,18 @@ from pathlib import Path
 import pytest
 from iroha_python import (
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+    SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     SORAFS_ORDERBOOK_PAYLOAD_KINDS,
     SORAFS_PDP_PAYLOAD_KINDS,
+    SORAFS_REFERENCE_MAX_LABEL_BYTES_V1,
+    SorafsGovernanceDagBlockInput,
     build_signed_orderbook_order_cancel,
     build_signed_orderbook_order_request,
     build_signed_orderbook_settlement_receipt,
     derive_orderbook_order_id,
     sign_orderbook_payload,
+    validate_governance_dag_block,
+    validate_governance_dag_head_chain,
     validate_orderbook_payload,
     validate_pdp_bundle,
     validate_pdp_challenge_proof,
@@ -22,6 +27,7 @@ from iroha_python import (
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ORDERBOOK_FIXTURES = _REPO_ROOT / "fixtures" / "sorafs_manifest" / "orderbook"
 _PDP_FIXTURES = _REPO_ROOT / "fixtures" / "sorafs_manifest" / "pdp"
+_GOVERNANCE_FIXTURES = _REPO_ROOT / "fixtures" / "sorafs_manifest" / "governance"
 _ORDERBOOK_PRIVATE_KEY = bytes([0xB7]) * 32
 _ORDERBOOK_OWNER_ACCOUNT = b"merchant@paynet"
 _MAX_SCALED_XOR = (
@@ -524,3 +530,113 @@ def test_reference_validation_rejects_bad_arguments_before_native_validation() -
         validate_orderbook_payload("order-request", b"\x00" * 8, generated_at_unix=-1)
     with pytest.raises(TypeError, match="bytes-like"):
         validate_pdp_payload("proof", "not-bytes")  # type: ignore[arg-type]
+
+
+def test_validate_governance_dag_block_accepts_canonical_fixture() -> None:
+    outcome = validate_governance_dag_block(
+        _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to"),
+        label="fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
+        generated_at_unix=1_700_002_001,
+    )
+
+    assert outcome["status"] == "Ok"
+    assert outcome["code"] == "SFS-OK-000"
+    assert outcome["generated_at"] == 1_700_002_001
+    assert outcome["inputs"] == [
+        {
+            "kind": "governance_dag_block",
+            "path": "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
+        }
+    ]
+
+
+def test_validate_governance_dag_block_rejects_expected_cid_mismatch() -> None:
+    outcome = validate_governance_dag_block(
+        _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to"),
+        expected_block_cid=bytes(32),
+        generated_at_unix=1_700_002_002,
+    )
+
+    assert outcome["status"] == "Error"
+    assert outcome["code"] == "SFS-GOV-004"
+    assert outcome["category"] == "validation"
+    assert outcome["generated_at"] == 1_700_002_002
+    assert outcome["inputs"] == [
+        {
+            "kind": "governance_dag_block",
+            "path": "governance-dag-block.to",
+        }
+    ]
+
+
+def test_validate_governance_dag_head_chain_accepts_root_to_head_fixture() -> None:
+    blocks = [
+        SorafsGovernanceDagBlockInput(
+            _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to"),
+            "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
+        ),
+        SorafsGovernanceDagBlockInput(
+            _fixture(_GOVERNANCE_FIXTURES / "dag_block_1_v1.to"),
+            "fixtures/sorafs_manifest/governance/dag_block_1_v1.to",
+        ),
+    ]
+    outcome = validate_governance_dag_head_chain(
+        _fixture(_GOVERNANCE_FIXTURES / "dag_head_v1.to"),
+        blocks,
+        head_label="fixtures/sorafs_manifest/governance/dag_head_v1.to",
+        generated_at_unix=1_700_002_003,
+    )
+
+    assert outcome["status"] == "Ok"
+    assert outcome["code"] == "SFS-OK-000"
+    assert outcome["generated_at"] == 1_700_002_003
+    assert [entry["kind"] for entry in outcome["inputs"]] == [
+        "governance_dag_head",
+        "governance_dag_block",
+        "governance_dag_block",
+    ]
+
+
+def test_validate_governance_dag_head_chain_rejects_reordered_blocks() -> None:
+    blocks = [
+        SorafsGovernanceDagBlockInput(
+            _fixture(_GOVERNANCE_FIXTURES / "dag_block_1_v1.to"),
+        ),
+        SorafsGovernanceDagBlockInput(
+            _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to"),
+        ),
+    ]
+    outcome = validate_governance_dag_head_chain(
+        _fixture(_GOVERNANCE_FIXTURES / "dag_head_v1.to"),
+        blocks,
+        generated_at_unix=1_700_002_004,
+    )
+
+    assert outcome["status"] == "Error"
+    assert outcome["code"] == "SFS-GOV-006"
+    assert outcome["generated_at"] == 1_700_002_004
+    assert [entry["path"] for entry in outcome["inputs"]] == [
+        "governance-dag-head.to",
+        "governance-dag-block-0.to",
+        "governance-dag-block-1.to",
+    ]
+
+
+def test_governance_dag_wrappers_enforce_labels_and_block_count() -> None:
+    root = _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to")
+    head = _fixture(_GOVERNANCE_FIXTURES / "dag_head_v1.to")
+    with pytest.raises(ValueError, match="UTF-8 bytes"):
+        validate_governance_dag_block(
+            root,
+            label="x" * (SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 + 1),
+        )
+    with pytest.raises(ValueError, match=r"1\.\.="):
+        validate_governance_dag_head_chain(head, [])
+    with pytest.raises(ValueError, match=r"1\.\.="):
+        validate_governance_dag_head_chain(
+            head,
+            [
+                SorafsGovernanceDagBlockInput(root)
+                for _ in range(SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1 + 1)
+            ],
+        )

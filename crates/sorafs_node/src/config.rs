@@ -3,13 +3,22 @@
 use std::path::{Path, PathBuf};
 
 use iroha_config::parameters::actual;
-use iroha_data_model::prelude::Quantity;
+use iroha_data_model::{
+    prelude::Quantity,
+    sorafs::transparency::{
+        MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
+        ModerationPrivacyParametersV1,
+    },
+};
 use sorafs_manifest::deal::XorQuantity;
 
 use crate::{
     metering::SmoothingConfig,
     pdp_provider::{PDP_PROVIDER_POLICY_VERSION_V1, PdpProviderProtocolPolicyV1},
-    transparency::PrivacyAggregateScheduleConfig,
+    transparency::{
+        PrivacyAggregateCycleConfig, PrivacyAggregateScheduleConfig,
+        PrivacyCompositionBudgetPolicyV1,
+    },
 };
 
 /// Convenience wrapper around the Torii-level SoraFS storage configuration.
@@ -23,6 +32,9 @@ pub struct StorageConfig {
     por_sample_interval_secs: u64,
     pdp_sample_window: u16,
     pdp_tree_memory_limit_bytes: iroha_config::base::util::Bytes<u64>,
+    moderation_screening_enabled: bool,
+    moderation_screening_authority_bundle_path: Option<PathBuf>,
+    moderation_screening_authority_bundle_digest: Option<[u8; 32]>,
     pdp_provider: PdpProviderProtocolPolicyV1,
     runtime_retention: RuntimeRetentionPolicy,
     alias: Option<String>,
@@ -34,6 +46,7 @@ pub struct StorageConfig {
     pricing_trust_policy_path: Option<PathBuf>,
     hedging_feed_trust_policy_path: Option<PathBuf>,
     privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
+    privacy_aggregate_policy: Option<PrivacyAggregatePolicyConfig>,
     evidence_viewer_audit_schedule: Option<PrivacyAggregateScheduleConfig>,
     reserve_lifecycle_schedule: Option<ReserveLifecycleScheduleConfig>,
     governance_dir: Option<PathBuf>,
@@ -95,6 +108,24 @@ impl StorageConfig {
     #[must_use]
     pub fn pdp_tree_memory_limit_bytes(&self) -> iroha_config::base::util::Bytes<u64> {
         self.pdp_tree_memory_limit_bytes
+    }
+
+    /// Whether authenticated moderation-screening admission is enabled.
+    #[must_use]
+    pub fn moderation_screening_enabled(&self) -> bool {
+        self.moderation_screening_enabled
+    }
+
+    /// Canonical non-secret authority bundle configured for screening admission.
+    #[must_use]
+    pub fn moderation_screening_authority_bundle_path(&self) -> Option<&PathBuf> {
+        self.moderation_screening_authority_bundle_path.as_ref()
+    }
+
+    /// Reviewed BLAKE3 digest of the exact canonical authority bundle bytes.
+    #[must_use]
+    pub fn moderation_screening_authority_bundle_digest(&self) -> Option<[u8; 32]> {
+        self.moderation_screening_authority_bundle_digest
     }
 
     /// Durable admission-bound PDP provider protocol policy.
@@ -161,6 +192,12 @@ impl StorageConfig {
     #[must_use]
     pub fn privacy_aggregate_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
         self.privacy_aggregate_schedule
+    }
+
+    /// Governed config-backed privacy and composition-budget policy.
+    #[must_use]
+    pub fn privacy_aggregate_policy(&self) -> Option<&PrivacyAggregatePolicyConfig> {
+        self.privacy_aggregate_policy.as_ref()
     }
 
     /// Optional config-backed evidence-viewer audit-report due-cycle scheduler.
@@ -235,6 +272,12 @@ impl StorageConfig {
             por_sample_interval_secs: storage.por_sample_interval_secs,
             pdp_sample_window: storage.pdp_sample_window,
             pdp_tree_memory_limit_bytes: storage.pdp_tree_memory_limit_bytes,
+            moderation_screening_enabled: storage.moderation_screening_enabled,
+            moderation_screening_authority_bundle_path: storage
+                .moderation_screening_authority_bundle_path
+                .clone(),
+            moderation_screening_authority_bundle_digest: storage
+                .moderation_screening_authority_bundle_digest,
             pdp_provider: PdpProviderProtocolPolicyV1 {
                 version: PDP_PROVIDER_POLICY_VERSION_V1,
                 max_pending_records: storage.pdp_provider.max_pending_records,
@@ -258,7 +301,8 @@ impl StorageConfig {
             reputation_trust_policy_path: storage.reputation_trust_policy_path.clone(),
             pricing_trust_policy_path: storage.pricing_trust_policy_path.clone(),
             hedging_feed_trust_policy_path: storage.hedging_feed_trust_policy_path.clone(),
-            privacy_aggregate_schedule: storage.privacy_aggregates.into_schedule_config(),
+            privacy_aggregate_schedule: storage.privacy_aggregates.clone().into_schedule_config(),
+            privacy_aggregate_policy: storage.privacy_aggregates.clone().into_policy_config(),
             evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
             reserve_lifecycle_schedule: storage.reserve_lifecycle.into_schedule_config(),
             governance_dir: storage.governance_dag_dir.clone(),
@@ -347,6 +391,30 @@ impl StorageConfigBuilder {
         self
     }
 
+    /// Enable or disable authenticated moderation-screening admission.
+    #[must_use]
+    pub fn moderation_screening_enabled(mut self, enabled: bool) -> Self {
+        self.inner.moderation_screening_enabled = enabled;
+        self
+    }
+
+    /// Set the canonical non-secret screening authority bundle path.
+    #[must_use]
+    pub fn moderation_screening_authority_bundle_path(mut self, path: Option<PathBuf>) -> Self {
+        self.inner.moderation_screening_authority_bundle_path = path;
+        self
+    }
+
+    /// Set the reviewed digest of the exact screening authority bundle bytes.
+    #[must_use]
+    pub fn moderation_screening_authority_bundle_digest(
+        mut self,
+        digest: Option<[u8; 32]>,
+    ) -> Self {
+        self.inner.moderation_screening_authority_bundle_digest = digest;
+        self
+    }
+
     /// Override the durable admission-bound PDP provider protocol policy.
     #[must_use]
     pub fn pdp_provider_policy(mut self, policy: PdpProviderProtocolPolicyV1) -> Self {
@@ -417,6 +485,16 @@ impl StorageConfigBuilder {
         schedule: Option<PrivacyAggregateScheduleConfig>,
     ) -> Self {
         self.inner.privacy_aggregate_schedule = schedule;
+        self
+    }
+
+    /// Override the governed config-backed privacy aggregate policy.
+    #[must_use]
+    pub fn privacy_aggregate_policy(
+        mut self,
+        policy: Option<PrivacyAggregatePolicyConfig>,
+    ) -> Self {
+        self.inner.privacy_aggregate_policy = policy;
         self
     }
 
@@ -631,6 +709,91 @@ trait PrivacyAggregateScheduleConfigExt {
     fn into_schedule_config(self) -> Option<PrivacyAggregateScheduleConfig>;
 }
 
+/// Governed V1 privacy aggregate policy sourced exclusively from `iroha_config`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivacyAggregatePolicyConfig {
+    aggregate_id_prefix: String,
+    privacy: ModerationPrivacyParametersV1,
+    policy_digest: [u8; 32],
+    composition_budget: PrivacyCompositionBudgetPolicyV1,
+}
+
+impl PrivacyAggregatePolicyConfig {
+    /// Construct and validate one governed privacy aggregate policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the public identifier, privacy parameters, policy
+    /// digest, or durable composition-budget policy is not canonical.
+    pub fn new(
+        aggregate_id_prefix: String,
+        privacy: ModerationPrivacyParametersV1,
+        policy_digest: [u8; 32],
+        composition_budget: PrivacyCompositionBudgetPolicyV1,
+    ) -> Result<Self, String> {
+        if aggregate_id_prefix.trim() != aggregate_id_prefix
+            || aggregate_id_prefix.is_empty()
+            || aggregate_id_prefix.len() > 128
+            || aggregate_id_prefix.chars().any(char::is_control)
+        {
+            return Err("privacy aggregate identifier prefix is invalid".to_string());
+        }
+        privacy
+            .validate()
+            .map_err(|error| format!("privacy aggregate parameters are invalid: {error}"))?;
+        if policy_digest.iter().all(|byte| *byte == 0) {
+            return Err("privacy aggregate policy digest must be nonzero".to_string());
+        }
+        composition_budget
+            .validate()
+            .map_err(|error| format!("privacy composition budget is invalid: {error}"))?;
+        if composition_budget.budget_id != policy_digest {
+            return Err(
+                "privacy composition budget must be bound to the policy digest".to_string(),
+            );
+        }
+        Ok(Self {
+            aggregate_id_prefix,
+            privacy,
+            policy_digest,
+            composition_budget,
+        })
+    }
+
+    /// Build one cycle config from the governed public policy.
+    #[must_use]
+    pub fn cycle_config(&self) -> PrivacyAggregateCycleConfig {
+        PrivacyAggregateCycleConfig {
+            aggregate_id_prefix: self.aggregate_id_prefix.clone(),
+            privacy: self.privacy,
+            policy_digest: Some(self.policy_digest),
+            metadata: Vec::new(),
+        }
+    }
+
+    /// Return the governed digest bound into threshold-PRF cycle requests.
+    #[must_use]
+    pub const fn policy_digest(&self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    /// Return whether this policy requires differential-privacy randomness.
+    #[must_use]
+    pub const fn requires_cycle_prf(&self) -> bool {
+        self.privacy.per_subject_metric_cap.is_some()
+    }
+
+    /// Durable composition-budget policy bound to the same governed digest.
+    #[must_use]
+    pub const fn composition_budget(&self) -> PrivacyCompositionBudgetPolicyV1 {
+        self.composition_budget
+    }
+}
+
+trait PrivacyAggregatePolicyConfigExt {
+    fn into_policy_config(self) -> Option<PrivacyAggregatePolicyConfig>;
+}
+
 impl PrivacyAggregateScheduleConfigExt for actual::SorafsPrivacyAggregateSchedule {
     fn into_schedule_config(self) -> Option<PrivacyAggregateScheduleConfig> {
         if !self.enabled {
@@ -640,6 +803,56 @@ impl PrivacyAggregateScheduleConfigExt for actual::SorafsPrivacyAggregateSchedul
             cycle_seconds: self.cycle_seconds.max(1),
             publish_delay_seconds: self.publish_delay_seconds,
         })
+    }
+}
+
+impl PrivacyAggregatePolicyConfigExt for actual::SorafsPrivacyAggregateSchedule {
+    fn into_policy_config(self) -> Option<PrivacyAggregatePolicyConfig> {
+        if !self.enabled {
+            return None;
+        }
+        let mode = match self.privacy_mode.as_str() {
+            "differential_privacy" => ModerationPrivacyModeV1::DifferentialPrivacy,
+            "suppression" => ModerationPrivacyModeV1::Suppression,
+            "differential_privacy_with_suppression" => {
+                ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression
+            }
+            invalid => {
+                panic!("validated SoraFS privacy aggregate config has unsupported mode `{invalid}`")
+            }
+        };
+        let policy_digest = self.policy_digest.unwrap_or_else(|| {
+            panic!("enabled SoraFS privacy aggregate config is missing its policy digest")
+        });
+        let uses_dp = !matches!(mode, ModerationPrivacyModeV1::Suppression);
+        let uses_suppression = !matches!(mode, ModerationPrivacyModeV1::DifferentialPrivacy);
+        let privacy = ModerationPrivacyParametersV1 {
+            version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+            mode,
+            epsilon_numerator: uses_dp.then_some(self.epsilon_numerator),
+            epsilon_denominator: uses_dp.then_some(self.epsilon_denominator),
+            delta_ppb: uses_dp.then_some(0),
+            per_subject_metric_cap: uses_dp.then_some(self.per_subject_metric_cap),
+            suppression_threshold: uses_suppression.then_some(self.suppression_threshold),
+            suppressed_count: 0,
+        };
+        let composition_budget = PrivacyCompositionBudgetPolicyV1 {
+            budget_id: policy_digest,
+            epsilon_limit_numerator: self.composition_budget_epsilon_numerator,
+            epsilon_limit_denominator: self.composition_budget_epsilon_denominator,
+            max_publications: self.composition_budget_max_publications,
+        };
+        Some(
+            PrivacyAggregatePolicyConfig::new(
+                self.aggregate_id_prefix,
+                privacy,
+                policy_digest,
+                composition_budget,
+            )
+            .unwrap_or_else(|error| {
+                panic!("validated SoraFS privacy aggregate policy is invalid: {error}")
+            }),
+        )
     }
 }
 
@@ -1195,6 +1408,8 @@ mod tests {
             enabled: true,
             cycle_seconds: 12,
             publish_delay_seconds: 3,
+            policy_digest: Some([0xC0; 32]),
+            ..actual::SorafsPrivacyAggregateSchedule::default()
         };
         actual.evidence_viewer_audits = actual::SorafsEvidenceViewerAuditSchedule {
             enabled: true,
@@ -1272,6 +1487,27 @@ mod tests {
                 publish_delay_seconds: 3,
             })
         );
+        let privacy_policy = cfg
+            .privacy_aggregate_policy()
+            .expect("enabled privacy aggregate policy");
+        let cycle_policy = privacy_policy.cycle_config();
+        assert_eq!(cycle_policy.aggregate_id_prefix, "sfm4c-cycle");
+        assert_eq!(cycle_policy.policy_digest, Some([0xC0; 32]));
+        assert_eq!(privacy_policy.policy_digest(), [0xC0; 32]);
+        assert!(privacy_policy.requires_cycle_prf());
+        assert_eq!(cycle_policy.privacy.epsilon_numerator, Some(4));
+        assert_eq!(cycle_policy.privacy.epsilon_denominator, Some(5));
+        assert_eq!(cycle_policy.privacy.delta_ppb, Some(0));
+        assert_eq!(cycle_policy.privacy.per_subject_metric_cap, Some(1));
+        assert_eq!(
+            privacy_policy.composition_budget(),
+            PrivacyCompositionBudgetPolicyV1 {
+                budget_id: [0xC0; 32],
+                epsilon_limit_numerator: 12,
+                epsilon_limit_denominator: 1,
+                max_publications: 52,
+            }
+        );
         assert_eq!(
             cfg.evidence_viewer_audit_schedule(),
             Some(PrivacyAggregateScheduleConfig {
@@ -1308,10 +1544,12 @@ mod tests {
             enabled: false,
             cycle_seconds: 0,
             publish_delay_seconds: 5,
+            ..actual::SorafsPrivacyAggregateSchedule::default()
         };
 
         let cfg = StorageConfig::from(&actual);
         assert_eq!(cfg.privacy_aggregate_schedule(), None);
+        assert_eq!(cfg.privacy_aggregate_policy(), None);
     }
 
     #[test]

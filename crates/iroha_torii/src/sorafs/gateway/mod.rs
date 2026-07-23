@@ -1,6 +1,7 @@
 //! Policy and security primitives for the SoraFS gateway service.
 
 mod acme;
+mod compliance;
 mod controller;
 mod denylist;
 mod policy;
@@ -11,7 +12,22 @@ pub use acme::{
     AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeClientError, AcmeConfig,
     CertificateBundle, CertificateOrder, ChallengeProfile,
 };
-pub use controller::{SelfSignedAcmeClient, TlsAutomationHandle};
+pub use compliance::{
+    FileGatewayComplianceStore, GatewayComplianceAcknowledgementPayloadV1,
+    GatewayComplianceAcknowledgementV1, GatewayComplianceAppealOverrideV1,
+    GatewayComplianceBaselineRuleV1, GatewayComplianceCatalogApprovalV1,
+    GatewayComplianceCatalogPayloadV1, GatewayComplianceCatalogV1, GatewayComplianceCheckpointV1,
+    GatewayComplianceContentEncoding, GatewayComplianceController,
+    GatewayComplianceControllerConfig, GatewayComplianceDecision, GatewayComplianceDecisionSource,
+    GatewayComplianceDisposition, GatewayComplianceError, GatewayComplianceFeedDocumentV1,
+    GatewayComplianceFeedHostPolicy, GatewayComplianceFeedPolicy, GatewayComplianceFeedTransport,
+    GatewayComplianceFetchLimits, GatewayComplianceFetchRequest, GatewayComplianceFetchResponse,
+    GatewayComplianceHistoryRecordV1, GatewayComplianceLegalSafetyHoldV1,
+    GatewayComplianceRollbackPayloadV1, GatewayComplianceRollbackV1,
+    GatewayComplianceSourceAnchorV1, GatewayComplianceStore, GatewayComplianceSubjectKindV1,
+    GatewayComplianceToggleV1, GatewayComplianceTrustPolicyV1, GatewayComplianceTrustedSignerV1,
+};
+pub use controller::TlsAutomationHandle;
 pub use denylist::{
     DenylistEntry, DenylistEntryBuilder, DenylistHit, DenylistKind, DenylistPolicy,
     DenylistPolicyTier, GatewayDenylist, PerceptualFamilyEntry, PerceptualMatch,

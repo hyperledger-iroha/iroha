@@ -2465,7 +2465,7 @@ impl ModerationScreeningListArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ModerationScreeningSubmitArgs {
-    /// JSON file emitted by `sorafs_cli moderation run-local --json-out`.
+    /// JSON request containing canonical signed-result or committee authority.
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
@@ -2495,31 +2495,19 @@ impl ModerationScreeningSubmitArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ModerationScreeningSubmitPayload {
-    subject: String,
-    subject_digest_hex: String,
-    manifest_id_hex: String,
-    runner_hash_hex: String,
-    combined_score_bps: u16,
-    verdict: String,
-    screened_at_unix: Option<u64>,
-    evidence_digest_hex: Option<String>,
-    policy_digest_hex: Option<String>,
-    notes: Option<String>,
+    idempotency_key_hex: String,
+    evidence_kind: String,
+    authority_b64: String,
+    committee_member_results_b64: Vec<String>,
 }
 
 impl ModerationScreeningSubmitPayload {
     fn as_request(&self) -> SorafsModerationScreeningResultRequest<'_> {
         SorafsModerationScreeningResultRequest {
-            subject: self.subject.as_str(),
-            subject_digest_hex: self.subject_digest_hex.as_str(),
-            manifest_id_hex: self.manifest_id_hex.as_str(),
-            runner_hash_hex: self.runner_hash_hex.as_str(),
-            combined_score_bps: self.combined_score_bps,
-            verdict: self.verdict.as_str(),
-            screened_at_unix: self.screened_at_unix,
-            evidence_digest_hex: self.evidence_digest_hex.as_deref(),
-            policy_digest_hex: self.policy_digest_hex.as_deref(),
-            notes: self.notes.as_deref(),
+            idempotency_key_hex: self.idempotency_key_hex.as_str(),
+            evidence_kind: self.evidence_kind.as_str(),
+            authority_b64: self.authority_b64.as_str(),
+            committee_member_results_b64: self.committee_member_results_b64.as_slice(),
         }
     }
 }
@@ -11123,15 +11111,41 @@ fn normalize_moderation_registry_manifest_format(format: &str) -> Result<&'stati
 fn load_moderation_screening_submit_payload(
     path: &Path,
 ) -> Result<ModerationScreeningSubmitPayload> {
-    let bytes = fs::read(path).wrap_err_with(|| {
+    const MAX_AUTHENTICATED_SCREENING_JSON_BYTES: u64 = 8 * 1024 * 1024;
+    let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
         format!(
-            "failed to read moderation screening result JSON `{}`",
+            "failed to inspect moderation screening authority JSON `{}`",
             path.display()
         )
     })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(eyre!(
+            "moderation screening authority JSON `{}` must be a regular non-symlink file",
+            path.display()
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_AUTHENTICATED_SCREENING_JSON_BYTES {
+        return Err(eyre!(
+            "moderation screening authority JSON `{}` must contain 1..={} bytes",
+            path.display(),
+            MAX_AUTHENTICATED_SCREENING_JSON_BYTES
+        ));
+    }
+    let bytes = fs::read(path).wrap_err_with(|| {
+        format!(
+            "failed to read moderation screening authority JSON `{}`",
+            path.display()
+        )
+    })?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != metadata.len() {
+        return Err(eyre!(
+            "moderation screening authority JSON `{}` changed while it was read",
+            path.display()
+        ));
+    }
     let value: Value = norito::json::from_slice(&bytes).wrap_err_with(|| {
         format!(
-            "failed to parse moderation screening result JSON `{}`",
+            "failed to parse moderation screening authority JSON `{}`",
             path.display()
         )
     })?;
@@ -11144,37 +11158,63 @@ fn moderation_screening_submit_payload_from_json(
     let Value::Object(fields) = value else {
         return Err(eyre!("--input must contain a JSON object"));
     };
-    let subject = required_json_text(fields, "subject")?;
-    let subject_digest_hex = required_json_hex_digest::<32>(fields, "subject_digest_hex")?;
-    let manifest_id_hex = required_json_hex_digest::<16>(fields, "manifest_id_hex")?;
-    let runner_hash_hex = required_json_hex_digest::<32>(fields, "runner_hash_hex")?;
-    let combined_score_bps = required_json_u16(fields, "combined_score_bps")?;
-    if combined_score_bps > 10_000 {
-        return Err(eyre!("combined_score_bps must be <= 10000"));
+    let idempotency_key_hex = required_json_hex_digest::<32>(fields, "idempotency_key_hex")?;
+    if idempotency_key_hex.bytes().all(|byte| byte == b'0') {
+        return Err(eyre!("idempotency_key_hex must not be all zeroes"));
     }
-    let verdict = normalize_moderation_screening_verdict(
-        required_json_text(fields, "verdict")?.as_str(),
-        "verdict",
-    )?;
-    let screened_at_unix = optional_json_u64(fields, "screened_at_unix")?;
-    if screened_at_unix == Some(0) {
-        return Err(eyre!("screened_at_unix must be non-zero"));
+    let evidence_kind = required_json_text(fields, "evidence_kind")?;
+    if !matches!(
+        evidence_kind.as_str(),
+        "signed_result" | "committee_aggregate"
+    ) {
+        return Err(eyre!(
+            "evidence_kind must be `signed_result` or `committee_aggregate`"
+        ));
     }
-    let evidence_digest_hex = optional_json_hex_digest::<32>(fields, "evidence_digest_hex")?;
-    let policy_digest_hex = optional_json_hex_digest::<32>(fields, "policy_digest_hex")?;
-    let notes = optional_json_text(fields, "notes")?;
+    let authority_b64 = required_json_text(fields, "authority_b64")?;
+    let committee_member_results_b64 =
+        required_json_string_array(fields, "committee_member_results_b64")?;
+    match evidence_kind.as_str() {
+        "signed_result" if !committee_member_results_b64.is_empty() => {
+            return Err(eyre!(
+                "signed_result must not include committee_member_results_b64"
+            ));
+        }
+        "committee_aggregate"
+            if committee_member_results_b64.is_empty()
+                || committee_member_results_b64.len() > 64 =>
+        {
+            return Err(eyre!(
+                "committee_member_results_b64 must contain 1..=64 signed results"
+            ));
+        }
+        _ => {}
+    }
     Ok(ModerationScreeningSubmitPayload {
-        subject,
-        subject_digest_hex,
-        manifest_id_hex,
-        runner_hash_hex,
-        combined_score_bps,
-        verdict,
-        screened_at_unix,
-        evidence_digest_hex,
-        policy_digest_hex,
-        notes,
+        idempotency_key_hex,
+        evidence_kind,
+        authority_b64,
+        committee_member_results_b64,
     })
+}
+
+fn required_json_string_array(fields: &Map, field: &str) -> Result<Vec<String>> {
+    let Some(Value::Array(values)) = fields.get(field) else {
+        return if fields.contains_key(field) {
+            Err(eyre!("{field} must be a JSON string array"))
+        } else {
+            Err(eyre!("{field} is required"))
+        };
+    };
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| match value {
+            Value::String(value) if !value.is_empty() && value.trim() == value => Ok(value.clone()),
+            Value::String(_) => Err(eyre!("{field}[{index}] must be non-empty and unpadded")),
+            _ => Err(eyre!("{field}[{index}] must be a JSON string")),
+        })
+        .collect()
 }
 
 fn required_json_text(fields: &Map, field: &str) -> Result<String> {
@@ -11198,27 +11238,6 @@ fn required_json_hex_digest<const N: usize>(fields: &Map, field: &str) -> Result
     normalize_hex_digest::<N>(&value, field)
 }
 
-fn optional_json_hex_digest<const N: usize>(fields: &Map, field: &str) -> Result<Option<String>> {
-    match fields.get(field) {
-        Some(Value::String(value)) => Ok(Some(normalize_hex_digest::<N>(value, field)?)),
-        Some(Value::Null) | None => Ok(None),
-        Some(_) => Err(eyre!("{field} must be a JSON string or null")),
-    }
-}
-
-fn required_json_u16(fields: &Map, field: &str) -> Result<u16> {
-    let value = required_json_u64(fields, field)?;
-    u16::try_from(value).map_err(|_| eyre!("{field} must fit into u16"))
-}
-
-fn required_json_u64(fields: &Map, field: &str) -> Result<u64> {
-    match fields.get(field).and_then(Value::as_u64) {
-        Some(value) => Ok(value),
-        None if fields.contains_key(field) => Err(eyre!("{field} must be an unsigned integer")),
-        None => Err(eyre!("{field} is required")),
-    }
-}
-
 fn optional_json_u64(fields: &Map, field: &str) -> Result<Option<u64>> {
     match fields.get(field) {
         Some(Value::Null) | None => Ok(None),
@@ -11226,20 +11245,6 @@ fn optional_json_u64(fields: &Map, field: &str) -> Result<Option<u64>> {
             .as_u64()
             .map(Some)
             .ok_or_else(|| eyre!("{field} must be an unsigned integer or null")),
-    }
-}
-
-fn normalize_moderation_screening_verdict(value: &str, field: &str) -> Result<String> {
-    let verdict = required_trimmed_text(value, field)?.to_ascii_lowercase();
-    if matches!(
-        verdict.as_str(),
-        "pass" | "warn" | "quarantine" | "escalate" | "block"
-    ) {
-        Ok(verdict)
-    } else {
-        Err(eyre!(
-            "{field} must be pass, warn, quarantine, escalate, or block"
-        ))
     }
 }
 
@@ -13726,6 +13731,7 @@ fn capability_type_label(cap: CapabilityType) -> &'static str {
         CapabilityType::QuicNoise => "quic_noise",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
+        CapabilityType::PotrMlDsa => "potr_mldsa",
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }
@@ -25627,30 +25633,22 @@ mod tests {
     }
 
     #[test]
-    fn moderation_screening_submit_reads_runner_json() {
-        let subject_digest = [0xA1_u8; 32];
-        let manifest_id = [0xB2_u8; 16];
-        let runner_hash = [0xC3_u8; 32];
-        let evidence_digest = [0xD4_u8; 32];
-        let policy_digest = [0xE5_u8; 32];
-        let expected_subject_digest = encode(subject_digest);
-        let expected_manifest_id = encode(manifest_id);
-        let expected_runner_hash = encode(runner_hash);
-        let expected_evidence_digest = encode(evidence_digest);
-        let expected_policy_digest = encode(policy_digest);
+    fn moderation_screening_submit_reads_authenticated_authority_json() {
+        let idempotency_key = [0xA1_u8; 32];
+        let expected_idempotency_key = encode(idempotency_key);
+        let authority_b64 = STANDARD.encode(b"canonical committee aggregate");
+        let member_one_b64 = STANDARD.encode(b"canonical signed member one");
+        let member_two_b64 = STANDARD.encode(b"canonical signed member two");
         let mut file = NamedTempFile::new().expect("screening result file");
         file.write_all(
             &norito::json::to_vec(&norito::json!({
-                "subject": " cid:bafyfixture ",
-                "subject_digest_hex": (encode(subject_digest).to_ascii_uppercase()),
-                "manifest_id_hex": (format!("0x{}", encode(manifest_id).to_ascii_uppercase())),
-                "runner_hash_hex": (encode(runner_hash).to_ascii_uppercase()),
-                "combined_score_bps": 6500_u64,
-                "verdict": " Quarantine ",
-                "screened_at_unix": 1_800_000_110_u64,
-                "evidence_digest_hex": (encode(evidence_digest).to_ascii_uppercase()),
-                "policy_digest_hex": (encode(policy_digest).to_ascii_uppercase()),
-                "notes": " local runner fixture ",
+                "idempotency_key_hex": (format!("0x{}", encode(idempotency_key).to_ascii_uppercase())),
+                "evidence_kind": "committee_aggregate",
+                "authority_b64": authority_b64.clone(),
+                "committee_member_results_b64": [
+                    member_one_b64.clone(),
+                    member_two_b64.clone(),
+                ],
             }))
             .expect("serialize screening JSON"),
         )
@@ -25661,22 +25659,13 @@ mod tests {
         let mut ctx = TestContext::new();
 
         args.run_with(&mut ctx, |_client, request| {
-            assert_eq!(request.subject, "cid:bafyfixture");
-            assert_eq!(request.subject_digest_hex, expected_subject_digest);
-            assert_eq!(request.manifest_id_hex, expected_manifest_id);
-            assert_eq!(request.runner_hash_hex, expected_runner_hash);
-            assert_eq!(request.combined_score_bps, 6_500);
-            assert_eq!(request.verdict, "quarantine");
-            assert_eq!(request.screened_at_unix, Some(1_800_000_110));
+            assert_eq!(request.idempotency_key_hex, expected_idempotency_key);
+            assert_eq!(request.evidence_kind, "committee_aggregate");
+            assert_eq!(request.authority_b64, authority_b64);
             assert_eq!(
-                request.evidence_digest_hex,
-                Some(expected_evidence_digest.as_str())
+                request.committee_member_results_b64,
+                [member_one_b64.clone(), member_two_b64.clone()]
             );
-            assert_eq!(
-                request.policy_digest_hex,
-                Some(expected_policy_digest.as_str())
-            );
-            assert_eq!(request.notes, Some("local runner fixture"));
             Ok(Response::builder()
                 .status(StatusCode::ACCEPTED)
                 .header("Content-Type", "application/json")
@@ -25696,11 +25685,9 @@ mod tests {
         let mut file = NamedTempFile::new().expect("screening result file");
         file.write_all(
             &norito::json::to_vec(&norito::json!({
-                "subject": "cid:bafyfixture",
-                "subject_digest_hex": (encode([0x11_u8; 32])),
-                "manifest_id_hex": (encode([0x22_u8; 16])),
-                "combined_score_bps": 1000_u64,
-                "verdict": "pass",
+                "idempotency_key_hex": (encode([0x11_u8; 32])),
+                "evidence_kind": "signed_result",
+                "committee_member_results_b64": [],
             }))
             .expect("serialize screening JSON"),
         )
@@ -25712,8 +25699,8 @@ mod tests {
 
         let err = args
             .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
-            .expect_err("missing runner hash must be rejected");
-        assert!(err.to_string().contains("runner_hash_hex"));
+            .expect_err("missing authority must be rejected");
+        assert!(err.to_string().contains("authority_b64"));
         assert!(ctx.printed.is_empty());
     }
 

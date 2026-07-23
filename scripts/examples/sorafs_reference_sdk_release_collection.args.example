@@ -16,6 +16,6 @@
 --require-kind release_archive,signed_manifest,downstream_bindings,cookbook_smoke,ffi_header_contract,governance_approval
 --now-unix 1800400000
 --max-evidence-age-secs 1209600
---min-release-targets 4
---min-downstream-packages 5
+--min-release-targets 5
+--min-downstream-packages 6
 --max-smoke-duration-secs 1800

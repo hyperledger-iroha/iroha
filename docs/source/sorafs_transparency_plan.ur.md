@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f7638d95e4adc291dac711642874a3a7b435983aacb52035133f8631e5c6acca
+source_hash: 3438160dd3fd3ea4b20bd87184ddf36a4a353d1c8dd89f9e70a57db55879c162
 source_last_modified: "2026-07-06T20:37:18.181237+00:00"
 translation_last_reviewed: 2026-07-05
 source_mtime: "2026-07-06T20:37:18.181237+00:00"
@@ -129,8 +129,8 @@ moderation ledger publication service described by the original plan.
   width, and publish delay. `sorafs_node::StorageConfig` projects enabled config
   into `PrivacyAggregateScheduleConfig`, and
   `NodeHandle::publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
-  uses that cadence while keeping privacy policy and noise seed material as
-  explicit runtime-only inputs.
+  uses the config-authoritative policy while accepting only runtime
+  threshold-PRF output and predecessor hash inputs.
 - Torii exposes
   `/v1/sorafs/transparency/privacy-aggregates/source-events` for
   canonical-authenticated local aggregate source-event ingestion. The handler
@@ -141,8 +141,7 @@ moderation ledger publication service described by the original plan.
   `/v1/sorafs/transparency/privacy-aggregates/publish-due` for
   canonical-authenticated local configured aggregate publication. The handler
   evaluates the configured schedule, catches up stale due event-backed windows,
-  accepts privacy policy, optional noise seed, policy digest, previous block
-  hash, and public aggregate metadata as runtime-only request material, and
+  accepts only optional threshold-PRF output and previous block hash, and
   returns structured
   published/skipped/already-published outcomes with cycle hashes when a cycle is
   published.

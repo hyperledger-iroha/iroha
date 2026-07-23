@@ -25,8 +25,8 @@ jobs:
     runs-on: [self-hosted, Linux, cuda]
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
           workspaces: "."
@@ -68,7 +68,7 @@ jobs:
           cargo test -p norito stage1_helper --features cuda-stage1,stage1-validate -- --nocapture
           cargo test -p norito cuda_stage1_backend_matches_scalar_when_required_or_available --features cuda-stage1,stage1-validate -- --nocapture
       - name: Upload CUDA inventory
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cuda-nightly-hardware
           path: dist/cuda-nightly

@@ -11,8 +11,14 @@ use crate::{
     },
     merge::{MergeLedgerEntry, MergeQuorumCertificate},
     nexus::{DataSpaceId, LaneId},
+    peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
+
+/// Current wire version for a globally committed autonomous lane payload.
+pub const AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1: u8 = 1;
+/// Current-only first-release block execution-context bundle layout.
+pub const BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1: u8 = 1;
 
 /// Role of one route leg in an external execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -65,6 +71,7 @@ impl ExternalExecutionRouteLeg {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct ExternalExecutionContext {
     /// Hash of the external entrypoint this context belongs to.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -77,7 +84,6 @@ pub struct ExternalExecutionContext {
     /// Full coordinator/participant route plan used for execution.
     pub routing_plan_legs: Vec<ExternalExecutionRouteLeg>,
     /// Native AMX receipt collected for this routed entrypoint, when the plan spans dataspaces.
-    #[norito(default)]
     pub native_amx_receipt: Option<NativeAmxReceipt>,
 }
 
@@ -223,33 +229,103 @@ impl CertifiedMergeLedgerReference {
     }
 }
 
-/// Ordered execution context for external entrypoints in a block payload.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
+/// Globally ordered commitment to one producer-authenticated autonomous lane payload.
+///
+/// `canonical_payload` contains the exact canonical framed bytes of the
+/// hint-free lane payload. The duplicated identity fields let admission reject
+/// substitutions before making the payload eligible for lane-local execution.
+/// A finalized global block hint is attached only after this envelope has been
+/// committed, so the payload never has to contain the hash of its own carrier.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
+pub struct AutonomousLanePayloadEnvelopeV1 {
+    /// Envelope schema version.
+    pub version: u8,
+    /// Hash of the chain identifier that owns the payload.
+    pub chain_id_hash: Hash,
+    /// Consensus epoch at the global proposal height.
+    pub epoch: u64,
+    /// Lane selected for autonomous execution.
+    pub lane_id: LaneId,
+    /// Dataspace selected for autonomous execution.
+    pub dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation.
+    pub lane_incarnation: Hash,
+    /// Global proposal height bound by the lane proposal.
+    pub proposal_height: u64,
+    /// Lane-local block height.
+    pub lane_block_height: u64,
+    /// Origin lane-local view.
+    pub lane_block_view: u64,
+    /// Exact producer-authenticated proposal identity.
+    pub proposal_hash: Hash,
+    /// Exact lane-block descriptor identity.
+    pub descriptor_hash: Hash,
+    /// Exact hint-neutral executable payload identity.
+    pub payload_hash: Hash,
+    /// Lane committee member that authenticated the payload.
+    pub producer: PeerId,
+    /// Bounded canonical framed bytes of the hint-free executable payload.
+    pub canonical_payload: Vec<u8>,
+}
+
+/// Ordered execution context for external entrypoints in a block payload.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
 pub struct BlockExecutionContextBundle {
+    /// Exact first-release bundle layout. Only version one is supported.
+    pub version: u8,
     /// Routing context entries aligned with the block's external entrypoints.
     pub external: Vec<ExternalExecutionContext>,
+    /// Producer-authenticated autonomous payloads anchored by this global block.
+    ///
+    /// This field is deliberately required in the current layout. Legacy
+    /// execution-context bytes must not decode as an implicitly empty anchor.
+    pub autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
     /// Lane-local payload ownership and RBC instance identities aligned by block entrypoint index.
-    #[norito(default)]
     pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
     /// Merge-committee-certified entry applied before ordinary block entrypoints.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub merge_entry: Option<CertifiedMergeLedgerReference>,
 }
 
 impl BlockExecutionContextBundle {
+    /// Current supported bundle layout.
+    pub const VERSION: u8 = BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1;
+
+    /// Return whether this bundle advertises the current first-release layout.
+    #[must_use]
+    pub const fn has_current_version(&self) -> bool {
+        self.version == Self::VERSION
+    }
+
     /// Construct an ordered execution context bundle.
     #[must_use]
     pub const fn new(external: Vec<ExternalExecutionContext>) -> Self {
         Self {
+            version: Self::VERSION,
             external,
+            autonomous_lane_payloads: Vec::new(),
             lane_payload_ownerships: Vec::new(),
             merge_entry: None,
         }
+    }
+
+    /// Attach globally anchored autonomous lane payloads to this bundle.
+    #[must_use]
+    pub fn with_autonomous_lane_payloads(
+        mut self,
+        autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
+    ) -> Self {
+        self.autonomous_lane_payloads = autonomous_lane_payloads;
+        self
     }
 
     /// Attach lane-local payload ownership identities to this bundle.
@@ -273,14 +349,23 @@ impl BlockExecutionContextBundle {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.external.is_empty()
+            && self.autonomous_lane_payloads.is_empty()
             && self.lane_payload_ownerships.is_empty()
             && self.merge_entry.is_none()
+    }
+}
+
+impl Default for BlockExecutionContextBundle {
+    fn default() -> Self {
+        Self::new(Vec::new())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use core::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
     use crate::{
@@ -295,6 +380,7 @@ mod tests {
     fn sample_merge_entry() -> MergeLedgerEntry {
         let validator_set = Vec::<PeerId>::new();
         MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: 9,
             lane_catalog_hash: Hash::new(b"lane-catalog"),
             active_lanes: Vec::new(),
@@ -468,6 +554,157 @@ mod tests {
             !BlockExecutionContextBundle::new(Vec::new())
                 .with_lane_payload_ownerships(vec![ownership])
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn block_execution_context_bundle_new_has_required_empty_autonomous_anchor() {
+        let bundle = BlockExecutionContextBundle::new(Vec::new());
+        assert_eq!(bundle.version, BlockExecutionContextBundle::VERSION);
+        assert!(bundle.autonomous_lane_payloads.is_empty());
+        assert!(bundle.is_empty());
+
+        let encoded = norito::to_bytes(&bundle).expect("empty current bundle encodes");
+        let decoded: BlockExecutionContextBundle =
+            norito::decode_from_bytes(&encoded).expect("required empty anchor decodes");
+        assert_eq!(decoded, bundle);
+    }
+
+    #[test]
+    fn block_execution_context_bundle_roundtrips_autonomous_lane_payloads() {
+        let producer = PeerId::new(
+            KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::BlsNormal)
+                .expect("generate checked autonomous payload producer")
+                .public_key()
+                .clone(),
+        );
+        let envelope = AutonomousLanePayloadEnvelopeV1 {
+            version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
+            chain_id_hash: Hash::new(b"autonomous-envelope-chain"),
+            epoch: 4,
+            lane_id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(9),
+            lane_incarnation: Hash::new(b"autonomous-envelope-incarnation"),
+            proposal_height: 7,
+            lane_block_height: 5,
+            lane_block_view: 0,
+            proposal_hash: Hash::new(b"autonomous-envelope-proposal"),
+            descriptor_hash: Hash::new(b"autonomous-envelope-descriptor"),
+            payload_hash: Hash::new(b"autonomous-envelope-payload"),
+            producer,
+            canonical_payload: vec![1, 2, 3, 4],
+        };
+        let bundle = BlockExecutionContextBundle::new(Vec::new())
+            .with_autonomous_lane_payloads(vec![envelope.clone()]);
+
+        let encoded = norito::to_bytes(&bundle).expect("autonomous payload bundle encodes");
+        let decoded: BlockExecutionContextBundle =
+            norito::decode_from_bytes(&encoded).expect("autonomous payload bundle decodes");
+
+        assert_eq!(decoded.autonomous_lane_payloads, vec![envelope]);
+        assert!(!decoded.is_empty());
+    }
+
+    #[test]
+    fn block_execution_context_layout_omissions_fail_closed() {
+        #[derive(Encode)]
+        struct LegacyExternalExecutionContext {
+            entrypoint_hash: HashOf<TransactionEntrypoint>,
+            lane_id: LaneId,
+            dataspace_id: DataSpaceId,
+            routing_plan_digest: Hash,
+            routing_plan_legs: Vec<ExternalExecutionRouteLeg>,
+        }
+
+        #[derive(Encode)]
+        struct UnversionedBlockExecutionContextBundle {
+            external: Vec<ExternalExecutionContext>,
+            autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
+            lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+            merge_entry: Option<CertifiedMergeLedgerReference>,
+        }
+
+        #[derive(Encode)]
+        struct PreAutonomousBlockExecutionContextBundle {
+            version: u8,
+            external: Vec<ExternalExecutionContext>,
+            lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+            merge_entry: Option<CertifiedMergeLedgerReference>,
+        }
+
+        #[derive(Encode)]
+        struct LegacyBlockExecutionContextBundle {
+            version: u8,
+            external: Vec<ExternalExecutionContext>,
+            autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
+        }
+
+        #[derive(Encode)]
+        struct PreviousBlockExecutionContextBundle {
+            version: u8,
+            external: Vec<ExternalExecutionContext>,
+            autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
+            lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+        }
+
+        let legacy_external = LegacyExternalExecutionContext {
+            entrypoint_hash: entrypoint_hash(b"legacy-external"),
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            routing_plan_digest: Hash::new(b"legacy-external-plan"),
+            routing_plan_legs: Vec::new(),
+        }
+        .encode();
+        assert!(
+            ExternalExecutionContext::decode(&mut legacy_external.as_slice()).is_err(),
+            "an external context omitting its Native AMX receipt field must fail closed"
+        );
+
+        let unversioned = UnversionedBlockExecutionContextBundle {
+            external: Vec::new(),
+            autonomous_lane_payloads: Vec::new(),
+            lane_payload_ownerships: Vec::new(),
+            merge_entry: None,
+        }
+        .encode();
+        assert!(
+            BlockExecutionContextBundle::decode(&mut unversioned.as_slice()).is_err(),
+            "the unversioned execution-context bundle must fail closed"
+        );
+
+        let pre_autonomous = PreAutonomousBlockExecutionContextBundle {
+            version: BlockExecutionContextBundle::VERSION,
+            external: Vec::new(),
+            lane_payload_ownerships: Vec::new(),
+            merge_entry: None,
+        }
+        .encode();
+        assert!(
+            BlockExecutionContextBundle::decode(&mut pre_autonomous.as_slice()).is_err(),
+            "the bundle layout omitting its autonomous payload field must fail closed"
+        );
+
+        let legacy = LegacyBlockExecutionContextBundle {
+            version: BlockExecutionContextBundle::VERSION,
+            external: Vec::new(),
+            autonomous_lane_payloads: Vec::new(),
+        }
+        .encode();
+        assert!(
+            BlockExecutionContextBundle::decode(&mut legacy.as_slice()).is_err(),
+            "the bundle layout omitting ownership and merge fields must fail closed"
+        );
+
+        let previous = PreviousBlockExecutionContextBundle {
+            version: BlockExecutionContextBundle::VERSION,
+            external: Vec::new(),
+            autonomous_lane_payloads: Vec::new(),
+            lane_payload_ownerships: Vec::new(),
+        }
+        .encode();
+        assert!(
+            BlockExecutionContextBundle::decode(&mut previous.as_slice()).is_err(),
+            "the bundle layout omitting its merge field must fail closed"
         );
     }
 

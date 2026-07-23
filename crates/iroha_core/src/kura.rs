@@ -43,7 +43,7 @@ use iroha_config::{
 use iroha_crypto::Algorithm;
 #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 use iroha_crypto::KeyPair;
-use iroha_crypto::{Hash, HashOf, MerkleTree, PublicKey};
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
@@ -56,8 +56,8 @@ use iroha_data_model::{
             LaneBlockProposalV1, LaneBlockQcV1, NativeAmxReceipt, SumeragiLanePayloadOwnership,
         },
         consensus_v2::{
-            BlockSubject, ExecutionCommitment, HeightContextId, QuorumCertificateRef,
-            SnapshotV2BootstrapRecord,
+            BlockSubject, ExecutionCommitment, HeightContextId, NativeAmxApplicationManifestLeafV1,
+            QuorumCertificateRef, SnapshotV2BootstrapRecord,
             finality::{
                 V2FinalityArtifact, V2FinalityValidationError, V2QuorumCertificateVerificationError,
             },
@@ -789,9 +789,14 @@ const CERTIFIED_LANE_BLOCKS_INDEX_FILE: &str = "certified_blocks.index";
 const AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norito";
 const AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
 const AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX: &str = "autonomous_view";
-#[cfg(test)]
+const AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX: &str = "autonomous_attempt_v1";
+const AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX: &str = "autonomous_attempt_view_v1";
+const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX: &str = "autonomous_latest_attempt_v1";
+const AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE: &str = "autonomous_route_latest_attempt_v1.norito";
+const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES: usize = 4 * 1024;
+const AUTONOMOUS_LANE_BLOCK_VIEW_STATE_MAX_BYTES: usize =
+    MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIMS_DIR_PREFIX: &str = "autonomous_entrypoint_claims";
-#[cfg(test)]
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES: usize = 4 * 1024;
 const CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET: usize = 64;
 const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
@@ -802,6 +807,12 @@ const LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE: &str = "application_receipts.no
 const LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE: &str = "application_receipts.index";
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE: &str = "native_amx_participant_receipts.norito";
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE: &str = "native_amx_participant_receipts.index";
+const NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE: &str = "native_amx_application_manifests.norito";
+const NATIVE_AMX_APPLICATION_MANIFESTS_INDEX_FILE: &str = "native_amx_application_manifests.index";
+const NATIVE_AMX_APPLICATION_MANIFEST_MAX_PROOF_HEIGHT: usize = 10;
+const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE: &str =
+    "native_amx_participant_receipts.latest_v1.norito";
+const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES: usize = 4 * 1024;
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
 const ROSTER_SIDECARS_DATA_FILE: &str = "roster_sidecars.norito";
@@ -1728,7 +1739,7 @@ struct BlockReplicaAdvert {
 }
 
 /// Local body availability for a canonical block known to Kura.
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BlockBodyStatus {
     /// Body is cached in memory.
@@ -2112,6 +2123,12 @@ impl MergeLedgerLog {
     /// it is the next contiguous frame.
     fn preflight_append(&mut self, entry: &MergeLedgerEntry) -> Result<bool> {
         self.recover_failed_append_tail()?;
+        if !entry.has_current_version() {
+            return Err(Error::MergeCarrierConflict(format!(
+                "unsupported merge ledger entry version {}",
+                entry.version
+            )));
+        }
         let entry_hash = entry.canonical_hash();
         if let Some(existing) = self.entry_by_hash(entry_hash)? {
             return if existing == *entry {
@@ -2339,6 +2356,12 @@ impl MergeLedgerLog {
                 "indexed merge frame failed exact Norito decode: {err}"
             ))
         })?;
+        if !entry.has_current_version() {
+            return Err(Error::MergeCarrierConflict(format!(
+                "indexed merge frame has unsupported merge ledger entry version {}",
+                entry.version
+            )));
+        }
         if entry.encode() != bytes
             || !entry.canonical_size_within_limit()
             || entry.epoch_id != frame.epoch_id
@@ -2448,6 +2471,12 @@ impl MergeLedgerLog {
                             "merge ledger frame {total_entries} failed exact Norito decode: {err}"
                         ))
                     })?;
+                    if !entry.has_current_version() {
+                        return Err(Error::MergeCarrierConflict(format!(
+                            "merge ledger frame {total_entries} has unsupported merge ledger entry version {}",
+                            entry.version
+                        )));
+                    }
                     if entry.encode() != buf {
                         return Err(Error::MergeCarrierConflict(format!(
                             "merge ledger frame {total_entries} is not canonical Norito"
@@ -3022,7 +3051,7 @@ impl Kura {
 
     /// Return `true` when the block payload is available locally (in memory, `blocks.data`, or the
     /// local sidecar cache).
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn block_payload_available_by_hash(&self, hash: HashOf<BlockHeader>) -> bool {
         if self.canonical_storage_poisoned.load(Ordering::Acquire) {
             return false;
@@ -3033,7 +3062,7 @@ impl Kura {
         self.block_payload_available_by_height(height)
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn block_payload_available_by_height(&self, block_height: NonZeroUsize) -> bool {
         matches!(
             self.block_body_status_by_height(block_height),
@@ -3072,7 +3101,7 @@ impl Kura {
     }
 
     /// Return local/remote body status for a canonical block hash known to Kura.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn block_body_status_by_hash(
         &self,
         hash: HashOf<BlockHeader>,
@@ -3084,7 +3113,7 @@ impl Kura {
         self.block_body_status_by_height(height)
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn block_body_status_by_height(&self, block_height: NonZeroUsize) -> Option<BlockBodyStatus> {
         if self.prune_recovery_is_required()
             || self.canonical_storage_poisoned.load(Ordering::Acquire)
@@ -4049,6 +4078,8 @@ impl Kura {
             if block_count > 0 {
                 let _ = kura.commit_manifest(block_count as u64)?;
             }
+            kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
+            kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
         }
 
         match kura.kura_disk_usage_bytes() {
@@ -4612,8 +4643,11 @@ impl Kura {
 
     /// Attempt to purge retired Kura segments to reclaim disk budget.
     pub(crate) fn purge_retired_segments(&self) -> Result<bool> {
+        let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
-        self.purge_retired_storage()
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
+        self.purge_retired_storage_under_prune_and_canonical_guards()
     }
 
     fn invalidate_pending_budget_cache(&self) {
@@ -5828,6 +5862,10 @@ impl Kura {
             self.prepare_lane_storage_resolved(entry)?;
         }
         *self.lane_storage_entries.lock() = restored_entries;
+        drop(_canonical_chain_guard);
+        drop(_prune_guard);
+        self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
+        self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
         if let Err(err) = self.refresh_disk_usage_bytes() {
             warn!(
                 ?err,
@@ -5929,6 +5967,8 @@ impl Kura {
                 primary_merge_path,
             ));
         }
+        self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
+        self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
         if let Err(err) = self.refresh_disk_usage_bytes() {
             warn!(
                 ?err,
@@ -9397,6 +9437,15 @@ impl Kura {
                     format!("pending merge temporary is not exact framed Norito: {err}"),
                 )
             })?;
+            if !entry.has_current_version() {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    temp_path,
+                    format!(
+                        "pending merge temporary has unsupported merge ledger entry version {}",
+                        entry.version
+                    ),
+                ));
+            }
             if entry.canonical_bytes() != bytes
                 || hex::encode(entry.canonical_hash().as_ref()) != hash_text
             {
@@ -9451,6 +9500,15 @@ impl Kura {
                 format!("pending certified merge entry is not exact framed Norito: {err}"),
             )
         })?;
+        if !entry.has_current_version() {
+            return Err(Self::invalid_pending_merge_entry_error(
+                path.to_path_buf(),
+                format!(
+                    "pending certified merge entry has unsupported merge ledger entry version {}",
+                    entry.version
+                ),
+            ));
+        }
         let canonical = crate::merge::canonical_merge_ledger_entry_bytes(&entry);
         if canonical != bytes {
             return Err(Self::invalid_pending_merge_entry_error(
@@ -9670,7 +9728,11 @@ impl Kura {
         Ok(entry)
     }
 
-    fn pending_certified_merge_entries(
+    /// Return canonical, uncommitted certified merge sidecars in deterministic order.
+    ///
+    /// The pending store is bounded at admission, and entries already present in the committed
+    /// merge log are excluded.
+    pub(crate) fn pending_certified_merge_entries(
         &self,
     ) -> Result<Vec<(HashOf<MergeLedgerEntry>, MergeLedgerEntry)>> {
         self.ensure_prune_recovery_not_required()?;
@@ -9698,6 +9760,83 @@ impl Kura {
         entries.sort_by_key(|(hash, entry)| (entry.epoch_id, *hash));
         self.ensure_prune_recovery_not_required()?;
         Ok(entries)
+    }
+
+    /// Return whether an uncommitted certified merge sidecar still carries
+    /// work for one exact active lane incarnation.
+    ///
+    /// The underlying scan is bounded by the pending-entry count and byte
+    /// limits. Malformed autonomous routing bytes, or a matching route without
+    /// one unique historical active-lane binding, conservatively count as work,
+    /// so drain certification never treats unverifiable evidence as empty.
+    pub(crate) fn pending_certified_merge_work_for_lane(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<bool> {
+        Ok(self
+            .pending_certified_merge_entries()?
+            .into_iter()
+            .any(|(_, entry)| {
+                entry.lane_snapshots.iter().any(|snapshot| {
+                    snapshot.lane_id == lane_id
+                        && snapshot.dataspace_id == dataspace_id
+                        && snapshot.lane_incarnation == lane_incarnation
+                }) || entry.execution_batch.as_ref().is_some_and(|batch| {
+                    batch.lanes.iter().any(|execution| {
+                        let descriptor = &execution.proposal.descriptor;
+                        (descriptor.lane_id == lane_id
+                            && descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == lane_incarnation)
+                            || execution.routing_plans.iter().any(|encoded| {
+                                norito::decode_from_bytes::<crate::queue::RoutingPlan>(encoded)
+                                    .map_or(true, |plan| {
+                                        plan.legs().into_iter().any(|leg| {
+                                            if leg.route.lane_id != lane_id
+                                                || leg.route.dataspace_id != dataspace_id
+                                            {
+                                                return false;
+                                            }
+                                            let mut bindings =
+                                                entry.active_lanes.iter().filter(|binding| {
+                                                    binding.lane_id == leg.route.lane_id
+                                                        && binding.dataspace_id
+                                                            == leg.route.dataspace_id
+                                                });
+                                            let Some(binding) = bindings.next() else {
+                                                return true;
+                                            };
+                                            if bindings.next().is_some() {
+                                                return true;
+                                            }
+                                            binding.incarnation == lane_incarnation
+                                        })
+                                    })
+                            })
+                            || execution
+                                .native_amx_receipts
+                                .iter()
+                                .flatten()
+                                .any(|receipt| {
+                                    (receipt.lane_id == lane_id
+                                        && receipt.dataspace_id == dataspace_id
+                                        && receipt.lane_incarnation == lane_incarnation)
+                                        || receipt.legs.iter().any(|leg| {
+                                            let participant = &leg.participant_proposal.descriptor;
+                                            leg.lane_id == lane_id
+                                                && leg.dataspace_id == dataspace_id
+                                                && participant.lane_incarnation == lane_incarnation
+                                        })
+                                })
+                    })
+                }) || entry.lane_drain_certificates.iter().any(|certificate| {
+                    let intent = &certificate.body.intent;
+                    intent.lane_id == lane_id
+                        && intent.dataspace_id == dataspace_id
+                        && intent.lane_incarnation == lane_incarnation
+                })
+            }))
     }
 
     /// Select the next pending certified entry deterministically by
@@ -11064,7 +11203,7 @@ impl Kura {
     }
 
     /// Return the durable height and encoded payload length for a known canonical block hash.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn durable_block_payload_len_by_hash(
         &self,
         hash: HashOf<BlockHeader>,
@@ -11093,7 +11232,7 @@ impl Kura {
     ///
     /// The body must match Kura's durable height/hash metadata. Inline blocks are already local and
     /// are left untouched.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn cache_block_body(&self, block: &SignedBlock) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -13867,9 +14006,49 @@ impl Kura {
         )>,
     > {
         let _prune_guard = self.prune_lock.lock();
+        self.v2_finality_artifact_with_archive_under_prune_guard(height)
+    }
+
+    /// Inner finality reader for callers that already hold `prune_lock`.
+    ///
+    /// Keeping the complete canonical-header, retained-wire, and cryptographic
+    /// validation here lets multi-artifact publication revalidate finality in
+    /// the same prune critical section without recursively locking.
+    fn v2_finality_artifact_with_archive_under_prune_guard(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            BlockHeader,
+            V2FinalityArtifact,
+            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+        )>,
+    > {
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)
+    }
+
+    /// Inner finality reader for callers that already hold `prune_lock` and
+    /// `canonical_chain_lock`, in that order.
+    ///
+    /// Geometry retirement and archive validation also hold
+    /// `lane_geometry_lock` and `sidecar_lock`. Keeping this reader free of
+    /// lock acquisition lets those paths authenticate retained Native AMX
+    /// evidence without recursively acquiring the canonical-chain mutex.
+    fn v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            BlockHeader,
+            V2FinalityArtifact,
+            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+        )>,
+    > {
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
         let directory = Self::v2_finality_artifact_dir_for(&blocks_dir);
         let path = Self::v2_finality_artifact_path_for(&blocks_dir, height);
@@ -14989,16 +15168,23 @@ impl Kura {
     /// published but its bytes are missing.
     pub(crate) fn commit_manifest(&self, height: u64) -> Result<Option<CommitManifest>> {
         self.ensure_prune_recovery_not_required()?;
+        let _guard = self.sidecar_lock.lock();
+        self.commit_manifest_under_sidecar_guard(height)
+    }
+
+    /// Read a commit manifest while the caller holds `sidecar_lock`.
+    ///
+    /// This no-relock variant is used by geometry evidence validation, whose
+    /// outer critical section already owns prune, canonical, geometry, and
+    /// sidecar locks in the global order.
+    fn commit_manifest_under_sidecar_guard(&self, height: u64) -> Result<Option<CommitManifest>> {
+        self.ensure_prune_recovery_not_required()?;
         let path = self.commit_manifest_path(height);
-        let manifest = {
-            let _guard = self.sidecar_lock.lock();
-            self.ensure_prune_recovery_not_required()?;
-            Self::decode_commit_manifest_at(&path)?
-        };
+        let manifest = Self::decode_commit_manifest_at(&path)?;
         let Some(manifest) = manifest else {
             self.ensure_prune_recovery_not_required()?;
             if self
-                .wsv_checkpoint(height)?
+                .wsv_checkpoint_under_sidecar_guard(height)?
                 .is_some_and(|checkpoint| checkpoint.commit_manifest_hash.is_some())
             {
                 return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
@@ -15035,7 +15221,7 @@ impl Kura {
                 actual: manifest.block_hash,
             });
         }
-        self.ensure_checkpoint_matches_commit_manifest(&manifest)?;
+        self.ensure_checkpoint_matches_commit_manifest_under_sidecar_guard(&manifest)?;
         self.ensure_prune_recovery_not_required()?;
         Ok(Some(manifest))
     }
@@ -15066,8 +15252,11 @@ impl Kura {
         })
     }
 
-    fn ensure_checkpoint_matches_commit_manifest(&self, manifest: &CommitManifest) -> Result<()> {
-        if let Some(checkpoint) = self.wsv_checkpoint(manifest.height)? {
+    fn ensure_checkpoint_matches_commit_manifest_under_sidecar_guard(
+        &self,
+        manifest: &CommitManifest,
+    ) -> Result<()> {
+        if let Some(checkpoint) = self.wsv_checkpoint_under_sidecar_guard(manifest.height)? {
             Self::ensure_checkpoint_matches_manifest(&checkpoint, manifest)?;
         }
         Ok(())
@@ -15367,12 +15556,15 @@ impl Kura {
     /// the canonical block hash stored at the same height.
     pub(crate) fn wsv_checkpoint(&self, height: u64) -> Result<Option<WsvCheckpoint>> {
         self.ensure_prune_recovery_not_required()?;
+        let _guard = self.sidecar_lock.lock();
+        self.wsv_checkpoint_under_sidecar_guard(height)
+    }
+
+    /// Read a WSV checkpoint while the caller holds `sidecar_lock`.
+    fn wsv_checkpoint_under_sidecar_guard(&self, height: u64) -> Result<Option<WsvCheckpoint>> {
+        self.ensure_prune_recovery_not_required()?;
         let path = self.wsv_checkpoint_path(height);
-        let checkpoint = {
-            let _guard = self.sidecar_lock.lock();
-            self.ensure_prune_recovery_not_required()?;
-            Self::decode_wsv_checkpoint_at(&path)?
-        };
+        let checkpoint = Self::decode_wsv_checkpoint_at(&path)?;
         let Some(checkpoint) = checkpoint else {
             self.ensure_prune_recovery_not_required()?;
             return Ok(None);
@@ -15465,7 +15657,7 @@ impl Kura {
     }
 
     /// Return whether any canonical WSV checkpoint file exists at or below `height`.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn has_wsv_checkpoint_at_or_before(&self, height: u64) -> Result<bool> {
         self.ensure_prune_recovery_not_required()?;
         self.latest_wsv_checkpoint_height_at_or_before(height)
@@ -17028,7 +17220,9 @@ impl Kura {
         std::fs::remove_dir_all(root)
     }
 
-    fn purge_retired_storage(&self) -> Result<bool> {
+    /// Purge retired storage while the caller holds `prune_lock` and
+    /// `canonical_chain_lock`, in that order.
+    fn purge_retired_storage_under_prune_and_canonical_guards(&self) -> Result<bool> {
         self.durable_mutation_authorized()?;
         if self.store_root.as_os_str().is_empty() {
             return Ok(false);
@@ -17044,7 +17238,7 @@ impl Kura {
         let mut removed_total_bytes = 0u64;
 
         self.durable_mutation_authorized()?;
-        match self.resume_proven_lane_geometry_archive_gc() {
+        match self.resume_proven_lane_geometry_archive_gc_under_prune_and_canonical_guards() {
             Ok(summary) if summary.removed_archive_roots > 0 => {
                 removed_any = true;
                 info!(
@@ -17247,7 +17441,7 @@ impl Kura {
             .saturating_add(merge_entry_bytes);
 
         if required > limit {
-            if self.purge_retired_storage()? {
+            if self.purge_retired_storage_under_prune_and_canonical_guards()? {
                 used = self.disk_usage.load(Ordering::Relaxed);
                 budget_used = used.saturating_add(pending_bytes);
                 required = used
@@ -17340,7 +17534,7 @@ impl Kura {
         };
 
         if required > limit {
-            if self.purge_retired_storage()? {
+            if self.purge_retired_storage_under_prune_and_canonical_guards()? {
                 used = self.disk_usage.load(Ordering::Relaxed);
                 budget_used = used.saturating_add(pending_current);
                 required = {
@@ -18969,7 +19163,7 @@ impl Kura {
             .map(|(hash, _)| *hash)
     }
 
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn hard_fork_extend_hash_only_from_snapshot_with_legacy_count(
         &self,
         snapshot_hashes: &[HashOf<BlockHeader>],
@@ -19036,7 +19230,7 @@ impl Kura {
     /// The snapshot payload is the source of truth for hashes above the durable block body log.
     /// Missing bodies are persisted as hash-only placeholders so the next committed block can
     /// append at the snapshot height without replaying legacy blocks.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn extend_hash_only_prefix_from_snapshot(
         &self,
         snapshot_hashes: &[HashOf<BlockHeader>],
@@ -19322,6 +19516,10 @@ impl Kura {
 
     /// Run storage-budget accounting without storing a block.
     pub fn check_storage_budget_for_bench(&self, block: &SignedBlock) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         self.check_storage_budget(block, None)
     }
 
@@ -20756,10 +20954,8 @@ pub(crate) struct AutonomousLaneBlockArtifact {
 }
 
 impl AutonomousLaneBlockArtifact {
-    #[cfg(test)]
     const FORMAT_LABEL: &'static str = "lane.autonomous_block";
 
-    #[cfg(test)]
     fn new(executable_payload: LaneExecutablePayloadV1) -> Self {
         Self {
             format: AutonomousLaneBlockArtifactFormat::Current,
@@ -20778,6 +20974,53 @@ impl AutonomousLaneBlockArtifact {
             ));
         }
         Ok(bytes)
+    }
+}
+
+/// Authenticated pointer to the latest attempt at one lane-local height.
+///
+/// The legacy autonomous sidecar remains the immutable first attempt. A later
+/// global proposal height may reuse that lane-local height only after the
+/// prior attempt is durably retired and its Queue release is complete. Each
+/// successor is stored under its proposal-height namespace and this pointer is
+/// published last, so a crash can expose either the old or new complete
+/// attempt but never a payload paired with another attempt's retirement.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct AutonomousLaneBlockLatestAttemptV1 {
+    version: u16,
+    chain_id_hash: Hash,
+    epoch: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    proposal_height: u64,
+    lane_block_height: u64,
+    origin_proposal_hash: Hash,
+    executable_payload_hash: Hash,
+}
+
+impl AutonomousLaneBlockLatestAttemptV1 {
+    const VERSION: u16 = 1;
+
+    fn from_payload(payload: &LaneExecutablePayloadV1) -> Self {
+        let descriptor = &payload.origin_proposal.descriptor;
+        Self {
+            version: Self::VERSION,
+            chain_id_hash: payload.chain_id_hash,
+            epoch: payload.epoch,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            proposal_height: descriptor.proposal_height,
+            lane_block_height: descriptor.lane_block_height,
+            origin_proposal_hash: payload.origin_proposal.proposal_hash,
+            executable_payload_hash: payload.payload_hash,
+        }
+    }
+
+    fn matches_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
+        self.version == Self::VERSION && self == &Self::from_payload(payload)
     }
 }
 
@@ -20821,16 +21064,34 @@ impl AutonomousLaneMergeBundleV1 {
     }
 }
 
+/// Durable state of one autonomous executable-entrypoint owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+enum AutonomousLaneEntrypointClaimStateV3 {
+    /// The lane payload exclusively owns the entrypoint.
+    #[codec(index = 1)]
+    Active,
+    /// The exact slot retirement is durable, but Queue still owns the
+    /// reservations behind an ordered release barrier.
+    #[codec(index = 2)]
+    ReleasePending(Hash),
+    /// Queue proved its ordered barrier durable, so canonical ownership may
+    /// return to ordinary FIFO.
+    #[codec(index = 3)]
+    Released(Hash),
+}
+
 /// Durable exact-key owner for one autonomous executable entrypoint.
 ///
 /// Claims live in hash-addressed files outside individual lane segments, so a
 /// lookup touches at most one bounded record and never scans historical lane
-/// blocks. Records are retained across lane retirement and bind the claim to
-/// the complete immutable payload identity.
-#[cfg(test)]
+/// blocks. An active claim binds the complete immutable payload identity. A
+/// terminal slot retirement first changes every claim to `ReleasePending`.
+/// Only a durable Queue release barrier permits the second transition to
+/// `Released`; only that state may be replaced by a later payload.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-struct AutonomousLaneEntrypointClaimV1 {
-    version: u8,
+#[norito(deny_unknown_fields)]
+struct AutonomousLaneEntrypointClaimV3 {
+    version: u16,
     chain_id_hash: Hash,
     epoch: u64,
     entrypoint_hash: Hash,
@@ -20841,14 +21102,16 @@ struct AutonomousLaneEntrypointClaimV1 {
     lane_block_height: u64,
     origin_proposal_hash: Hash,
     executable_payload_hash: Hash,
+    state: AutonomousLaneEntrypointClaimStateV3,
 }
 
-#[cfg(test)]
-impl AutonomousLaneEntrypointClaimV1 {
+impl AutonomousLaneEntrypointClaimV3 {
+    const VERSION: u16 = 3;
+
     fn new(payload: &LaneExecutablePayloadV1, entrypoint_hash: Hash) -> Self {
         let descriptor = &payload.origin_proposal.descriptor;
         Self {
-            version: 1,
+            version: Self::VERSION,
             chain_id_hash: payload.chain_id_hash,
             epoch: payload.epoch,
             entrypoint_hash,
@@ -20859,18 +21122,143 @@ impl AutonomousLaneEntrypointClaimV1 {
             lane_block_height: descriptor.lane_block_height,
             origin_proposal_hash: payload.origin_proposal.proposal_hash,
             executable_payload_hash: payload.payload_hash,
+            state: AutonomousLaneEntrypointClaimStateV3::Active,
+        }
+    }
+
+    fn owns_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
+        let mut expected = Self::new(payload, self.entrypoint_hash);
+        expected.state = self.state;
+        self.version == Self::VERSION
+            && payload.entrypoint_hashes.contains(&self.entrypoint_hash)
+            && self == &expected
+    }
+
+    fn active_for_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
+        matches!(self.state, AutonomousLaneEntrypointClaimStateV3::Active)
+            && self.owns_payload(payload)
+    }
+
+    fn release_pending_for_payload(
+        payload: &LaneExecutablePayloadV1,
+        entrypoint_hash: Hash,
+        retirement_hash: Hash,
+    ) -> Self {
+        let mut claim = Self::new(payload, entrypoint_hash);
+        claim.state = AutonomousLaneEntrypointClaimStateV3::ReleasePending(retirement_hash);
+        claim
+    }
+
+    fn released_for_payload(
+        payload: &LaneExecutablePayloadV1,
+        entrypoint_hash: Hash,
+        retirement_hash: Hash,
+    ) -> Self {
+        let mut claim = Self::new(payload, entrypoint_hash);
+        claim.state = AutonomousLaneEntrypointClaimStateV3::Released(retirement_hash);
+        claim
+    }
+
+    fn retirement_hash(&self) -> Option<Hash> {
+        match self.state {
+            AutonomousLaneEntrypointClaimStateV3::Active => None,
+            AutonomousLaneEntrypointClaimStateV3::ReleasePending(hash)
+            | AutonomousLaneEntrypointClaimStateV3::Released(hash) => Some(hash),
+        }
+    }
+}
+
+/// Terminal durable identity for one abandoned autonomous lane-height slot.
+///
+/// The record is written before any queue reservation returns to ordinary FIFO
+/// ownership. Its ordered reservation vector is therefore both the exact
+/// release recipe and the restart proof that a delayed proposal, READY vote,
+/// QC, or merge bundle belongs to a closed slot.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+pub(crate) struct AutonomousLaneSlotRetirementV1 {
+    version: u16,
+    chain_id_hash: Hash,
+    epoch: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    proposal_height: u64,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    origin_descriptor_hash: Hash,
+    origin_proposal_hash: Hash,
+    executable_payload_hash: Hash,
+    reservation_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
+}
+
+impl AutonomousLaneSlotRetirementV1 {
+    const VERSION: u16 = 1;
+
+    /// Build the only valid retirement identity for an authenticated payload.
+    #[must_use]
+    pub(crate) fn from_payload(payload: &LaneExecutablePayloadV1) -> Self {
+        let proposal = &payload.origin_proposal;
+        let descriptor = &proposal.descriptor;
+        Self {
+            version: Self::VERSION,
+            chain_id_hash: payload.chain_id_hash,
+            epoch: payload.epoch,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            proposal_height: descriptor.proposal_height,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            origin_descriptor_hash: descriptor.descriptor_hash,
+            origin_proposal_hash: proposal.proposal_hash,
+            executable_payload_hash: payload.payload_hash,
+            reservation_keys: payload.reservation_keys.clone(),
         }
     }
 
     fn matches_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
-        self.version == 1
-            && payload.entrypoint_hashes.contains(&self.entrypoint_hash)
-            && self == &Self::new(payload, self.entrypoint_hash)
+        self.version == Self::VERSION && self == &Self::from_payload(payload)
+    }
+
+    /// Exact FIFO-ordered reservations released after this record is durable.
+    #[must_use]
+    pub(crate) fn reservation_keys(&self) -> &[crate::queue::LaneQueueReservationKeyV1] {
+        &self.reservation_keys
+    }
+
+    pub(crate) fn digest(&self) -> Result<Hash> {
+        let bytes = norito::to_bytes(self).map_err(Error::NoritoFrame)?;
+        Ok(Hash::new_from_chunks(&[
+            b"iroha:nexus:autonomous-lane-slot-retirement:v1\0",
+            &bytes,
+        ]))
+    }
+
+    /// Build the exact Queue-side ordered barrier for this durable retirement.
+    pub(crate) fn queue_release_barrier(
+        &self,
+    ) -> Result<crate::queue::LaneQueueReservationReleaseBarrierV2> {
+        Ok(crate::queue::LaneQueueReservationReleaseBarrierV2 {
+            version: crate::queue::LaneQueueReservationReleaseBarrierV2::VERSION,
+            chain_id_hash: self.chain_id_hash,
+            epoch: self.epoch,
+            lane_id: self.lane_id,
+            dataspace_id: self.dataspace_id,
+            lane_incarnation: self.lane_incarnation,
+            proposal_height: self.proposal_height,
+            lane_block_height: self.lane_block_height,
+            lane_block_view: self.lane_block_view,
+            origin_descriptor_hash: self.origin_descriptor_hash,
+            origin_proposal_hash: self.origin_proposal_hash,
+            executable_payload_hash: self.executable_payload_hash,
+            retirement_hash: self.digest()?,
+            ordered_keys: self.reservation_keys.clone(),
+        })
     }
 }
 
 /// Known formats for the bounded mutable view state of an autonomous payload.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 enum AutonomousLaneBlockViewStateFormat {
     #[codec(index = 1)]
@@ -20885,7 +21273,6 @@ enum AutonomousLaneBlockViewStateFormat {
 /// limit. All identity fields are repeated and validated so a stale view file
 /// cannot be attached to a recreated lane or another payload at the same
 /// lane-local height.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AutonomousLaneBlockViewState {
     format: AutonomousLaneBlockViewStateFormat,
@@ -20901,9 +21288,9 @@ struct AutonomousLaneBlockViewState {
     availability_certificate: Option<DurableLanePayloadAvailabilityCertificateV1>,
     checkpoint: Option<DurableLaneBlockViewCheckpointV1>,
     certificates: Vec<DurableLaneBlockNewViewCertificateV1>,
+    retirement: Option<AutonomousLaneSlotRetirementV1>,
 }
 
-#[cfg(test)]
 impl AutonomousLaneBlockViewState {
     fn from_artifact(artifact: &AutonomousLaneBlockArtifact) -> Self {
         let payload = &artifact.executable_payload;
@@ -20922,6 +21309,7 @@ impl AutonomousLaneBlockViewState {
             availability_certificate: artifact.availability_certificate.clone(),
             checkpoint: artifact.view_checkpoint.clone(),
             certificates: artifact.new_view_certificates.clone(),
+            retirement: None,
         }
     }
 
@@ -20938,6 +21326,12 @@ impl AutonomousLaneBlockViewState {
             && self.origin_proposal_hash == payload.origin_proposal.proposal_hash
             && self.executable_payload_hash == payload.payload_hash
     }
+}
+
+struct AutonomousLaneBlockDurableRecord {
+    artifact: AutonomousLaneBlockArtifact,
+    retirement: Option<AutonomousLaneSlotRetirementV1>,
+    view_state_path: PathBuf,
 }
 
 /// Known metadata format variants for lane-local block artifacts.
@@ -21277,15 +21671,6 @@ pub enum LaneBlockPayloadAvailability {
     EntrypointHashMismatch,
 }
 
-impl LaneBlockPayloadAvailability {
-    /// Whether every accepted entrypoint can be recovered from local durable block state.
-    #[must_use]
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
-    pub(crate) const fn is_available(self) -> bool {
-        matches!(self, Self::Available)
-    }
-}
-
 /// Verified payload material recovered for a certified standalone lane block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredLaneBlockPayload {
@@ -21320,6 +21705,7 @@ pub enum LaneBlockExecutionInputArtifactFormat {
 
 /// Durable recovered input for a certified standalone lane block.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockExecutionInputArtifact {
     /// Schema / evolution tag for the execution input format.
     pub format: LaneBlockExecutionInputArtifactFormat,
@@ -21328,26 +21714,20 @@ pub struct LaneBlockExecutionInputArtifact {
     /// Lane payload ownership sidecar anchoring the payload to a global block.
     pub artifact: LaneBlockArtifact,
     /// Chain binding when this input came from a lane-owned payload.
-    #[norito(default)]
     pub autonomous_chain_id_hash: Option<Hash>,
     /// Epoch binding when this input came from a lane-owned payload.
-    #[norito(default)]
     pub autonomous_epoch: Option<u64>,
     /// Canonical autonomous executable payload digest, when applicable.
-    #[norito(default)]
     pub autonomous_payload_hash: Option<Hash>,
     /// Accepted entrypoint hashes in lane descriptor order.
     pub entrypoint_hashes: Vec<Hash>,
     /// Accepted entrypoints in lane descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
     /// Exact durable queue reservation identities in entrypoint order.
-    #[norito(default)]
     pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
     /// Complete routing plans in entrypoint order.
-    #[norito(default)]
     pub routing_plans: Vec<RoutingPlan>,
     /// Producer-authenticated native-AMX receipts in entrypoint order.
-    #[norito(default)]
     pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
 
@@ -21494,6 +21874,7 @@ pub enum LaneBlockApplicationReceiptArtifactFormat {
 
 /// Durable receipt proving a certified standalone lane block has committed results.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 pub struct LaneBlockApplicationReceiptArtifact {
     /// Schema / evolution tag for the application receipt format.
     pub format: LaneBlockApplicationReceiptArtifactFormat,
@@ -21514,45 +21895,64 @@ pub struct LaneBlockApplicationReceiptArtifact {
     /// Committed transaction results in lane descriptor order.
     pub results: Vec<TransactionResult>,
     /// Merge epoch whose durable entry authorized this application.
-    #[norito(default)]
     pub merge_epoch_id: Option<u64>,
     /// Hash of the exact full merge-ledger entry referenced by the carrier block.
-    #[norito(default)]
     pub merge_entry_hash: Option<HashOf<MergeLedgerEntry>>,
     /// Actual globally committed block height carrying the compact merge reference.
-    #[norito(default)]
     pub merge_carrier_block_height: Option<u64>,
     /// Actual globally committed block hash carrying the compact merge reference.
-    #[norito(default)]
     pub merge_carrier_block_hash: Option<HashOf<BlockHeader>>,
     /// Hash-addressed authenticated source bundle committed by the merge batch.
-    #[norito(default)]
     pub merge_source_bundle_hash: Option<Hash>,
     /// Stable pre-marker batch identity included in the complete write set.
-    #[norito(default)]
     pub merge_batch_identity_hash: Option<Hash>,
     /// Final marker-inclusive merge batch hash sealed by the merge QC.
-    #[norito(default)]
     pub merge_batch_hash: Option<Hash>,
     /// Canonical base WSV commitment sealed by the merge batch.
-    #[norito(default)]
     pub merge_base_state_hash: Option<HashOf<BlockHeader>>,
     /// Canonical complete marker-inclusive write-set root.
-    #[norito(default)]
     pub merge_write_set_root: Option<Hash>,
     /// Expected post-state transition commitment after the batch.
-    #[norito(default)]
     pub merge_expected_post_state_hash: Option<HashOf<BlockHeader>>,
     /// Exact lane settlement commitment hash staged atomically with execution.
-    #[norito(default)]
     pub merge_settlement_hash:
         Option<HashOf<iroha_data_model::block::consensus::LaneBlockCommitment>>,
 }
 
+/// Per-route Native AMX application leaf and its QC-authenticated Merkle proof.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+pub(crate) struct NativeAmxParticipantApplicationManifestArtifactV1 {
+    /// Exact durable artifact schema version.
+    pub version: u16,
+    /// Canonical manifest leaf committed by the global CommitQC.
+    pub leaf: NativeAmxApplicationManifestLeafV1,
+    /// Zero-based position of `leaf` in canonical route order.
+    pub leaf_index: u32,
+    /// Merkle proof from `leaf` to `manifest_root`.
+    pub proof: MerkleProof<NativeAmxApplicationManifestLeafV1>,
+    /// Exact root authenticated by the global CommitQC.
+    pub manifest_root: Hash,
+    /// Exact route-leaf count authenticated by the global CommitQC.
+    pub manifest_leaf_count: u32,
+    /// Hash of the independently persisted and verified v2 finality artifact.
+    pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
+}
+
+impl NativeAmxParticipantApplicationManifestArtifactV1 {
+    const VERSION: u16 = 1;
+    const FORMAT_LABEL: &'static str = "lane.native_amx_participant_application_manifest.v1";
+
+    fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
+        norito::to_bytes(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
     /// Exact durable sidecar schema version.
-    pub version: u8,
+    pub version: u16,
     /// Participant control proposal certified by its lane committee.
     pub participant_proposal: LaneBlockProposalV1,
     /// Exact zero-effect control settlement certified alongside the proposal.
@@ -21564,90 +21964,116 @@ pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
     /// Canonical global block identity. It binds the execution context, not the
     /// result root (which consensus hashing deliberately excludes).
     pub application_block_hash: HashOf<BlockHeader>,
-    /// Result root retained from the validated canonical block body.
-    pub result_merkle_root: Option<Hash>,
-    /// Exact deterministic WSV checkpoint published after global commit.
-    pub wsv_checkpoint_hash: Hash,
-    /// Consensus post-state root from the durable commit manifest, when present.
-    pub commit_post_state_root: Option<Hash>,
-    /// Hash of the global Commit QC recorded by the durable commit manifest.
-    pub commit_qc_hash: Option<Hash>,
+    /// Hash of the canonical result-bearing global block wire.
+    pub executed_block_wire_hash: Hash,
     /// Hash of the exact independently verified durable v2 finality artifact.
     pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    /// Hash of the distinct per-route manifest leaf/proof artifact.
+    pub manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
     /// Source transaction identities in canonical block order. These are
     /// intentionally distinct from `entrypoint_hashes`.
     pub source_ids: Vec<[u8; Hash::LENGTH]>,
     /// Canonical global entrypoint indices whose results apply this control.
     pub entrypoint_indices: Vec<u64>,
     /// Canonical entrypoint hashes at `entrypoint_indices`.
-    pub entrypoint_hashes: Vec<Hash>,
+    pub entrypoint_hashes: Vec<HashOf<TransactionEntrypoint>>,
     /// Hashes of the exact committed transaction results.
-    pub result_hashes: Vec<Hash>,
+    pub result_hashes: Vec<HashOf<TransactionResult>>,
     /// Exact canonical transaction results.
     pub results: Vec<TransactionResult>,
 }
 
-impl NativeAmxParticipantApplicationReceiptArtifact {
+/// Bounded route/incarnation pointer to the latest Native AMX application receipt.
+///
+/// The append-only receipt pair remains authoritative. This independently
+/// versioned index is rebuilt from that pair during startup and allows
+/// consensus/drain readers to avoid reverse history scans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct NativeAmxParticipantReceiptLatestIndexV1 {
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    lane_block_height: u64,
+    participant_proposal_hash: Hash,
+    participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    application_block_height: u64,
+    application_block_hash: HashOf<BlockHeader>,
+    receipt_digest: Hash,
+}
+
+impl NativeAmxParticipantReceiptLatestIndexV1 {
     const VERSION: u8 = 1;
-    const FORMAT_LABEL: &'static str = "lane.native_amx_participant_application_receipt";
+
+    fn from_receipt(receipt: &NativeAmxParticipantApplicationReceiptArtifact) -> Result<Self> {
+        let descriptor = &receipt.participant_proposal.descriptor;
+        let bytes = receipt.encode_framed()?;
+        Ok(Self {
+            version: Self::VERSION,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            lane_block_height: descriptor.lane_block_height,
+            participant_proposal_hash: receipt.participant_proposal.proposal_hash,
+            participant_settlement_hash: receipt.participant_settlement_hash,
+            application_block_height: receipt.application_block_height,
+            application_block_hash: receipt.application_block_hash,
+            receipt_digest: Hash::new(bytes),
+        })
+    }
+
+    fn matches_receipt(&self, receipt: &NativeAmxParticipantApplicationReceiptArtifact) -> bool {
+        let Ok(expected) = Self::from_receipt(receipt) else {
+            return false;
+        };
+        *self == expected
+    }
+}
+
+impl NativeAmxParticipantApplicationReceiptArtifact {
+    const VERSION: u16 = 2;
+    const FORMAT_LABEL: &'static str = "lane.native_amx_participant_application_receipt.v2";
 
     fn new(
-        participant_proposal: LaneBlockProposalV1,
-        participant_settlement: LaneBlockCommitment,
-        participant_settlement_hash: HashOf<LaneBlockCommitment>,
-        application_block_height: u64,
-        application_block_hash: HashOf<BlockHeader>,
-        result_merkle_root: Option<Hash>,
-        wsv_checkpoint_hash: Hash,
-        commit_post_state_root: Option<Hash>,
-        commit_qc_hash: Option<Hash>,
+        entry: &crate::sumeragi::exec::NativeAmxApplicationManifestEntryV1,
+        manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
         finality_artifact_hash: HashOf<V2FinalityArtifact>,
-        entries: Vec<(u64, Hash, [u8; Hash::LENGTH], TransactionResult)>,
     ) -> Self {
-        let mut source_ids = Vec::with_capacity(entries.len());
-        let mut entrypoint_indices = Vec::with_capacity(entries.len());
-        let mut entrypoint_hashes = Vec::with_capacity(entries.len());
-        let mut result_hashes = Vec::with_capacity(entries.len());
-        let mut results = Vec::with_capacity(entries.len());
-        for (index, entrypoint_hash, source_id, result) in entries {
-            source_ids.push(source_id);
-            entrypoint_indices.push(index);
-            entrypoint_hashes.push(entrypoint_hash);
-            result_hashes.push(Hash::from(result.hash()));
-            results.push(result);
-        }
+        let leaf = &entry.leaf;
         Self {
             version: Self::VERSION,
-            participant_proposal,
-            participant_settlement,
-            participant_settlement_hash,
-            application_block_height,
-            application_block_hash,
-            result_merkle_root,
-            wsv_checkpoint_hash,
-            commit_post_state_root,
-            commit_qc_hash,
+            participant_proposal: entry.participant_proposal.clone(),
+            participant_settlement: entry.participant_settlement.clone(),
+            participant_settlement_hash: leaf.settlement_hash,
+            application_block_height: leaf.application_block_height,
+            application_block_hash: leaf.application_block_hash,
+            executed_block_wire_hash: leaf.executed_block_wire_hash,
             finality_artifact_hash,
-            source_ids,
-            entrypoint_indices,
-            entrypoint_hashes,
-            result_hashes,
-            results,
+            manifest_artifact_hash,
+            source_ids: leaf.members.iter().map(|member| member.source_id).collect(),
+            entrypoint_indices: leaf
+                .members
+                .iter()
+                .map(|member| member.entrypoint_index)
+                .collect(),
+            entrypoint_hashes: leaf
+                .members
+                .iter()
+                .map(|member| member.entrypoint_hash)
+                .collect(),
+            result_hashes: leaf
+                .members
+                .iter()
+                .map(|member| member.result_hash)
+                .collect(),
+            results: entry.results.clone(),
         }
     }
 
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         norito::to_bytes(self)
     }
-}
-
-#[derive(Debug)]
-struct NativeAmxParticipantApplicationGroup {
-    proposal: LaneBlockProposalV1,
-    settlement: LaneBlockCommitment,
-    settlement_hash: HashOf<LaneBlockCommitment>,
-    settlement_source_ids: Vec<[u8; Hash::LENGTH]>,
-    entries: Vec<(u64, Hash, [u8; Hash::LENGTH], TransactionResult)>,
 }
 
 impl LaneBlockApplicationReceiptArtifact {
@@ -21978,7 +22404,6 @@ impl Kura {
         )
     }
 
-    #[cfg(test)]
     fn autonomous_lane_block_view_state_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -21989,7 +22414,46 @@ impl Kura {
         ))
     }
 
-    #[cfg(test)]
+    fn autonomous_lane_block_attempt_path_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+        lane_block_height: u64,
+        proposal_height: u64,
+    ) -> PathBuf {
+        Self::lane_artifact_dir(&entry.blocks_dir(store_root)).join(format!(
+            "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
+        ))
+    }
+
+    fn autonomous_lane_block_attempt_view_state_path_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+        lane_block_height: u64,
+        proposal_height: u64,
+    ) -> PathBuf {
+        Self::lane_artifact_dir(&entry.blocks_dir(store_root)).join(format!(
+            "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
+        ))
+    }
+
+    fn autonomous_lane_block_latest_attempt_path_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+        lane_block_height: u64,
+    ) -> PathBuf {
+        Self::lane_artifact_dir(&entry.blocks_dir(store_root)).join(format!(
+            "{AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX}_{lane_block_height:020}.norito"
+        ))
+    }
+
+    fn autonomous_lane_route_latest_attempt_path_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+    ) -> PathBuf {
+        Self::lane_artifact_dir(&entry.blocks_dir(store_root))
+            .join(AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE)
+    }
+
     fn hash_path_component(hash: &Hash) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let bytes = hash.as_ref();
@@ -22001,7 +22465,6 @@ impl Kura {
         encoded
     }
 
-    #[cfg(test)]
     fn autonomous_lane_entrypoint_claim_path(
         store_root: &Path,
         chain_id_hash: &Hash,
@@ -22021,7 +22484,6 @@ impl Kura {
             ))
     }
 
-    #[cfg(test)]
     fn autonomous_lane_entrypoint_claim_temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
     }
@@ -22068,6 +22530,25 @@ impl Kura {
             dir.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE),
             dir.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE),
         )
+    }
+
+    fn native_amx_application_manifest_paths_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+    ) -> (PathBuf, PathBuf) {
+        let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
+        (
+            dir.join(NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE),
+            dir.join(NATIVE_AMX_APPLICATION_MANIFESTS_INDEX_FILE),
+        )
+    }
+
+    fn native_amx_participant_receipt_latest_index_path_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+    ) -> PathBuf {
+        Self::lane_artifact_dir(&entry.blocks_dir(store_root))
+            .join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE)
     }
 
     fn invalid_lane_artifact_error(path: PathBuf, message: impl Into<String>) -> Error {
@@ -22268,7 +22749,6 @@ impl Kura {
     }
 
     /// Assemble the exact locally durable merge source for a certified proposal.
-    #[cfg(test)]
     pub(crate) fn autonomous_lane_merge_bundle(
         &self,
         certified: CertifiedLaneBlockArtifact,
@@ -22297,41 +22777,6 @@ impl Kura {
         Ok(bundle)
     }
 
-    fn validate_first_release_lane_block_source_binding(
-        autonomous_chain_id_hash: Option<Hash>,
-        autonomous_epoch: Option<u64>,
-        autonomous_payload_hash: Option<Hash>,
-    ) -> std::result::Result<(), &'static str> {
-        if (
-            autonomous_chain_id_hash,
-            autonomous_epoch,
-            autonomous_payload_hash,
-        ) == (None, None, None)
-        {
-            Ok(())
-        } else {
-            Err("autonomous execution inputs are not part of first-release v2")
-        }
-    }
-
-    #[cfg(test)]
-    fn validate_first_release_lane_block_execution_input_source(
-        artifact: &LaneBlockExecutionInputArtifact,
-    ) -> std::result::Result<(), &'static str> {
-        Self::validate_first_release_lane_block_source_binding(
-            artifact.autonomous_chain_id_hash,
-            artifact.autonomous_epoch,
-            artifact.autonomous_payload_hash,
-        )?;
-        if !artifact.reservation_keys.is_empty()
-            || !artifact.routing_plans.is_empty()
-            || !artifact.native_amx_receipts.is_empty()
-        {
-            return Err("global execution input carries autonomous reservation metadata");
-        }
-        Ok(())
-    }
-
     pub(crate) fn validate_lane_block_execution_input_artifact(
         artifact: &LaneBlockExecutionInputArtifact,
     ) -> std::result::Result<(), &'static str> {
@@ -22344,18 +22789,20 @@ impl Kura {
             artifact.autonomous_payload_hash,
         ) {
             (Some(_), Some(_), Some(_)) => {
-                let compatibility_handoff = artifact.proposal.payload_block_hint.is_some()
-                    && artifact.reservation_keys.is_empty()
-                    && artifact.routing_plans.is_empty()
-                    && artifact.native_amx_receipts.is_empty();
-                if !compatibility_handoff
-                    && (artifact.reservation_keys.len() != artifact.entrypoints.len()
-                        || artifact.routing_plans.len() != artifact.entrypoints.len()
-                        || artifact.native_amx_receipts.len() != artifact.entrypoints.len())
+                if artifact.reservation_keys.len() != artifact.entrypoints.len()
+                    || artifact.routing_plans.len() != artifact.entrypoints.len()
+                    || artifact.native_amx_receipts.len() != artifact.entrypoints.len()
                 {
                     return Err(
                         "autonomous execution input reservation and routing vectors are not aligned",
                     );
+                }
+                if artifact
+                    .reservation_keys
+                    .iter()
+                    .any(|key| key.validate().is_err())
+                {
+                    return Err("autonomous execution input reservation key is invalid");
                 }
             }
             (None, None, None) => {
@@ -22520,6 +22967,95 @@ impl Kura {
         Ok(())
     }
 
+    fn validate_native_amx_participant_application_manifest_artifact(
+        artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
+    ) -> std::result::Result<(), &'static str> {
+        if artifact.version != NativeAmxParticipantApplicationManifestArtifactV1::VERSION {
+            return Err("unsupported Native AMX participant manifest artifact version");
+        }
+        artifact
+            .leaf
+            .validate()
+            .map_err(|_| "invalid Native AMX participant application manifest leaf")?;
+        let expected_proof_height = usize::try_from(
+            u32::BITS
+                - artifact
+                    .manifest_leaf_count
+                    .saturating_sub(1)
+                    .leading_zeros(),
+        )
+        .map_err(|_| "Native AMX participant manifest proof height does not fit usize")?;
+        if artifact.manifest_leaf_count == 0
+            || artifact.manifest_leaf_count
+                > iroha_data_model::block::consensus_v2::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES
+            || artifact.leaf_index >= artifact.manifest_leaf_count
+            || artifact.proof.leaf_index() != artifact.leaf_index
+            || artifact.proof.audit_path().len() != expected_proof_height
+            || artifact.proof.audit_path().len() > NATIVE_AMX_APPLICATION_MANIFEST_MAX_PROOF_HEIGHT
+            || artifact.manifest_root
+                == iroha_data_model::block::consensus_v2::native_amx_application_manifest_empty_root(
+                )
+        {
+            return Err("Native AMX participant manifest proof shape is invalid");
+        }
+        let leaf_hash = HashOf::new(&artifact.leaf);
+        let root = HashOf::<MerkleTree<NativeAmxApplicationManifestLeafV1>>::from_untyped_unchecked(
+            artifact.manifest_root,
+        );
+        if !artifact.proof.clone().verify(
+            &leaf_hash,
+            &root,
+            NATIVE_AMX_APPLICATION_MANIFEST_MAX_PROOF_HEIGHT,
+        ) {
+            return Err("Native AMX participant manifest Merkle proof is invalid");
+        }
+        Ok(())
+    }
+
+    fn native_amx_participant_receipt_matches_manifest_leaf(
+        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+        leaf: &NativeAmxApplicationManifestLeafV1,
+    ) -> bool {
+        let descriptor = &receipt.participant_proposal.descriptor;
+        descriptor.lane_id == leaf.lane_id
+            && descriptor.dataspace_id == leaf.dataspace_id
+            && descriptor.lane_incarnation == leaf.lane_incarnation
+            && descriptor.lane_block_height == leaf.participant_height
+            && descriptor.lane_block_view == leaf.participant_view
+            && descriptor.previous_lane_block_height == leaf.predecessor_height
+            && descriptor.previous_lane_block_descriptor_hash == leaf.predecessor_descriptor_hash
+            && descriptor.descriptor_hash == leaf.descriptor_hash
+            && receipt.participant_proposal.proposal_hash == leaf.proposal_hash
+            && receipt.participant_settlement_hash == leaf.settlement_hash
+            && receipt.application_block_height == leaf.application_block_height
+            && receipt.application_block_hash == leaf.application_block_hash
+            && receipt.executed_block_wire_hash == leaf.executed_block_wire_hash
+            && receipt.source_ids
+                == leaf
+                    .members
+                    .iter()
+                    .map(|member| member.source_id)
+                    .collect::<Vec<_>>()
+            && receipt.entrypoint_indices
+                == leaf
+                    .members
+                    .iter()
+                    .map(|member| member.entrypoint_index)
+                    .collect::<Vec<_>>()
+            && receipt.entrypoint_hashes
+                == leaf
+                    .members
+                    .iter()
+                    .map(|member| member.entrypoint_hash)
+                    .collect::<Vec<_>>()
+            && receipt.result_hashes
+                == leaf
+                    .members
+                    .iter()
+                    .map(|member| member.result_hash)
+                    .collect::<Vec<_>>()
+    }
+
     fn validate_native_amx_participant_application_receipt_artifact(
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
     ) -> std::result::Result<(), &'static str> {
@@ -22532,9 +23068,19 @@ impl Kura {
         if artifact.participant_proposal.payload_block_hint.is_some()
             || descriptor.proposal_height != artifact.application_block_height
             || artifact.application_block_height == 0
-            || artifact.result_merkle_root.is_none()
-            || artifact.commit_post_state_root.is_none()
-            || artifact.commit_qc_hash.is_none()
+            || artifact
+                .executed_block_wire_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || Hash::from(artifact.finality_artifact_hash)
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || Hash::from(artifact.manifest_artifact_hash)
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
         {
             return Err("Native AMX participant receipt lacks global commit evidence");
         }
@@ -22599,9 +23145,139 @@ impl Kura {
             .iter()
             .zip(artifact.result_hashes.iter().copied())
         {
-            if Hash::from(result.hash()) != expected_hash {
+            if result.hash() != expected_hash {
                 return Err("Native AMX participant result hash mismatch");
             }
+        }
+        Ok(())
+    }
+
+    fn validate_native_amx_participant_receipt_latest_index(
+        latest: &NativeAmxParticipantReceiptLatestIndexV1,
+    ) -> std::result::Result<(), &'static str> {
+        if latest.version != NativeAmxParticipantReceiptLatestIndexV1::VERSION {
+            return Err("unsupported Native AMX participant latest-index version");
+        }
+        if latest.lane_block_height == 0 || latest.application_block_height == 0 {
+            return Err("Native AMX participant latest index contains a zero height");
+        }
+        for (hash, label) in [
+            (latest.lane_incarnation, "incarnation"),
+            (latest.participant_proposal_hash, "proposal"),
+            (Hash::from(latest.participant_settlement_hash), "settlement"),
+            (
+                Hash::from(latest.application_block_hash),
+                "application block",
+            ),
+            (latest.receipt_digest, "receipt digest"),
+        ] {
+            if hash.as_ref().iter().all(|byte| *byte == 0) {
+                return Err(match label {
+                    "incarnation" => "Native AMX participant latest index has zero incarnation",
+                    "proposal" => "Native AMX participant latest index has zero proposal hash",
+                    "settlement" => "Native AMX participant latest index has zero settlement hash",
+                    "application block" => {
+                        "Native AMX participant latest index has zero application block hash"
+                    }
+                    _ => "Native AMX participant latest index has zero receipt digest",
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn decode_native_amx_participant_receipt_latest_index(
+        &self,
+        entry: &LaneConfigEntry,
+        path: &Path,
+    ) -> Result<Option<NativeAmxParticipantReceiptLatestIndexV1>> {
+        self.decode_native_amx_participant_receipt_latest_index_for_route(
+            entry.lane_id,
+            entry.dataspace_id,
+            path,
+        )
+    }
+
+    fn decode_native_amx_participant_receipt_latest_index_for_route(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        path: &Path,
+    ) -> Result<Option<NativeAmxParticipantReceiptLatestIndexV1>> {
+        let Some(directory) = path.parent() else {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "Native AMX participant latest-index path has no parent directory",
+            ));
+        };
+        let Some(bytes) = self.read_regular_sidecar_bytes(
+            path,
+            directory,
+            NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let latest = norito::decode_from_bytes::<NativeAmxParticipantReceiptLatestIndexV1>(&bytes)
+            .map_err(|error| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!(
+                        "Native AMX participant latest index failed exact Norito decode: {error}"
+                    ),
+                )
+            })?;
+        let canonical = norito::to_bytes(&latest)?;
+        Self::validate_native_amx_participant_receipt_latest_index(&latest).map_err(|message| {
+            Self::invalid_lane_artifact_error(path.to_path_buf(), message.to_owned())
+        })?;
+        if canonical != bytes || latest.lane_id != lane_id || latest.dataspace_id != dataspace_id {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "Native AMX participant latest index is non-canonical or targets another route",
+            ));
+        }
+        Ok(Some(latest))
+    }
+
+    fn persist_native_amx_participant_receipt_latest_index_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        artifact: &NativeAmxParticipantApplicationReceiptArtifact,
+        path: &Path,
+    ) -> Result<()> {
+        let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(artifact)?;
+        Self::validate_native_amx_participant_receipt_latest_index(&latest).map_err(|message| {
+            Self::invalid_lane_artifact_error(path.to_path_buf(), message.to_owned())
+        })?;
+        if latest.lane_id != entry.lane_id || latest.dataspace_id != entry.dataspace_id {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "Native AMX participant latest index targets another lane storage route",
+            ));
+        }
+        let bytes = norito::to_bytes(&latest)?;
+        if bytes.is_empty() || bytes.len() > NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "Native AMX participant latest index exceeds its hard byte limit",
+            ));
+        }
+        self.write_atomic_synced_replace(path, &bytes)?;
+        let persisted = self
+            .decode_native_amx_participant_receipt_latest_index(entry, path)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    "Native AMX participant latest index disappeared after publication",
+                )
+            })?;
+        if persisted != latest {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "Native AMX participant latest index changed after publication",
+            ));
         }
         Ok(())
     }
@@ -22630,21 +23306,64 @@ impl Kura {
     }
 
     fn lane_artifact_required_bytes_for_block(block: &SignedBlock) -> Result<u64> {
-        let Some(bundle) = block.execution_context() else {
-            return Ok(0);
-        };
-        if bundle.lane_payload_ownerships.is_empty() {
-            return Ok(0);
-        }
-
         let block_hash = block.hash();
         let mut total = 0u64;
-        for ownership in &bundle.lane_payload_ownerships {
-            let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
-            let encoded_len = u64::try_from(artifact.encode_framed()?.len())?;
+        if let Some(bundle) = block.execution_context() {
+            for ownership in &bundle.lane_payload_ownerships {
+                let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
+                let encoded_len = u64::try_from(artifact.encode_framed()?.len())?;
+                total = total
+                    .saturating_add(encoded_len)
+                    .saturating_add(PIPELINE_INDEX_ENTRY_SIZE_U64);
+            }
+        }
+
+        let native_manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(block)
+                .map_err(|error| {
+                    Self::invalid_lane_artifact_error(
+                        PathBuf::from(NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE),
+                        format!("cannot account Native AMX application manifest: {error}"),
+                    )
+                })?;
+        let placeholder_finality_hash = HashOf::from_untyped_unchecked(Hash::new(
+            b"Native AMX application disk-accounting finality placeholder",
+        ));
+        for (index, entry) in native_manifest.entries().iter().enumerate() {
+            let leaf_index = u32::try_from(index)?;
+            let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
+                version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+                leaf: entry.leaf.clone(),
+                leaf_index,
+                proof: native_manifest.proof(leaf_index).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        PathBuf::from(NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE),
+                        "cannot account missing Native AMX manifest proof",
+                    )
+                })?,
+                manifest_root: native_manifest.root(),
+                manifest_leaf_count: native_manifest.count(),
+                finality_artifact_hash: placeholder_finality_hash,
+            };
+            let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
+                entry,
+                HashOf::new(&manifest_artifact),
+                placeholder_finality_hash,
+            );
+            let manifest_len = u64::try_from(manifest_artifact.encode_framed()?.len())?;
+            let receipt_len = u64::try_from(receipt.encode_framed()?.len())?;
+            let latest_len = u64::try_from(
+                norito::to_bytes(&NativeAmxParticipantReceiptLatestIndexV1::from_receipt(
+                    &receipt,
+                )?)?
+                .len(),
+            )?;
             total = total
-                .saturating_add(encoded_len)
-                .saturating_add(PIPELINE_INDEX_ENTRY_SIZE_U64);
+                .saturating_add(manifest_len)
+                .saturating_add(PIPELINE_INDEX_ENTRY_SIZE_U64)
+                .saturating_add(receipt_len)
+                .saturating_add(PIPELINE_INDEX_ENTRY_SIZE_U64)
+                .saturating_add(latest_len);
         }
         Ok(total)
     }
@@ -23241,6 +23960,30 @@ impl Kura {
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
 
         let _guard = self.sidecar_lock.lock();
+        let (autonomous_data_path, autonomous_index_path) =
+            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+        if let Some(autonomous) = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                lane_block_height,
+                &autonomous_data_path,
+                &autonomous_index_path,
+                true,
+            )?
+        {
+            if autonomous.artifact.executable_payload.origin_proposal != artifact.proposal {
+                return Err(Self::invalid_lane_artifact_error(
+                    autonomous_data_path,
+                    "certification proposal conflicts with the durable autonomous lane slot",
+                ));
+            }
+            if autonomous.retirement.is_some() {
+                return Err(Self::invalid_lane_artifact_error(
+                    autonomous.view_state_path,
+                    "durably retired autonomous lane slot cannot be certified",
+                ));
+            }
+        }
         if !self.recover_bound_progress_sidecar_artifacts(
             &data_path,
             &index_path,
@@ -23488,8 +24231,8 @@ impl Kura {
     /// Return the first valid certified lane block at or above `minimum_height`
     /// accepted by `accept`.
     ///
-    /// Retired autonomous-generation fixtures use this bounded lookup without
-    /// allocating every historical sidecar.
+    /// Autonomous merge preparation uses this bounded lookup without allocating
+    /// every historical sidecar.
     #[cfg(test)]
     pub(crate) fn first_certified_lane_block_artifact_matching_from<F>(
         &self,
@@ -23576,7 +24319,6 @@ impl Kura {
     /// bounded independently of the sidecar index length so malformed sparse or
     /// foreign history cannot turn proposal/startup recovery into an unbounded
     /// walk; failing to find an artifact within the budget fails closed.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn latest_certified_lane_block_artifacts_matching<F>(
         &self,
         lane_id: LaneId,
@@ -23896,130 +24638,396 @@ impl Kura {
         Some(artifact)
     }
 
-    #[cfg(test)]
+    fn decode_autonomous_lane_block_latest_attempt(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<AutonomousLaneBlockLatestAttemptV1> {
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lane latest-attempt pointer exceeds its hard byte limit",
+            ));
+        }
+        let pointer = norito::decode_from_bytes::<AutonomousLaneBlockLatestAttemptV1>(bytes)
+            .map_err(Error::NoritoFrame)?;
+        if norito::to_bytes(&pointer).map_err(Error::NoritoFrame)? != bytes
+            || pointer.version != AutonomousLaneBlockLatestAttemptV1::VERSION
+            || pointer.proposal_height == 0
+            || pointer.lane_block_height == 0
+            || [
+                pointer.chain_id_hash,
+                pointer.lane_incarnation,
+                pointer.origin_proposal_hash,
+                pointer.executable_payload_hash,
+            ]
+            .iter()
+            .any(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lane latest-attempt pointer has a non-canonical identity",
+            ));
+        }
+        Ok(pointer)
+    }
+
+    fn read_autonomous_lane_block_latest_attempt_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_block_height: u64,
+    ) -> Result<Option<AutonomousLaneBlockLatestAttemptV1>> {
+        let path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
+            entry,
+            &self.store_root,
+            lane_block_height,
+        );
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.clone(),
+                "autonomous lane latest-attempt pointer has no parent directory",
+            )
+        })?;
+        let Some(bytes) = self.read_regular_sidecar_bytes(
+            &path,
+            parent,
+            AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let pointer = Self::decode_autonomous_lane_block_latest_attempt(&path, &bytes)?;
+        if pointer.lane_id != entry.lane_id
+            || pointer.dataspace_id != entry.dataspace_id
+            || pointer.lane_block_height != lane_block_height
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous lane latest-attempt pointer does not match its lane-height path",
+            ));
+        }
+        self.require_active_lane_incarnation(
+            entry,
+            pointer.lane_incarnation,
+            pointer.proposal_height,
+        )?;
+        Ok(Some(pointer))
+    }
+
+    fn read_autonomous_lane_route_latest_attempt_locked(
+        &self,
+        entry: &LaneConfigEntry,
+    ) -> Result<Option<AutonomousLaneBlockLatestAttemptV1>> {
+        let path =
+            Self::autonomous_lane_route_latest_attempt_path_for_entry(entry, &self.store_root);
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.clone(),
+                "autonomous lane route-latest pointer has no parent directory",
+            )
+        })?;
+        let Some(bytes) = self.read_regular_sidecar_bytes(
+            &path,
+            parent,
+            AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let pointer = Self::decode_autonomous_lane_block_latest_attempt(&path, &bytes)?;
+        if pointer.lane_id != entry.lane_id || pointer.dataspace_id != entry.dataspace_id {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous lane route-latest pointer does not match its active route",
+            ));
+        }
+        self.require_active_lane_incarnation(
+            entry,
+            pointer.lane_incarnation,
+            pointer.proposal_height,
+        )?;
+        Ok(Some(pointer))
+    }
+
+    fn read_autonomous_lane_block_attempt_artifact_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        pointer: &AutonomousLaneBlockLatestAttemptV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        recover: bool,
+    ) -> Result<AutonomousLaneBlockDurableRecord> {
+        if pointer.chain_id_hash != expected_chain_id_hash || pointer.epoch != expected_epoch {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                    entry,
+                    &self.store_root,
+                    pointer.lane_block_height,
+                ),
+                "autonomous lane latest-attempt pointer has the wrong chain context",
+            ));
+        }
+        let artifact_path = Self::autonomous_lane_block_attempt_path_for_entry(
+            entry,
+            &self.store_root,
+            pointer.lane_block_height,
+            pointer.proposal_height,
+        );
+        let parent = artifact_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                artifact_path.clone(),
+                "autonomous lane attempt path has no parent directory",
+            )
+        })?;
+        let bytes = self
+            .read_regular_sidecar_bytes(
+                &artifact_path,
+                parent,
+                MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    artifact_path.clone(),
+                    "autonomous lane latest-attempt pointer references a missing payload",
+                )
+            })?;
+        let mut artifact = norito::decode_from_bytes::<AutonomousLaneBlockArtifact>(&bytes)
+            .map_err(Error::NoritoFrame)?;
+        if artifact.encode_framed().map_err(Error::NoritoFrame)? != bytes
+            || !pointer.matches_payload(&artifact.executable_payload)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                artifact_path,
+                "autonomous lane attempt payload conflicts with its latest pointer",
+            ));
+        }
+        let descriptor = &artifact.executable_payload.origin_proposal.descriptor;
+        self.require_active_lane_artifact(entry, descriptor)?;
+        let view_state_path = Self::autonomous_lane_block_attempt_view_state_path_for_entry(
+            entry,
+            &self.store_root,
+            pointer.lane_block_height,
+            pointer.proposal_height,
+        );
+        let retirement = match self.read_autonomous_lane_block_view_state_locked(
+            &artifact.executable_payload,
+            &view_state_path,
+            recover,
+        )? {
+            Some(state) => {
+                artifact.availability_certificate = state.availability_certificate;
+                artifact.view_checkpoint = state.checkpoint;
+                artifact.new_view_certificates = state.certificates;
+                state.retirement
+            }
+            None => None,
+        };
+        Self::validate_autonomous_lane_block_artifact(
+            &artifact,
+            expected_chain_id_hash,
+            expected_epoch,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(parent.to_path_buf(), message))?;
+        Ok(AutonomousLaneBlockDurableRecord {
+            artifact,
+            retirement,
+            view_state_path,
+        })
+    }
+
     fn autonomous_lane_block_view_state_temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
     }
 
-    #[cfg(test)]
     fn decode_autonomous_lane_block_view_state(
         path: &Path,
-    ) -> std::result::Result<AutonomousLaneBlockViewState, &'static str> {
-        let bytes = std::fs::read(path).map_err(|_| "failed to read autonomous lane view state")?;
-        if bytes.len() > usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX) {
-            return Err("autonomous lane view state exceeds hard byte limit");
+        bytes: &[u8],
+    ) -> Result<AutonomousLaneBlockViewState> {
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_BLOCK_VIEW_STATE_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lane view state exceeds its hard byte limit",
+            ));
         }
-        norito::decode_from_bytes::<AutonomousLaneBlockViewState>(&bytes)
-            .map_err(|_| "failed to decode autonomous lane view state")
+        let state = norito::decode_from_bytes::<AutonomousLaneBlockViewState>(bytes)
+            .map_err(Error::NoritoFrame)?;
+        if norito::to_bytes(&state).map_err(Error::NoritoFrame)? != bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lane view state is not canonical Norito",
+            ));
+        }
+        Ok(state)
     }
 
     /// Read the independently replaceable view suffix. A present but malformed
     /// file fails closed; it is never treated as an empty/origin view.
-    #[cfg(test)]
     fn read_autonomous_lane_block_view_state_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
         path: &Path,
         recover: bool,
-    ) -> std::result::Result<Option<AutonomousLaneBlockViewState>, &'static str> {
+    ) -> Result<Option<AutonomousLaneBlockViewState>> {
+        enum Candidate {
+            Absent,
+            Invalid(Error),
+            Valid {
+                state: AutonomousLaneBlockViewState,
+                current: LaneBlockProposalV1,
+            },
+        }
+
         let temp_path = Self::autonomous_lane_block_view_state_temp_path(path);
-        let validate_state = |state: AutonomousLaneBlockViewState| {
-            if !state.matches_payload(payload) {
-                return None;
-            }
-            if state.certificates.len() > MAX_LANE_NEW_VIEW_CERTIFICATES {
-                return None;
-            }
-            let artifact = AutonomousLaneBlockArtifact {
-                format: AutonomousLaneBlockArtifactFormat::Current,
-                executable_payload: payload.clone(),
-                availability_certificate: state.availability_certificate.clone(),
-                view_checkpoint: state.checkpoint.clone(),
-                new_view_certificates: state.certificates.clone(),
-            };
-            let current = Self::validate_autonomous_lane_block_artifact(
-                &artifact,
-                payload.chain_id_hash,
-                payload.epoch,
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lane view state path has no parent",
             )
-            .ok()?;
-            Some((state, current))
+        })?;
+        let validate_state =
+            |state: AutonomousLaneBlockViewState,
+             source_path: &Path|
+             -> Result<(AutonomousLaneBlockViewState, LaneBlockProposalV1)> {
+                if !state.matches_payload(payload) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        source_path.to_path_buf(),
+                        "autonomous lane view state does not match its immutable payload",
+                    ));
+                }
+                if state.certificates.len() > MAX_LANE_NEW_VIEW_CERTIFICATES {
+                    return Err(Self::invalid_lane_artifact_error(
+                        source_path.to_path_buf(),
+                        "autonomous lane view state exceeds the NewView certificate limit",
+                    ));
+                }
+                if state
+                    .retirement
+                    .as_ref()
+                    .is_some_and(|retirement| !retirement.matches_payload(payload))
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        source_path.to_path_buf(),
+                        "autonomous lane slot retirement conflicts with its immutable payload",
+                    ));
+                }
+                let artifact = AutonomousLaneBlockArtifact {
+                    format: AutonomousLaneBlockArtifactFormat::Current,
+                    executable_payload: payload.clone(),
+                    availability_certificate: state.availability_certificate.clone(),
+                    view_checkpoint: state.checkpoint.clone(),
+                    new_view_certificates: state.certificates.clone(),
+                };
+                let current = Self::validate_autonomous_lane_block_artifact(
+                    &artifact,
+                    payload.chain_id_hash,
+                    payload.epoch,
+                )
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(source_path.to_path_buf(), message)
+                })?;
+                Ok((state, current))
+            };
+        let load_candidate = |candidate_path: &Path| -> Result<Candidate> {
+            let Some(bytes) = self.read_regular_sidecar_bytes(
+                candidate_path,
+                parent,
+                AUTONOMOUS_LANE_BLOCK_VIEW_STATE_MAX_BYTES,
+            )?
+            else {
+                return Ok(Candidate::Absent);
+            };
+            Ok(
+                match Self::decode_autonomous_lane_block_view_state(candidate_path, &bytes)
+                    .and_then(|state| validate_state(state, candidate_path))
+                {
+                    Ok((state, current)) => Candidate::Valid { state, current },
+                    Err(error) => Candidate::Invalid(error),
+                },
+            )
         };
-        let main_exists = path.exists();
-        let main = main_exists
-            .then(|| Self::decode_autonomous_lane_block_view_state(path).ok())
-            .flatten()
-            .and_then(&validate_state);
+        let main = load_candidate(path)?;
         let recover = recover && self.durable_mutation_authorized().is_ok();
         if !recover {
             return match main {
-                Some((state, _)) => Ok(Some(state)),
-                None if main_exists => Err("autonomous lane view state is corrupt or truncated"),
-                None => Ok(None),
+                Candidate::Valid { state, .. } => Ok(Some(state)),
+                Candidate::Invalid(error) => Err(error),
+                Candidate::Absent => Ok(None),
             };
         }
-        let temp = temp_path
-            .exists()
-            .then(|| Self::decode_autonomous_lane_block_view_state(&temp_path).ok())
-            .flatten()
-            .and_then(&validate_state);
+        let temp = load_candidate(&temp_path)?;
 
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let tracked_before = Self::file_len_or_zero(path)
-            .unwrap_or(0)
-            .saturating_add(Self::file_len_or_zero(&temp_path).unwrap_or(0));
-        let result = match (main, temp) {
-            (Some((_main_state, main_current)), Some((temp_state, temp_current)))
-                if temp_current.descriptor.lane_block_view
-                    > main_current.descriptor.lane_block_view =>
-            {
-                if Self::promote_sidecar_temp(
-                    &temp_path,
-                    path,
-                    AutonomousLaneBlockArtifact::FORMAT_LABEL,
-                    "view-state",
-                ) {
-                    Ok(Some(temp_state))
-                } else {
-                    Err("failed to recover newer autonomous lane view state")
-                }
+        let tracked_before = self
+            .regular_sidecar_metadata(path, parent)?
+            .map_or(0, |metadata| metadata.file.len())
+            .saturating_add(
+                self.regular_sidecar_metadata(&temp_path, parent)?
+                    .map_or(0, |metadata| metadata.file.len()),
+            );
+        let remove_temp = || -> Result<()> {
+            if self.regular_sidecar_metadata(&temp_path, parent)?.is_some() {
+                std::fs::remove_file(&temp_path)
+                    .map_err(|error| Error::IO(error, temp_path.clone()))?;
+                sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
             }
-            (Some((main_state, _)), Some(_)) => {
-                let _ = std::fs::remove_file(&temp_path);
-                Ok(Some(main_state))
-            }
-            (Some((main_state, _)), None) => {
-                if temp_path.exists() {
-                    let _ = std::fs::remove_file(&temp_path);
-                }
-                Ok(Some(main_state))
-            }
-            (None, Some((temp_state, _))) => {
-                if Self::promote_sidecar_temp(
-                    &temp_path,
-                    path,
-                    AutonomousLaneBlockArtifact::FORMAT_LABEL,
-                    "view-state",
-                ) {
-                    Ok(Some(temp_state))
-                } else {
-                    Err("failed to recover autonomous lane view state")
-                }
-            }
-            (None, None) if main_exists => {
-                Err("autonomous lane view state is corrupt or truncated")
-            }
-            (None, None) => Ok(None),
+            Ok(())
         };
-        let tracked_after = Self::file_len_or_zero(path)
-            .unwrap_or(0)
-            .saturating_add(Self::file_len_or_zero(&temp_path).unwrap_or(0));
-        self.update_disk_usage_delta(tracked_before, tracked_after);
+        let promote_temp = |state: &AutonomousLaneBlockViewState| -> Result<()> {
+            let bytes = norito::to_bytes(state).map_err(Error::NoritoFrame)?;
+            self.write_atomic_synced_replace(path, &bytes)?;
+            remove_temp()
+        };
+        let recovery_rank = |state: &AutonomousLaneBlockViewState,
+                             current: &LaneBlockProposalV1| {
+            (
+                current.descriptor.lane_block_view,
+                state.retirement.is_some(),
+                state.availability_certificate.is_some(),
+            )
+        };
+        let result = match (main, temp) {
+            (
+                Candidate::Valid {
+                    state: main_state,
+                    current: main_current,
+                },
+                Candidate::Valid {
+                    state: temp_state,
+                    current: temp_current,
+                },
+            ) => {
+                if recovery_rank(&temp_state, &temp_current)
+                    > recovery_rank(&main_state, &main_current)
+                {
+                    promote_temp(&temp_state).map(|()| Some(temp_state))
+                } else {
+                    remove_temp().map(|()| Some(main_state))
+                }
+            }
+            (Candidate::Invalid(_), Candidate::Valid { state, .. })
+            | (Candidate::Absent, Candidate::Valid { state, .. }) => {
+                promote_temp(&state).map(|()| Some(state))
+            }
+            (Candidate::Valid { state, .. }, Candidate::Invalid(_)) => {
+                remove_temp().map(|()| Some(state))
+            }
+            (Candidate::Valid { state, .. }, Candidate::Absent) => Ok(Some(state)),
+            (Candidate::Invalid(error), Candidate::Invalid(_))
+            | (Candidate::Invalid(error), Candidate::Absent)
+            | (Candidate::Absent, Candidate::Invalid(error)) => Err(error),
+            (Candidate::Absent, Candidate::Absent) => Ok(None),
+        };
+        if let Ok(main) = self.regular_sidecar_metadata(path, parent)
+            && let Ok(temp) = self.regular_sidecar_metadata(&temp_path, parent)
+        {
+            let tracked_after = main
+                .map_or(0, |metadata| metadata.file.len())
+                .saturating_add(temp.map_or(0, |metadata| metadata.file.len()));
+            self.update_disk_usage_delta(tracked_before, tracked_after);
+        }
         accounting_mutation.finish();
         result
     }
 
-    #[cfg(test)]
     fn write_autonomous_lane_block_view_state_locked(
         &self,
         artifact: &AutonomousLaneBlockArtifact,
@@ -24035,8 +25043,50 @@ impl Kura {
         )
         .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
         let state = AutonomousLaneBlockViewState::from_artifact(artifact);
-        let bytes = norito::to_bytes(&state).map_err(Error::NoritoFrame)?;
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > STRICT_INIT_MAX_BLOCK_BYTES {
+        self.write_autonomous_lane_block_view_state_record_locked(
+            &artifact.executable_payload,
+            &state,
+            path,
+            expected_chain_id_hash,
+            expected_epoch,
+        )
+    }
+
+    fn write_autonomous_lane_block_view_state_record_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        state: &AutonomousLaneBlockViewState,
+        path: &Path,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
+        if !state.matches_payload(payload)
+            || state
+                .retirement
+                .as_ref()
+                .is_some_and(|retirement| !retirement.matches_payload(payload))
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lane view state conflicts with its immutable payload",
+            ));
+        }
+        let artifact = AutonomousLaneBlockArtifact {
+            format: AutonomousLaneBlockArtifactFormat::Current,
+            executable_payload: payload.clone(),
+            availability_certificate: state.availability_certificate.clone(),
+            view_checkpoint: state.checkpoint.clone(),
+            new_view_certificates: state.certificates.clone(),
+        };
+        Self::validate_autonomous_lane_block_artifact(
+            &artifact,
+            expected_chain_id_hash,
+            expected_epoch,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
+        let bytes = norito::to_bytes(state).map_err(Error::NoritoFrame)?;
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_BLOCK_VIEW_STATE_MAX_BYTES {
             return Err(Self::invalid_lane_artifact_error(
                 path.to_path_buf(),
                 "autonomous lane view state exceeds hard byte limit",
@@ -24050,73 +25100,313 @@ impl Kura {
         };
         std::fs::create_dir_all(parent).map_err(|err| Error::MkDir(err, parent.to_path_buf()))?;
         let temp_path = Self::autonomous_lane_block_view_state_temp_path(path);
-        let before_bytes =
-            Self::file_len_or_zero(path)?.saturating_add(Self::file_len_or_zero(&temp_path)?);
+        let main_before = self.regular_sidecar_metadata(path, parent)?;
+        let temp_before = self.regular_sidecar_metadata(&temp_path, parent)?;
+        let before_bytes = main_before
+            .as_ref()
+            .map_or(0, |metadata| metadata.file.len())
+            .saturating_add(
+                temp_before
+                    .as_ref()
+                    .map_or(0, |metadata| metadata.file.len()),
+            );
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        if let Err(err) = std::fs::remove_file(&temp_path)
-            && err.kind() != ErrorKind::NotFound
+        let operation = (|| -> Result<()> {
+            if temp_before.is_some() {
+                std::fs::remove_file(&temp_path)
+                    .map_err(|error| Error::IO(error, temp_path.clone()))?;
+            }
+            self.write_atomic_synced_replace(path, &bytes)
+        })();
+        let after = self
+            .regular_sidecar_metadata(path, parent)
+            .and_then(|main| {
+                self.regular_sidecar_metadata(&temp_path, parent)
+                    .map(|temp| (main, temp))
+            });
+        if let Ok((main, temp)) = &after {
+            let after_bytes = main
+                .as_ref()
+                .map_or(0, |metadata| metadata.file.len())
+                .saturating_add(temp.as_ref().map_or(0, |metadata| metadata.file.len()));
+            self.update_disk_usage_delta(before_bytes, after_bytes);
+        }
+        accounting_mutation.finish();
+        operation?;
+        after?;
+        Ok(())
+    }
+
+    fn write_autonomous_lane_block_attempt_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        artifact: &AutonomousLaneBlockArtifact,
+        state: &AutonomousLaneBlockViewState,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<AutonomousLaneBlockLatestAttemptV1> {
+        self.durable_mutation_authorized()?;
+        let payload = &artifact.executable_payload;
+        Self::validate_autonomous_lane_block_artifact(
+            artifact,
+            expected_chain_id_hash,
+            expected_epoch,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))?;
+        if !state.matches_payload(payload)
+            || state
+                .retirement
+                .as_ref()
+                .is_some_and(|retirement| !retirement.matches_payload(payload))
         {
-            return Err(Error::IO(err, temp_path));
-        }
-        let mut temp = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp_path)
-            .map_err(|err| Error::IO(err, temp_path.clone()))?;
-        temp.write_all(&bytes)
-            .map_err(|err| Error::IO(err, temp_path.clone()))?;
-        if matches!(self.sidecar_fsync_mode(), FsyncMode::Always) {
-            temp.sync_data()
-                .map_err(|err| Error::IO(err, temp_path.clone()))?;
-        }
-        drop(temp);
-        if !Self::promote_sidecar_temp(
-            &temp_path,
-            path,
-            AutonomousLaneBlockArtifact::FORMAT_LABEL,
-            "view-state",
-        ) {
-            return Err(Error::IO(
-                std::io::Error::other("failed to atomically replace autonomous lane view state"),
-                path.to_path_buf(),
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lane attempt state conflicts with its immutable payload",
             ));
         }
-        let after_bytes =
-            Self::file_len_or_zero(path)?.saturating_add(Self::file_len_or_zero(&temp_path)?);
-        self.update_disk_usage_delta(before_bytes, after_bytes);
+        let descriptor = &payload.origin_proposal.descriptor;
+        self.require_active_lane_artifact(entry, descriptor)?;
+        let artifact_path = Self::autonomous_lane_block_attempt_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let parent = artifact_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                artifact_path.clone(),
+                "autonomous lane attempt path has no parent directory",
+            )
+        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|error| Error::MkDir(error, parent.to_path_buf()))?;
+        let artifact_bytes = artifact.encode_framed()?;
+        let artifact_before = Self::file_len_or_zero(&artifact_path)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let wrote = self.write_atomic_synced_noclobber(&artifact_path, &artifact_bytes)?;
+        if !wrote {
+            let existing = self
+                .read_regular_sidecar_bytes(
+                    &artifact_path,
+                    parent,
+                    MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        artifact_path.clone(),
+                        "autonomous lane attempt disappeared after no-clobber publication",
+                    )
+                })?;
+            if existing != artifact_bytes {
+                let existing_artifact =
+                    norito::decode_from_bytes::<AutonomousLaneBlockArtifact>(&existing)
+                        .map_err(Error::NoritoFrame)?;
+                if existing_artifact
+                    .encode_framed()
+                    .map_err(Error::NoritoFrame)?
+                    != existing
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        artifact_path,
+                        "autonomous lane proposal-height attempt is not canonical Norito",
+                    ));
+                }
+                let Some(hint) = payload.origin_proposal.payload_block_hint else {
+                    return Err(Self::invalid_lane_artifact_error(
+                        artifact_path,
+                        "autonomous lane proposal-height attempt already contains conflicting bytes",
+                    ));
+                };
+                let promoted_payload = existing_artifact
+                    .executable_payload
+                    .attach_global_hint_exact(hint, expected_chain_id_hash, expected_epoch)
+                    .map_err(|error| {
+                        Self::invalid_lane_artifact_error(
+                            artifact_path.clone(),
+                            format!(
+                                "autonomous lane attempt cannot be promoted to the carrier hint: {error}"
+                            ),
+                        )
+                    })?;
+                let mut promoted_artifact = existing_artifact;
+                promoted_artifact.executable_payload = promoted_payload;
+                if promoted_artifact != *artifact {
+                    return Err(Self::invalid_lane_artifact_error(
+                        artifact_path,
+                        "autonomous lane attempt carrier-hint promotion changed other durable bytes",
+                    ));
+                }
+                self.write_atomic_synced_replace(&artifact_path, &artifact_bytes)?;
+            }
+        }
+        let artifact_after = Self::file_len_or_zero(&artifact_path)?;
+        self.update_disk_usage_delta(artifact_before, artifact_after);
+        accounting_mutation.finish();
+
+        let view_state_path = Self::autonomous_lane_block_attempt_view_state_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        self.write_autonomous_lane_block_view_state_record_locked(
+            payload,
+            state,
+            &view_state_path,
+            expected_chain_id_hash,
+            expected_epoch,
+        )?;
+        Ok(AutonomousLaneBlockLatestAttemptV1::from_payload(payload))
+    }
+
+    fn publish_autonomous_lane_block_latest_attempt_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        pointer: &AutonomousLaneBlockLatestAttemptV1,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
+        let path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
+            entry,
+            &self.store_root,
+            pointer.lane_block_height,
+        );
+        if pointer.version != AutonomousLaneBlockLatestAttemptV1::VERSION
+            || pointer.lane_id != entry.lane_id
+            || pointer.dataspace_id != entry.dataspace_id
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "refusing to publish a malformed autonomous latest-attempt pointer",
+            ));
+        }
+        if let Some(existing) =
+            self.read_autonomous_lane_block_latest_attempt_locked(entry, pointer.lane_block_height)?
+        {
+            if existing != *pointer
+                && (pointer.proposal_height <= existing.proposal_height
+                    || pointer.chain_id_hash != existing.chain_id_hash
+                    || pointer.epoch < existing.epoch
+                    || pointer.lane_id != existing.lane_id
+                    || pointer.dataspace_id != existing.dataspace_id
+                    || pointer.lane_incarnation != existing.lane_incarnation
+                    || pointer.lane_block_height != existing.lane_block_height)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous latest-attempt pointer cannot move backward or change route identity",
+                ));
+            }
+        }
+        let bytes = norito::to_bytes(pointer).map_err(Error::NoritoFrame)?;
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous latest-attempt pointer exceeds its hard byte limit",
+            ));
+        }
+        let before = Self::file_len_or_zero(&path)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        self.write_atomic_synced_replace(&path, &bytes)?;
+        let after = Self::file_len_or_zero(&path)?;
+        self.update_disk_usage_delta(before, after);
         accounting_mutation.finish();
         Ok(())
     }
 
-    #[cfg(test)]
+    fn publish_autonomous_lane_route_latest_attempt_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        pointer: &AutonomousLaneBlockLatestAttemptV1,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
+        let path =
+            Self::autonomous_lane_route_latest_attempt_path_for_entry(entry, &self.store_root);
+        if pointer.version != AutonomousLaneBlockLatestAttemptV1::VERSION
+            || pointer.lane_id != entry.lane_id
+            || pointer.dataspace_id != entry.dataspace_id
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "refusing to publish a malformed autonomous route-latest pointer",
+            ));
+        }
+        if let Some(existing) = self.read_autonomous_lane_route_latest_attempt_locked(entry)? {
+            if existing != *pointer
+                && ((pointer.lane_block_height, pointer.proposal_height)
+                    <= (existing.lane_block_height, existing.proposal_height)
+                    || pointer.proposal_height < existing.proposal_height
+                    || pointer.chain_id_hash != existing.chain_id_hash
+                    || pointer.epoch < existing.epoch
+                    || pointer.lane_id != existing.lane_id
+                    || pointer.dataspace_id != existing.dataspace_id
+                    || pointer.lane_incarnation != existing.lane_incarnation)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous route-latest pointer cannot move backward or change incarnation",
+                ));
+            }
+        }
+        let bytes = norito::to_bytes(pointer).map_err(Error::NoritoFrame)?;
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous route-latest pointer exceeds its hard byte limit",
+            ));
+        }
+        let before = Self::file_len_or_zero(&path)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        self.write_atomic_synced_replace(&path, &bytes)?;
+        let after = Self::file_len_or_zero(&path)?;
+        self.update_disk_usage_delta(before, after);
+        accounting_mutation.finish();
+        Ok(())
+    }
+
     fn decode_autonomous_lane_entrypoint_claim(
         path: &Path,
-    ) -> std::result::Result<AutonomousLaneEntrypointClaimV1, &'static str> {
+    ) -> std::result::Result<AutonomousLaneEntrypointClaimV3, &'static str> {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| "failed to inspect autonomous entrypoint claim")?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err("autonomous entrypoint claim is not a regular no-follow file");
+        }
+        if metadata.len()
+            > u64::try_from(AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES).unwrap_or(u64::MAX)
+        {
+            return Err("autonomous entrypoint claim exceeds hard byte limit");
+        }
         let bytes =
             std::fs::read(path).map_err(|_| "failed to read autonomous entrypoint claim")?;
         if bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
             return Err("autonomous entrypoint claim exceeds hard byte limit");
         }
-        let claim = norito::decode_from_bytes::<AutonomousLaneEntrypointClaimV1>(&bytes)
+        let claim = norito::decode_from_bytes::<AutonomousLaneEntrypointClaimV3>(&bytes)
             .map_err(|_| "failed to decode autonomous entrypoint claim")?;
-        if claim.version != 1
+        if claim.version != AutonomousLaneEntrypointClaimV3::VERSION
             || claim.proposal_height == 0
             || claim.lane_block_height == 0
+            || [
+                claim.chain_id_hash,
+                claim.entrypoint_hash,
+                claim.lane_incarnation,
+                claim.origin_proposal_hash,
+                claim.executable_payload_hash,
+            ]
+            .iter()
+            .any(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
             || claim
-                .lane_incarnation
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
+                .retirement_hash()
+                .is_some_and(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
         {
             return Err("invalid autonomous entrypoint claim identity");
         }
         Ok(claim)
     }
 
-    #[cfg(test)]
     fn autonomous_lane_entrypoint_claim_path_matches(
         &self,
-        claim: &AutonomousLaneEntrypointClaimV1,
+        claim: &AutonomousLaneEntrypointClaimV3,
         path: &Path,
     ) -> bool {
         Self::autonomous_lane_entrypoint_claim_path(
@@ -24126,14 +25416,49 @@ impl Kura {
         ) == path
     }
 
+    fn autonomous_lane_entrypoint_claim_file_exists(path: &Path) -> Result<bool> {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata)
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() =>
+            {
+                Err(Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    "autonomous entrypoint claim is not a regular no-follow file",
+                ))
+            }
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(Error::IO(error, path.to_path_buf())),
+        }
+    }
+
+    fn promote_autonomous_lane_entrypoint_claim_temp(temp_path: &Path, path: &Path) -> Result<()> {
+        let temp = std::fs::OpenOptions::new()
+            .read(true)
+            .open(temp_path)
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        temp.sync_all()
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        if !Self::promote_sidecar_temp(temp_path, path, "lane.autonomous_entrypoint_claim", "claim")
+        {
+            return Err(Error::IO(
+                std::io::Error::other("failed to promote durable autonomous entrypoint claim"),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Check one exact indexed lane-height slot without invoking sidecar
     /// recovery. This is used only to resolve a claim temp after a crash; a
     /// malformed or in-progress index is conservatively treated as occupied.
-    #[cfg(test)]
     fn autonomous_lane_claim_target_may_be_durable_locked(
         &self,
-        claim: &AutonomousLaneEntrypointClaimV1,
+        claim: &AutonomousLaneEntrypointClaimV3,
     ) -> bool {
+        if !matches!(claim.state, AutonomousLaneEntrypointClaimStateV3::Active) {
+            return false;
+        }
         let Some(entry) = self
             .lane_storage_entries
             .lock()
@@ -24152,53 +25477,29 @@ impl Kura {
         }
         let (data_path, index_path) =
             Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
-        if data_path.with_extension("norito.tmp").exists()
-            || index_path.with_extension("index.tmp").exists()
-        {
-            return true;
-        }
-        if !index_path.exists() {
-            return data_path.exists();
-        }
-        let Ok(mut index) = std::fs::File::open(&index_path) else {
-            return true;
-        };
-        let Ok(index_len) = index.metadata().map(|metadata| metadata.len()) else {
-            return true;
-        };
-        let Ok(layout) = SidecarIndexLayout::read_from(&mut index, index_len) else {
-            return true;
-        };
-        let Some(position) = layout.entry_position(claim.lane_block_height) else {
-            return false;
-        };
-        let mut bytes = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        if index
-            .seek(SeekFrom::Start(position))
-            .and_then(|_| index.read_exact(&mut bytes))
-            .is_err()
-        {
-            return true;
-        }
-        if SidecarIndexEntry::from_bytes(bytes).len == 0 {
-            return false;
-        }
-        // The exact slot is occupied. Decode only that indexed record (never a
-        // history scan) so a failed replacement attempt cannot steal a claim
-        // merely because an older incarnation still occupies the lane height.
-        Self::read_indexed_sidecar_from_paths_with_recovery(
+        // The exact current attempt is pointer-resolved. Any malformed or
+        // in-progress durable state remains conservatively occupied; only a
+        // proven absence lets a staged claim be discarded.
+        match self.read_autonomous_lane_block_record_from_paths_locked(
+            &entry,
+            claim.lane_id,
             claim.lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_from_bytes::<AutonomousLaneBlockArtifact>,
-            AutonomousLaneBlockArtifact::FORMAT_LABEL,
+            claim.chain_id_hash,
+            claim.epoch,
             false,
-        )
-        .is_none_or(|artifact| claim.matches_payload(&artifact.executable_payload))
+        ) {
+            Ok(Some(record)) => claim.active_for_payload(&record.artifact.executable_payload),
+            Ok(None) => false,
+            Err(_) => true,
+        }
     }
 
-    #[cfg(test)]
     fn remove_autonomous_lane_entrypoint_claim_file(&self, path: &Path) -> Result<()> {
+        if !Self::autonomous_lane_entrypoint_claim_file_exists(path)? {
+            return Ok(());
+        }
         let bytes = Self::file_len_or_zero(path)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         match std::fs::remove_file(path) {
@@ -24210,17 +25511,15 @@ impl Kura {
         Ok(())
     }
 
-    #[cfg(test)]
     fn prepare_autonomous_lane_entrypoint_claims_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
-    ) -> Result<Vec<(PathBuf, AutonomousLaneEntrypointClaimV1)>> {
+    ) -> Result<Vec<(PathBuf, AutonomousLaneEntrypointClaimV3)>> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut staged = Vec::with_capacity(payload.entrypoint_hashes.len());
         let mut staged_dirs = BTreeSet::new();
-        let fsync_mode = self.sidecar_fsync_mode();
         for entrypoint_hash in &payload.entrypoint_hashes {
-            let incoming = AutonomousLaneEntrypointClaimV1::new(payload, *entrypoint_hash);
+            let incoming = AutonomousLaneEntrypointClaimV3::new(payload, *entrypoint_hash);
             let path = Self::autonomous_lane_entrypoint_claim_path(
                 &self.store_root,
                 &incoming.chain_id_hash,
@@ -24228,44 +25527,62 @@ impl Kura {
             );
             let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
 
-            if path.exists() {
+            let existing = if Self::autonomous_lane_entrypoint_claim_file_exists(&path)? {
                 let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
                     .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
-                if !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path)
-                    || !existing.matches_payload(payload)
-                {
+                if !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous entrypoint claim has a mismatched hash path",
+                    ));
+                }
+                if existing.active_for_payload(payload) {
+                    self.remove_autonomous_lane_entrypoint_claim_file(&temp_path)?;
+                    continue;
+                }
+                if existing.owns_payload(payload) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous entrypoint belongs to a durably retired lane payload",
+                    ));
+                }
+                if !matches!(
+                    existing.state,
+                    AutonomousLaneEntrypointClaimStateV3::Released(_)
+                ) {
                     return Err(Self::invalid_lane_artifact_error(
                         path,
                         "autonomous entrypoint is already claimed by another lane payload",
                     ));
                 }
-                self.remove_autonomous_lane_entrypoint_claim_file(&temp_path)?;
-                continue;
-            }
+                Some(existing)
+            } else {
+                None
+            };
 
-            if temp_path.exists() {
+            if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
                 let pending = Self::decode_autonomous_lane_entrypoint_claim(&temp_path).map_err(
                     |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
                 )?;
-                if !self.autonomous_lane_entrypoint_claim_path_matches(&pending, &path) {
+                if !self.autonomous_lane_entrypoint_claim_path_matches(&pending, &path)
+                    || !matches!(pending.state, AutonomousLaneEntrypointClaimStateV3::Active)
+                {
                     return Err(Self::invalid_lane_artifact_error(
                         temp_path,
-                        "autonomous entrypoint temp claim has a mismatched hash path",
+                        "autonomous entrypoint temp claim has a mismatched or released identity",
                     ));
                 }
                 if self.autonomous_lane_claim_target_may_be_durable_locked(&pending) {
-                    if !Self::promote_sidecar_temp(
-                        &temp_path,
-                        &path,
-                        "lane.autonomous_entrypoint_claim",
-                        "claim",
-                    ) {
-                        return Err(Error::IO(
-                            std::io::Error::other("failed to recover autonomous entrypoint claim"),
-                            path,
-                        ));
+                    let replaced_bytes = if existing.is_some() {
+                        Self::file_len_or_zero(&path)?
+                    } else {
+                        0
+                    };
+                    Self::promote_autonomous_lane_entrypoint_claim_temp(&temp_path, &path)?;
+                    if replaced_bytes > 0 {
+                        self.sub_disk_usage_bytes(replaced_bytes);
                     }
-                    if !pending.matches_payload(payload) {
+                    if !pending.active_for_payload(payload) {
                         return Err(Self::invalid_lane_artifact_error(
                             path,
                             "autonomous entrypoint is already claimed by another lane payload",
@@ -24296,13 +25613,7 @@ impl Kura {
                 .write(true)
                 .open(&temp_path)
                 .map_err(|err| Error::IO(err, temp_path.clone()))?;
-            if let Err(err) = temp.write_all(&bytes).and_then(|()| {
-                if matches!(fsync_mode, FsyncMode::Always) {
-                    temp.sync_data()
-                } else {
-                    Ok(())
-                }
-            }) {
+            if let Err(err) = temp.write_all(&bytes).and_then(|()| temp.sync_all()) {
                 drop(temp);
                 let _ = std::fs::remove_file(&temp_path);
                 return Err(Error::IO(err, temp_path));
@@ -24312,35 +25623,40 @@ impl Kura {
             staged_dirs.insert(parent.to_path_buf());
             staged.push((path, incoming));
         }
-        if matches!(fsync_mode, FsyncMode::Always) {
-            for dir in staged_dirs {
-                sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
-            }
+        for dir in staged_dirs {
+            sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
         }
         accounting_mutation.finish();
         Ok(staged)
     }
 
-    #[cfg(test)]
     fn finalize_autonomous_lane_entrypoint_claims_locked(
         &self,
-        staged: &[(PathBuf, AutonomousLaneEntrypointClaimV1)],
+        staged: &[(PathBuf, AutonomousLaneEntrypointClaimV3)],
     ) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         for (path, expected) in staged {
             let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(path);
-            if path.exists() {
+            let replaced_bytes = if Self::autonomous_lane_entrypoint_claim_file_exists(path)? {
                 let existing = Self::decode_autonomous_lane_entrypoint_claim(path)
                     .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
-                if &existing != expected {
+                if &existing == expected {
+                    self.remove_autonomous_lane_entrypoint_claim_file(&temp_path)?;
+                    continue;
+                }
+                if !matches!(
+                    existing.state,
+                    AutonomousLaneEntrypointClaimStateV3::Released(_)
+                ) {
                     return Err(Self::invalid_lane_artifact_error(
                         path.clone(),
                         "autonomous entrypoint claim changed before commit",
                     ));
                 }
-                self.remove_autonomous_lane_entrypoint_claim_file(&temp_path)?;
-                continue;
-            }
+                Self::file_len_or_zero(path)?
+            } else {
+                0
+            };
             let pending = Self::decode_autonomous_lane_entrypoint_claim(&temp_path)
                 .map_err(|message| Self::invalid_lane_artifact_error(temp_path.clone(), message))?;
             if &pending != expected {
@@ -24349,19 +25665,266 @@ impl Kura {
                     "autonomous entrypoint temp claim changed before commit",
                 ));
             }
-            if !Self::promote_sidecar_temp(
-                &temp_path,
-                path,
-                "lane.autonomous_entrypoint_claim",
-                "claim",
-            ) {
-                return Err(Error::IO(
-                    std::io::Error::other("failed to commit autonomous entrypoint claim"),
-                    path.clone(),
-                ));
+            Self::promote_autonomous_lane_entrypoint_claim_temp(&temp_path, path)?;
+            if replaced_bytes > 0 {
+                self.sub_disk_usage_bytes(replaced_bytes);
             }
         }
         accounting_mutation.finish();
+        Ok(())
+    }
+
+    /// Durably transition every exact entrypoint owner through one release phase.
+    ///
+    /// Individual claim replacements are atomic. The full group is validated
+    /// before the first replacement, and a retry resumes an interrupted exact
+    /// prefix without accepting a different retirement identity.
+    fn transition_autonomous_lane_entrypoint_claims_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        finalize_release: bool,
+    ) -> Result<()> {
+        if !retirement.matches_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous entrypoint release conflicts with slot retirement",
+            ));
+        }
+        let retirement_hash = retirement.digest()?;
+        let mut replacements = Vec::with_capacity(payload.entrypoint_hashes.len());
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.chain_id_hash,
+                entrypoint_hash,
+            );
+            let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
+            let expected_active = AutonomousLaneEntrypointClaimV3::new(payload, *entrypoint_hash);
+            let existing = if Self::autonomous_lane_entrypoint_claim_file_exists(&path)? {
+                Self::decode_autonomous_lane_entrypoint_claim(&path)
+                    .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?
+            } else {
+                // The payload append is the durable ownership boundary. A
+                // crash immediately after that append can leave the exact
+                // claim only at its staged path; retirement must promote that
+                // owner before changing it to a pending tombstone, otherwise
+                // the already-durable lane slot can never be reconciled.
+                if !Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous entrypoint release is missing its durable or staged owner",
+                    ));
+                }
+                let pending = Self::decode_autonomous_lane_entrypoint_claim(&temp_path).map_err(
+                    |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
+                )?;
+                if pending != expected_active
+                    || !self.autonomous_lane_entrypoint_claim_path_matches(&pending, &path)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        temp_path,
+                        "autonomous entrypoint release found a conflicting staged owner",
+                    ));
+                }
+                Self::promote_autonomous_lane_entrypoint_claim_temp(&temp_path, &path)?;
+                pending
+            };
+            if !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path)
+                || !existing.owns_payload(payload)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "autonomous entrypoint release does not match its durable payload owner",
+                ));
+            }
+            if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                let pending = Self::decode_autonomous_lane_entrypoint_claim(&temp_path).map_err(
+                    |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
+                )?;
+                if pending != expected_active {
+                    return Err(Self::invalid_lane_artifact_error(
+                        temp_path,
+                        "autonomous entrypoint release found a conflicting staged owner",
+                    ));
+                }
+                self.remove_autonomous_lane_entrypoint_claim_file(&temp_path)?;
+            }
+
+            let pending = AutonomousLaneEntrypointClaimV3::release_pending_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+            );
+            let released = AutonomousLaneEntrypointClaimV3::released_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+            );
+            let replacement = if finalize_release {
+                if existing == released {
+                    None
+                } else if existing == pending {
+                    Some(released)
+                } else {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous entrypoint release requires the exact ReleasePending claim",
+                    ));
+                }
+            } else if existing == pending || existing == released {
+                None
+            } else if existing == expected_active {
+                Some(pending)
+            } else {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous entrypoint claim has a conflicting retirement identity",
+                ));
+            };
+            if let Some(replacement) = replacement {
+                replacements.push((path, replacement));
+            }
+        }
+
+        for (path, replacement) in replacements {
+            let bytes = norito::to_bytes(&replacement).map_err(Error::NoritoFrame)?;
+            if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "transitioned autonomous entrypoint claim exceeds hard byte limit",
+                ));
+            }
+            let before_bytes = Self::file_len_or_zero(&path)?;
+            self.write_atomic_synced_replace(&path, &bytes)?;
+            let after_bytes = Self::file_len_or_zero(&path)?;
+            self.update_disk_usage_delta(before_bytes, after_bytes);
+        }
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    fn prepare_autonomous_lane_entrypoint_claim_release_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+    ) -> Result<()> {
+        self.transition_autonomous_lane_entrypoint_claims_locked(payload, retirement, false)
+    }
+
+    fn finalize_autonomous_lane_entrypoint_claim_release_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+    ) -> Result<()> {
+        self.transition_autonomous_lane_entrypoint_claims_locked(payload, retirement, true)
+    }
+
+    fn require_autonomous_lane_entrypoint_claims_released_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+    ) -> Result<()> {
+        let retirement_hash = retirement.digest()?;
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.chain_id_hash,
+                entrypoint_hash,
+            );
+            let released = AutonomousLaneEntrypointClaimV3::released_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+            );
+            let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            if existing != released
+                || !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous lane-height successor requires every prior claim to be fully released",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn require_autonomous_lane_release_completed_or_superseded_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<()> {
+        let retirement_hash = retirement.digest()?;
+        let descriptor = &payload.origin_proposal.descriptor;
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.chain_id_hash,
+                entrypoint_hash,
+            );
+            let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
+            if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                return Err(Self::invalid_lane_artifact_error(
+                    temp_path,
+                    "cannot prove an old autonomous release while a claim transition is staged",
+                ));
+            }
+            let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            let released = AutonomousLaneEntrypointClaimV3::released_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+            );
+            if existing == released {
+                continue;
+            }
+            if existing.chain_id_hash != payload.chain_id_hash
+                || existing.epoch < payload.epoch
+                || existing.entrypoint_hash != *entrypoint_hash
+                || existing.lane_id != descriptor.lane_id
+                || existing.dataspace_id != descriptor.dataspace_id
+                || existing.lane_incarnation != descriptor.lane_incarnation
+                || existing.lane_block_height != descriptor.lane_block_height
+                || existing.proposal_height <= descriptor.proposal_height
+                || !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous release claim is neither exact nor authenticatedly superseded",
+                ));
+            }
+            let newer = self
+                .read_autonomous_lane_block_attempt_record_from_paths_locked(
+                    entry,
+                    existing.lane_id,
+                    existing.lane_block_height,
+                    existing.proposal_height,
+                    data_path,
+                    index_path,
+                    existing.chain_id_hash,
+                    existing.epoch,
+                    false,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "superseding autonomous entrypoint claim lacks its durable attempt",
+                    )
+                })?;
+            if !existing.owns_payload(&newer.artifact.executable_payload) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "superseding autonomous entrypoint claim does not match its signed payload",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -24371,7 +25934,6 @@ impl Kura {
     /// A duplicate from another transport path is accepted only when its
     /// canonical origin proposal and executable body are byte-for-byte equal;
     /// conflicting payloads fail closed and never replace durable state.
-    #[cfg(test)]
     pub(crate) fn persist_lane_executable_payload(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -24415,24 +25977,107 @@ impl Kura {
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir))?;
 
         let _guard = self.sidecar_lock.lock();
-        if let Some(existing) = self.read_autonomous_lane_block_artifact_from_paths_locked(
-            &entry,
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-            &data_path,
-            &index_path,
-            expected_chain_id_hash,
-            expected_epoch,
-            true,
-        ) {
-            let existing_payload = &existing.executable_payload;
-            if existing_payload.payload_hash == payload.payload_hash
-                && existing_payload.origin_proposal == payload.origin_proposal
-                && existing_payload.entrypoint_hashes == payload.entrypoint_hashes
-                && existing_payload.entrypoints == payload.entrypoints
-            {
+        if let Some(existing_record) = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                descriptor.lane_block_height,
+                &data_path,
+                &index_path,
+                true,
+            )?
+        {
+            let existing_payload = &existing_record.artifact.executable_payload;
+            if existing_payload == payload {
+                if existing_record.retirement.is_some() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        existing_record.view_state_path,
+                        "autonomous lane height is durably retired",
+                    ));
+                }
                 let staged = self.prepare_autonomous_lane_entrypoint_claims_locked(payload)?;
                 self.finalize_autonomous_lane_entrypoint_claims_locked(&staged)?;
+                self.publish_autonomous_lane_route_latest_attempt_locked(
+                    &entry,
+                    &AutonomousLaneBlockLatestAttemptV1::from_payload(payload),
+                )?;
+                return Ok(());
+            }
+
+            if existing_record.retirement.is_none()
+                && existing_payload
+                    .origin_proposal
+                    .payload_block_hint
+                    .is_none()
+                && let Some(hint) = payload.origin_proposal.payload_block_hint
+            {
+                let promoted = existing_payload
+                    .attach_global_hint_exact(hint, expected_chain_id_hash, expected_epoch)
+                    .map_err(|error| {
+                        Self::invalid_lane_artifact_error(
+                            data_path.clone(),
+                            format!(
+                                "autonomous lane carrier-hint promotion is not byte exact: {error}"
+                            ),
+                        )
+                    })?;
+                if promoted != *payload {
+                    return Err(Self::invalid_lane_artifact_error(
+                        data_path,
+                        "autonomous lane carrier-hint promotion changed authenticated payload bytes",
+                    ));
+                }
+                let state = AutonomousLaneBlockViewState::from_artifact(&existing_record.artifact);
+                let staged = self.prepare_autonomous_lane_entrypoint_claims_locked(payload)?;
+                let attempt = AutonomousLaneBlockArtifact::new(payload.clone());
+                let pointer = self.write_autonomous_lane_block_attempt_locked(
+                    &entry,
+                    &attempt,
+                    &state,
+                    expected_chain_id_hash,
+                    expected_epoch,
+                )?;
+                self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
+                self.finalize_autonomous_lane_entrypoint_claims_locked(&staged)?;
+                self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &pointer)?;
+                return Ok(());
+            }
+
+            if let Some(retirement) = existing_record.retirement.as_ref() {
+                let previous = &existing_payload.origin_proposal.descriptor;
+                let successor = &payload.origin_proposal.descriptor;
+                if successor.lane_id != previous.lane_id
+                    || successor.dataspace_id != previous.dataspace_id
+                    || successor.lane_incarnation != previous.lane_incarnation
+                    || successor.lane_block_height != previous.lane_block_height
+                    || successor.previous_lane_block_height != previous.previous_lane_block_height
+                    || successor.previous_lane_block_descriptor_hash
+                        != previous.previous_lane_block_descriptor_hash
+                    || successor.proposal_height <= previous.proposal_height
+                    || payload.chain_id_hash != existing_payload.chain_id_hash
+                    || payload.epoch < existing_payload.epoch
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        data_path,
+                        "autonomous lane-height successor does not extend the released proposal-height attempt",
+                    ));
+                }
+                self.require_autonomous_lane_entrypoint_claims_released_locked(
+                    existing_payload,
+                    retirement,
+                )?;
+                let staged = self.prepare_autonomous_lane_entrypoint_claims_locked(payload)?;
+                let attempt = AutonomousLaneBlockArtifact::new(payload.clone());
+                let state = AutonomousLaneBlockViewState::from_artifact(&attempt);
+                let pointer = self.write_autonomous_lane_block_attempt_locked(
+                    &entry,
+                    &attempt,
+                    &state,
+                    expected_chain_id_hash,
+                    expected_epoch,
+                )?;
+                self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
+                self.finalize_autonomous_lane_entrypoint_claims_locked(&staged)?;
+                self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &pointer)?;
                 return Ok(());
             }
             return Err(Self::invalid_lane_artifact_error(
@@ -24441,6 +26086,25 @@ impl Kura {
             ));
         }
 
+        let view_state_parent = view_state_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                view_state_path.clone(),
+                "autonomous lane view state path has no parent",
+            )
+        })?;
+        let view_state_temp_path =
+            Self::autonomous_lane_block_view_state_temp_path(&view_state_path);
+        let stale_view = self.regular_sidecar_metadata(&view_state_path, view_state_parent)?;
+        let stale_view_temp =
+            self.regular_sidecar_metadata(&view_state_temp_path, view_state_parent)?;
+        let stale_view_bytes = stale_view
+            .as_ref()
+            .map_or(0, |metadata| metadata.file.len())
+            .saturating_add(
+                stale_view_temp
+                    .as_ref()
+                    .map_or(0, |metadata| metadata.file.len()),
+            );
         let staged_claims = self.prepare_autonomous_lane_entrypoint_claims_locked(payload)?;
         self.write_autonomous_lane_block_artifact_locked(
             &AutonomousLaneBlockArtifact::new(payload.clone()),
@@ -24450,23 +26114,269 @@ impl Kura {
             expected_epoch,
         )?;
         self.finalize_autonomous_lane_entrypoint_claims_locked(&staged_claims)?;
-        let view_state_temp_path =
-            Self::autonomous_lane_block_view_state_temp_path(&view_state_path);
-        let stale_view_bytes = Self::file_len_or_zero(&view_state_path)?
-            .saturating_add(Self::file_len_or_zero(&view_state_temp_path)?);
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        for stale_path in [view_state_path.clone(), view_state_temp_path] {
-            if let Err(err) = std::fs::remove_file(&stale_path)
-                && err.kind() != ErrorKind::NotFound
-            {
-                return Err(Error::IO(err, stale_path));
+        for (stale_path, metadata) in [
+            (view_state_path.clone(), stale_view),
+            (view_state_temp_path, stale_view_temp),
+        ] {
+            if metadata.is_some() {
+                std::fs::remove_file(&stale_path).map_err(|error| Error::IO(error, stale_path))?;
             }
         }
         if stale_view_bytes > 0 {
+            sync_dir(view_state_parent)
+                .map_err(|error| Error::IO(error, view_state_parent.to_path_buf()))?;
             self.sub_disk_usage_bytes(stale_view_bytes);
         }
         accounting_mutation.finish();
+        self.publish_autonomous_lane_route_latest_attempt_locked(
+            &entry,
+            &AutonomousLaneBlockLatestAttemptV1::from_payload(payload),
+        )?;
         Ok(())
+    }
+
+    /// Durably close one exact autonomous lane-height slot before releasing its reservations.
+    ///
+    /// The supplied record must be the canonical identity derived from the already durable
+    /// payload. A certified slot cannot be retired, an exact retry is idempotent, and any
+    /// conflicting or stale-incarnation record fails closed.
+    pub(crate) fn persist_autonomous_lane_slot_retirement(
+        &self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<AutonomousLaneSlotRetirementV1> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
+            || retirement.chain_id_hash != expected_chain_id_hash
+            || retirement.epoch != expected_epoch
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lane slot retirement has an unsupported version or chain context",
+            ));
+        }
+        let entry = self.lane_storage_entry(retirement.lane_id)?;
+        let (data_path, index_path) =
+            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+        let (certified_data_path, certified_index_path) =
+            Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        let record = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                retirement.lane_block_height,
+                &data_path,
+                &index_path,
+                true,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    data_path.clone(),
+                    "missing autonomous executable payload for slot retirement",
+                )
+            })?;
+        if !retirement.matches_payload(&record.artifact.executable_payload) {
+            let Some(historical) = self
+                .read_autonomous_lane_block_attempt_record_from_paths_locked(
+                    &entry,
+                    retirement.lane_id,
+                    retirement.lane_block_height,
+                    retirement.proposal_height,
+                    &data_path,
+                    &index_path,
+                    expected_chain_id_hash,
+                    expected_epoch,
+                    true,
+                )?
+            else {
+                return Err(Self::invalid_lane_artifact_error(
+                    record.view_state_path,
+                    "autonomous lane slot retirement conflicts with the durable payload identity",
+                ));
+            };
+            if !retirement.matches_payload(&historical.artifact.executable_payload)
+                || historical.retirement.as_ref() != Some(retirement)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    historical.view_state_path,
+                    "autonomous lane slot retirement conflicts with the historical attempt",
+                ));
+            }
+            self.require_autonomous_lane_release_completed_or_superseded_locked(
+                &entry,
+                &historical.artifact.executable_payload,
+                retirement,
+                &data_path,
+                &index_path,
+            )?;
+            return Ok(retirement.clone());
+        }
+        if let Some(existing) = record.retirement.as_ref() {
+            if existing == retirement {
+                self.prepare_autonomous_lane_entrypoint_claim_release_locked(
+                    &record.artifact.executable_payload,
+                    retirement,
+                )?;
+                return Ok(existing.clone());
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "conflicting autonomous lane slot retirement is already durable",
+            ));
+        }
+        if self
+            .read_active_certified_lane_block_artifact_from_paths_durability_attested_locked(
+                &entry,
+                retirement.lane_block_height,
+                &certified_data_path,
+                &certified_index_path,
+                true,
+            )
+            .is_some()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                certified_data_path,
+                "certified autonomous lane block cannot be retired",
+            ));
+        }
+
+        let mut state = AutonomousLaneBlockViewState::from_artifact(&record.artifact);
+        state.retirement = Some(retirement.clone());
+        self.write_autonomous_lane_block_view_state_record_locked(
+            &record.artifact.executable_payload,
+            &state,
+            &record.view_state_path,
+            expected_chain_id_hash,
+            expected_epoch,
+        )?;
+        self.prepare_autonomous_lane_entrypoint_claim_release_locked(
+            &record.artifact.executable_payload,
+            retirement,
+        )?;
+        Ok(retirement.clone())
+    }
+
+    /// Finish the claim half of an exact autonomous-slot release.
+    ///
+    /// Callers may invoke this only after Queue has durably prepared the
+    /// byte-identical ordered barrier. Active claims are rejected here rather
+    /// than skipping `ReleasePending`; exact `Released` retries are harmless.
+    pub(crate) fn finalize_autonomous_lane_slot_release(
+        &self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        queue_barrier: &crate::queue::LaneQueueReservationReleaseBarrierV2,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
+            || retirement.chain_id_hash != expected_chain_id_hash
+            || retirement.epoch != expected_epoch
+            || retirement.queue_release_barrier()? != *queue_barrier
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lane slot release has an unsupported version or chain context",
+            ));
+        }
+        let entry = self.lane_storage_entry(retirement.lane_id)?;
+        let (data_path, index_path) =
+            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        let record = self
+            .read_autonomous_lane_block_attempt_record_from_paths_locked(
+                &entry,
+                retirement.lane_id,
+                retirement.lane_block_height,
+                retirement.proposal_height,
+                &data_path,
+                &index_path,
+                expected_chain_id_hash,
+                expected_epoch,
+                true,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    data_path.clone(),
+                    "missing autonomous executable payload for claim release",
+                )
+            })?;
+        if record.retirement.as_ref() != Some(retirement)
+            || !retirement.matches_payload(&record.artifact.executable_payload)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lane claim release does not match its durable retirement",
+            ));
+        }
+        let current = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                retirement.lane_block_height,
+                &data_path,
+                &index_path,
+                true,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous lane claim release has no current lane-height attempt",
+                )
+            })?;
+        if current.artifact.executable_payload == record.artifact.executable_payload {
+            self.finalize_autonomous_lane_entrypoint_claim_release_locked(
+                &record.artifact.executable_payload,
+                retirement,
+            )
+        } else {
+            self.require_autonomous_lane_release_completed_or_superseded_locked(
+                &entry,
+                &record.artifact.executable_payload,
+                retirement,
+                &data_path,
+                &index_path,
+            )
+        }
+    }
+
+    /// Read and fully revalidate the durable retirement for one active lane-height slot.
+    ///
+    /// A malformed, oversized, temporary-conflicted, or symlinked view record is returned as an
+    /// error rather than being mistaken for an absent retirement.
+    pub(crate) fn read_autonomous_lane_slot_retirement(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<Option<AutonomousLaneSlotRetirementV1>> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (data_path, index_path) =
+            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        Ok(self
+            .read_autonomous_lane_block_record_from_paths_locked(
+                &entry,
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                expected_chain_id_hash,
+                expected_epoch,
+                true,
+            )?
+            .and_then(|record| record.retirement))
     }
 
     /// Persist the availability DELIVER certificate for an autonomous payload.
@@ -24476,7 +26386,6 @@ impl Kura {
     /// potentially large executable payload. The certificate itself is
     /// immutable after first write: only an exact replay is accepted, and a
     /// later synthetic NewView cursor cannot replace the origin Prepare QC.
-    #[cfg(test)]
     pub(crate) fn persist_lane_payload_availability_certificate(
         &self,
         lane_id: LaneId,
@@ -24492,14 +26401,9 @@ impl Kura {
         let entry = self.lane_storage_entry(lane_id)?;
         let (data_path, index_path) =
             Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
-        let view_state_path = Self::autonomous_lane_block_view_state_path_for_entry(
-            &entry,
-            &self.store_root,
-            lane_block_height,
-        );
         let _guard = self.sidecar_lock.lock();
-        let mut artifact = self
-            .read_autonomous_lane_block_artifact_from_paths_locked(
+        let record = self
+            .read_autonomous_lane_block_record_from_paths_locked(
                 &entry,
                 lane_id,
                 lane_block_height,
@@ -24508,13 +26412,20 @@ impl Kura {
                 expected_chain_id_hash,
                 expected_epoch,
                 true,
-            )
+            )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
                     data_path.clone(),
                     "missing autonomous executable payload for availability certificate",
                 )
             })?;
+        if record.retirement.is_some() {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "durably retired autonomous lane slot cannot accept availability evidence",
+            ));
+        }
+        let mut artifact = record.artifact;
         crate::lane_consensus::validate_lane_payload_availability_certificate(
             &certificate,
             &artifact.executable_payload,
@@ -24539,7 +26450,7 @@ impl Kura {
         artifact.availability_certificate = Some(certificate);
         self.write_autonomous_lane_block_view_state_locked(
             &artifact,
-            &view_state_path,
+            &record.view_state_path,
             expected_chain_id_hash,
             expected_epoch,
         )
@@ -24584,7 +26495,6 @@ impl Kura {
     /// This is the restart reconciliation predicate: coordinates and an
     /// entrypoint hash alone are insufficient because a stale routing plan,
     /// recreated incarnation, or different provisional owner must be released.
-    #[cfg(test)]
     pub(crate) fn autonomous_lane_payload_matches_reservation(
         &self,
         key: &crate::queue::LaneQueueReservationKeyV1,
@@ -24612,22 +26522,53 @@ impl Kura {
         })
     }
 
-    /// Production no longer materializes autonomous lane payloads. Conservatively
-    /// report no durable owner so restart reconciliation releases every orphaned
-    /// reservation instead of preserving an unverifiable lock.
-    #[cfg(not(test))]
-    pub(crate) fn autonomous_lane_payload_matches_reservation(
+    /// Resolve the exact durable slot retirement owning a live reservation.
+    ///
+    /// The lookup touches only the reservation's indexed lane height. A
+    /// retirement at that slot with a different reservation vector is an
+    /// identity conflict, not an orphan proof, and therefore fails closed.
+    pub(crate) fn autonomous_lane_retirement_matching_reservation(
         &self,
-        _key: &crate::queue::LaneQueueReservationKeyV1,
-        _expected_chain_id_hash: Hash,
-        _expected_epoch: u64,
-    ) -> bool {
-        false
+        key: &crate::queue::LaneQueueReservationKeyV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<Option<AutonomousLaneSlotRetirementV1>> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let Some(entry) = self.lane_storage_entries.lock().get(&key.lane_id).cloned() else {
+            return Ok(None);
+        };
+        let (data_path, index_path) =
+            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        let Some(retirement) = self
+            .read_autonomous_lane_block_attempt_record_from_paths_locked(
+                &entry,
+                key.lane_id,
+                key.lane_block_height,
+                key.proposal_height,
+                &data_path,
+                &index_path,
+                expected_chain_id_hash,
+                expected_epoch,
+                true,
+            )?
+            .and_then(|record| record.retirement)
+        else {
+            return Ok(None);
+        };
+        if retirement.reservation_keys().contains(key) {
+            return Ok(Some(retirement));
+        }
+        Err(Self::invalid_lane_artifact_error(
+            self.store_root.clone(),
+            "autonomous lane retirement conflicts with a live reservation at the same slot",
+        ))
     }
 
     /// Append one fully authenticated, contiguous NewView certificate to a
     /// durable lane-owned payload.
-    #[cfg(test)]
     pub(crate) fn persist_lane_new_view_certificate(
         &self,
         lane_id: LaneId,
@@ -24643,14 +26584,9 @@ impl Kura {
         let entry = self.lane_storage_entry(lane_id)?;
         let (data_path, index_path) =
             Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
-        let view_state_path = Self::autonomous_lane_block_view_state_path_for_entry(
-            &entry,
-            &self.store_root,
-            lane_block_height,
-        );
         let _guard = self.sidecar_lock.lock();
-        let mut artifact = self
-            .read_autonomous_lane_block_artifact_from_paths_locked(
+        let record = self
+            .read_autonomous_lane_block_record_from_paths_locked(
                 &entry,
                 lane_id,
                 lane_block_height,
@@ -24659,13 +26595,20 @@ impl Kura {
                 expected_chain_id_hash,
                 expected_epoch,
                 true,
-            )
+            )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
                     data_path.clone(),
                     "missing autonomous executable payload for NewView certificate",
                 )
             })?;
+        if record.retirement.is_some() {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "durably retired autonomous lane slot cannot accept NewView evidence",
+            ));
+        }
+        let mut artifact = record.artifact;
         let current = Self::validate_autonomous_lane_block_artifact(
             &artifact,
             expected_chain_id_hash,
@@ -24723,7 +26666,7 @@ impl Kura {
         }
         self.write_autonomous_lane_block_view_state_locked(
             &artifact,
-            &view_state_path,
+            &record.view_state_path,
             expected_chain_id_hash,
             expected_epoch,
         )?;
@@ -24732,7 +26675,6 @@ impl Kura {
 
     /// Read and fully revalidate a lane-owned payload and all contiguous view proofs.
     #[must_use]
-    #[cfg(test)]
     pub(crate) fn read_autonomous_lane_block_artifact(
         &self,
         lane_id: LaneId,
@@ -24753,7 +26695,6 @@ impl Kura {
     }
 
     /// Read an autonomous payload while the caller holds `lane_geometry_lock`.
-    #[cfg(test)]
     fn read_autonomous_lane_block_artifact_geometry_locked(
         &self,
         lane_id: LaneId,
@@ -24786,7 +26727,6 @@ impl Kura {
     /// authenticated NewView proof chain. Prepare, Commit, READY, and merge
     /// certification remain bound to the payload's immutable origin proposal;
     /// use [`Self::autonomous_lane_certification_payload`] for that subject.
-    #[cfg(test)]
     pub(crate) fn current_autonomous_lane_payload(
         &self,
         lane_id: LaneId,
@@ -24838,27 +26778,142 @@ impl Kura {
         Some((artifact.executable_payload, origin))
     }
 
-    /// Return at most `limit_per_lane` newest fully validated autonomous payloads
-    /// for every currently configured lane storage entry.
+    /// Explicitly reconstruct the bounded route/incarnation latest pointers.
     ///
-    /// The caller supplies the canonical epoch for each proposal height. Index
-    /// recovery runs before enumeration, and malformed records, identity drift,
-    /// wrong-chain/epoch payloads, and broken view chains are rejected rather
-    /// than downgraded to their origin proposal. Each lane index is scanned in
-    /// reverse with a fixed budget so sparse or adversarial history cannot make
-    /// startup recovery unbounded. Results remain globally deterministic.
-    #[cfg(test)]
+    /// This is the only autonomous path that scans the historical height
+    /// index. It runs during startup or restored-geometry activation before
+    /// consensus can hydrate work. Runtime hydration subsequently performs one
+    /// exact pointer lookup per configured route.
+    fn rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup(&self) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entries = self
+            .lane_storage_entries
+            .lock()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let _sidecar_guard = self.sidecar_lock.lock();
+        for entry in entries {
+            let (data_path, index_path) =
+                Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+            if !data_path.exists() && !index_path.exists() {
+                let route_path = Self::autonomous_lane_route_latest_attempt_path_for_entry(
+                    &entry,
+                    &self.store_root,
+                );
+                if self
+                    .regular_sidecar_metadata(
+                        &route_path,
+                        route_path.parent().ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                route_path.clone(),
+                                "autonomous route-latest pointer has no parent",
+                            )
+                        })?,
+                    )?
+                    .is_some()
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        route_path,
+                        "autonomous route-latest pointer exists without lane payload history",
+                    ));
+                }
+                continue;
+            }
+            if !Self::recover_indexed_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                AutonomousLaneBlockArtifact::FORMAT_LABEL,
+            ) {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    "failed to recover autonomous payload history before latest-index rebuild",
+                ));
+            }
+            let Some(heights) = Self::indexed_sidecar_height_range(
+                &index_path,
+                AutonomousLaneBlockArtifact::FORMAT_LABEL,
+            ) else {
+                if self
+                    .read_autonomous_lane_route_latest_attempt_locked(&entry)?
+                    .is_some()
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        index_path,
+                        "autonomous route-latest pointer exists beside empty payload history",
+                    ));
+                }
+                continue;
+            };
+            let mut latest: Option<AutonomousLaneBlockLatestAttemptV1> = None;
+            for lane_block_height in heights {
+                let Some(record) = self
+                    .read_current_autonomous_lane_block_record_self_context_locked(
+                        &entry,
+                        lane_block_height,
+                        &data_path,
+                        &index_path,
+                        false,
+                    )?
+                else {
+                    continue;
+                };
+                let pointer = AutonomousLaneBlockLatestAttemptV1::from_payload(
+                    &record.artifact.executable_payload,
+                );
+                if let Some(current) = latest.as_ref()
+                    && (pointer.chain_id_hash != current.chain_id_hash
+                        || pointer.lane_id != current.lane_id
+                        || pointer.dataspace_id != current.dataspace_id
+                        || pointer.lane_incarnation != current.lane_incarnation
+                        || pointer.proposal_height < current.proposal_height
+                        || pointer.epoch < current.epoch)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        data_path,
+                        "autonomous payload history regresses its active route or global context",
+                    ));
+                }
+                if latest.as_ref().is_none_or(|current| {
+                    (pointer.lane_block_height, pointer.proposal_height)
+                        > (current.lane_block_height, current.proposal_height)
+                }) {
+                    latest = Some(pointer);
+                }
+            }
+            let Some(latest) = latest else {
+                continue;
+            };
+            self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &latest)?;
+        }
+        Ok(())
+    }
+
+    /// Return at most `limit` newest fully validated autonomous payloads across
+    /// active routes.
+    ///
+    /// Runtime hydration is a bounded route/incarnation lookup through the
+    /// versioned latest pointer; it never reverse-scans lane history. The
+    /// caller supplies the canonical epoch for the pointed proposal height.
+    /// Startup is responsible for explicitly reconstructing a missing pointer
+    /// before consensus begins.
     pub(crate) fn latest_autonomous_lane_block_artifacts_snapshot<F>(
         &self,
         expected_chain_id_hash: Hash,
-        limit_per_lane: usize,
+        limit: usize,
         mut epoch_for_height: F,
-    ) -> Vec<(AutonomousLaneBlockArtifact, LaneBlockProposalV1)>
+    ) -> Result<Vec<(AutonomousLaneBlockArtifact, LaneBlockProposalV1)>>
     where
         F: FnMut(u64) -> u64,
     {
-        if limit_per_lane == 0 || self.prune_recovery_is_required() {
-            return Vec::new();
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        if self.prune_recovery_is_required() {
+            return Err(Error::PruneRecoveryRequired);
         }
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
@@ -24871,91 +26926,68 @@ impl Kura {
         for (lane_id, entry) in entries {
             let (data_path, index_path) =
                 Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
-            let scan_budget = limit_per_lane.saturating_mul(8).max(64);
-            let candidates = {
+            let candidate = {
                 let _guard = self.sidecar_lock.lock();
                 if self.prune_recovery_is_required() {
-                    return Vec::new();
+                    return Err(Error::PruneRecoveryRequired);
                 }
-                if !Self::recover_indexed_sidecar_artifacts(
+                self.read_autonomous_lane_route_latest_attempt_locked(&entry)?
+            };
+            let Some(pointer) = candidate else {
+                continue;
+            };
+            if pointer.chain_id_hash != expected_chain_id_hash {
+                continue;
+            }
+            let expected_epoch = epoch_for_height(pointer.proposal_height);
+            let record = {
+                let _guard = self.sidecar_lock.lock();
+                if self.prune_recovery_is_required() {
+                    return Err(Error::PruneRecoveryRequired);
+                }
+                self.read_autonomous_lane_block_attempt_record_from_paths_locked(
+                    &entry,
+                    lane_id,
+                    pointer.lane_block_height,
+                    pointer.proposal_height,
                     &data_path,
                     &index_path,
-                    AutonomousLaneBlockArtifact::FORMAT_LABEL,
-                ) {
-                    continue;
-                }
-                let Some(heights) = Self::indexed_sidecar_height_range(
-                    &index_path,
-                    AutonomousLaneBlockArtifact::FORMAT_LABEL,
-                ) else {
-                    continue;
-                };
-                heights
-                    .rev()
-                    .take(scan_budget)
-                    .filter_map(|lane_block_height| {
-                        let raw = Self::read_indexed_sidecar_from_paths_with_recovery(
-                            lane_block_height,
-                            &data_path,
-                            &index_path,
-                            norito::decode_from_bytes::<AutonomousLaneBlockArtifact>,
-                            AutonomousLaneBlockArtifact::FORMAT_LABEL,
-                            false,
-                        )?;
-                        Some((
-                            lane_block_height,
-                            raw.executable_payload
-                                .origin_proposal
-                                .descriptor
-                                .proposal_height,
-                        ))
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let mut recovered_for_lane = 0_usize;
-            for (lane_block_height, proposal_height) in candidates {
-                let expected_epoch = epoch_for_height(proposal_height);
-                let artifact = {
-                    let _guard = self.sidecar_lock.lock();
-                    if self.prune_recovery_is_required() {
-                        return Vec::new();
-                    }
-                    self.read_autonomous_lane_block_artifact_from_paths_locked(
-                        &entry,
-                        lane_id,
-                        lane_block_height,
-                        &data_path,
-                        &index_path,
-                        expected_chain_id_hash,
-                        expected_epoch,
-                        false,
-                    )
-                };
-                let Some(artifact) = artifact else {
-                    continue;
-                };
-                if artifact
-                    .executable_payload
-                    .origin_proposal
-                    .descriptor
-                    .proposal_height
-                    != proposal_height
-                {
-                    continue;
-                }
-                let Ok(current) = Self::validate_autonomous_lane_block_artifact(
-                    &artifact,
                     expected_chain_id_hash,
                     expected_epoch,
-                ) else {
-                    continue;
-                };
-                recovered.push((artifact, current));
-                recovered_for_lane = recovered_for_lane.saturating_add(1);
-                if recovered_for_lane == limit_per_lane {
-                    break;
-                }
+                    false,
+                )
+            };
+            let Some(record) = record? else {
+                continue;
+            };
+            if record.retirement.is_some() {
+                continue;
             }
+            let artifact = record.artifact;
+            let current = Self::validate_autonomous_lane_block_artifact(
+                &artifact,
+                expected_chain_id_hash,
+                expected_epoch,
+            )
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(
+                    Self::autonomous_lane_route_latest_attempt_path_for_entry(
+                        &entry,
+                        &self.store_root,
+                    ),
+                    message,
+                )
+            })?;
+            if artifact
+                .executable_payload
+                .origin_proposal
+                .descriptor
+                .proposal_height
+                != pointer.proposal_height
+            {
+                continue;
+            }
+            recovered.push((artifact, current));
         }
         recovered.sort_by_key(|(_, proposal)| {
             (
@@ -24965,15 +26997,15 @@ impl Kura {
                 proposal.descriptor.lane_block_view,
             )
         });
+        recovered.truncate(limit);
         if self.prune_recovery_is_required() {
-            Vec::new()
+            Err(Error::PruneRecoveryRequired)
         } else {
-            recovered
+            Ok(recovered)
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[cfg(test)]
     fn read_autonomous_lane_block_artifact_from_paths_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -24985,79 +27017,286 @@ impl Kura {
         expected_epoch: u64,
         recover: bool,
     ) -> Option<AutonomousLaneBlockArtifact> {
-        let mut artifact = Self::read_indexed_sidecar_from_paths_with_recovery(
+        match self.read_autonomous_lane_block_record_from_paths_locked(
+            entry,
+            lane_id,
+            lane_block_height,
+            data_path,
+            index_path,
+            expected_chain_id_hash,
+            expected_epoch,
+            recover,
+        ) {
+            Ok(Some(record)) if record.retirement.is_none() => Some(record.artifact),
+            Ok(Some(_)) => {
+                warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "autonomous lane block slot is durably retired"
+                );
+                None
+            }
+            Ok(None) => None,
+            Err(error) => {
+                warn!(
+                    ?error,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "autonomous lane block validation failed"
+                );
+                None
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn read_autonomous_lane_block_record_from_paths_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        recover: bool,
+    ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
+        if let Some(pointer) =
+            self.read_autonomous_lane_block_latest_attempt_locked(entry, lane_block_height)?
+        {
+            if pointer.lane_id != lane_id {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path.to_path_buf(),
+                    "autonomous lane latest attempt belongs to a different lane",
+                ));
+            }
+            return self
+                .read_autonomous_lane_block_attempt_artifact_locked(
+                    entry,
+                    &pointer,
+                    expected_chain_id_hash,
+                    expected_epoch,
+                    recover,
+                )
+                .map(Some);
+        }
+        self.read_legacy_autonomous_lane_block_record_from_paths_locked(
+            entry,
+            lane_id,
+            lane_block_height,
+            data_path,
+            index_path,
+            expected_chain_id_hash,
+            expected_epoch,
+            recover,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn read_legacy_autonomous_lane_block_record_from_paths_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        recover: bool,
+    ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
+        let Some(mut artifact) = Self::read_indexed_sidecar_from_paths_with_recovery(
             lane_block_height,
             data_path,
             index_path,
             norito::decode_from_bytes::<AutonomousLaneBlockArtifact>,
             AutonomousLaneBlockArtifact::FORMAT_LABEL,
             recover,
-        )?;
+        ) else {
+            return Ok(None);
+        };
         let descriptor = &artifact.executable_payload.origin_proposal.descriptor;
         if descriptor.lane_id != lane_id
             || descriptor.dataspace_id != entry.dataspace_id
             || descriptor.lane_block_height != lane_block_height
         {
-            warn!(
-                lane = %lane_id.as_u32(),
-                lane_block_height,
-                actual_lane = %descriptor.lane_id.as_u32(),
-                actual_height = descriptor.lane_block_height,
-                "autonomous lane block identity mismatch"
-            );
-            return None;
+            return Err(Self::invalid_lane_artifact_error(
+                data_path.to_path_buf(),
+                "autonomous lane block identity does not match its indexed lane-height slot",
+            ));
         }
-        if let Err(error) = self.require_active_lane_artifact(entry, descriptor) {
-            warn!(
-                ?error,
-                lane = %lane_id.as_u32(),
-                lane_block_height,
-                "autonomous lane block targets a stale storage incarnation"
-            );
-            return None;
-        }
-        let view_state_path = data_path.parent()?.join(format!(
+        self.require_active_lane_artifact(entry, descriptor)?;
+        let parent = data_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                data_path.to_path_buf(),
+                "autonomous lane block data path has no parent",
+            )
+        })?;
+        let view_state_path = parent.join(format!(
             "{AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX}_{lane_block_height:020}.norito"
         ));
-        match self.read_autonomous_lane_block_view_state_locked(
+        let retirement = match self.read_autonomous_lane_block_view_state_locked(
             &artifact.executable_payload,
             &view_state_path,
             recover,
-        ) {
-            Ok(Some(state)) => {
+        )? {
+            Some(state) => {
                 artifact.availability_certificate = state.availability_certificate;
                 artifact.view_checkpoint = state.checkpoint;
                 artifact.new_view_certificates = state.certificates;
+                state.retirement
             }
-            Ok(None) => {}
-            Err(message) => {
-                warn!(
-                    lane = %lane_id.as_u32(),
-                    lane_block_height,
-                    message,
-                    ?view_state_path,
-                    "autonomous lane view state validation failed"
-                );
-                return None;
-            }
-        }
-        if let Err(message) = Self::validate_autonomous_lane_block_artifact(
+            None => None,
+        };
+        Self::validate_autonomous_lane_block_artifact(
             &artifact,
             expected_chain_id_hash,
             expected_epoch,
-        ) {
-            warn!(
-                lane = %lane_id.as_u32(),
-                lane_block_height,
-                message,
-                "autonomous lane block validation failed"
-            );
-            return None;
-        }
-        Some(artifact)
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(data_path.to_path_buf(), message))?;
+        Ok(Some(AutonomousLaneBlockDurableRecord {
+            artifact,
+            retirement,
+            view_state_path,
+        }))
     }
 
-    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn read_autonomous_lane_block_attempt_record_from_paths_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        proposal_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        recover: bool,
+    ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
+        let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
+            entry,
+            &self.store_root,
+            lane_block_height,
+            proposal_height,
+        );
+        let parent = attempt_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                attempt_path.clone(),
+                "autonomous lane attempt path has no parent directory",
+            )
+        })?;
+        if self
+            .regular_sidecar_metadata(&attempt_path, parent)?
+            .is_some()
+        {
+            let bytes = self
+                .read_regular_sidecar_bytes(
+                    &attempt_path,
+                    parent,
+                    MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        attempt_path.clone(),
+                        "autonomous lane attempt disappeared during exact lookup",
+                    )
+                })?;
+            let artifact = norito::decode_from_bytes::<AutonomousLaneBlockArtifact>(&bytes)
+                .map_err(Error::NoritoFrame)?;
+            if artifact.encode_framed().map_err(Error::NoritoFrame)? != bytes {
+                return Err(Self::invalid_lane_artifact_error(
+                    attempt_path,
+                    "autonomous lane attempt payload is not canonical Norito",
+                ));
+            }
+            let pointer =
+                AutonomousLaneBlockLatestAttemptV1::from_payload(&artifact.executable_payload);
+            if pointer.lane_id != lane_id
+                || pointer.lane_block_height != lane_block_height
+                || pointer.proposal_height != proposal_height
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    parent.to_path_buf(),
+                    "autonomous lane attempt payload does not match its attempt namespace",
+                ));
+            }
+            return self
+                .read_autonomous_lane_block_attempt_artifact_locked(
+                    entry,
+                    &pointer,
+                    expected_chain_id_hash,
+                    expected_epoch,
+                    recover,
+                )
+                .map(Some);
+        }
+        let legacy = self.read_legacy_autonomous_lane_block_record_from_paths_locked(
+            entry,
+            lane_id,
+            lane_block_height,
+            data_path,
+            index_path,
+            expected_chain_id_hash,
+            expected_epoch,
+            recover,
+        )?;
+        if legacy.as_ref().is_some_and(|record| {
+            record
+                .artifact
+                .executable_payload
+                .origin_proposal
+                .descriptor
+                .proposal_height
+                != proposal_height
+        }) {
+            return Ok(None);
+        }
+        Ok(legacy)
+    }
+
+    fn read_current_autonomous_lane_block_record_self_context_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        recover: bool,
+    ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
+        if let Some(pointer) =
+            self.read_autonomous_lane_block_latest_attempt_locked(entry, lane_block_height)?
+        {
+            return self
+                .read_autonomous_lane_block_attempt_artifact_locked(
+                    entry,
+                    &pointer,
+                    pointer.chain_id_hash,
+                    pointer.epoch,
+                    recover,
+                )
+                .map(Some);
+        }
+        let Some(artifact) = Self::read_indexed_sidecar_from_paths_with_recovery(
+            lane_block_height,
+            data_path,
+            index_path,
+            norito::decode_from_bytes::<AutonomousLaneBlockArtifact>,
+            AutonomousLaneBlockArtifact::FORMAT_LABEL,
+            recover,
+        ) else {
+            return Ok(None);
+        };
+        self.read_legacy_autonomous_lane_block_record_from_paths_locked(
+            entry,
+            entry.lane_id,
+            lane_block_height,
+            data_path,
+            index_path,
+            artifact.executable_payload.chain_id_hash,
+            artifact.executable_payload.epoch,
+            recover,
+        )
+    }
+
     fn write_autonomous_lane_block_artifact_locked(
         &self,
         artifact: &AutonomousLaneBlockArtifact,
@@ -25101,7 +27340,6 @@ impl Kura {
         Ok(())
     }
 
-    #[cfg(test)]
     fn recover_lane_block_execution_input_source(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -25120,23 +27358,6 @@ impl Kura {
             (None, None, None) => self.recover_lane_block_payload(proposal),
             _ => Err(LaneBlockPayloadAvailability::DescriptorMismatch),
         }
-    }
-
-    #[cfg(not(test))]
-    fn recover_lane_block_execution_input_source(
-        &self,
-        proposal: &LaneBlockProposalV1,
-        autonomous_chain_id_hash: Option<Hash>,
-        autonomous_epoch: Option<u64>,
-        autonomous_payload_hash: Option<Hash>,
-    ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
-        Self::validate_first_release_lane_block_source_binding(
-            autonomous_chain_id_hash,
-            autonomous_epoch,
-            autonomous_payload_hash,
-        )
-        .map_err(|_| LaneBlockPayloadAvailability::DescriptorMismatch)?;
-        self.recover_lane_block_payload(proposal)
     }
 
     /// Persist verified recovered payload input for a certified standalone lane block.
@@ -25382,7 +27603,7 @@ impl Kura {
         Some(artifact)
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn lane_block_execution_input_available(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -25721,7 +27942,7 @@ impl Kura {
         Some(artifact)
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn lane_block_execution_preflight_has_rejections(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -25781,7 +28002,7 @@ impl Kura {
             && self.lane_block_application_receipt_available(&receipt.proposal)
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn read_preflighted_lane_block_execution_input_for_application(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -25905,10 +28126,16 @@ impl Kura {
         self.write_lane_block_application_receipt_artifact(&artifact)
     }
 
-    fn native_amx_participant_application_receipts_for_block(
+    fn native_amx_participant_application_evidence_for_block_under_publication_guard(
         &self,
         block: &SignedBlock,
-    ) -> Result<Vec<NativeAmxParticipantApplicationReceiptArtifact>> {
+        require_post_apply_metadata: bool,
+    ) -> Result<
+        Vec<(
+            NativeAmxParticipantApplicationManifestArtifactV1,
+            NativeAmxParticipantApplicationReceiptArtifact,
+        )>,
+    > {
         let application_block_height = block.header().height().get();
         let application_block_hash = block.hash();
         let height = usize::try_from(application_block_height)
@@ -25930,269 +28157,531 @@ impl Kura {
                 "Native AMX application block is not canonical in Kura",
             ));
         }
-        let Some(bundle) = block.execution_context() else {
-            return Ok(Vec::new());
-        };
-        if !bundle
-            .external
-            .iter()
-            .any(|context| context.native_amx_receipt.is_some())
-        {
-            return Ok(Vec::new());
-        }
-        let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
-        if bundle.external.len() != block.external_entrypoint_count()
-            || block.result_hashes().len() < bundle.external.len()
-            || block.header().result_merkle_root() != expected_result_root
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "Native AMX application block result/context alignment is invalid",
-            ));
-        }
-        let Some(manifest) = self.commit_manifest(application_block_height)? else {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "Native AMX application block lacks its durable commit manifest",
-            ));
-        };
-        let Some(checkpoint) = self.wsv_checkpoint(application_block_height)? else {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "Native AMX application block lacks its durable WSV checkpoint",
-            ));
-        };
-        if manifest.block_hash != application_block_hash
-            || checkpoint.block_hash != application_block_hash
-            || checkpoint.state_hash != manifest.wsv_checkpoint_hash
-            || manifest.post_state_root.is_none()
-            || manifest.commit_qc_hash.is_none()
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "Native AMX application block commit/WSV evidence is incomplete or inconsistent",
-            ));
-        }
-        let Some(finality) = self.v2_finality_artifact(application_block_height)? else {
+        let native_manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(block)
+                .map_err(|error| {
+                    Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        format!("Native AMX application manifest construction failed: {error}"),
+                    )
+                })?;
+        let Some((_, finality, _)) =
+            self.v2_finality_artifact_with_archive_under_prune_guard(application_block_height)?
+        else {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "Native AMX application block lacks durable v2 finality",
             ));
         };
         if finality.block_hash != application_block_hash
-            || manifest.parent_state_root
-                != Some(finality.commit_qc.execution_commitment.parent_state_root)
-            || manifest.post_state_root
-                != Some(finality.commit_qc.execution_commitment.post_state_root)
-            || manifest.commit_qc_hash != Some(Hash::new(finality.commit_qc.encode()))
+            || finality
+                .commit_qc
+                .execution_commitment
+                .native_amx_application_manifest_version
+                != iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION
+            || finality
+                .commit_qc
+                .execution_commitment
+                .native_amx_application_manifest_root
+                != native_manifest.root()
+            || finality
+                .commit_qc
+                .execution_commitment
+                .native_amx_application_manifest_count
+                != native_manifest.count()
+            || finality
+                .commit_qc
+                .execution_commitment
+                .executed_block_wire_hash
+                != native_manifest.executed_block_wire_hash()
         {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
-                "Native AMX finality does not match its commit manifest",
+                "Native AMX finality does not authenticate the canonical application manifest",
             ));
         }
-        let finality_artifact_hash = HashOf::new(&finality);
-        let mut groups = BTreeMap::<
-            (LaneId, DataSpaceId, Hash, u64),
-            NativeAmxParticipantApplicationGroup,
-        >::new();
-        for (index, context) in bundle.external.iter().enumerate() {
-            let Some(native_receipt) = context.native_amx_receipt.as_ref() else {
-                continue;
-            };
-            let entrypoint_hash = Hash::from(context.entrypoint_hash);
-            let result = Self::block_transaction_result_at(block, index).ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "Native AMX application block is missing a committed transaction result",
-                )
-            })?;
-            let entrypoint_index = u64::try_from(index).map_err(|_| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "Native AMX entrypoint index does not fit the durable receipt",
-                )
-            })?;
-            for leg in &native_receipt.legs {
-                let descriptor = &leg.participant_proposal.descriptor;
-                if descriptor.lane_id == native_receipt.lane_id
-                    && descriptor.dataspace_id == native_receipt.dataspace_id
-                    && descriptor.lane_incarnation == native_receipt.lane_incarnation
-                    && leg.participant_proposal.proposal_hash
-                        == native_receipt.coordinator_proposal_hash
-                {
-                    continue;
-                }
-                let prepare_body = &leg.prepare_qc.body;
-                let commit_body = &leg.commit_qc.body;
-                if descriptor.proposal_height != application_block_height
-                    || prepare_body.source_id != native_receipt.source_id
-                    || commit_body.source_id != native_receipt.source_id
-                    || Hash::from(prepare_body.tx_entrypoint_hash) != entrypoint_hash
-                    || Hash::from(commit_body.tx_entrypoint_hash) != entrypoint_hash
-                    || prepare_body.participant_proposal_hash
-                        != leg.participant_proposal.proposal_hash
-                    || commit_body.participant_proposal_hash
-                        != leg.participant_proposal.proposal_hash
-                    || prepare_body.participant_settlement_commitment
-                        != Hash::from(leg.participant_settlement_hash)
-                    || commit_body.participant_settlement_commitment
-                        != Hash::from(leg.participant_settlement_hash)
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        "Native AMX participant QCs do not bind the canonical source/entrypoint",
-                    ));
-                }
-                let computed_settlement_hash =
-                    iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
-                        .map_err(|_| {
-                        Self::invalid_lane_artifact_error(
-                            self.store_root.clone(),
-                            "Native AMX participant control settlement cannot be hashed",
-                        )
-                    })?;
-                if computed_settlement_hash != leg.participant_settlement_hash {
-                    return Err(Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        "Native AMX participant control settlement hash mismatch",
-                    ));
-                }
-                let key = (
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
-                    descriptor.lane_incarnation,
-                    descriptor.lane_block_height,
-                );
-                let settlement_source_ids = leg
-                    .participant_settlement
-                    .receipts
-                    .iter()
-                    .map(|receipt| receipt.source_id)
-                    .collect::<Vec<_>>();
-                let group =
-                    groups
-                        .entry(key)
-                        .or_insert_with(|| NativeAmxParticipantApplicationGroup {
-                            proposal: leg.participant_proposal.clone(),
-                            settlement: leg.participant_settlement.clone(),
-                            settlement_hash: leg.participant_settlement_hash,
-                            settlement_source_ids,
-                            entries: Vec::new(),
-                        });
-                if group.proposal != leg.participant_proposal
-                    || group.settlement != leg.participant_settlement
-                    || group.settlement_hash != leg.participant_settlement_hash
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        "Native AMX participant lane slot carries conflicting proposal/control claims",
-                    ));
-                }
-                if group
-                    .entries
-                    .iter()
-                    .any(|(_, _, source_id, _)| *source_id == native_receipt.source_id)
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        "Native AMX participant control repeats a source transaction",
-                    ));
-                }
-                group.entries.push((
-                    entrypoint_index,
-                    entrypoint_hash,
-                    native_receipt.source_id,
-                    result.clone(),
-                ));
-            }
-        }
-
-        let mut artifacts = Vec::with_capacity(groups.len());
-        for (_, mut group) in groups {
-            group.entries.sort_by_key(|(index, _, _, _)| *index);
-            let source_ids = group
-                .entries
-                .iter()
-                .map(|(_, _, source_id, _)| *source_id)
-                .collect::<Vec<_>>();
-            if source_ids != group.settlement_source_ids {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "Native AMX grouped participant settlement does not exactly cover block sources",
-                ));
-            }
-            let artifact = NativeAmxParticipantApplicationReceiptArtifact::new(
-                group.proposal,
-                group.settlement,
-                group.settlement_hash,
+        if require_post_apply_metadata {
+            self.validate_native_amx_post_apply_metadata_under_publication_guard(
                 application_block_height,
                 application_block_hash,
-                block.header().result_merkle_root().map(Hash::from),
-                manifest.wsv_checkpoint_hash,
-                manifest.post_state_root,
-                manifest.commit_qc_hash,
+                &finality,
+            )?;
+        }
+        let finality_artifact_hash = HashOf::new(&finality);
+        let mut evidence = Vec::with_capacity(native_manifest.entries().len());
+        for (index, entry) in native_manifest.entries().iter().enumerate() {
+            let leaf_index = u32::try_from(index).map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX manifest leaf index does not fit u32",
+                )
+            })?;
+            let proof = native_manifest.proof(leaf_index).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX manifest builder did not produce an inclusion proof",
+                )
+            })?;
+            let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
+                version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+                leaf: entry.leaf.clone(),
+                leaf_index,
+                proof,
+                manifest_root: native_manifest.root(),
+                manifest_leaf_count: native_manifest.count(),
                 finality_artifact_hash,
-                group.entries,
+            };
+            Self::validate_native_amx_participant_application_manifest_artifact(&manifest_artifact)
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?;
+            let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
+                entry,
+                HashOf::new(&manifest_artifact),
+                finality_artifact_hash,
             );
-            Self::validate_native_amx_participant_application_receipt_artifact(&artifact).map_err(
+            Self::validate_native_amx_participant_application_receipt_artifact(&receipt).map_err(
                 |message| {
                     Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
                 },
             )?;
-            artifacts.push(artifact);
+            if !Self::native_amx_participant_receipt_matches_manifest_leaf(
+                &receipt,
+                &manifest_artifact.leaf,
+            ) {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX receipt does not exactly match its canonical manifest leaf",
+                ));
+            }
+            evidence.push((manifest_artifact, receipt));
         }
-        Ok(artifacts)
+        Ok(evidence)
     }
 
-    /// Persist global-result-bound Native AMX participant application receipts.
+    fn validate_native_amx_post_apply_metadata_under_publication_guard(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        finality: &V2FinalityArtifact,
+    ) -> Result<()> {
+        let Some(manifest) = self.commit_manifest(height)? else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX startup repair requires a durable commit manifest",
+            ));
+        };
+        let Some(checkpoint) = self.wsv_checkpoint(height)? else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX startup repair requires a durable WSV checkpoint",
+            ));
+        };
+        let execution = &finality.commit_qc.execution_commitment;
+        if manifest.block_hash != block_hash
+            || checkpoint.block_hash != block_hash
+            || checkpoint.state_hash != manifest.wsv_checkpoint_hash
+            || checkpoint.commit_manifest_hash != Some(manifest.encoded_hash())
+            || manifest.parent_state_root != Some(execution.parent_state_root)
+            || manifest.post_state_root != Some(execution.post_state_root)
+            || manifest.commit_qc_hash != Some(Hash::new(finality.commit_qc.encode()))
+            || manifest.commit_authority_hash != Some(v2_commit_authority_hash(finality))
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX startup repair metadata does not match finality and canonical WSV",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Persist QC-authenticated Native AMX participant manifests and receipts.
     ///
-    /// This is a post-commit publication boundary: it never executes a
-    /// transaction. The exact grouped participant proposal/control claim is
-    /// joined to results already committed by the canonical global block.
-    pub(crate) fn persist_native_amx_participant_application_receipts(
+    /// The distinct manifest data/index pairs are published for every route
+    /// before any receipt/latest-index pair. This operation never executes a
+    /// transaction and is idempotent at every artifact boundary.
+    pub(crate) fn persist_native_amx_participant_application_evidence(
         &self,
         block: &SignedBlock,
     ) -> Result<usize> {
-        let artifacts = self.native_amx_participant_application_receipts_for_block(block)?;
+        let _publication_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let artifacts = self
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                block, false,
+            )?;
+        self.persist_native_amx_participant_application_evidence_under_publication_guard(
+            block, artifacts,
+        )
+    }
+
+    /// Repair Native AMX evidence after WSV commit and its Kura metadata join.
+    ///
+    /// Unlike the pre-WSV publication path, startup repair requires and
+    /// revalidates the exact checkpoint and commit manifest in the same prune
+    /// critical section as finality, manifest proofs, and sidecar publication.
+    pub(crate) fn repair_native_amx_participant_application_evidence(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<usize> {
+        let _publication_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let artifacts = self
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                block, true,
+            )?;
+        self.persist_native_amx_participant_application_evidence_under_publication_guard(
+            block, artifacts,
+        )
+    }
+
+    fn persist_native_amx_participant_application_evidence_under_publication_guard(
+        &self,
+        block: &SignedBlock,
+        artifacts: Vec<(
+            NativeAmxParticipantApplicationManifestArtifactV1,
+            NativeAmxParticipantApplicationReceiptArtifact,
+        )>,
+    ) -> Result<usize> {
+        let canonical_height = usize::try_from(block.header().height().get())
+            .ok()
+            .and_then(NonZeroUsize::new);
+        if canonical_height.and_then(|height| self.get_durable_block_hash(height))
+            != Some(block.hash())
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX application block changed before evidence publication",
+            ));
+        }
+        for (manifest, _) in &artifacts {
+            self.write_native_amx_participant_application_manifest_artifact_under_publication_guard(
+                manifest,
+            )?;
+        }
         let mut persisted = 0_usize;
-        for artifact in artifacts {
-            self.write_native_amx_participant_application_receipt_artifact(&artifact)?;
+        for (manifest, receipt) in artifacts {
+            self.write_native_amx_participant_application_receipt_artifact_under_publication_guard(
+                &receipt, &manifest,
+            )?;
             persisted = persisted.saturating_add(1);
         }
         Ok(persisted)
     }
 
-    fn native_amx_participant_application_receipt_matches_available_evidence(
+    /// Validate a Native AMX manifest without acquiring locks.
+    ///
+    /// The caller holds `prune_lock` and `canonical_chain_lock`, in that
+    /// order. Geometry callers may additionally hold `lane_geometry_lock` and
+    /// `sidecar_lock`.
+    fn native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
+        &self,
+        artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
+    ) -> bool {
+        if Self::validate_native_amx_participant_application_manifest_artifact(artifact).is_err() {
+            return false;
+        }
+        let leaf = &artifact.leaf;
+        let Ok(Some((_, finality, _))) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                leaf.application_block_height,
+            )
+        else {
+            return false;
+        };
+        let execution = finality.commit_qc.execution_commitment;
+        if finality.block_hash != leaf.application_block_hash
+            || HashOf::new(&finality) != artifact.finality_artifact_hash
+            || execution.native_amx_application_manifest_version
+                != iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION
+            || execution.native_amx_application_manifest_root != artifact.manifest_root
+            || execution.native_amx_application_manifest_count != artifact.manifest_leaf_count
+            || execution.executed_block_wire_hash != leaf.executed_block_wire_hash
+        {
+            return false;
+        }
+        let Ok(height) = usize::try_from(leaf.application_block_height) else {
+            return false;
+        };
+        let Some(height) = NonZeroUsize::new(height) else {
+            return false;
+        };
+        self.get_durable_block_hash(height) == Some(leaf.application_block_hash)
+    }
+
+    fn write_native_amx_participant_application_manifest_artifact_under_publication_guard(
+        &self,
+        artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
+    ) -> Result<()> {
+        Self::validate_native_amx_participant_application_manifest_artifact(artifact).map_err(
+            |message| Self::invalid_lane_artifact_error(self.store_root.clone(), message),
+        )?;
+        let leaf = &artifact.leaf;
+        self.ensure_prune_recovery_not_required()?;
+        let canonical_height = usize::try_from(leaf.application_block_height)
+            .ok()
+            .and_then(NonZeroUsize::new);
+        if canonical_height.and_then(|height| self.get_durable_block_hash(height))
+            != Some(leaf.application_block_hash)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX participant manifest canonical block changed before persistence",
+            ));
+        }
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(leaf.lane_id)?;
+        if entry.dataspace_id != leaf.dataspace_id {
+            return Err(Self::invalid_lane_artifact_error(
+                entry.blocks_dir(&self.store_root),
+                "Native AMX participant manifest targets another dataspace",
+            ));
+        }
+        self.require_active_lane_incarnation(
+            &entry,
+            leaf.lane_incarnation,
+            leaf.application_block_height,
+        )?;
+        let (data_path, index_path) =
+            Self::native_amx_application_manifest_paths_for_entry(&entry, &self.store_root);
+        let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "Native AMX participant manifest path has no parent directory",
+            ));
+        };
+        std::fs::create_dir_all(&dir).map_err(|error| Error::MkDir(error, dir.clone()))?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None).ok();
+        if let Some(existing) = self
+            .read_native_amx_participant_application_manifest_from_paths_locked(
+                &entry,
+                leaf.participant_height,
+                &data_path,
+                &index_path,
+                true,
+            )
+        {
+            if existing == *artifact {
+                if let Some(before_bytes) = before_bytes
+                    && let Ok(after_bytes) =
+                        Self::sidecar_tracked_bytes(&data_path, &index_path, None)
+                {
+                    self.update_disk_usage_delta(before_bytes, after_bytes);
+                    accounting_mutation.finish();
+                }
+                return Ok(());
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                format!(
+                    "Native AMX participant manifest already has different evidence for lane {} dataspace {} incarnation {} height {}",
+                    leaf.lane_id.as_u32(),
+                    leaf.dataspace_id.as_u64(),
+                    leaf.lane_incarnation,
+                    leaf.participant_height,
+                ),
+            ));
+        }
+        let payload = artifact.encode_framed()?;
+        if !Self::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            leaf.participant_height,
+            &payload,
+            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+            self.sidecar_fsync_mode(),
+            None,
+            SidecarIndexOrigin::FirstWrite,
+        ) {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "failed to persist Native AMX participant application manifest",
+                ),
+                data_path,
+            ));
+        }
+        if let Some(before_bytes) = before_bytes
+            && let Ok(after_bytes) = Self::sidecar_tracked_bytes(&data_path, &index_path, None)
+        {
+            self.update_disk_usage_delta(before_bytes, after_bytes);
+            accounting_mutation.finish();
+        }
+        Ok(())
+    }
+
+    fn read_native_amx_participant_application_manifest_from_paths_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        recover: bool,
+    ) -> Option<NativeAmxParticipantApplicationManifestArtifactV1> {
+        Self::read_indexed_sidecar_from_paths_with_recovery(
+            lane_block_height,
+            data_path,
+            index_path,
+            norito::decode_from_bytes::<NativeAmxParticipantApplicationManifestArtifactV1>,
+            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+            recover,
+        )
+        .and_then(|artifact| {
+            let leaf = &artifact.leaf;
+            if leaf.lane_id != entry.lane_id
+                || leaf.dataspace_id != entry.dataspace_id
+                || leaf.participant_height != lane_block_height
+                || self
+                    .require_active_lane_incarnation(
+                        entry,
+                        leaf.lane_incarnation,
+                        leaf.application_block_height,
+                    )
+                    .is_err()
+                || Self::validate_native_amx_participant_application_manifest_artifact(&artifact)
+                    .is_err()
+            {
+                iroha_logger::warn!(
+                    lane = %entry.lane_id.as_u32(),
+                    dataspace = entry.dataspace_id.as_u64(),
+                    lane_block_height,
+                    "Native AMX participant manifest identity, marker, or proof mismatch"
+                );
+                return None;
+            }
+            Some(artifact)
+        })
+    }
+
+    fn read_native_amx_participant_application_manifest_from_bound_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        bound: &mut BoundProgressSidecar,
+    ) -> Option<NativeAmxParticipantApplicationManifestArtifactV1> {
+        let artifact = Self::read_indexed_sidecar_from_open_files(
+            lane_block_height,
+            &mut bound.data,
+            &mut bound.index,
+            &bound.namespace.data_path,
+            &bound.namespace.index_path,
+            norito::decode_from_bytes::<NativeAmxParticipantApplicationManifestArtifactV1>,
+            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+        )?;
+        if artifact.leaf.lane_id != lane_id
+            || artifact.leaf.participant_height != lane_block_height
+            || Self::validate_native_amx_participant_application_manifest_artifact(&artifact)
+                .is_err()
+        {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                "durability-attested Native AMX participant manifest identity or proof mismatch"
+            );
+            return None;
+        }
+        Some(artifact)
+    }
+
+    fn native_amx_participant_application_receipt_matches_available_evidence_under_prune_guard(
         &self,
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
     ) -> bool {
         if Self::validate_native_amx_participant_application_receipt_artifact(artifact).is_err() {
             return false;
         }
-        let Ok(Some(manifest)) = self.commit_manifest(artifact.application_block_height) else {
+        let descriptor = &artifact.participant_proposal.descriptor;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let Ok(entry) = self.lane_storage_entry(descriptor.lane_id) else {
             return false;
         };
-        let Ok(Some(checkpoint)) = self.wsv_checkpoint(artifact.application_block_height) else {
+        if entry.dataspace_id != descriptor.dataspace_id {
+            return false;
+        }
+        let (data_path, index_path) =
+            Self::native_amx_application_manifest_paths_for_entry(&entry, &self.store_root);
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let Some(manifest_artifact) = self
+            .read_native_amx_participant_application_manifest_from_paths_locked(
+                &entry,
+                descriptor.lane_block_height,
+                &data_path,
+                &index_path,
+                true,
+            )
+        else {
             return false;
         };
-        let Ok(Some(finality)) = self.v2_finality_artifact(artifact.application_block_height)
+        if manifest_artifact.leaf.lane_incarnation != descriptor.lane_incarnation {
+            return false;
+        }
+        self.native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
+            artifact,
+            &manifest_artifact,
+        )
+    }
+
+    /// Validate a Native AMX receipt and its already decoded manifest without
+    /// acquiring locks.
+    ///
+    /// The caller holds `prune_lock`, `canonical_chain_lock`, and
+    /// `sidecar_lock`, in that order. Geometry callers also hold
+    /// `lane_geometry_lock` between canonical and sidecar acquisition.
+    fn native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
+        &self,
+        artifact: &NativeAmxParticipantApplicationReceiptArtifact,
+        manifest_artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
+    ) -> bool {
+        if Self::validate_native_amx_participant_application_receipt_artifact(artifact).is_err()
+            || HashOf::new(manifest_artifact) != artifact.manifest_artifact_hash
+            || manifest_artifact.finality_artifact_hash != artifact.finality_artifact_hash
+            || !Self::native_amx_participant_receipt_matches_manifest_leaf(
+                artifact,
+                &manifest_artifact.leaf,
+            )
+            || !self
+                .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
+                    manifest_artifact,
+                )
+        {
+            return false;
+        }
+        let Ok(Some(manifest)) =
+            self.commit_manifest_under_sidecar_guard(artifact.application_block_height)
+        else {
+            return false;
+        };
+        let Ok(Some(checkpoint)) =
+            self.wsv_checkpoint_under_sidecar_guard(artifact.application_block_height)
+        else {
+            return false;
+        };
+        let Ok(Some((_, finality, _))) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                artifact.application_block_height,
+            )
         else {
             return false;
         };
         if manifest.block_hash != artifact.application_block_hash
-            || manifest.wsv_checkpoint_hash != artifact.wsv_checkpoint_hash
-            || manifest.post_state_root != artifact.commit_post_state_root
-            || manifest.commit_qc_hash != artifact.commit_qc_hash
             || checkpoint.block_hash != artifact.application_block_hash
-            || checkpoint.state_hash != artifact.wsv_checkpoint_hash
+            || checkpoint.state_hash != manifest.wsv_checkpoint_hash
+            || checkpoint.commit_manifest_hash != Some(manifest.encoded_hash())
             || finality.block_hash != artifact.application_block_hash
             || HashOf::new(&finality) != artifact.finality_artifact_hash
+            || finality
+                .commit_qc
+                .execution_commitment
+                .executed_block_wire_hash
+                != artifact.executed_block_wire_hash
             || manifest.parent_state_root
                 != Some(finality.commit_qc.execution_commitment.parent_state_root)
             || manifest.post_state_root
                 != Some(finality.commit_qc.execution_commitment.post_state_root)
             || manifest.commit_qc_hash != Some(Hash::new(finality.commit_qc.encode()))
+            || manifest.commit_authority_hash != Some(v2_commit_authority_hash(&finality))
         {
             return false;
         }
@@ -26202,54 +28691,32 @@ impl Kura {
         let Some(height) = NonZeroUsize::new(height) else {
             return false;
         };
-        if self
-            .get_block_hash(height)
+        self.get_block_hash(height)
             .or_else(|| self.get_durable_block_hash(height))
-            != Some(artifact.application_block_hash)
-        {
-            return false;
-        }
-        // A hash-only header cannot prove that this exact participant
-        // proposal/control/result group was included: the block consensus hash
-        // intentionally excludes the result root, and no per-context inclusion
-        // proof exists yet. Fail closed after body eviction rather than letting
-        // replaceable sidecar bytes advance a lane frontier.
-        let Some(block) = self.get_block(height) else {
-            return false;
-        };
-        if block.header().result_merkle_root().map(Hash::from) != artifact.result_merkle_root {
-            return false;
-        }
-        match self.native_amx_participant_application_receipts_for_block(&block) {
-            Ok(expected) => expected.iter().any(|candidate| candidate == artifact),
-            Err(error) => {
-                iroha_logger::warn!(
-                    ?error,
-                    lane = %artifact.participant_proposal.descriptor.lane_id.as_u32(),
-                    dataspace = artifact.participant_proposal.descriptor.dataspace_id.as_u64(),
-                    lane_block_height = artifact.participant_proposal.descriptor.lane_block_height,
-                    "failed to reconstruct Native AMX participant application evidence"
-                );
-                false
-            }
-        }
+            == Some(artifact.application_block_hash)
     }
 
-    fn write_native_amx_participant_application_receipt_artifact(
+    fn write_native_amx_participant_application_receipt_artifact_under_publication_guard(
         &self,
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
+        manifest_artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
     ) -> Result<()> {
-        self.ensure_prune_recovery_not_required()?;
         Self::validate_native_amx_participant_application_receipt_artifact(artifact).map_err(
             |message| Self::invalid_lane_artifact_error(self.store_root.clone(), message),
         )?;
-        if !self.native_amx_participant_application_receipt_matches_available_evidence(artifact) {
+        let descriptor = &artifact.participant_proposal.descriptor;
+        if HashOf::new(manifest_artifact) != artifact.manifest_artifact_hash
+            || manifest_artifact.finality_artifact_hash != artifact.finality_artifact_hash
+            || !Self::native_amx_participant_receipt_matches_manifest_leaf(
+                artifact,
+                &manifest_artifact.leaf,
+            )
+        {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
-                "Native AMX participant receipt no longer matches canonical commit evidence",
+                "Native AMX participant receipt differs from its QC-authenticated manifest leaf",
             ));
         }
-        let descriptor = &artifact.participant_proposal.descriptor;
         let lane_id = descriptor.lane_id;
         let lane_block_height = descriptor.lane_block_height;
         if lane_block_height == 0 {
@@ -26259,17 +28726,6 @@ impl Kura {
             ));
         }
 
-        let observed_existing = self.read_native_amx_participant_application_receipt(
-            lane_id,
-            descriptor.dataspace_id,
-            descriptor.lane_incarnation,
-            lane_block_height,
-        );
-        // Evidence readers acquire the prune gate internally. Acquire our
-        // write guard only after those calls, then recheck the immutable
-        // canonical identity under the guard to avoid a non-reentrant lock and
-        // a check/write race.
-        let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let canonical_height = usize::try_from(artifact.application_block_height)
             .ok()
@@ -26289,6 +28745,10 @@ impl Kura {
         self.require_active_lane_artifact(&entry, descriptor)?;
         let (data_path, index_path) =
             Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
+        let latest_index_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &self.store_root,
+        );
         let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
             return Err(Self::invalid_lane_artifact_error(
                 data_path,
@@ -26297,6 +28757,9 @@ impl Kura {
         };
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
         let _guard = self.sidecar_lock.lock();
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let before_bytes =
+            Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&latest_index_path)).ok();
         if let Some(existing) = self
             .read_native_amx_participant_application_receipt_from_paths_locked(
                 &entry,
@@ -26307,23 +28770,34 @@ impl Kura {
             )
         {
             if existing == *artifact {
+                self.persist_native_amx_participant_receipt_latest_index_locked(
+                    &entry,
+                    artifact,
+                    &latest_index_path,
+                )?;
+                if let Some(before_bytes) = before_bytes
+                    && let Ok(after_bytes) = Self::sidecar_tracked_bytes(
+                        &data_path,
+                        &index_path,
+                        Some(&latest_index_path),
+                    )
+                {
+                    self.update_disk_usage_delta(before_bytes, after_bytes);
+                    accounting_mutation.finish();
+                }
                 return Ok(());
             }
-            if observed_existing.as_ref() == Some(&existing) {
-                return Err(Self::invalid_lane_artifact_error(
-                    data_path,
-                    format!(
-                        "Native AMX participant receipt already has different valid evidence for lane {} dataspace {} incarnation {} height {}",
-                        lane_id.as_u32(),
-                        descriptor.dataspace_id.as_u64(),
-                        descriptor.lane_incarnation,
-                        lane_block_height,
-                    ),
-                ));
-            }
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                format!(
+                    "Native AMX participant receipt already has different evidence for lane {} dataspace {} incarnation {} height {}",
+                    lane_id.as_u32(),
+                    descriptor.dataspace_id.as_u64(),
+                    descriptor.lane_incarnation,
+                    lane_block_height,
+                ),
+            ));
         }
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None).ok();
         let payload = artifact.encode_framed()?;
         if !Self::append_indexed_sidecar(
             &data_path,
@@ -26340,8 +28814,14 @@ impl Kura {
                 data_path,
             ));
         }
+        self.persist_native_amx_participant_receipt_latest_index_locked(
+            &entry,
+            artifact,
+            &latest_index_path,
+        )?;
         if let Some(before_bytes) = before_bytes
-            && let Ok(after_bytes) = Self::sidecar_tracked_bytes(&data_path, &index_path, None)
+            && let Ok(after_bytes) =
+                Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&latest_index_path))
         {
             self.update_disk_usage_delta(before_bytes, after_bytes);
             accounting_mutation.finish();
@@ -26388,6 +28868,87 @@ impl Kura {
         })
     }
 
+    fn read_native_amx_participant_application_receipt_from_bound_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        bound: &mut BoundProgressSidecar,
+    ) -> Option<NativeAmxParticipantApplicationReceiptArtifact> {
+        let artifact = Self::read_indexed_sidecar_from_open_files(
+            lane_block_height,
+            &mut bound.data,
+            &mut bound.index,
+            &bound.namespace.data_path,
+            &bound.namespace.index_path,
+            norito::decode_from_bytes::<NativeAmxParticipantApplicationReceiptArtifact>,
+            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+        )?;
+        let descriptor = &artifact.participant_proposal.descriptor;
+        if descriptor.lane_id != lane_id
+            || descriptor.lane_block_height != lane_block_height
+            || Self::validate_native_amx_participant_application_receipt_artifact(&artifact)
+                .is_err()
+        {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                "durability-attested Native AMX participant receipt identity or structure mismatch"
+            );
+            return None;
+        }
+        Some(artifact)
+    }
+
+    /// Read structurally valid durable participant-control evidence at an exact route height.
+    ///
+    /// Unlike [`Self::read_native_amx_participant_application_receipt`], this
+    /// diagnostic reader does not require the receipt to match the active
+    /// incarnation marker or the surviving canonical block body. That
+    /// distinction lets operator diagnostics surface a structurally valid
+    /// same-height identity conflict instead of treating the conflicting
+    /// sidecar as absent.
+    #[must_use]
+    pub(crate) fn read_structural_native_amx_participant_application_receipt(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+    ) -> Option<NativeAmxParticipantApplicationReceiptArtifact> {
+        let _prune_guard = self.prune_lock.lock();
+        if self.prune_recovery_is_required() {
+            return None;
+        }
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        if entry.dataspace_id != dataspace_id {
+            return None;
+        }
+        let (data_path, index_path) =
+            Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        if self.prune_recovery_is_required() {
+            return None;
+        }
+        let artifact = Self::read_indexed_sidecar_from_paths_with_recovery(
+            lane_block_height,
+            &data_path,
+            &index_path,
+            norito::decode_from_bytes::<NativeAmxParticipantApplicationReceiptArtifact>,
+            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+            false,
+        )?;
+        if Self::validate_native_amx_participant_application_receipt_artifact(&artifact).is_err() {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                dataspace = dataspace_id.as_u64(),
+                lane_block_height,
+                "structural Native AMX participant receipt shape mismatch"
+            );
+            return None;
+        }
+        Some(artifact)
+    }
+
     /// Read exact durable participant-control application evidence.
     #[must_use]
     pub(crate) fn read_native_amx_participant_application_receipt(
@@ -26397,6 +28958,7 @@ impl Kura {
         lane_incarnation: Hash,
         lane_block_height: u64,
     ) -> Option<NativeAmxParticipantApplicationReceiptArtifact> {
+        let _prune_guard = self.prune_lock.lock();
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -26423,7 +28985,11 @@ impl Kura {
                 .then_some(artifact)
         };
         let artifact = read_structural(true)?;
-        if !self.native_amx_participant_application_receipt_matches_available_evidence(&artifact) {
+        if !self
+            .native_amx_participant_application_receipt_matches_available_evidence_under_prune_guard(
+                &artifact,
+            )
+        {
             return None;
         }
         (read_structural(false)? == artifact && !self.prune_recovery_is_required())
@@ -26437,6 +29003,7 @@ impl Kura {
         lane_incarnation: Hash,
         mut accept: impl FnMut(&NativeAmxParticipantApplicationReceiptArtifact) -> bool,
     ) -> Option<NativeAmxParticipantApplicationReceiptArtifact> {
+        let _prune_guard = self.prune_lock.lock();
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -26447,44 +29014,60 @@ impl Kura {
         }
         let (data_path, index_path) =
             Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
-        let candidates = {
+        let latest_index_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &self.store_root,
+        );
+        let (latest, artifact) = {
             let _guard = self.sidecar_lock.lock();
             if self.prune_recovery_is_required() {
                 return None;
             }
-            if !Self::recover_indexed_sidecar_artifacts(
-                &data_path,
-                &index_path,
-                NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            ) {
+            let latest = match self
+                .decode_native_amx_participant_receipt_latest_index(&entry, &latest_index_path)
+            {
+                Ok(Some(latest)) => latest,
+                Ok(None) => return None,
+                Err(error) => {
+                    iroha_logger::warn!(
+                        ?error,
+                        lane = %lane_id.as_u32(),
+                        dataspace = dataspace_id.as_u64(),
+                        "Native AMX participant latest index is unavailable"
+                    );
+                    return None;
+                }
+            };
+            if latest.lane_incarnation != lane_incarnation {
                 return None;
             }
-            let heights = Self::indexed_sidecar_height_range(
+            let artifact = self.read_native_amx_participant_application_receipt_from_paths_locked(
+                &entry,
+                latest.lane_block_height,
+                &data_path,
                 &index_path,
-                NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+                false,
             )?;
-            heights
-                .rev()
-                .filter_map(|height| {
-                    let artifact = self
-                        .read_native_amx_participant_application_receipt_from_paths_locked(
-                            &entry,
-                            height,
-                            &data_path,
-                            &index_path,
-                            false,
-                        )?;
-                    (artifact.participant_proposal.descriptor.lane_incarnation == lane_incarnation)
-                        .then_some(artifact)
-                })
-                .take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
-                .collect::<Vec<_>>()
+            if !latest.matches_receipt(&artifact) {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    dataspace = dataspace_id.as_u64(),
+                    lane_block_height = latest.lane_block_height,
+                    "Native AMX participant latest index does not match its exact receipt"
+                );
+                return None;
+            }
+            (latest, artifact)
         };
         drop(_geometry_guard);
-        let artifact = candidates.into_iter().find(|artifact| {
-            self.native_amx_participant_application_receipt_matches_available_evidence(artifact)
-                && accept(artifact)
-        })?;
+        if !self
+            .native_amx_participant_application_receipt_matches_available_evidence_under_prune_guard(
+                &artifact,
+            )
+            || !accept(&artifact)
+        {
+            return None;
+        }
         let confirmed = {
             let _geometry_guard = self.lane_geometry_lock.lock();
             let entry = self.lane_storage_entry(lane_id).ok()?;
@@ -26493,19 +29076,300 @@ impl Kura {
             }
             let (data_path, index_path) =
                 Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
+            let latest_index_path =
+                Self::native_amx_participant_receipt_latest_index_path_for_entry(
+                    &entry,
+                    &self.store_root,
+                );
             let _guard = self.sidecar_lock.lock();
             if self.prune_recovery_is_required() {
                 return None;
             }
-            self.read_native_amx_participant_application_receipt_from_paths_locked(
-                &entry,
-                artifact.participant_proposal.descriptor.lane_block_height,
-                &data_path,
-                &index_path,
-                false,
-            )?
+            let confirmed_latest = self
+                .decode_native_amx_participant_receipt_latest_index(&entry, &latest_index_path)
+                .ok()
+                .flatten()?;
+            if confirmed_latest != latest {
+                return None;
+            }
+            let confirmed = self
+                .read_native_amx_participant_application_receipt_from_paths_locked(
+                    &entry,
+                    latest.lane_block_height,
+                    &data_path,
+                    &index_path,
+                    false,
+                )?;
+            latest.matches_receipt(&confirmed).then_some(confirmed)?
         };
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
+    }
+
+    /// Revalidate one structurally decoded receipt against every durable
+    /// application-evidence surface without acquiring another Kura lock.
+    ///
+    /// The caller holds `prune_lock`, `canonical_chain_lock`,
+    /// `lane_geometry_lock`, and `sidecar_lock`, in that order.
+    fn native_amx_latest_receipt_has_exact_evidence_under_startup_guards(
+        &self,
+        entry: &LaneConfigEntry,
+        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+        manifest_data_path: &Path,
+        manifest_index_path: &Path,
+    ) -> bool {
+        let descriptor = &receipt.participant_proposal.descriptor;
+        if descriptor.lane_id != entry.lane_id || descriptor.dataspace_id != entry.dataspace_id {
+            return false;
+        }
+        let Some(manifest) = self
+            .read_native_amx_participant_application_manifest_from_paths_locked(
+                entry,
+                descriptor.lane_block_height,
+                manifest_data_path,
+                manifest_index_path,
+                false,
+            )
+        else {
+            return false;
+        };
+        manifest.leaf.lane_incarnation == descriptor.lane_incarnation
+            && self
+                .native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
+                    receipt,
+                    &manifest,
+                )
+    }
+
+    /// Reconstruct every active lane's bounded Native AMX latest-receipt index.
+    ///
+    /// This is an explicit startup operation. Only the highest structurally
+    /// valid receipt whose exact manifest, finality, checkpoint, commit
+    /// manifest, canonical block, and result-bearing wire identities all
+    /// revalidate may become the route/incarnation pointer. Unresolved
+    /// temporaries, malformed or unbacked pointers, and unsafe authoritative
+    /// sidecar paths fail closed.
+    pub(crate) fn rebuild_native_amx_participant_receipt_latest_indexes_on_startup(
+        &self,
+    ) -> Result<usize> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entries = self
+            .lane_storage_entries
+            .lock()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut rebuilt = 0_usize;
+
+        for entry in entries {
+            let (data_path, index_path) =
+                Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
+            let (manifest_data_path, manifest_index_path) =
+                Self::native_amx_application_manifest_paths_for_entry(&entry, &self.store_root);
+            let latest_index_path =
+                Self::native_amx_participant_receipt_latest_index_path_for_entry(
+                    &entry,
+                    &self.store_root,
+                );
+            let before_bytes =
+                Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&latest_index_path))?;
+
+            for path in [
+                &data_path,
+                &index_path,
+                &manifest_data_path,
+                &manifest_index_path,
+                &latest_index_path,
+            ] {
+                let metadata = match std::fs::symlink_metadata(path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                    Err(error) => return Err(Error::IO(error, path.to_path_buf())),
+                };
+                if metadata.file_type().is_symlink()
+                    || !metadata.file_type().is_file()
+                    || !Self::sidecar_is_single_link(&metadata)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path.to_path_buf(),
+                        "Native AMX participant receipt index recovery found a symlinked, non-regular, or multi-link artifact",
+                    ));
+                }
+            }
+
+            for temporary in [
+                data_path.with_extension("norito.tmp"),
+                index_path.with_extension("index.tmp"),
+                manifest_data_path.with_extension("norito.tmp"),
+                manifest_index_path.with_extension("index.tmp"),
+                latest_index_path.with_extension("norito.tmp"),
+            ] {
+                match std::fs::symlink_metadata(&temporary) {
+                    Ok(_) => {
+                        return Err(Self::invalid_lane_artifact_error(
+                            temporary,
+                            "Native AMX latest-index reconstruction found an unresolved temporary artifact",
+                        ));
+                    }
+                    Err(error) if error.kind() == ErrorKind::NotFound => {}
+                    Err(error) => return Err(Error::IO(error, temporary)),
+                }
+            }
+            if let Some(directory) = latest_index_path.parent() {
+                let directory_entries = std::fs::read_dir(directory)
+                    .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+                for directory_entry in directory_entries {
+                    let directory_entry = directory_entry
+                        .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+                    if directory_entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".kura-sidecar-")
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            directory_entry.path(),
+                            "Native AMX latest-index reconstruction found an unresolved atomic temporary artifact",
+                        ));
+                    }
+                }
+            }
+
+            let layout = Self::validate_indexed_sidecar_pair(
+                &data_path,
+                &index_path,
+                u64::MAX,
+                NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+                true,
+                true,
+            )?;
+            let _manifest_layout = Self::validate_indexed_sidecar_pair(
+                &manifest_data_path,
+                &manifest_index_path,
+                u64::MAX,
+                NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+                true,
+                true,
+            )?;
+            let latest_height = layout.and_then(|layout| {
+                layout
+                    .height_range()
+                    .and_then(|range| range.into_iter().next_back())
+            });
+            let expected_receipt = latest_height
+                .map(|lane_block_height| {
+                    self.read_native_amx_participant_application_receipt_from_paths_locked(
+                        &entry,
+                        lane_block_height,
+                        &data_path,
+                        &index_path,
+                        false,
+                    )
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            data_path.clone(),
+                            "Native AMX participant receipt pair has no valid highest payload",
+                        )
+                    })
+                })
+                .transpose()?;
+            if let Some(receipt) = expected_receipt.as_ref()
+                && !self.native_amx_latest_receipt_has_exact_evidence_under_startup_guards(
+                    &entry,
+                    receipt,
+                    &manifest_data_path,
+                    &manifest_index_path,
+                )
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path.clone(),
+                    "Native AMX participant highest receipt lacks exact finality, manifest, checkpoint, or canonical sidecar evidence",
+                ));
+            }
+            let expected = expected_receipt
+                .as_ref()
+                .map(NativeAmxParticipantReceiptLatestIndexV1::from_receipt)
+                .transpose()?;
+            let current = self
+                .decode_native_amx_participant_receipt_latest_index(&entry, &latest_index_path)?;
+
+            match (expected, current) {
+                (Some(expected), Some(current)) if current != expected => {
+                    let current_receipt = self
+                        .read_native_amx_participant_application_receipt_from_paths_locked(
+                            &entry,
+                            current.lane_block_height,
+                            &data_path,
+                            &index_path,
+                            false,
+                        )
+                        .filter(|receipt| current.matches_receipt(receipt))
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                latest_index_path.clone(),
+                                "Native AMX participant latest index is conflicting or unbacked",
+                            )
+                        })?;
+                    if current.lane_block_height >= expected.lane_block_height
+                        || !self.native_amx_latest_receipt_has_exact_evidence_under_startup_guards(
+                            &entry,
+                            &current_receipt,
+                            &manifest_data_path,
+                            &manifest_index_path,
+                        )
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            latest_index_path,
+                            "Native AMX participant latest index conflicts with exact durable application evidence",
+                        ));
+                    }
+                    let receipt = expected_receipt.as_ref().ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            data_path.clone(),
+                            "Native AMX participant highest receipt disappeared during startup reconstruction",
+                        )
+                    })?;
+                    self.persist_native_amx_participant_receipt_latest_index_locked(
+                        &entry,
+                        receipt,
+                        &latest_index_path,
+                    )?;
+                    rebuilt = rebuilt.saturating_add(1);
+                }
+                (Some(expected), None) => {
+                    let receipt = expected_receipt.as_ref().ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            data_path.clone(),
+                            "Native AMX participant highest receipt disappeared during startup reconstruction",
+                        )
+                    })?;
+                    debug_assert!(expected.matches_receipt(receipt));
+                    self.persist_native_amx_participant_receipt_latest_index_locked(
+                        &entry,
+                        receipt,
+                        &latest_index_path,
+                    )?;
+                    rebuilt = rebuilt.saturating_add(1);
+                }
+                (Some(_), Some(_)) | (None, None) => {}
+                (None, Some(_)) => {
+                    return Err(Self::invalid_lane_artifact_error(
+                        latest_index_path,
+                        "Native AMX participant latest index has no authoritative receipt",
+                    ));
+                }
+            }
+
+            let after_bytes =
+                Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&latest_index_path))?;
+            self.update_disk_usage_delta(before_bytes, after_bytes);
+        }
+        accounting_mutation.finish();
+        Ok(rebuilt)
     }
 
     /// Persist a direct standalone execution receipt for a certified lane block.
@@ -26607,7 +29471,7 @@ impl Kura {
     /// This writer is retained only for historical merge-settlement tests. The
     /// production first-release path reads and authenticates certified receipts
     /// but does not generate autonomous merge-execution receipts.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn persist_merge_lane_block_application_receipts(
         &self,
         entry: &MergeLedgerEntry,
@@ -27652,7 +30516,7 @@ impl Kura {
         )
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn lane_block_payload_availability(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -27743,7 +30607,6 @@ impl Kura {
 
     /// Recover a certified lane block directly from its producer-authenticated
     /// lane-owned payload, without requiring the global block body to commit.
-    #[cfg(test)]
     pub(crate) fn recover_autonomous_lane_block_payload(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -27888,7 +30751,7 @@ impl Kura {
         (HashOf::from_untyped_unchecked(synthetic), 0)
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn lane_block_payload_artifact_and_block(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -28040,7 +30903,7 @@ impl Kura {
             && ownership.qc_mode_tag == descriptor.qc_mode_tag
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn block_entrypoint_hash_at(block: &SignedBlock, index: usize) -> Option<Hash> {
         Self::block_entrypoint_at(block, index).map(|entrypoint| Hash::from(entrypoint.hash()))
     }
@@ -28166,7 +31029,7 @@ impl Kura {
     /// predecessor-gated lane sessions before later blocks that depend on them.
     /// Retired sidecars are reserved for geometry archive/retirement paths.
     #[must_use]
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn lane_block_artifacts_snapshot(&self) -> Vec<LaneBlockArtifact> {
         if self.prune_recovery_is_required() {
             return Vec::new();
@@ -28198,7 +31061,7 @@ impl Kura {
         }
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn active_lane_block_artifacts_structural_snapshot(&self) -> Vec<LaneBlockArtifact> {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
@@ -28244,7 +31107,7 @@ impl Kura {
         }
         artifacts
     }
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn active_lane_block_artifacts_match_structural_snapshot(
         &self,
         artifacts: &[LaneBlockArtifact],
@@ -37422,36 +40285,6 @@ impl BlockStore {
         self.verify_rollback_boundary(intent, intent_path)
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
-    fn establish_rollback_source(
-        &mut self,
-        intent: &KuraRollbackIntent,
-        intent_path: &Path,
-    ) -> Result<()> {
-        self.validate_rollback_prefix(intent, intent_path)?;
-        let index_count = self.read_index_count()?;
-        let hashes_count = self.read_hashes_count()?;
-        if index_count != intent.from_height || hashes_count != intent.from_height {
-            return Err(Error::RollbackIntentInvalid {
-                path: intent_path.to_path_buf(),
-                reason: format!(
-                    "rollback source is not a complete canonical boundary: index={index_count}, hashes={hashes_count}, source={}",
-                    intent.from_height
-                ),
-            });
-        }
-        // This boundary is mandatory under every fsync policy: rollback cannot safely begin
-        // from a source prefix that exists only in the page cache.
-        self.ensure_data_file()?.try_io(|file| file.sync_data())?;
-        self.ensure_hashes_file()?.try_io(|file| file.sync_data())?;
-        self.ensure_index_file()?.try_io(|file| file.sync_data())?;
-        self.write_commit_marker(intent.from_height)?;
-        self.commit_marker_count = intent.from_height;
-        self.commit_marker_pending = None;
-        self.fsync.clear();
-        Ok(())
-    }
-
     fn verify_rollback_boundary(
         &mut self,
         intent: &KuraRollbackIntent,
@@ -38331,7 +41164,7 @@ mod tests {
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         transaction::{
             Executable, TransactionBuilder,
-            signed::{TransactionResult, TransactionResultInner},
+            signed::{TransactionEntrypoint, TransactionResult, TransactionResultInner},
         },
         trigger::DataTriggerSequence,
     };
@@ -39290,11 +42123,12 @@ mod tests {
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };
-        let commitment = crate::sumeragi::exec::execution_commitment_from_witness(
-            &witness,
-            Hash::new(b"Kura top-up fixture executed block wire placeholder"),
-        )
-        .expect("derive top-up execution commitment");
+        let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(Hash::new(
+            b"Kura top-up fixture executed block wire placeholder",
+        ));
+        let commitment =
+            crate::sumeragi::exec::execution_commitment_from_witness(&witness, &manifest)
+                .expect("derive top-up execution commitment");
         (witness, commitment)
     }
 
@@ -39319,11 +42153,12 @@ mod tests {
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };
-        let commitment = crate::sumeragi::exec::execution_commitment_from_witness(
-            &witness,
-            Hash::new(b"Kura receiver-only fixture executed block wire placeholder"),
-        )
-        .expect("derive receiver-only execution commitment");
+        let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(Hash::new(
+            b"Kura receiver-only fixture executed block wire placeholder",
+        ));
+        let commitment =
+            crate::sumeragi::exec::execution_commitment_from_witness(&witness, &manifest)
+                .expect("derive receiver-only execution commitment");
         (witness, commitment)
     }
 
@@ -44016,6 +46851,7 @@ mod tests {
             .collect();
         let global_state_root = reduce_merge_hint_roots(&merge_hint_roots);
         MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: epoch,
             lane_catalog_hash: Hash::new(b"kura-merge-test-catalog"),
             active_lanes: vec![iroha_data_model::merge::MergeLaneBinding {
@@ -44210,6 +47046,105 @@ mod tests {
             .expect("exact round retains the sidecar");
         assert_eq!(selected_hash, entry_hash);
         assert_eq!(selected, entry);
+    }
+
+    #[test]
+    fn pending_certified_merge_work_binds_routing_legs_to_exact_active_incarnation() {
+        let target_lane = LaneId::new(7);
+        let target_dataspace = DataSpaceId::new(11);
+        let retired_incarnation = Hash::new(b"pending-route-retired-incarnation");
+        let recreated_incarnation = Hash::new(b"pending-route-recreated-incarnation");
+        let routing_plan = crate::queue::RoutingPlan::native_amx(
+            crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![crate::queue::RouteLeg::new(
+                crate::queue::RoutingDecision::new(target_lane, target_dataspace),
+                crate::queue::RouteLegRole::Participant,
+            )],
+        );
+        let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
+        let mut retired_entry = merge_entry_with_indexed_entrypoint(entrypoint);
+        retired_entry
+            .execution_batch
+            .as_mut()
+            .and_then(|batch| batch.lanes.first_mut())
+            .expect("merge execution fixture")
+            .routing_plans = vec![routing_plan.encode()];
+        retired_entry
+            .active_lanes
+            .push(iroha_data_model::merge::MergeLaneBinding {
+                lane_id: target_lane,
+                dataspace_id: target_dataspace,
+                lane_config_hash: Hash::new(b"pending-route-retired-config"),
+                incarnation: retired_incarnation,
+                activation_height: 1,
+            });
+
+        let kura = Kura::blank_kura_for_testing();
+        kura.persist_pending_certified_merge_entry(&retired_entry)
+            .expect("persist retired-incarnation pending merge fixture");
+        assert!(
+            kura.pending_certified_merge_work_for_lane(
+                target_lane,
+                target_dataspace,
+                retired_incarnation,
+            )
+            .expect("scan retired incarnation"),
+            "the pending routing leg must block its exact historical incarnation"
+        );
+        assert!(
+            !kura
+                .pending_certified_merge_work_for_lane(
+                    target_lane,
+                    target_dataspace,
+                    recreated_incarnation,
+                )
+                .expect("scan recreated incarnation"),
+            "an old-incarnation sidecar must not ABA-block the recreated lane"
+        );
+
+        let mut unbound_entry = retired_entry.clone();
+        unbound_entry
+            .active_lanes
+            .retain(|binding| binding.lane_id != target_lane);
+        let unbound_kura = Kura::blank_kura_for_testing();
+        unbound_kura
+            .persist_pending_certified_merge_entry(&unbound_entry)
+            .expect("persist unbound routing fixture");
+        assert!(
+            unbound_kura
+                .pending_certified_merge_work_for_lane(
+                    target_lane,
+                    target_dataspace,
+                    recreated_incarnation,
+                )
+                .expect("scan unbound routing fixture"),
+            "a matching route without an authenticated active binding must fail closed"
+        );
+
+        let mut ambiguous_entry = retired_entry;
+        ambiguous_entry
+            .active_lanes
+            .push(iroha_data_model::merge::MergeLaneBinding {
+                lane_id: target_lane,
+                dataspace_id: target_dataspace,
+                lane_config_hash: Hash::new(b"pending-route-recreated-config"),
+                incarnation: recreated_incarnation,
+                activation_height: 2,
+            });
+        let ambiguous_kura = Kura::blank_kura_for_testing();
+        ambiguous_kura
+            .persist_pending_certified_merge_entry(&ambiguous_entry)
+            .expect("persist ambiguous routing fixture");
+        assert!(
+            ambiguous_kura
+                .pending_certified_merge_work_for_lane(
+                    target_lane,
+                    target_dataspace,
+                    recreated_incarnation,
+                )
+                .expect("scan ambiguous routing fixture"),
+            "duplicate route bindings must fail closed"
+        );
     }
 
     #[test]
@@ -47239,6 +50174,50 @@ mod tests {
         ));
         assert_eq!(
             fs::read(&log_path).expect("read rejected corrupt log image"),
+            exact_bytes,
+            "startup rejection must retain every byte for operator recovery"
+        );
+    }
+
+    #[test]
+    fn merge_log_rejects_unsupported_entry_version_without_mutation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("merge.log");
+        let entry1 = sample_merge_entry(1);
+        {
+            let mut merge_log = MergeLedgerLog::open_at(&log_path, MERGE_LEDGER_CACHE_CAPACITY)
+                .expect("open merge log");
+            merge_log.append(&entry1).expect("append entry1");
+        }
+
+        let mut unsupported = sample_merge_entry(2);
+        unsupported.version = MergeLedgerEntry::VERSION + 1;
+        let unsupported_bytes = unsupported.encode();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log_path)
+            .expect("open merge log for unsupported frame");
+        file.write_all(
+            &u32::try_from(unsupported_bytes.len())
+                .expect("unsupported fixture length fits u32")
+                .to_le_bytes(),
+        )
+        .expect("write unsupported frame length");
+        file.write_all(&unsupported_bytes)
+            .expect("write unsupported frame");
+        file.sync_data().expect("sync unsupported frame");
+        drop(file);
+
+        let exact_bytes = fs::read(&log_path).expect("read exact unsupported log image");
+        let error = MergeLedgerLog::open_at(&log_path, MERGE_LEDGER_CACHE_CAPACITY)
+            .expect_err("a complete unsupported-version frame must fail closed");
+        assert!(matches!(
+            error,
+            Error::MergeCarrierConflict(ref message)
+                if message.contains("unsupported merge ledger entry version")
+        ));
+        assert_eq!(
+            fs::read(&log_path).expect("read rejected unsupported log image"),
             exact_bytes,
             "startup rejection must retain every byte for operator recovery"
         );
@@ -52488,6 +55467,7 @@ mod tests {
             proposal.descriptor.dataspace_id,
         ));
         let reservation = LaneQueueReservationKeyV1 {
+            version: LaneQueueReservationKeyV1::VERSION,
             signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
             routing_plan_digest: routing_plan.digest(),
@@ -52580,6 +55560,7 @@ mod tests {
                 let accepted =
                     AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
                 LaneQueueReservationKeyV1 {
+                    version: LaneQueueReservationKeyV1::VERSION,
                     signed_transaction_hash: accepted.hash(),
                     entrypoint_hash: entrypoint.hash(),
                     routing_plan_digest: routing_plan.digest(),
@@ -52612,6 +55593,59 @@ mod tests {
             signer.private_key(),
         )
         .expect("rebound autonomous payload")
+    }
+
+    fn repropose_autonomous_lane_payload_for_kura(
+        source: &LaneExecutablePayloadV1,
+        proposal_height: u64,
+        signer: &KeyPair,
+    ) -> LaneExecutablePayloadV1 {
+        let mut proposal = source.origin_proposal.clone();
+        proposal.descriptor.proposal_height = proposal_height;
+        proposal.descriptor.subject_hash =
+            Hash::new(format!("kura-autonomous-reproposal-subject:{proposal_height}").into_bytes());
+        proposal.descriptor.payload_ownership_hash = Hash::new(
+            format!("kura-autonomous-reproposal-ownership:{proposal_height}").into_bytes(),
+        );
+        proposal.descriptor.rbc_instance_hash =
+            Hash::new(format!("kura-autonomous-reproposal-rbc:{proposal_height}").into_bytes());
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        if let Some(hint) = proposal.payload_block_hint.as_mut() {
+            hint.proposal_height = proposal_height;
+            hint.proposal_view = hint.proposal_view.saturating_add(1);
+            hint.proposal_block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                format!("kura-autonomous-reproposal-anchor:{proposal_height}").into_bytes(),
+            ));
+        }
+        let reservation_keys = source
+            .reservation_keys
+            .iter()
+            .zip(&source.entrypoint_hashes)
+            .map(|(source_key, entrypoint_hash)| {
+                let mut key = *source_key;
+                key.proposal_height = proposal_height;
+                key.proposal_identity_hash = proposal.proposal_hash;
+                key.reservation_owner_hash = Hash::new_from_chunks(&[
+                    b"iroha:kura:test-autonomous-reproposal-owner:v1\0",
+                    proposal.proposal_hash.as_ref(),
+                    entrypoint_hash.as_ref(),
+                ]);
+                key
+            })
+            .collect();
+        LaneExecutablePayloadV1::new_signed_with_reservations(
+            source.chain_id_hash,
+            source.epoch,
+            proposal,
+            source.entrypoints.clone(),
+            reservation_keys,
+            source.routing_plans.clone(),
+            source.native_amx_receipts.clone(),
+            PeerId::new(signer.public_key().clone()),
+            signer.private_key(),
+        )
+        .expect("reproposed autonomous payload")
     }
 
     fn next_durable_lane_view_certificate_for_kura(
@@ -52989,6 +56023,549 @@ mod tests {
     }
 
     #[test]
+    fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist autonomous payload");
+        let availability =
+            durable_lane_payload_availability_for_kura(&payload, &payload.origin_proposal, &signer);
+        kura.persist_lane_payload_availability_certificate(
+            lane_id,
+            1,
+            availability,
+            chain_id_hash,
+            epoch,
+        )
+        .expect("persist availability before retirement");
+        let (session, signer_pops) =
+            committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
+        let certified = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+        let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
+
+        assert_eq!(
+            retirement.reservation_keys(),
+            payload.reservation_keys.as_slice(),
+        );
+        assert_eq!(
+            kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch,)
+                .expect("persist terminal slot retirement"),
+            retirement,
+        );
+        assert_eq!(
+            kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch,)
+                .expect("exact retirement retry is idempotent"),
+            retirement,
+        );
+        assert_eq!(
+            kura.read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+                .expect("read durable retirement"),
+            Some(retirement.clone()),
+        );
+        assert!(
+            kura.read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)
+                .is_none(),
+            "retired payload must be hidden from autonomous recovery",
+        );
+        assert!(
+            kura.latest_autonomous_lane_block_artifacts_snapshot(chain_id_hash, 1, |_| epoch)
+                .expect("load bounded route-latest snapshot")
+                .is_empty(),
+            "retired payload must be ineligible for startup merge recovery",
+        );
+        assert!(matches!(
+            kura.recover_autonomous_lane_block_payload(
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+            ),
+            Err(LaneBlockPayloadAvailability::MissingLaneArtifact)
+        ));
+        assert!(
+            !kura.autonomous_lane_payload_matches_reservation(
+                &payload.reservation_keys[0],
+                chain_id_hash,
+                epoch,
+            ),
+            "restart reconciliation must release a tombstoned reservation",
+        );
+        assert_eq!(
+            kura.autonomous_lane_merge_bundle(certified, chain_id_hash, epoch),
+            Err("autonomous lane merge payload is unavailable"),
+            "a locally supplied delayed QC cannot make a retired slot merge eligible",
+        );
+        assert!(
+            kura.persist_committed_lane_block_session(&session, &signer_pops)
+                .is_err(),
+            "certification after durable retirement must fail closed",
+        );
+        assert!(
+            kura.read_certified_lane_block_artifact(lane_id, 1)
+                .is_none(),
+            "rejected delayed certification must leave no certified sidecar",
+        );
+        assert!(
+            kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+                .is_err(),
+            "the same payload cannot reclaim a terminal slot",
+        );
+
+        drop(kura);
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+        assert_eq!(
+            reopened
+                .read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+                .expect("revalidate retirement after restart"),
+            Some(retirement),
+        );
+        assert!(
+            reopened
+                .read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)
+                .is_none(),
+            "restart must not resurrect the retired executable payload",
+        );
+    }
+
+    #[test]
+    fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_entry = lane_config.entry(LaneId::new(1)).expect("lane entry");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) = autonomous_lane_payload_for_kura(
+            lane_entry.lane_id,
+            lane_entry.dataspace_id,
+            1,
+            &signer,
+        );
+        let successor = rebind_autonomous_lane_payload_for_kura(
+            &payload,
+            lane_entry.lane_id,
+            lane_entry.dataspace_id,
+            2,
+            b"kura-autonomous-view-incarnation",
+            &signer,
+        );
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist first autonomous payload");
+        let claim_path = Kura::autonomous_lane_entrypoint_claim_path(
+            temp_dir.path(),
+            &chain_id_hash,
+            &payload.entrypoint_hashes[0],
+        );
+        let claim_temp_path = Kura::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
+        fs::rename(&claim_path, &claim_temp_path)
+            .expect("model crash after payload append but before claim promotion");
+        assert!(
+            !claim_path.exists() && claim_temp_path.exists(),
+            "crash fixture retains only the staged exact owner",
+        );
+        let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
+        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+            .expect("retirement promotes and marks the staged exact owner release-pending");
+
+        let pending =
+            Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).expect("pending claim");
+        assert_eq!(
+            pending.state,
+            AutonomousLaneEntrypointClaimStateV3::ReleasePending(
+                retirement.digest().expect("retirement digest")
+            ),
+        );
+        assert!(
+            kura.persist_lane_executable_payload(&successor, chain_id_hash, epoch)
+                .is_err(),
+            "ReleasePending must remain exclusive until the exact Queue barrier is durable",
+        );
+
+        // Model a crash immediately after the slot tombstone reached disk but
+        // before this particular claim replacement did.
+        let active = AutonomousLaneEntrypointClaimV3::new(&payload, payload.entrypoint_hashes[0]);
+        fs::write(
+            &claim_path,
+            norito::to_bytes(&active).expect("encode active claim"),
+        )
+        .expect("restore interrupted active claim");
+        drop(kura);
+
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+        reopened
+            .persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+            .expect("startup retry completes ReleasePending");
+        let repaired =
+            Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).expect("repaired claim");
+        assert_eq!(
+            repaired.state,
+            AutonomousLaneEntrypointClaimStateV3::ReleasePending(
+                retirement.digest().expect("retirement digest")
+            ),
+        );
+
+        let barrier = retirement
+            .queue_release_barrier()
+            .expect("build exact queue barrier");
+        let mut conflicting_barrier = barrier.clone();
+        conflicting_barrier.executable_payload_hash =
+            Hash::new(b"conflicting-queue-release-payload");
+        assert!(
+            reopened
+                .finalize_autonomous_lane_slot_release(
+                    &retirement,
+                    &conflicting_barrier,
+                    chain_id_hash,
+                    epoch,
+                )
+                .is_err(),
+            "a barrier with different payload identity must not release claims",
+        );
+        reopened
+            .finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
+            .expect("exact durable Queue barrier releases claims");
+        reopened
+            .finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
+            .expect("released claim retry is idempotent");
+        let released =
+            Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).expect("released claim");
+        assert_eq!(
+            released.state,
+            AutonomousLaneEntrypointClaimStateV3::Released(
+                retirement.digest().expect("retirement digest")
+            ),
+        );
+        reopened
+            .persist_lane_executable_payload(&successor, chain_id_hash, epoch)
+            .expect("released entrypoint can be reproposed at the next exact slot");
+        let successor_claim =
+            Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).expect("successor claim");
+        assert!(successor_claim.active_for_payload(&successor));
+        assert!(
+            reopened
+                .persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+                .is_err(),
+            "the delayed retired payload must not reclaim its old slot",
+        );
+
+        drop(reopened);
+        let (restarted, _) = Kura::new(&config, &lane_config).expect("restart after reproposal");
+        restarted
+            .persist_lane_executable_payload(&successor, chain_id_hash, epoch)
+            .expect("successor ownership remains idempotent after restart");
+    }
+
+    #[test]
+    fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
+        #[derive(Encode)]
+        struct LegacyClaimV2 {
+            version: u16,
+            chain_id_hash: Hash,
+            epoch: u64,
+            entrypoint_hash: Hash,
+            lane_id: LaneId,
+            dataspace_id: DataSpaceId,
+            lane_incarnation: Hash,
+            proposal_height: u64,
+            lane_block_height: u64,
+            origin_proposal_hash: Hash,
+            executable_payload_hash: Hash,
+            released_by_retirement_hash: Option<Hash>,
+        }
+
+        #[derive(Encode)]
+        enum UnknownClaimState {
+            #[codec(index = 99)]
+            Unknown,
+        }
+
+        #[derive(Encode)]
+        struct UnknownClaimV3 {
+            version: u16,
+            chain_id_hash: Hash,
+            epoch: u64,
+            entrypoint_hash: Hash,
+            lane_id: LaneId,
+            dataspace_id: DataSpaceId,
+            lane_incarnation: Hash,
+            proposal_height: u64,
+            lane_block_height: u64,
+            origin_proposal_hash: Hash,
+            executable_payload_hash: Hash,
+            state: UnknownClaimState,
+        }
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let chain_id_hash = Hash::new(b"legacy-claim-chain");
+        let entrypoint_hash = Hash::new(b"legacy-claim-entrypoint");
+        let path = Kura::autonomous_lane_entrypoint_claim_path(
+            temp_dir.path(),
+            &chain_id_hash,
+            &entrypoint_hash,
+        );
+        fs::create_dir_all(path.parent().expect("claim parent")).expect("create claim parent");
+        let common = (
+            chain_id_hash,
+            entrypoint_hash,
+            LaneId::new(1),
+            DataSpaceId::new(3),
+            Hash::new(b"legacy-claim-incarnation"),
+            Hash::new(b"legacy-claim-proposal"),
+            Hash::new(b"legacy-claim-payload"),
+        );
+        let legacy = LegacyClaimV2 {
+            version: 2,
+            chain_id_hash: common.0,
+            epoch: 4,
+            entrypoint_hash: common.1,
+            lane_id: common.2,
+            dataspace_id: common.3,
+            lane_incarnation: common.4,
+            proposal_height: 8,
+            lane_block_height: 5,
+            origin_proposal_hash: common.5,
+            executable_payload_hash: common.6,
+            released_by_retirement_hash: None,
+        };
+        fs::write(
+            &path,
+            norito::to_bytes(&legacy).expect("encode legacy claim"),
+        )
+        .expect("write legacy claim");
+        assert!(
+            Kura::decode_autonomous_lane_entrypoint_claim(&path).is_err(),
+            "version-two claim layouts must fail closed"
+        );
+
+        let unknown = UnknownClaimV3 {
+            version: AutonomousLaneEntrypointClaimV3::VERSION,
+            chain_id_hash: common.0,
+            epoch: 4,
+            entrypoint_hash: common.1,
+            lane_id: common.2,
+            dataspace_id: common.3,
+            lane_incarnation: common.4,
+            proposal_height: 8,
+            lane_block_height: 5,
+            origin_proposal_hash: common.5,
+            executable_payload_hash: common.6,
+            state: UnknownClaimState::Unknown,
+        };
+        fs::write(
+            &path,
+            norito::to_bytes(&unknown).expect("encode unknown claim"),
+        )
+        .expect("write unknown claim");
+        assert!(
+            Kura::decode_autonomous_lane_entrypoint_claim(&path).is_err(),
+            "unknown claim state tags must fail closed"
+        );
+    }
+
+    #[test]
+    fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_entry = lane_config.entry(LaneId::new(1)).expect("lane entry");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) = autonomous_lane_payload_for_kura(
+            lane_entry.lane_id,
+            lane_entry.dataspace_id,
+            1,
+            &signer,
+        );
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist autonomous payload");
+
+        let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
+        let mut conflicting = retirement.clone();
+        conflicting.origin_proposal_hash = Hash::new(b"conflicting-retirement-proposal");
+        assert!(
+            kura.persist_autonomous_lane_slot_retirement(&conflicting, chain_id_hash, epoch,)
+                .is_err(),
+            "a caller cannot retire a different proposal identity",
+        );
+        assert!(
+            kura.read_autonomous_lane_slot_retirement(lane_entry.lane_id, 1, chain_id_hash, epoch,)
+                .expect("conflicting attempt leaves a readable slot")
+                .is_none(),
+        );
+        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+            .expect("persist exact retirement");
+
+        let recreated = rebind_autonomous_lane_payload_for_kura(
+            &payload,
+            lane_entry.lane_id,
+            lane_entry.dataspace_id,
+            1,
+            b"kura-autonomous-retirement-recreated-incarnation",
+            &signer,
+        );
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &recreated);
+        assert!(
+            kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch,)
+                .is_err(),
+            "a delayed exact tombstone cannot target a recreated lane incarnation",
+        );
+        assert!(
+            kura.persist_autonomous_lane_slot_retirement(
+                &AutonomousLaneSlotRetirementV1::from_payload(&recreated),
+                chain_id_hash,
+                epoch,
+            )
+            .is_err(),
+            "a fresh-incarnation tombstone requires its own durable payload first",
+        );
+        assert!(
+            kura.read_autonomous_lane_slot_retirement(lane_entry.lane_id, 1, chain_id_hash, epoch,)
+                .is_err(),
+            "the old tombstone must never validate under the recreated active marker",
+        );
+    }
+
+    #[test]
+    fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist autonomous payload");
+        let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
+        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+            .expect("persist retirement");
+
+        let view_path =
+            Kura::autonomous_lane_block_view_state_path_for_entry(lane_entry, temp_dir.path(), 1);
+        let temp_path = Kura::autonomous_lane_block_view_state_temp_path(&view_path);
+        let valid_bytes = fs::read(&view_path).expect("read canonical retirement");
+        fs::rename(&view_path, &temp_path).expect("stage retirement rename crash");
+        fs::write(&view_path, &valid_bytes[..valid_bytes.len() / 2])
+            .expect("stage truncated main after crash");
+        assert_eq!(
+            kura.read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+                .expect("promote valid retirement temp"),
+            Some(retirement.clone()),
+        );
+        assert!(!temp_path.exists(), "recovered retirement temp is removed");
+
+        fs::write(&view_path, &valid_bytes[..valid_bytes.len() / 2])
+            .expect("truncate retirement without recovery temp");
+        assert!(
+            kura.read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+                .is_err(),
+            "truncated retirement must fail closed",
+        );
+        fs::write(&view_path, &valid_bytes).expect("restore retirement after truncation");
+
+        fs::write(&view_path, [0xFF, 0x00, 0xAA]).expect("corrupt retirement");
+        assert!(
+            kura.read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+                .is_err(),
+            "corrupt retirement must fail closed",
+        );
+        fs::write(&view_path, &valid_bytes).expect("restore retirement after corruption");
+
+        fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&view_path)
+            .expect("open retirement for oversized fixture")
+            .set_len(
+                u64::try_from(AUTONOMOUS_LANE_BLOCK_VIEW_STATE_MAX_BYTES)
+                    .expect("view limit fits u64")
+                    .saturating_add(1),
+            )
+            .expect("make sparse oversized retirement");
+        assert!(
+            kura.read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+                .is_err(),
+            "oversized retirement must fail before allocation or decode",
+        );
+        fs::write(&view_path, &valid_bytes).expect("restore retirement after oversize");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let real_path = view_path.with_extension("norito.real");
+            fs::rename(&view_path, &real_path).expect("move retirement behind symlink");
+            symlink(&real_path, &view_path).expect("symlink retirement");
+            assert!(
+                kura.read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+                    .is_err(),
+                "symlinked retirement must fail closed",
+            );
+            fs::remove_file(&view_path).expect("remove retirement symlink");
+            fs::rename(&real_path, &view_path).expect("restore regular retirement");
+
+            symlink(&view_path, &temp_path).expect("symlink crash temp");
+            assert!(
+                kura.read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+                    .is_err(),
+                "symlinked retirement temp must fail closed even beside a valid main",
+            );
+            fs::remove_file(&temp_path).expect("remove crash-temp symlink");
+        }
+        assert_eq!(
+            kura.read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+                .expect("regular retirement survives adversarial files"),
+            Some(retirement),
+        );
+    }
+
+    #[test]
+    fn autonomous_lane_slot_retirement_rejects_already_certified_slot() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist autonomous payload");
+        let (session, signer_pops) =
+            committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified autonomous slot");
+        assert!(
+            kura.persist_autonomous_lane_slot_retirement(
+                &AutonomousLaneSlotRetirementV1::from_payload(&payload),
+                chain_id_hash,
+                epoch,
+            )
+            .is_err(),
+            "a certified autonomous slot cannot release its queue ownership",
+        );
+        assert!(
+            kura.read_autonomous_lane_slot_retirement(lane_id, 1, chain_id_hash, epoch)
+                .expect("certified slot remains readable")
+                .is_none(),
+        );
+    }
+
+    #[test]
     fn autonomous_merge_bundle_certifies_origin_while_new_view_advances_cursor() {
         let lane_config = two_lane_runtime_config();
         let lane_id = LaneId::new(1);
@@ -53171,15 +56748,17 @@ mod tests {
             .current_autonomous_lane_payload(lane_id, 1, chain_id_hash, epoch)
             .expect("restart recovery");
         assert_eq!(recovered.1.descriptor.lane_block_view, 258);
-        let snapshot =
-            reopened.latest_autonomous_lane_block_artifacts_snapshot(chain_id_hash, 1, |_| epoch);
+        let snapshot = reopened
+            .latest_autonomous_lane_block_artifacts_snapshot(chain_id_hash, 1, |_| epoch)
+            .expect("load bounded route-latest snapshot");
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].1.descriptor.lane_block_view, 258);
         assert!(
             reopened
                 .latest_autonomous_lane_block_artifacts_snapshot(chain_id_hash, 0, |_| epoch)
+                .expect("zero-cap snapshot is empty")
                 .is_empty(),
-            "a zero per-lane recovery limit must not enumerate durable history"
+            "a zero global recovery limit must not enumerate durable history"
         );
 
         let temp_path = Kura::autonomous_lane_block_view_state_temp_path(&view_path);
@@ -53204,6 +56783,324 @@ mod tests {
                 .read_autonomous_lane_block_artifact(lane_id, 1, chain_id_hash, epoch)
                 .is_none(),
             "corrupt view state must not fall back to the origin proposal"
+        );
+    }
+
+    #[test]
+    fn autonomous_payload_promotes_hint_free_bytes_to_one_exact_carrier_hint() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, mut hint_free) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let hint = hint_free
+            .origin_proposal
+            .payload_block_hint
+            .take()
+            .expect("fixture carrier hint");
+        hint_free
+            .validate(chain_id_hash, epoch)
+            .expect("hint-free payload remains authenticated");
+        let hinted = hint_free
+            .attach_global_hint_exact(hint, chain_id_hash, epoch)
+            .expect("attach exact carrier hint");
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &hint_free);
+        kura.persist_lane_executable_payload(&hint_free, chain_id_hash, epoch)
+            .expect("persist hint-free local payload");
+        kura.persist_lane_executable_payload(&hinted, chain_id_hash, epoch)
+            .expect("promote to exact carrier-hinted payload");
+        assert_eq!(
+            kura.current_autonomous_lane_payload(lane.lane_id, 1, chain_id_hash, epoch)
+                .expect("current promoted payload")
+                .0,
+            hinted,
+        );
+        assert!(
+            kura.persist_lane_executable_payload(&hint_free, chain_id_hash, epoch)
+                .is_err(),
+            "carrier-hint promotion must never be reversed",
+        );
+
+        drop(kura);
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+        assert_eq!(
+            reopened
+                .current_autonomous_lane_payload(lane.lane_id, 1, chain_id_hash, epoch)
+                .expect("restart recovers promoted payload")
+                .0,
+            hinted,
+        );
+    }
+
+    #[test]
+    fn autonomous_payload_rejects_a_conflicting_carrier_hint_after_promotion() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, mut hint_free) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let first_hint = hint_free
+            .origin_proposal
+            .payload_block_hint
+            .take()
+            .expect("fixture carrier hint");
+        let first = hint_free
+            .attach_global_hint_exact(first_hint, chain_id_hash, epoch)
+            .expect("attach first carrier hint");
+        let conflicting_hint = iroha_data_model::block::consensus::LaneBlockProposalPayloadHintV1 {
+            proposal_height: first_hint.proposal_height,
+            proposal_view: first_hint.proposal_view.saturating_add(1),
+            proposal_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"conflicting-autonomous-carrier-hint",
+            )),
+        };
+        let conflicting = hint_free
+            .attach_global_hint_exact(conflicting_hint, chain_id_hash, epoch)
+            .expect("build independently authenticated conflicting hint form");
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &hint_free);
+        kura.persist_lane_executable_payload(&hint_free, chain_id_hash, epoch)
+            .expect("persist hint-free local payload");
+        kura.persist_lane_executable_payload(&first, chain_id_hash, epoch)
+            .expect("promote first carrier hint");
+        assert!(
+            kura.persist_lane_executable_payload(&conflicting, chain_id_hash, epoch)
+                .is_err(),
+            "a different carrier identity must not replace the promoted hint",
+        );
+        assert_eq!(
+            kura.current_autonomous_lane_payload(lane.lane_id, 1, chain_id_hash, epoch)
+                .expect("first carrier remains current")
+                .0,
+            first,
+        );
+    }
+
+    #[test]
+    fn finalized_release_allows_a_later_proposal_attempt_at_the_same_lane_height() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, first) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let successor = repropose_autonomous_lane_payload_for_kura(
+            &first,
+            first
+                .origin_proposal
+                .descriptor
+                .proposal_height
+                .saturating_add(1),
+            &signer,
+        );
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
+        kura.persist_lane_executable_payload(&first, chain_id_hash, epoch)
+            .expect("persist first attempt");
+        let retirement = AutonomousLaneSlotRetirementV1::from_payload(&first);
+        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+            .expect("retire first attempt");
+        let barrier = retirement
+            .queue_release_barrier()
+            .expect("exact Queue release barrier");
+        kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
+            .expect("finalize first attempt release");
+        kura.persist_lane_executable_payload(&successor, chain_id_hash, epoch)
+            .expect("persist successor at the same lane-local height");
+        assert_eq!(
+            kura.current_autonomous_lane_payload(lane.lane_id, 1, chain_id_hash, epoch)
+                .expect("successor is current")
+                .0,
+            successor,
+        );
+        assert_eq!(
+            kura.read_autonomous_lane_slot_retirement(lane.lane_id, 1, chain_id_hash, epoch)
+                .expect("current attempt retirement lookup"),
+            None,
+            "the old tombstone must not retire the fresh attempt",
+        );
+        assert!(
+            kura.persist_lane_executable_payload(&first, chain_id_hash, epoch)
+                .is_err(),
+            "the delayed old payload must not reclaim the current attempt",
+        );
+        let route_latest_path =
+            Kura::autonomous_lane_route_latest_attempt_path_for_entry(lane, temp_dir.path());
+        drop(kura);
+        fs::remove_file(&route_latest_path)
+            .expect("model restart with a missing derived route-latest index");
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+        assert!(
+            route_latest_path.is_file(),
+            "startup must explicitly reconstruct the missing route-latest index",
+        );
+        assert_eq!(
+            reopened
+                .current_autonomous_lane_payload(lane.lane_id, 1, chain_id_hash, epoch)
+                .expect("restart resolves the route-latest successor")
+                .0,
+            successor,
+        );
+    }
+
+    #[test]
+    fn autonomous_route_latest_snapshot_rejects_runtime_index_corruption() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist autonomous payload");
+
+        let route_latest_path =
+            Kura::autonomous_lane_route_latest_attempt_path_for_entry(lane, temp_dir.path());
+        fs::write(&route_latest_path, [0xFF, 0x00, 0xAA])
+            .expect("corrupt the live route-latest pointer");
+        assert!(
+            kura.latest_autonomous_lane_block_artifacts_snapshot(chain_id_hash, 1, |_| epoch)
+                .is_err(),
+            "runtime hydration must fail closed instead of hiding durable queue ownership",
+        );
+    }
+
+    #[test]
+    fn old_reservation_retirement_remains_exactly_addressable_after_same_height_reproposal() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, first) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let successor = repropose_autonomous_lane_payload_for_kura(
+            &first,
+            first
+                .origin_proposal
+                .descriptor
+                .proposal_height
+                .saturating_add(1),
+            &signer,
+        );
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
+        kura.persist_lane_executable_payload(&first, chain_id_hash, epoch)
+            .expect("persist first attempt");
+        let retirement = AutonomousLaneSlotRetirementV1::from_payload(&first);
+        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+            .expect("retire first attempt");
+        let barrier = retirement
+            .queue_release_barrier()
+            .expect("exact Queue release barrier");
+        kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
+            .expect("finalize first attempt release");
+        kura.persist_lane_executable_payload(&successor, chain_id_hash, epoch)
+            .expect("persist successor attempt");
+
+        assert_eq!(
+            kura.autonomous_lane_retirement_matching_reservation(
+                &first.reservation_keys[0],
+                chain_id_hash,
+                epoch,
+            )
+            .expect("proposal-height-indexed old retirement lookup"),
+            Some(retirement.clone()),
+        );
+        kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
+            .expect("old finalized release remains idempotently provable");
+        assert!(
+            kura.autonomous_lane_payload_matches_reservation(
+                &successor.reservation_keys[0],
+                chain_id_hash,
+                epoch,
+            ),
+            "current reservation lookup must resolve only the fresh attempt",
+        );
+        drop(kura);
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+        assert_eq!(
+            reopened
+                .autonomous_lane_retirement_matching_reservation(
+                    &first.reservation_keys[0],
+                    chain_id_hash,
+                    epoch,
+                )
+                .expect("restart old retirement lookup"),
+            Some(retirement),
+        );
+    }
+
+    #[test]
+    fn autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let first_signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let second_signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, template) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &first_signer);
+
+        let mut proposal = template.origin_proposal.clone();
+        let mut validator_set = vec![
+            PeerId::new(first_signer.public_key().clone()),
+            PeerId::new(second_signer.public_key().clone()),
+        ];
+        validator_set.sort();
+        proposal.descriptor.validator_set = validator_set.clone();
+        proposal.descriptor.validator_set_hash = HashOf::new(&validator_set);
+        proposal.descriptor.validator_count =
+            u32::try_from(validator_set.len()).expect("validator count");
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+
+        let mut reservation_keys = template.reservation_keys.clone();
+        for reservation in &mut reservation_keys {
+            reservation.proposal_identity_hash = proposal.proposal_hash;
+        }
+        let build_payload = |signer: &KeyPair| {
+            LaneExecutablePayloadV1::new_signed_with_reservations(
+                chain_id_hash,
+                epoch,
+                proposal.clone(),
+                template.entrypoints.clone(),
+                reservation_keys.clone(),
+                template.routing_plans.clone(),
+                template.native_amx_receipts.clone(),
+                PeerId::new(signer.public_key().clone()),
+                signer.private_key(),
+            )
+            .expect("construct producer-authenticated payload")
+        };
+        let first = build_payload(&first_signer);
+        let second = build_payload(&second_signer);
+        assert_eq!(first.payload_hash, second.payload_hash);
+        assert_ne!(first, second);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
+        kura.persist_lane_executable_payload(&first, chain_id_hash, epoch)
+            .expect("persist first producer identity");
+        assert!(
+            kura.persist_lane_executable_payload(&second, chain_id_hash, epoch)
+                .is_err(),
+            "same payload hash from another producer must not alias the durable payload"
+        );
+        assert_eq!(
+            kura.read_autonomous_lane_block_artifact(lane.lane_id, 1, chain_id_hash, epoch,)
+                .expect("read exact durable payload")
+                .executable_payload,
+            first
         );
     }
 
@@ -54976,43 +58873,161 @@ mod tests {
     }
 
     #[test]
-    fn first_release_execution_input_policy_rejects_every_autonomous_binding_shape() {
-        let chain_id_hash = Hash::new(b"first-release-autonomous-chain");
-        let payload_hash = Hash::new(b"first-release-autonomous-payload");
-        for mask in 0_u8..8 {
-            let result = Kura::validate_first_release_lane_block_source_binding(
-                (mask & 1 != 0).then_some(chain_id_hash),
-                (mask & 2 != 0).then_some(7),
-                (mask & 4 != 0).then_some(payload_hash),
-            );
-            if mask == 0 {
-                assert_eq!(result, Ok(()));
-            } else {
-                assert_eq!(
-                    result,
-                    Err("autonomous execution inputs are not part of first-release v2"),
-                    "binding mask {mask:03b} must fail closed"
-                );
-            }
+    fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence() {
+        #[derive(Encode)]
+        struct LegacyLaneBlockApplicationReceiptArtifact {
+            format: LaneBlockApplicationReceiptArtifactFormat,
+            proposal: LaneBlockProposalV1,
+            artifact: LaneBlockArtifact,
+            application_block_height: u64,
+            application_block_hash: HashOf<BlockHeader>,
+            entrypoint_indices: Vec<u64>,
+            entrypoint_hashes: Vec<Hash>,
+            result_hashes: Vec<Hash>,
+            results: Vec<TransactionResult>,
         }
+
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        )
+        .as_ref()
+        .clone();
+        attach_ok_results_to_block(&mut block);
+        let proposal = lane_block_proposal_from_ownership(
+            block
+                .execution_context()
+                .expect("execution context")
+                .lane_payload_ownerships
+                .first()
+                .expect("lane ownership"),
+        );
+
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.store_block(Arc::new(block))
+            .expect("store block with lane artifact and results");
+        kura.persist_lane_block_application_receipt(&proposal)
+            .expect("persist current lane application receipt");
+        let current = kura
+            .read_lane_block_application_receipt(lane_id, lane_block_height)
+            .expect("current lane application receipt");
+        let legacy = LegacyLaneBlockApplicationReceiptArtifact {
+            format: current.format,
+            proposal: current.proposal,
+            artifact: current.artifact,
+            application_block_height: current.application_block_height,
+            application_block_hash: current.application_block_hash,
+            entrypoint_indices: current.entrypoint_indices,
+            entrypoint_hashes: current.entrypoint_hashes,
+            result_hashes: current.result_hashes,
+            results: current.results,
+        };
+        let payload = norito::to_bytes(&legacy).expect("encode legacy application receipt");
+        let (data_path, index_path) =
+            Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                lane_block_height,
+                &payload,
+                "lane block application receipt",
+                FsyncMode::Batched,
+                None,
+                SidecarIndexOrigin::FirstWrite,
+            ),
+            "legacy application receipt should replace the indexed test entry"
+        );
+
+        assert_eq!(
+            kura.read_lane_block_application_receipt_from_paths_locked(
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                false,
+            ),
+            None,
+            "a receipt omitting all eleven merge-evidence fields must fail closed"
+        );
     }
 
     #[test]
-    fn first_release_execution_input_policy_rejects_each_autonomous_metadata_vector() {
+    fn autonomous_execution_input_requires_complete_exact_source_binding() {
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(LaneId::new(1), DataSpaceId::new(2), 1, &signer);
+        let input =
+            Kura::autonomous_lane_block_execution_input_candidate(&payload, chain_id_hash, epoch)
+                .expect("autonomous input fixture");
+        assert_eq!(
+            Kura::validate_lane_block_execution_input_artifact(&input),
+            Ok(()),
+            "a complete reservation-bound autonomous input must be accepted"
+        );
+
+        for (label, candidate) in [
+            ("chain", {
+                let mut candidate = input.clone();
+                candidate.autonomous_chain_id_hash = None;
+                candidate
+            }),
+            ("epoch", {
+                let mut candidate = input.clone();
+                candidate.autonomous_epoch = None;
+                candidate
+            }),
+            ("payload", {
+                let mut candidate = input.clone();
+                candidate.autonomous_payload_hash = None;
+                candidate
+            }),
+        ] {
+            assert_eq!(
+                Kura::validate_lane_block_execution_input_artifact(&candidate),
+                Err("execution input autonomous source binding is incomplete"),
+                "missing {label} binding must fail closed"
+            );
+        }
+
+        let mut unbound = input.clone();
+        unbound.reservation_keys.clear();
+        unbound.routing_plans.clear();
+        unbound.native_amx_receipts.clear();
+        assert_eq!(
+            Kura::validate_lane_block_execution_input_artifact(&unbound),
+            Err("autonomous execution input reservation and routing vectors are not aligned"),
+            "the former payload-hint compatibility handoff must fail closed"
+        );
+
+        let mut unsupported_reservation_version = input;
+        unsupported_reservation_version.reservation_keys[0].version =
+            LaneQueueReservationKeyV1::VERSION + 1;
+        assert_eq!(
+            Kura::validate_lane_block_execution_input_artifact(&unsupported_reservation_version),
+            Err("autonomous execution input reservation key is invalid")
+        );
+    }
+
+    #[test]
+    fn global_execution_input_rejects_unbound_autonomous_metadata() {
         let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (chain_id_hash, epoch, payload) =
             autonomous_lane_payload_for_kura(LaneId::new(1), DataSpaceId::new(2), 1, &signer);
         let mut input =
             Kura::autonomous_lane_block_execution_input_candidate(&payload, chain_id_hash, epoch)
-                .expect("test-only autonomous input fixture");
-        assert_eq!(
-            Kura::validate_first_release_lane_block_execution_input_source(&input),
-            Err("autonomous execution inputs are not part of first-release v2")
-        );
-
+                .expect("autonomous input fixture");
         input.autonomous_chain_id_hash = None;
         input.autonomous_epoch = None;
         input.autonomous_payload_hash = None;
+
         for (label, candidate) in [
             ("reservation", {
                 let mut candidate = input.clone();
@@ -55034,7 +59049,7 @@ mod tests {
             }),
         ] {
             assert_eq!(
-                Kura::validate_first_release_lane_block_execution_input_source(&candidate),
+                Kura::validate_lane_block_execution_input_artifact(&candidate),
                 Err("global execution input carries autonomous reservation metadata"),
                 "{label} metadata must fail closed without an autonomous source binding"
             );
@@ -55044,7 +59059,7 @@ mod tests {
         input.routing_plans.clear();
         input.native_amx_receipts.clear();
         assert_eq!(
-            Kura::validate_first_release_lane_block_execution_input_source(&input),
+            Kura::validate_lane_block_execution_input_artifact(&input),
             Ok(())
         );
     }
@@ -55232,6 +59247,81 @@ mod tests {
         assert!(
             kura.lane_block_execution_input_available(&proposal),
             "healed execution input should be available to the standalone executor"
+        );
+    }
+
+    #[test]
+    fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding() {
+        #[derive(Encode)]
+        struct LegacyLaneBlockExecutionInputArtifact {
+            format: LaneBlockExecutionInputArtifactFormat,
+            proposal: LaneBlockProposalV1,
+            artifact: LaneBlockArtifact,
+            entrypoint_hashes: Vec<Hash>,
+            entrypoints: Vec<TransactionEntrypoint>,
+        }
+
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let proposal = lane_block_proposal_from_ownership(
+            block
+                .execution_context()
+                .expect("execution context")
+                .lane_payload_ownerships
+                .first()
+                .expect("lane ownership"),
+        );
+
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        let current = LaneBlockExecutionInputArtifact::new(recovered);
+        let legacy = LegacyLaneBlockExecutionInputArtifact {
+            format: current.format,
+            proposal: current.proposal,
+            artifact: current.artifact,
+            entrypoint_hashes: current.entrypoint_hashes,
+            entrypoints: current.entrypoints,
+        };
+        let payload = norito::to_bytes(&legacy).expect("encode legacy lane execution input");
+        let (data_path, index_path) =
+            Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                lane_block_height,
+                &payload,
+                "lane block execution input",
+                FsyncMode::Batched,
+                None,
+                SidecarIndexOrigin::FirstWrite,
+            ),
+            "legacy execution input should populate the indexed test entry"
+        );
+
+        assert_eq!(
+            kura.read_lane_block_execution_input_from_paths_locked(
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                false,
+            ),
+            None,
+            "a pre-autonomous input omitting bindings, reservations, routing, and receipts must fail closed"
         );
     }
 
@@ -58943,6 +63033,532 @@ mod tests {
             fs::metadata(&data_path).expect("data metadata").len(),
             0,
             "invalid kept entry should be dropped from data file"
+        );
+    }
+
+    #[test]
+    fn native_amx_manifest_artifact_rejects_leaf_or_proof_tampering() {
+        let leaf = NativeAmxApplicationManifestLeafV1 {
+            version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            lane_id: LaneId::new(3),
+            dataspace_id: DataSpaceId::new(4),
+            lane_incarnation: Hash::new(b"native manifest test incarnation"),
+            participant_height: 8,
+            participant_view: 2,
+            predecessor_height: 7,
+            predecessor_descriptor_hash: Some(Hash::new(b"native manifest test predecessor")),
+            descriptor_hash: Hash::new(b"native manifest test descriptor"),
+            proposal_hash: Hash::new(b"native manifest test proposal"),
+            settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native manifest test settlement",
+            )),
+            members: vec![
+                iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestMemberV1 {
+                    entrypoint_index: 5,
+                    source_id: [0x51; Hash::LENGTH],
+                    entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new(
+                        b"native manifest test entrypoint",
+                    )),
+                    result_hash: HashOf::from_untyped_unchecked(Hash::new(
+                        b"native manifest test result",
+                    )),
+                },
+            ],
+            application_block_height: 19,
+            application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native manifest test application",
+            )),
+            executed_block_wire_hash: Hash::new(b"native manifest test executed wire"),
+        };
+        let mut second_leaf = leaf.clone();
+        second_leaf.lane_id = LaneId::new(5);
+        second_leaf.dataspace_id = DataSpaceId::new(6);
+        second_leaf.lane_incarnation = Hash::new(b"native manifest second incarnation");
+        second_leaf.descriptor_hash = Hash::new(b"native manifest second descriptor");
+        second_leaf.proposal_hash = Hash::new(b"native manifest second proposal");
+        second_leaf.members[0].source_id = [0x62; Hash::LENGTH];
+        second_leaf.members[0].entrypoint_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"native manifest second entrypoint"));
+        second_leaf.members[0].result_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"native manifest second result"));
+        let tree = [HashOf::new(&leaf), HashOf::new(&second_leaf)]
+            .into_iter()
+            .collect::<MerkleTree<_>>();
+        let mut artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
+            version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+            leaf,
+            leaf_index: 0,
+            proof: tree.get_proof(0).expect("two-leaf proof"),
+            manifest_root: tree.root().map(Hash::from).expect("two-leaf root"),
+            manifest_leaf_count: 2,
+            finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native manifest test finality",
+            )),
+        };
+        Kura::validate_native_amx_participant_application_manifest_artifact(&artifact)
+            .expect("canonical Native AMX manifest artifact");
+
+        let canonical_leaf = artifact.leaf.clone();
+        artifact.leaf.members[0].result_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"tampered Native AMX manifest result"));
+        assert!(
+            Kura::validate_native_amx_participant_application_manifest_artifact(&artifact).is_err(),
+            "a changed leaf must no longer verify against the QC-authenticated root"
+        );
+        artifact.leaf = canonical_leaf;
+
+        let mut tampered_path = artifact.proof.clone().into_audit_path();
+        assert!(
+            !tampered_path.is_empty(),
+            "two leaves must produce one proof sibling"
+        );
+        tampered_path[0] = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"forged Native AMX manifest sibling",
+        )));
+        artifact.proof = MerkleProof::from_audit_path(artifact.leaf_index, tampered_path);
+        assert!(
+            Kura::validate_native_amx_participant_application_manifest_artifact(&artifact).is_err(),
+            "a changed audit-path hash must no longer verify against the QC-authenticated root"
+        );
+    }
+
+    fn install_native_amx_latest_index_evidence_fixture(
+        kura: &Kura,
+        entry: &LaneConfigEntry,
+    ) -> NativeAmxParticipantApplicationReceiptArtifact {
+        let block = store_dummy_block_arcs(kura, 1)
+            .into_iter()
+            .next()
+            .expect("one durable application block");
+        let (session, _) =
+            sample_committed_lane_block_session_for_kura(entry.lane_id, entry.dataspace_id, 1);
+        let proposal = session.proposal;
+        kura.install_lane_incarnation_marker_for_test(
+            entry,
+            proposal.descriptor.lane_incarnation,
+            0,
+        )
+        .expect("install active Native AMX participant incarnation");
+
+        let source_id = [0x5A; Hash::LENGTH];
+        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            proposal.descriptor.accepted_transaction_hashes[0],
+        );
+        let settlement = LaneBlockCommitment {
+            block_height: proposal.descriptor.lane_block_height,
+            lane_id: proposal.descriptor.lane_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            tx_count: 1,
+            total_local_amount: "0".parse().expect("zero quantity"),
+            total_xor_due: "0".parse().expect("zero quantity"),
+            total_xor_after_haircut: "0".parse().expect("zero quantity"),
+            total_xor_variance: "0".parse().expect("zero quantity"),
+            swap_metadata: None,
+            receipts: vec![iroha_data_model::block::consensus::LaneSettlementReceipt {
+                source_id,
+                local_amount: "0".parse().expect("zero quantity"),
+                xor_due: "0".parse().expect("zero quantity"),
+                xor_after_haircut: "0".parse().expect("zero quantity"),
+                xor_variance: "0".parse().expect("zero quantity"),
+                timestamp_ms: 1,
+            }],
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
+            .expect("hash Native AMX fixture settlement");
+        let executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("hash exact result-bearing application block wire");
+        let leaf = NativeAmxApplicationManifestLeafV1 {
+            version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            participant_height: proposal.descriptor.lane_block_height,
+            participant_view: proposal.descriptor.lane_block_view,
+            predecessor_height: proposal.descriptor.previous_lane_block_height,
+            predecessor_descriptor_hash: proposal.descriptor.previous_lane_block_descriptor_hash,
+            descriptor_hash: proposal.descriptor.descriptor_hash,
+            proposal_hash: proposal.proposal_hash,
+            settlement_hash,
+            members: vec![
+                iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestMemberV1 {
+                    entrypoint_index: proposal.descriptor.accepted_candidate_indices[0],
+                    source_id,
+                    entrypoint_hash,
+                    result_hash: result.hash(),
+                },
+            ],
+            application_block_height: 1,
+            application_block_hash: block.hash(),
+            executed_block_wire_hash,
+        };
+        leaf.validate()
+            .expect("canonical Native AMX fixture manifest leaf");
+        let tree = [HashOf::new(&leaf)].into_iter().collect::<MerkleTree<_>>();
+        let manifest_root = tree.root().map(Hash::from).expect("one-leaf manifest root");
+        let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
+            Hash::new(b"Native AMX latest-index parent state"),
+            Hash::new(b"Native AMX latest-index post state"),
+            Hash::new(b"Native AMX latest-index ordinary writes"),
+            None,
+            0,
+            iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            manifest_root,
+            1,
+            executed_block_wire_hash,
+        )
+        .expect("canonical Native AMX execution commitment");
+        let finality =
+            v2_finality_artifact_for_block_with_execution(block.as_ref(), execution_commitment);
+        let _ = kura
+            .store_v2_finality_artifact(&finality)
+            .expect("persist exact Native AMX finality");
+
+        let checkpoint_hash = Hash::new(b"Native AMX latest-index WSV checkpoint");
+        kura.store_wsv_checkpoint(1, block.hash(), checkpoint_hash)
+            .expect("persist Native AMX WSV checkpoint");
+        let commit_manifest =
+            CommitManifest::new(1, block.hash(), None, None, checkpoint_hash, None)
+                .with_authenticated_v2_commit_authority(&finality);
+        kura.store_commit_manifest(commit_manifest)
+            .expect("persist authenticated Native AMX commit manifest");
+
+        let finality_artifact_hash = HashOf::new(&finality);
+        let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
+            version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+            leaf,
+            leaf_index: 0,
+            proof: tree.get_proof(0).expect("one-leaf manifest proof"),
+            manifest_root,
+            manifest_leaf_count: 1,
+            finality_artifact_hash,
+        };
+        Kura::validate_native_amx_participant_application_manifest_artifact(&manifest_artifact)
+            .expect("valid Native AMX manifest sidecar");
+        let receipt = NativeAmxParticipantApplicationReceiptArtifact {
+            version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
+            participant_proposal: proposal,
+            participant_settlement: settlement,
+            participant_settlement_hash: settlement_hash,
+            application_block_height: 1,
+            application_block_hash: block.hash(),
+            executed_block_wire_hash,
+            finality_artifact_hash,
+            manifest_artifact_hash: HashOf::new(&manifest_artifact),
+            source_ids: vec![source_id],
+            entrypoint_indices: vec![0],
+            entrypoint_hashes: vec![entrypoint_hash],
+            result_hashes: vec![result.hash()],
+            results: vec![result],
+        };
+        Kura::validate_native_amx_participant_application_receipt_artifact(&receipt)
+            .expect("valid Native AMX receipt sidecar");
+
+        let (manifest_data_path, manifest_index_path) =
+            Kura::native_amx_application_manifest_paths_for_entry(entry, &kura.store_root);
+        assert!(Kura::append_indexed_sidecar(
+            &manifest_data_path,
+            &manifest_index_path,
+            1,
+            &manifest_artifact
+                .encode_framed()
+                .expect("encode Native AMX manifest"),
+            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+            kura.sidecar_fsync_mode(),
+            None,
+            SidecarIndexOrigin::FirstWrite,
+        ));
+        let (receipt_data_path, receipt_index_path) =
+            Kura::native_amx_participant_receipt_paths_for_entry(entry, &kura.store_root);
+        assert!(Kura::append_indexed_sidecar(
+            &receipt_data_path,
+            &receipt_index_path,
+            1,
+            &receipt.encode_framed().expect("encode Native AMX receipt"),
+            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+            kura.sidecar_fsync_mode(),
+            None,
+            SidecarIndexOrigin::FirstWrite,
+        ));
+        receipt
+    }
+
+    #[test]
+    fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
+        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("primary lane storage entry");
+        let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &kura.store_root,
+        );
+        drop(kura);
+
+        for corrupt in [
+            vec![0xA5],
+            vec![0x5A; NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES + 1],
+        ] {
+            fs::write(&latest_path, corrupt).expect("stage corrupt derived latest index");
+            let error = match Kura::new(&config, &lane_config) {
+                Ok(_) => panic!("startup must reject an unbacked corrupt latest index"),
+                Err(error) => error,
+            };
+            assert!(
+                latest_path.exists(),
+                "fail-closed reconstruction must not erase forensic evidence"
+            );
+            assert!(
+                error.to_string().contains("latest index")
+                    || error.to_string().contains("byte limit"),
+                "unexpected startup error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_amx_latest_index_binds_route_incarnation_and_exact_receipt() {
+        let (session, _) =
+            sample_committed_lane_block_session_for_kura(LaneId::SINGLE, DataSpaceId::UNIVERSAL, 1);
+        let proposal = session.proposal;
+        let settlement = LaneBlockCommitment {
+            block_height: 1,
+            lane_id: LaneId::SINGLE,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            tx_count: 0,
+            total_local_amount: "0".parse().expect("zero quantity"),
+            total_xor_due: "0".parse().expect("zero quantity"),
+            total_xor_after_haircut: "0".parse().expect("zero quantity"),
+            total_xor_variance: "0".parse().expect("zero quantity"),
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
+            .expect("hash fixture settlement");
+        let mut receipt = NativeAmxParticipantApplicationReceiptArtifact {
+            version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
+            participant_proposal: proposal.clone(),
+            participant_settlement: settlement,
+            participant_settlement_hash: settlement_hash,
+            application_block_height: proposal.descriptor.proposal_height,
+            application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native-latest-application-block",
+            )),
+            executed_block_wire_hash: Hash::new(b"native-latest-executed-wire"),
+            finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native-latest-finality",
+            )),
+            manifest_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native-latest-manifest",
+            )),
+            source_ids: Vec::new(),
+            entrypoint_indices: Vec::new(),
+            entrypoint_hashes: Vec::new(),
+            result_hashes: Vec::new(),
+            results: Vec::new(),
+        };
+        let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(&receipt)
+            .expect("construct exact latest index");
+        assert!(
+            latest.matches_receipt(&receipt),
+            "latest index must match the exact receipt bytes"
+        );
+        assert_eq!(latest.lane_id, proposal.descriptor.lane_id);
+        assert_eq!(latest.dataspace_id, proposal.descriptor.dataspace_id);
+        assert_eq!(
+            latest.lane_incarnation,
+            proposal.descriptor.lane_incarnation
+        );
+
+        receipt.application_block_height = receipt.application_block_height.saturating_add(1);
+        assert!(
+            !latest.matches_receipt(&receipt),
+            "application identity drift must change the exact receipt digest"
+        );
+    }
+
+    #[test]
+    fn native_amx_latest_index_rebuilds_idempotently_after_receipt_append_crash() {
+        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("primary lane storage entry");
+        let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &kura.store_root,
+        );
+        assert!(
+            !latest_path.exists(),
+            "fixture represents a crash before latest-index publication"
+        );
+        assert_eq!(
+            kura.read_structural_native_amx_participant_application_receipt(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                1,
+            ),
+            Some(receipt.clone()),
+            "diagnostics must read an exact structural sidecar without relying on the derived latest index"
+        );
+
+        assert_eq!(
+            kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+                .expect("rebuild missing latest index"),
+            1
+        );
+        let latest = kura
+            .decode_native_amx_participant_receipt_latest_index(&entry, &latest_path)
+            .expect("decode rebuilt latest index")
+            .expect("rebuilt latest index exists");
+        assert!(latest.matches_receipt(&receipt));
+        assert_eq!(
+            kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+                .expect("repeat latest-index rebuild"),
+            0,
+            "reconstruction must be idempotent"
+        );
+    }
+
+    #[test]
+    fn native_amx_latest_index_rebuild_rejects_missing_exact_evidence() {
+        for missing in ["manifest", "checkpoint", "commit manifest"] {
+            let temp_dir = TempDir::new().expect("temporary Kura directory");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("primary lane storage entry");
+            let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+            match missing {
+                "manifest" => {
+                    let (data_path, index_path) =
+                        Kura::native_amx_application_manifest_paths_for_entry(
+                            &entry,
+                            &kura.store_root,
+                        );
+                    fs::remove_file(data_path).expect("remove manifest data");
+                    fs::remove_file(index_path).expect("remove manifest index");
+                }
+                "checkpoint" => kura
+                    .remove_wsv_checkpoint_without_binding_for_tests(1)
+                    .expect("remove checkpoint"),
+                "commit manifest" => kura
+                    .remove_commit_manifest_without_binding_for_tests(1)
+                    .expect("remove commit manifest"),
+                _ => unreachable!(),
+            }
+            let error = kura
+                .rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+                .expect_err("unbacked highest receipt must fail closed");
+            assert!(
+                error.to_string().contains("lacks exact"),
+                "unexpected {missing} error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_amx_latest_index_rebuild_rejects_unresolved_temp() {
+        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("primary lane storage entry");
+        let (data_path, _) =
+            Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root);
+        let temporary = data_path.with_extension("norito.tmp");
+        fs::write(&temporary, b"incomplete receipt append").expect("stage unresolved temp");
+
+        let error = kura
+            .rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+            .expect_err("unresolved receipt temp must fail closed");
+        assert!(
+            error.to_string().contains("temporary"),
+            "unexpected temp error: {error}"
+        );
+    }
+
+    #[test]
+    fn native_amx_latest_index_rebuild_rejects_conflicting_pointer() {
+        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("primary lane storage entry");
+        let mut conflicting = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        conflicting.application_block_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"conflicting application block"));
+        let conflicting_latest =
+            NativeAmxParticipantReceiptLatestIndexV1::from_receipt(&conflicting)
+                .expect("construct structurally valid conflicting pointer");
+        let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &kura.store_root,
+        );
+        fs::write(
+            &latest_path,
+            norito::to_bytes(&conflicting_latest).expect("encode conflicting latest index"),
+        )
+        .expect("stage conflicting latest index");
+
+        let error = kura
+            .rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+            .expect_err("conflicting latest pointer must fail closed");
+        assert!(
+            error.to_string().contains("conflicting") || error.to_string().contains("unbacked"),
+            "unexpected conflict error: {error}"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("primary lane storage entry");
+        let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &kura.store_root,
+        );
+        drop(kura);
+
+        let target = temp_dir.path().join("attacker-controlled-latest-index");
+        fs::write(&target, b"attacker-controlled").expect("write symlink target");
+        symlink(&target, &latest_path).expect("plant latest-index symlink");
+        let error = match Kura::new(&config, &lane_config) {
+            Ok(_) => panic!("startup must reject a symlinked Native AMX latest index"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("symlinked")
+                || error.to_string().contains("non-regular")
+                || error.to_string().contains("multi-link"),
+            "unexpected startup error: {error}"
         );
     }
 

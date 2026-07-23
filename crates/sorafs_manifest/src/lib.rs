@@ -219,10 +219,11 @@ pub use gateway::{
     HostPattern,
 };
 pub use governance::{
-    GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
-    GOVERNANCE_EXTERNAL_KIND_GC_AUDIT_V1, GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1,
-    GOVERNANCE_EXTERNAL_KIND_RECONCILIATION_V1, GOVERNANCE_EXTERNAL_KIND_REPAIR_AUDIT_V1,
-    GOVERNANCE_EXTERNAL_KIND_REPAIR_SLASH_V1,
+    GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1,
+    GOVERNANCE_DAG_CID_BYTES_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
+    GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1, GOVERNANCE_EXTERNAL_KIND_GC_AUDIT_V1,
+    GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1, GOVERNANCE_EXTERNAL_KIND_RECONCILIATION_V1,
+    GOVERNANCE_EXTERNAL_KIND_REPAIR_AUDIT_V1, GOVERNANCE_EXTERNAL_KIND_REPAIR_SLASH_V1,
     GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1, GOVERNANCE_LOG_VERSION_V1,
     GovernanceDagBlockV1, GovernanceDagBlockValidationError, GovernanceDagChainValidationError,
     GovernanceDagHeadChainValidationError, GovernanceDagHeadV1, GovernanceDagHeadValidationError,
@@ -346,7 +347,6 @@ pub use pop_credentials::{
 };
 pub use por::{
     AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, AuditVerdictValidationError,
-    MANUAL_POR_CHALLENGE_VERSION_V1, ManualPorChallengeV1, ManualPorChallengeValidationError,
     POR_CHALLENGE_STATUS_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_SIGNATURE_DOMAIN_V1,
     POR_PROOF_VERSION_V1, POR_VERDICT_SIGNATURE_DOMAIN_V1, POR_WEEKLY_REPORT_VERSION_V1,
     PorChallengeOutcome, PorChallengeOutcomeParseError, PorChallengeStatusV1,
@@ -357,8 +357,10 @@ pub use por::{
     PorWeeklyReportV1, PorWeeklyReportValidationError,
 };
 pub use potr::{
-    POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrReceiptValidationError, PotrSignatureAlgorithm,
-    PotrSignatureV1, PotrStatus,
+    POTR_RECEIPT_DIGEST_DOMAIN_V1, POTR_RECEIPT_MAX_NOTE_BYTES_V1,
+    POTR_RECEIPT_SIGNATURE_DOMAIN_V1, POTR_RECEIPT_VERSION_V1, PotrReceiptSigningError,
+    PotrReceiptV1, PotrReceiptValidationError, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus,
+    sign_potr_receipt_v1,
 };
 pub use pricing::signed::{
     GOVERNED_PRICING_MANIFEST_VERSION_V1, GovernedPricingError, GovernedPricingManifestV1,
@@ -399,11 +401,11 @@ pub use provider_advert::{
     AdvertEndpoint, AdvertSignature, AdvertSignatureError, AdvertValidationError, AvailabilityTier,
     CapabilityTlv, CapabilityType, EndpointKind, EndpointMetadata, EndpointMetadataKey,
     MAX_ADVERT_TTL_SECS, PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1, PROVIDER_ADVERT_VERSION_V1,
-    PathDiversityPolicy, ProviderAdvertBodyV1, ProviderAdvertBuildError, ProviderAdvertBuilder,
-    ProviderAdvertSignaturePayloadV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints,
-    REFRESH_RECOMMENDATION_SECS, RangeCapabilityError, RendezvousTopic, SignatureAlgorithm,
-    StakePointer, StreamBudgetError, StreamBudgetV1, TransportHintError, TransportHintV1,
-    TransportProtocol,
+    PathDiversityPolicy, PotrMldsaCapabilityError, ProviderAdvertBodyV1, ProviderAdvertBuildError,
+    ProviderAdvertBuilder, ProviderAdvertSignaturePayloadV1, ProviderAdvertV1,
+    ProviderCapabilityRangeV1, QosHints, REFRESH_RECOMMENDATION_SECS, RangeCapabilityError,
+    RendezvousTopic, SignatureAlgorithm, StakePointer, StreamBudgetError, StreamBudgetV1,
+    TransportHintError, TransportHintV1, TransportProtocol, validate_potr_mldsa_capability,
 };
 pub use reconciliation::{
     AppealFinanceReconciliationSummaryV1, ReconciliationValidationError,

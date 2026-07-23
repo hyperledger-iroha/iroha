@@ -7,6 +7,7 @@ use std::{
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use ed25519_dalek::{Signer, SigningKey};
+use iroha_crypto::{Algorithm, KeyPair};
 use norito::json::Value;
 use sorafs_manifest::repair::QueuedRepairStateV1;
 use sorafs_manifest::{
@@ -15,7 +16,7 @@ use sorafs_manifest::{
     GovernanceSignatureAlgorithm, OrderRequestV1, POTR_RECEIPT_VERSION_V1, PotrReceiptV1,
     PotrStatus, ProofStreamTier, REPAIR_TASK_VERSION_V1, RepairTaskRecordV1, RepairTaskStateV1,
     RepairTicketId, SignatureAlgorithm, SignedReplicationOrderV1, governance_dag_block_cid_v1,
-    verify_order_request_signature_v1,
+    sign_potr_receipt_v1, verify_order_request_signature_v1,
 };
 use tempfile::tempdir;
 
@@ -26,7 +27,7 @@ fn workspace_fixture(path: &str) -> PathBuf {
 }
 
 fn potr_receipt() -> PotrReceiptV1 {
-    PotrReceiptV1 {
+    let receipt = PotrReceiptV1 {
         version: POTR_RECEIPT_VERSION_V1,
         manifest_digest: [0x11; 32],
         provider_id: [0x22; 32],
@@ -44,7 +45,12 @@ fn potr_receipt() -> PotrReceiptV1 {
         note: Some("ok".to_owned()),
         gateway_signature: None,
         provider_signature: None,
-    }
+    };
+    let gateway_key =
+        KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519).expect("fixture gateway key");
+    let provider_key =
+        KeyPair::try_from_seed(vec![0x31; 32], Algorithm::MlDsa).expect("fixture provider key");
+    sign_potr_receipt_v1(receipt, &gateway_key, &provider_key).expect("sign PoTR fixture")
 }
 
 fn repair_task_record() -> RepairTaskRecordV1 {
@@ -92,6 +98,28 @@ fn sign_governance_dag_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) 
     };
 }
 
+fn governance_dag_node(prev_cid: Option<Vec<u8>>, timestamp: u64) -> GovernanceLogNodeV1 {
+    let mut node = governance_node_fixture();
+    node.prev_cid = prev_cid;
+    node.timestamp = timestamp;
+    node.publisher_peer_id = b"12D3KooWGovernanceDagPublisher".to_vec();
+    node.node_cid = node
+        .recompute_node_cid()
+        .expect("derive canonical governance DAG node CID");
+    let signing_key = SigningKey::from_bytes(&[0xC7; 32]);
+    let signature = signing_key.sign(
+        &node
+            .signature_payload_bytes()
+            .expect("encode governance DAG node signing payload"),
+    );
+    node.publisher_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: signing_key.verifying_key().to_bytes().to_vec(),
+        signature: signature.to_bytes().to_vec(),
+    };
+    node
+}
+
 fn sign_governance_dag_head(head: &mut GovernanceDagHeadV1, seed: &[u8; 32]) {
     let signing_key = SigningKey::from_bytes(seed);
     let payload_bytes = head
@@ -107,10 +135,16 @@ fn sign_governance_dag_head(head: &mut GovernanceDagHeadV1, seed: &[u8; 32]) {
 
 fn governance_dag_block(
     prev_block_cid: Option<Vec<u8>>,
+    prev_node_cid: Option<Vec<u8>>,
     sequence: u64,
     timestamp: u64,
 ) -> GovernanceDagBlockV1 {
-    let node = governance_node_fixture();
+    let node = governance_dag_node(
+        prev_node_cid,
+        timestamp
+            .checked_sub(1)
+            .expect("fixture block timestamp is positive"),
+    );
     let publisher_peer_id = b"12D3KooWGovernanceDagPublisher".to_vec();
     let block_cid = governance_dag_block_cid_v1(
         prev_block_cid.as_deref(),
@@ -148,7 +182,7 @@ fn governance_dag_head(blocks: &[GovernanceDagBlockV1]) -> GovernanceDagHeadV1 {
         checkpoint_cid: None,
         head_signature: empty_governance_ed25519_signature(),
     };
-    sign_governance_dag_head(&mut head, &[0xD9; 32]);
+    sign_governance_dag_head(&mut head, &[0xC7; 32]);
     head
 }
 
@@ -1047,13 +1081,17 @@ fn sorafs_validate_bundle_rejects_manifest_mismatch() {
 #[test]
 fn sorafs_validate_governance_accepts_committed_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/governance/node_v1.to");
+    let node: GovernanceLogNodeV1 =
+        norito::decode_from_bytes(&fs::read(&fixture).expect("read governance node fixture"))
+            .expect("decode governance node fixture");
+    let expected_cid = format!("hex:{}", hex::encode(&node.node_cid));
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "governance",
             "--node",
             fixture.to_str().expect("fixture path is utf-8"),
             "--cid",
-            "bafygovernancelognode",
+            &expected_cid,
             "--generated-at",
             "123",
             "--format",
@@ -1143,7 +1181,7 @@ fn sorafs_validate_governance_rejects_missing_node_cid() {
 #[test]
 fn sorafs_validate_governance_dag_block_accepts_signed_block() {
     let temp = tempdir().expect("tempdir");
-    let block = governance_dag_block(None, 0, 1_700_000_800);
+    let block = governance_dag_block(None, None, 0, 1_700_000_800);
     let block_path = temp.path().join("governance-block.to");
     fs::write(
         &block_path,
@@ -1184,7 +1222,7 @@ fn sorafs_validate_governance_dag_block_accepts_signed_block() {
 #[test]
 fn sorafs_validate_governance_dag_block_rejects_cid_mismatch() {
     let temp = tempdir().expect("tempdir");
-    let block = governance_dag_block(None, 0, 1_700_000_800);
+    let block = governance_dag_block(None, None, 0, 1_700_000_800);
     let block_path = temp.path().join("governance-block.to");
     fs::write(
         &block_path,
@@ -1223,8 +1261,13 @@ fn sorafs_validate_governance_dag_block_rejects_cid_mismatch() {
 #[test]
 fn sorafs_validate_governance_dag_head_accepts_signed_chain() {
     let temp = tempdir().expect("tempdir");
-    let first = governance_dag_block(None, 0, 1_700_000_800);
-    let second = governance_dag_block(Some(first.block_cid.clone()), 1, 1_700_000_860);
+    let first = governance_dag_block(None, None, 0, 1_700_000_800);
+    let second = governance_dag_block(
+        Some(first.block_cid.clone()),
+        Some(first.node.node_cid.clone()),
+        1,
+        1_700_000_860,
+    );
     let blocks = vec![first, second];
     let head = governance_dag_head(&blocks);
     let head_path = temp.path().join("governance-head.to");
@@ -1586,6 +1629,7 @@ fn sorafs_validate_sign_governance_writes_valid_signed_norito() {
     signed_node
         .verify_publisher_signature()
         .expect("signed governance node verifies");
+    let expected_cid = format!("hex:{}", hex::encode(&signed_node.node_cid));
 
     let validate_output = cargo_bin_cmd!("sorafs-validate")
         .args([
@@ -1593,7 +1637,7 @@ fn sorafs_validate_sign_governance_writes_valid_signed_norito() {
             "--node",
             output_path.to_str().expect("output path is utf-8"),
             "--cid",
-            "bafygovernancelognode",
+            &expected_cid,
             "--generated-at",
             "124",
             "--format",

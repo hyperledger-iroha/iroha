@@ -3946,7 +3946,7 @@ def test_audited_progress_and_rank_leaves_are_tlaps_proved() -> None:
     obligations = ledger["obligations"]
     by_id = {obligation["id"]: obligation for obligation in obligations}
 
-    assert len(obligations) == 54
+    assert len(obligations) == 57
     assert sum(
         obligation["status"] == "tlaps_proved"
         for obligation in obligations
@@ -3954,9 +3954,28 @@ def test_audited_progress_and_rank_leaves_are_tlaps_proved() -> None:
     assert sum(
         obligation["status"] == "specified_unproved"
         for obligation in obligations
-    ) == 14
+    ) == 17
     assert by_id["async-runner-scheduler-preservation"]["status"] == "tlaps_proved"
     assert by_id["async-type-invariant"]["status"] == "tlaps_proved"
+    multilane_debt = {
+        "autoscale-lifecycle-production-refinement": (
+            "SumeragiV2AutoscaleLifecycle",
+            "AutoscaleLifecycleProductionRefinementObligation",
+        ),
+        "native-application-evidence-production-refinement": (
+            "SumeragiV2NativeApplicationEvidence",
+            "NativeApplicationEvidenceProductionRefinementObligation",
+        ),
+        "autonomous-reservation-carrier-production-refinement": (
+            "SumeragiV2AutonomousReservationCarrier",
+            "AutonomousReservationCarrierProductionRefinementObligation",
+        ),
+    }
+    for obligation_id, (formal_module, symbol) in multilane_debt.items():
+        obligation = by_id[obligation_id]
+        assert obligation["module"] == formal_module
+        assert obligation["symbol"] == symbol
+        assert obligation["status"] == "specified_unproved"
     expected = {
         "async-progress-ownership-invariant": (
             "AsyncSpecAlwaysProgressOwnershipInvariant",

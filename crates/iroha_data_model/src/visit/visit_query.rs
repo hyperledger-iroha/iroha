@@ -69,9 +69,15 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_sorafs_orderbook_order_by_id(FindSorafsOrderbookOrderById),
         visit_find_sorafs_orderbook_cancellation_by_order_id(FindSorafsOrderbookCancellationByOrderId),
         visit_find_sorafs_orderbook_receipt_by_id(FindSorafsOrderbookReceiptById),
+        visit_find_sorafs_orderbook_trade_by_id(FindSorafsOrderbookTradeById),
+        visit_find_sorafs_orderbook_channel_by_id(FindSorafsOrderbookChannelById),
         visit_find_sorafs_orderbook_status(FindSorafsOrderbookStatus),
         visit_find_sorafs_orderbook_orders(FindSorafsOrderbookOrders),
         visit_find_sorafs_orderbook_receipts(FindSorafsOrderbookReceipts),
+        visit_find_sorafs_reserve_policy(FindSorafsReservePolicy),
+        visit_find_sorafs_reserve_provider_by_id(FindSorafsReserveProviderById),
+        visit_find_sorafs_reserve_movement_by_id(FindSorafsReserveMovementById),
+        visit_find_sorafs_reserve_appeal_by_id(FindSorafsReserveAppealById),
         visit_find_sorafs_pop_issuer_policy(FindSorafsPopIssuerPolicy),
         visit_find_sorafs_pop_credential_commitment_by_digest(FindSorafsPopCredentialCommitmentByDigest),
         visit_find_sorafs_pop_commitment_root_by_version(FindSorafsPopCommitmentRootByVersion),
@@ -79,6 +85,8 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_sorafs_pop_revocation_by_nonce_commitment(FindSorafsPopRevocationByNonceCommitment),
         visit_find_sorafs_pop_audit_digest_by_sequence(FindSorafsPopAuditDigestBySequence),
         visit_find_sorafs_pop_registry_status(FindSorafsPopRegistryStatus),
+        visit_find_sorafs_repair_task(FindSorafsRepairTask),
+        visit_find_sorafs_repair_status(FindSorafsRepairStatus),
         visit_find_sorafs_moderation_policy(FindSorafsModerationPolicy),
         visit_find_sorafs_moderation_appeal(FindSorafsModerationAppeal),
         visit_find_sorafs_moderation_juror_eligibility(FindSorafsModerationJurorEligibility),
@@ -240,6 +248,12 @@ macro_rules! query_visitors {
             visit_find_sorafs_orderbook_receipt_by_id(
                 &$crate::query::sorafs::prelude::FindSorafsOrderbookReceiptById
             ),
+            visit_find_sorafs_orderbook_trade_by_id(
+                &$crate::query::sorafs::prelude::FindSorafsOrderbookTradeById
+            ),
+            visit_find_sorafs_orderbook_channel_by_id(
+                &$crate::query::sorafs::prelude::FindSorafsOrderbookChannelById
+            ),
             visit_find_sorafs_orderbook_status(
                 &$crate::query::sorafs::prelude::FindSorafsOrderbookStatus
             ),
@@ -248,6 +262,18 @@ macro_rules! query_visitors {
             ),
             visit_find_sorafs_orderbook_receipts(
                 &$crate::query::sorafs::prelude::FindSorafsOrderbookReceipts
+            ),
+            visit_find_sorafs_reserve_policy(
+                &$crate::query::sorafs::prelude::FindSorafsReservePolicy
+            ),
+            visit_find_sorafs_reserve_provider_by_id(
+                &$crate::query::sorafs::prelude::FindSorafsReserveProviderById
+            ),
+            visit_find_sorafs_reserve_movement_by_id(
+                &$crate::query::sorafs::prelude::FindSorafsReserveMovementById
+            ),
+            visit_find_sorafs_reserve_appeal_by_id(
+                &$crate::query::sorafs::prelude::FindSorafsReserveAppealById
             ),
             visit_find_sorafs_pop_issuer_policy(
                 &$crate::query::sorafs::prelude::FindSorafsPopIssuerPolicy
@@ -269,6 +295,12 @@ macro_rules! query_visitors {
             ),
             visit_find_sorafs_pop_registry_status(
                 &$crate::query::sorafs::prelude::FindSorafsPopRegistryStatus
+            ),
+            visit_find_sorafs_repair_task(
+                &$crate::query::sorafs::prelude::FindSorafsRepairTask
+            ),
+            visit_find_sorafs_repair_status(
+                &$crate::query::sorafs::prelude::FindSorafsRepairStatus
             ),
             visit_find_sorafs_moderation_policy(
                 &$crate::query::sorafs::prelude::FindSorafsModerationPolicy
@@ -423,9 +455,15 @@ mod tests {
             SingularQueryBox::FindSorafsOrderbookOrderById(_) => {}
             SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_) => {}
             SingularQueryBox::FindSorafsOrderbookReceiptById(_) => {}
+            SingularQueryBox::FindSorafsOrderbookTradeById(_) => {}
+            SingularQueryBox::FindSorafsOrderbookChannelById(_) => {}
             SingularQueryBox::FindSorafsOrderbookStatus(_) => {}
             SingularQueryBox::FindSorafsOrderbookOrders(_) => {}
             SingularQueryBox::FindSorafsOrderbookReceipts(_) => {}
+            SingularQueryBox::FindSorafsReservePolicy(_) => {}
+            SingularQueryBox::FindSorafsReserveProviderById(_) => {}
+            SingularQueryBox::FindSorafsReserveMovementById(_) => {}
+            SingularQueryBox::FindSorafsReserveAppealById(_) => {}
             SingularQueryBox::FindSorafsPopIssuerPolicy(_) => {}
             SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_) => {}
             SingularQueryBox::FindSorafsPopCommitmentRootByVersion(_) => {}
@@ -433,6 +471,8 @@ mod tests {
             SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_) => {}
             SingularQueryBox::FindSorafsPopAuditDigestBySequence(_) => {}
             SingularQueryBox::FindSorafsPopRegistryStatus(_) => {}
+            SingularQueryBox::FindSorafsRepairTask(_) => {}
+            SingularQueryBox::FindSorafsRepairStatus(_) => {}
             SingularQueryBox::FindSorafsModerationPolicy(_) => {}
             SingularQueryBox::FindSorafsModerationAppeal(_) => {}
             SingularQueryBox::FindSorafsModerationJurorEligibility(_) => {}

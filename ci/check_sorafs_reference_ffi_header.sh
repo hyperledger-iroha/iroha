@@ -239,6 +239,30 @@ expected_signatures = {
             u64("generated_at"),
         ],
     ),
+    "sorafs_reference_validate_governance_dag_block_json": buffer_signature(
+        "sorafs_reference_validate_governance_dag_block_json",
+        [
+            ptr("bytes_ptr"),
+            usize("bytes_len"),
+            ptr("label_ptr"),
+            usize("label_len"),
+            ptr("expected_block_cid_ptr"),
+            usize("expected_block_cid_len"),
+            u64("generated_at"),
+        ],
+    ),
+    "sorafs_reference_validate_governance_dag_head_chain_json": buffer_signature(
+        "sorafs_reference_validate_governance_dag_head_chain_json",
+        [
+            ptr("head_ptr"),
+            usize("head_len"),
+            ptr("head_label_ptr"),
+            usize("head_label_len"),
+            r"const\s+SorafsReferenceFfiInput\s*\*\s*blocks_ptr",
+            usize("blocks_len"),
+            u64("generated_at"),
+        ],
+    ),
     "sorafs_reference_validate_bundle_json": buffer_signature(
         "sorafs_reference_validate_bundle_json",
         [
@@ -306,6 +330,12 @@ required_structs = [
     r"const\s+uint8_t\s*\*\s*label_ptr\s*;\s*"
     r"size_t\s+label_len\s*;\s*"
     r"\}\s*SorafsReferenceFfiBundlePayload\s*;",
+    r"typedef\s+struct\s+SorafsReferenceFfiInput\s*\{\s*"
+    r"const\s+uint8_t\s*\*\s*bytes_ptr\s*;\s*"
+    r"size_t\s+bytes_len\s*;\s*"
+    r"const\s+uint8_t\s*\*\s*label_ptr\s*;\s*"
+    r"size_t\s+label_len\s*;\s*"
+    r"\}\s*SorafsReferenceFfiInput\s*;",
 ]
 for pattern in required_structs:
     if re.search(pattern, header_text) is None:

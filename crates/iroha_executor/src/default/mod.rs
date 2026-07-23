@@ -37,19 +37,24 @@ pub use governance::{
 use iroha_smart_contract::data_model::{
     isi::{
         AcceptSorafsModerationJurorAssignment, ActivatePublicLaneValidator,
-        ActivateSorafsModerationCase, ApprovePinManifest, BindManifestAlias,
-        CancelSorafsOrderbookOrder, CommitSorafsPopCredentialBatch, CompleteReplicationOrder,
-        ExitPublicLaneValidator, ExpireReplicationOrder, FinalizeSorafsModerationCase,
-        FinalizeSorafsModerationSortition, IssueReplicationOrder, PublishSorafsPopRevocationList,
-        RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
+        ActivateSorafsModerationCase, AdvanceSorafsReserveLifecycle, ApplySorafsRepairTaskAction,
+        ApprovePinManifest, BindManifestAlias, CancelSorafsOrderbookOrder, ChargeSorafsReserveRent,
+        CommitSorafsPopCredentialBatch, CompleteReplicationOrder, DecideSorafsReserveAppeal,
+        DecideSorafsReserveMovement, DrawSorafsReserveCredit, ExitPublicLaneValidator,
+        ExpireReplicationOrder, FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition,
+        IssueReplicationOrder, MaintainSorafsOrderbook, MatchSorafsOrderbook,
+        PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
         RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
         RegisterCapacityDispute, RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
-        RegisterPublicLaneValidator, RegisterSorafsModerationJurorEligibility, RemoveAssetKeyValue,
-        ResolveSorafsModerationChallenge, RetirePinManifest, SetAssetKeyValue,
-        SetLaneRelayEmergencyValidators, SetPricingSchedule, SetSorafsModerationPolicy,
-        SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy, SubmitSorafsModerationAppeal,
-        SubmitSorafsModerationCommit, SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder,
-        UnregisterProviderOwner, UpsertProviderCredit,
+        RegisterPublicLaneValidator, RegisterSorafsModerationJurorEligibility,
+        RegisterSorafsReserveAccount, RemoveAssetKeyValue, RepaySorafsReserveCredit,
+        RequestSorafsReserveMovement, ResolveSorafsModerationChallenge, RetirePinManifest,
+        SetAssetKeyValue, SetLaneRelayEmergencyValidators, SetPricingSchedule,
+        SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
+        SetSorafsReservePolicy, SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+        SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsRepairAppeal,
+        SubmitSorafsRepairTask, SubmitSorafsReserveAppeal, UnregisterProviderOwner,
+        UpsertProviderCredit,
         alias_setup::{
             CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
             RebindAccountAlias, RenewAliasLease,
@@ -120,7 +125,8 @@ pub use sorafs::{
     visit_find_sorafs_pop_commitment_root_by_version,
     visit_find_sorafs_pop_credential_commitment_by_digest, visit_find_sorafs_pop_issuer_policy,
     visit_find_sorafs_pop_registry_status, visit_find_sorafs_pop_revocation_by_nonce_commitment,
-    visit_find_sorafs_pop_revocation_publication_by_version,
+    visit_find_sorafs_pop_revocation_publication_by_version, visit_find_sorafs_repair_status,
+    visit_find_sorafs_repair_task,
 };
 /// Re-export staking visitor helpers used by the default executor.
 pub use staking::{
@@ -1154,6 +1160,18 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_upsert_provider_credit(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<SubmitSorafsRepairTask>() {
+            sorafs::visit_submit_repair_task(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ApplySorafsRepairTaskAction>() {
+            sorafs::visit_apply_repair_task_action(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SubmitSorafsRepairAppeal>() {
+            sorafs::visit_submit_repair_appeal(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<SetSorafsOrderbookPolicy>() {
             sorafs::visit_set_orderbook_policy(executor, isi);
             return;
@@ -1168,6 +1186,54 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<RecordSorafsOrderbookSettlementReceipt>() {
             sorafs::visit_record_orderbook_settlement_receipt(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<MatchSorafsOrderbook>() {
+            sorafs::visit_match_orderbook(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<MaintainSorafsOrderbook>() {
+            sorafs::visit_maintain_orderbook(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetSorafsReservePolicy>() {
+            sorafs::visit_set_reserve_policy(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RegisterSorafsReserveAccount>() {
+            sorafs::visit_register_reserve_account(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RequestSorafsReserveMovement>() {
+            sorafs::visit_request_reserve_movement(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<DecideSorafsReserveMovement>() {
+            sorafs::visit_decide_reserve_movement(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ChargeSorafsReserveRent>() {
+            sorafs::visit_charge_reserve_rent(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<AdvanceSorafsReserveLifecycle>() {
+            sorafs::visit_advance_reserve_lifecycle(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<DrawSorafsReserveCredit>() {
+            sorafs::visit_draw_reserve_credit(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RepaySorafsReserveCredit>() {
+            sorafs::visit_repay_reserve_credit(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SubmitSorafsReserveAppeal>() {
+            sorafs::visit_submit_reserve_appeal(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<DecideSorafsReserveAppeal>() {
+            sorafs::visit_decide_reserve_appeal(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SetSorafsPopIssuerPolicy>() {
@@ -1696,8 +1762,8 @@ pub mod sorafs {
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
         CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsProviderOwner,
-        CanRetireSorafsPin, CanSetSorafsPricing, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanRetireSorafsPin, CanSetSorafsPricing, CanSetSorafsReservePolicy,
+        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -1706,13 +1772,34 @@ pub mod sorafs {
         FindSorafsModerationCommit, FindSorafsModerationJurorEligibility,
         FindSorafsModerationNoShow, FindSorafsModerationOutcome, FindSorafsModerationPolicy,
         FindSorafsModerationReveal, FindSorafsModerationStatus,
-        FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookOrderById,
-        FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceiptById,
-        FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus, FindSorafsPopAuditDigestBySequence,
+        FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookChannelById,
+        FindSorafsOrderbookOrderById, FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy,
+        FindSorafsOrderbookReceiptById, FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus,
+        FindSorafsOrderbookTradeById, FindSorafsPopAuditDigestBySequence,
         FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
         FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
         FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
+        FindSorafsRepairStatus, FindSorafsRepairTask, FindSorafsReserveAppealById,
+        FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
     };
+
+    /// Authoritative repair tasks are public operational state.
+    pub fn visit_find_sorafs_repair_task<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsRepairTask,
+    ) {
+    }
+
+    /// Authoritative repair counters are public operational state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
+    pub fn visit_find_sorafs_repair_status<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsRepairStatus,
+    ) {
+    }
 
     fn visit_orderbook_read<V: Execute + Visit + ?Sized>(executor: &mut V) {
         if executor.context().curr_block.is_genesis()
@@ -1761,6 +1848,22 @@ pub mod sorafs {
         visit_orderbook_read(executor);
     }
 
+    /// Validate permission to read an authoritative matched trade.
+    pub fn visit_find_sorafs_orderbook_trade_by_id<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsOrderbookTradeById,
+    ) {
+        visit_orderbook_read(executor);
+    }
+
+    /// Validate permission to read an authoritative settlement channel.
+    pub fn visit_find_sorafs_orderbook_channel_by_id<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsOrderbookChannelById,
+    ) {
+        visit_orderbook_read(executor);
+    }
+
     /// Validate permission to read authoritative orderbook counters.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
@@ -1787,6 +1890,51 @@ pub mod sorafs {
         _query: &FindSorafsOrderbookReceipts,
     ) {
         visit_orderbook_read(executor);
+    }
+
+    fn visit_reserve_read<V: Execute + Visit + ?Sized>(executor: &mut V) {
+        if executor.context().curr_block.is_genesis()
+            || CanSetSorafsReservePolicy.is_owned_by(&executor.context().authority, executor.host())
+        {
+            return;
+        }
+        deny!(executor, "Can't read authoritative SoraFS reserve state");
+    }
+
+    /// Validate permission to read the active reserve policy.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
+    pub fn visit_find_sorafs_reserve_policy<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsReservePolicy,
+    ) {
+        visit_reserve_read(executor);
+    }
+
+    /// Validate permission to read a provider reserve account.
+    pub fn visit_find_sorafs_reserve_provider_by_id<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsReserveProviderById,
+    ) {
+        visit_reserve_read(executor);
+    }
+
+    /// Validate permission to read a reserve custody movement.
+    pub fn visit_find_sorafs_reserve_movement_by_id<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsReserveMovementById,
+    ) {
+        visit_reserve_read(executor);
+    }
+
+    /// Validate permission to read a reserve lifecycle appeal.
+    pub fn visit_find_sorafs_reserve_appeal_by_id<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsReserveAppealById,
+    ) {
+        visit_reserve_read(executor);
     }
 
     /// `PoP` issuer policy is public transparency state.
@@ -2150,6 +2298,32 @@ pub mod sorafs {
         deny!(executor, "Can't upsert SoraFS provider credit");
     }
 
+    /// Submit an authority-bound repair report; native execution enforces the
+    /// provider-scoped operator permission and source identity.
+    pub fn visit_submit_repair_task<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SubmitSorafsRepairTask,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Apply a revision-checked repair action; native execution enforces lease
+    /// ownership, expiry, and provider scope.
+    pub fn visit_apply_repair_task_action<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ApplySorafsRepairTaskAction,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Submit the single provider-owner appeal against an escalated repair.
+    pub fn visit_submit_repair_appeal<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SubmitSorafsRepairAppeal,
+    ) {
+        execute!(executor, isi);
+    }
+
     /// Activate the next authoritative orderbook policy revision when permitted.
     pub fn visit_set_orderbook_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2194,6 +2368,132 @@ pub mod sorafs {
             execute!(executor, isi);
         }
         deny!(executor, "Can't record SoraFS orderbook settlement receipt");
+    }
+
+    /// Run deterministic order matching when settlement permission is present.
+    pub fn visit_match_orderbook<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &MatchSorafsOrderbook,
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanCompleteSorafsReplicationOrder
+                .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(executor, "Can't match authoritative SoraFS orders");
+    }
+
+    /// Expire orders and settlement channels when settlement permission is present.
+    pub fn visit_maintain_orderbook<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &MaintainSorafsOrderbook,
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanCompleteSorafsReplicationOrder
+                .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't maintain the authoritative SoraFS orderbook"
+        );
+    }
+
+    fn execute_with_reserve_governance<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &(impl iroha_smart_contract::data_model::isi::Instruction + norito::NoritoSerialize),
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanSetSorafsReservePolicy.is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't govern the authoritative SoraFS reserve ledger"
+        );
+    }
+
+    /// Activate the next reserve policy revision when governance is permitted.
+    pub fn visit_set_reserve_policy<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetSorafsReservePolicy,
+    ) {
+        execute_with_reserve_governance(executor, isi);
+    }
+
+    /// Register a provider reserve partition when governance is permitted.
+    pub fn visit_register_reserve_account<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RegisterSorafsReserveAccount,
+    ) {
+        execute_with_reserve_governance(executor, isi);
+    }
+
+    /// Admit a provider-signed reserve movement request.
+    pub fn visit_request_reserve_movement<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RequestSorafsReserveMovement,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Decide a reserve movement when governance is permitted.
+    pub fn visit_decide_reserve_movement<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &DecideSorafsReserveMovement,
+    ) {
+        execute_with_reserve_governance(executor, isi);
+    }
+
+    /// Charge deterministic provider rent when governance is permitted.
+    pub fn visit_charge_reserve_rent<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ChargeSorafsReserveRent,
+    ) {
+        execute_with_reserve_governance(executor, isi);
+    }
+
+    /// Advance reserve lifecycle state when governance is permitted.
+    pub fn visit_advance_reserve_lifecycle<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &AdvanceSorafsReserveLifecycle,
+    ) {
+        execute_with_reserve_governance(executor, isi);
+    }
+
+    /// Draw protocol reserve credit when governance is permitted.
+    pub fn visit_draw_reserve_credit<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &DrawSorafsReserveCredit,
+    ) {
+        execute_with_reserve_governance(executor, isi);
+    }
+
+    /// Admit a provider-signed credit repayment.
+    pub fn visit_repay_reserve_credit<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RepaySorafsReserveCredit,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Admit a provider-signed reserve lifecycle appeal.
+    pub fn visit_submit_reserve_appeal<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SubmitSorafsReserveAppeal,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Decide a reserve lifecycle appeal when governance is permitted.
+    pub fn visit_decide_reserve_appeal<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &DecideSorafsReserveAppeal,
+    ) {
+        execute_with_reserve_governance(executor, isi);
     }
 
     /// Activate a `PoP` issuer policy when governance permission is present.
@@ -2637,6 +2937,7 @@ pub mod domain {
             | AnyPermission::CanIssueSorafsReplicationOrder(_)
             | AnyPermission::CanCompleteSorafsReplicationOrder(_)
             | AnyPermission::CanSetSorafsPricing(_)
+            | AnyPermission::CanSetSorafsReservePolicy(_)
             | AnyPermission::CanManageSorafsModeration(_)
             | AnyPermission::CanManageSorafsPopRegistry(_)
             | AnyPermission::CanOperateSorafsPopIssuer(_)
@@ -2953,6 +3254,7 @@ pub mod account {
             | AnyPermission::CanIssueSorafsReplicationOrder(_)
             | AnyPermission::CanCompleteSorafsReplicationOrder(_)
             | AnyPermission::CanSetSorafsPricing(_)
+            | AnyPermission::CanSetSorafsReservePolicy(_)
             | AnyPermission::CanManageSorafsModeration(_)
             | AnyPermission::CanManageSorafsPopRegistry(_)
             | AnyPermission::CanOperateSorafsPopIssuer(_)
@@ -3258,6 +3560,7 @@ pub mod asset_definition {
             | AnyPermission::CanIssueSorafsReplicationOrder(_)
             | AnyPermission::CanCompleteSorafsReplicationOrder(_)
             | AnyPermission::CanSetSorafsPricing(_)
+            | AnyPermission::CanSetSorafsReservePolicy(_)
             | AnyPermission::CanManageSorafsModeration(_)
             | AnyPermission::CanManageSorafsPopRegistry(_)
             | AnyPermission::CanOperateSorafsPopIssuer(_)
@@ -4722,6 +5025,7 @@ pub mod trigger {
             | AnyPermission::CanIssueSorafsReplicationOrder(_)
             | AnyPermission::CanCompleteSorafsReplicationOrder(_)
             | AnyPermission::CanSetSorafsPricing(_)
+            | AnyPermission::CanSetSorafsReservePolicy(_)
             | AnyPermission::CanManageSorafsModeration(_)
             | AnyPermission::CanManageSorafsPopRegistry(_)
             | AnyPermission::CanOperateSorafsPopIssuer(_)
@@ -4766,8 +5070,8 @@ pub mod trigger {
                 CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
                 CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsPin,
                 CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-                CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
-                CanUpsertSorafsProviderCredit,
+                CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
+                CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
             },
             soranet::CanIngestSoranetPrivacy,
         };
@@ -4814,6 +5118,7 @@ pub mod trigger {
                 AnyPermission::CanManageSorafsPopRegistry(CanManageSorafsPopRegistry),
                 AnyPermission::CanOperateSorafsPopIssuer(CanOperateSorafsPopIssuer),
                 AnyPermission::CanSetSorafsPricing(CanSetSorafsPricing),
+                AnyPermission::CanSetSorafsReservePolicy(CanSetSorafsReservePolicy),
                 AnyPermission::CanUpsertSorafsProviderCredit(CanUpsertSorafsProviderCredit),
                 AnyPermission::CanRegisterSorafsProviderOwner(CanRegisterSorafsProviderOwner),
                 AnyPermission::CanUnregisterSorafsProviderOwner(CanUnregisterSorafsProviderOwner),
@@ -5112,7 +5417,7 @@ mod sorafs_permission_tests {
         CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
         CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsPin,
         CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+        CanSetSorafsReservePolicy, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,

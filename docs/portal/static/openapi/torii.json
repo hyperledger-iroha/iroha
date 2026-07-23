@@ -14493,6 +14493,13 @@
             },
             "type": "array"
           },
+          "native_amx_participant_applications": {
+            "items": {
+              "$ref": "#/components/schemas/SumeragiNativeAmxParticipantApplication"
+            },
+            "maxItems": 1024,
+            "type": "array"
+          },
           "npos": {
             "$ref": "#/components/schemas/SumeragiNposDiagnostics"
           },
@@ -14557,7 +14564,8 @@
           "lane_block_sessions",
           "lane_governance_sealed_total",
           "lane_governance_sealed_aliases",
-          "lane_governance"
+          "lane_governance",
+          "native_amx_participant_applications"
         ],
         "type": "object"
       },
@@ -14901,6 +14909,113 @@
           "rbc_instance_hash"
         ],
         "type": "object"
+      },
+      "SumeragiNativeAmxParticipantApplication": {
+        "additionalProperties": false,
+        "properties": {
+          "application_block_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "application_block_height": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "descriptor_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "participant_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "participant_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "predecessor_descriptor_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "predecessor_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "settlement_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "source_count": {
+            "format": "uint64",
+            "maximum": 4096,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SumeragiNativeAmxParticipantApplicationState"
+          }
+        },
+        "required": [
+          "lane_id",
+          "dataspace_id",
+          "lane_incarnation",
+          "participant_height",
+          "participant_view",
+          "predecessor_height",
+          "descriptor_hash",
+          "proposal_hash",
+          "settlement_hash",
+          "source_count",
+          "state"
+        ],
+        "type": "object"
+      },
+      "SumeragiNativeAmxParticipantApplicationState": {
+        "enum": [
+          "certified_pending_carrier",
+          "committed_evidence_pending",
+          "durably_applied",
+          "conflict"
+        ],
+        "type": "string"
       },
       "SumeragiNposDiagnostics": {
         "additionalProperties": false,
@@ -15553,7 +15668,36 @@
       },
       "SumeragiV2ExecutionCommitment": {
         "additionalProperties": false,
-        "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. A top-up root is present exactly when topup_anchor_count is non-zero.",
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "native_amx_application_manifest_count": {
+                    "const": 0
+                  },
+                  "native_amx_application_manifest_root": {
+                    "const": "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "native_amx_application_manifest_count": {
+                    "maximum": 1024,
+                    "minimum": 1
+                  },
+                  "native_amx_application_manifest_root": {
+                    "not": {
+                      "const": "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. A top-up root is present exactly when topup_anchor_count is non-zero. Native AMX application manifest version/root/count are mandatory; version is 1, count is bounded to 1,024, and count is zero exactly for the canonical empty root.",
         "oneOf": [
           {
             "not": {
@@ -15583,6 +15727,20 @@
           "executed_block_wire_hash": {
             "$ref": "#/components/schemas/Hash"
           },
+          "native_amx_application_manifest_count": {
+            "format": "uint32",
+            "maximum": 1024,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "native_amx_application_manifest_root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "native_amx_application_manifest_version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          },
           "ordinary_writes_root": {
             "$ref": "#/components/schemas/Hash"
           },
@@ -15607,6 +15765,9 @@
           "post_state_root",
           "ordinary_writes_root",
           "topup_anchor_count",
+          "native_amx_application_manifest_version",
+          "native_amx_application_manifest_root",
+          "native_amx_application_manifest_count",
           "executed_block_wire_hash"
         ],
         "type": "object"

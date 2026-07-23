@@ -87,6 +87,7 @@ use super::{
 use crate::{
     EventsSender, IrohaNetwork, NetworkMessage,
     kura::{Kura, KuraV2CommitReceipt},
+    lane_consensus::LaneDrainVoteV1,
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
         CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
@@ -2331,6 +2332,11 @@ enum ExactOutputRolloverClaim {
         round: wire::ConsensusRound,
         message_hash: HashOf<NativeAmxMessage>,
     },
+    LaneDrainVote {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        vote_hash: HashOf<LaneDrainVoteV1>,
+    },
     MergeShare {
         scope: ExactOutputCreationScope,
         share_hash: HashOf<MergeCommitteeSignature>,
@@ -2380,6 +2386,7 @@ impl ExactOutputRolloverClaim {
             | Self::DurableCertifiedBodyResponse { scope, .. }
             | Self::DurableLaneCertificateResponse { scope, .. }
             | Self::NativeAmx { scope, .. }
+            | Self::LaneDrainVote { scope, .. }
             | Self::MergeShare { scope, .. }
             | Self::CertifiedSidecarRequest { scope, .. }
             | Self::CertifiedSidecarChunk { scope, .. } => Some(*scope),
@@ -2527,6 +2534,20 @@ impl ExactOutputRolloverClaim {
                     || HashOf::new(message.as_ref()) != *message_hash
                 {
                     return Err("Native AMX rollover claim changed semantic identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::LaneDrainVote {
+                target, vote_hash, ..
+            } => {
+                let [NetworkMessage::LaneDrainVote(vote)] = messages else {
+                    return Err("lane-drain rollover claim requires one exact vote".to_owned());
+                };
+                vote.validate_ingress()
+                    .map_err(|error| format!("lane-drain rollover claim is invalid: {error}"))?;
+                if peers != std::slice::from_ref(target) || HashOf::new(vote.as_ref()) != *vote_hash
+                {
+                    return Err("lane-drain rollover claim changed semantic identity".to_owned());
                 }
                 Ok(())
             }
@@ -5631,6 +5652,7 @@ fn applied_height_reconstruction_covers(
     if matches!(
         rollover_claim,
         ExactOutputRolloverClaim::NativeAmx { .. }
+            | ExactOutputRolloverClaim::LaneDrainVote { .. }
             | ExactOutputRolloverClaim::MergeShare { .. }
             | ExactOutputRolloverClaim::CertifiedSidecarRequest { .. }
             | ExactOutputRolloverClaim::CertifiedSidecarChunk { .. }
@@ -7766,6 +7788,23 @@ impl ProductionV2Services {
                         },
                     )
                 }
+                V2LaneWorkEffect::PostLaneDrainVote { peer, vote } => {
+                    vote.validate_ingress().map_err(|error| {
+                        format!("lane-drain effect has invalid vote evidence: {error}")
+                    })?;
+                    (
+                        vec![NetworkMessage::LaneDrainVote(Box::new(vote.clone()))],
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Topology],
+                        None,
+                        None,
+                        ExactOutputRolloverClaim::LaneDrainVote {
+                            scope: self.exact_output_scope(),
+                            target: peer.clone(),
+                            vote_hash: HashOf::new(vote),
+                        },
+                    )
+                }
                 V2LaneWorkEffect::BroadcastMerge(signature) => {
                     let peers = self.remote_voters();
                     let routes = vec![ExactTargetRoute::Topology; peers.len()];
@@ -8391,6 +8430,39 @@ impl ProductionV2Services {
             }
             Err(error) => {
                 iroha_logger::error!(%error, "Native AMX output failed closed");
+            }
+        }
+    }
+
+    /// Send one exact durably authorized lane-drain vote to a selected peer.
+    pub(crate) fn post_lane_drain_vote(&self, peer: PeerId, vote: LaneDrainVoteV1) {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            return;
+        };
+        if let Err(error) = vote.validate_ingress() {
+            iroha_logger::error!(%error, "lane-drain vote output failed validation");
+            return;
+        }
+        let rollover_claim = ExactOutputRolloverClaim::LaneDrainVote {
+            scope: self.exact_output_scope(),
+            target: peer.clone(),
+            vote_hash: HashOf::new(&vote),
+        };
+        match self.enqueue_exact_fanout_while_guarded(
+            vec![NetworkMessage::LaneDrainVote(Box::new(vote))],
+            vec![peer],
+            rollover_claim,
+            operation.permit(),
+        ) {
+            Ok(ExactFanoutOwnership::Owned) => operation.complete(),
+            Ok(ExactFanoutOwnership::SourceRetained) => {
+                iroha_logger::error!(
+                    "lane-drain vote fanout reached an unreserved outbound corridor boundary"
+                );
+            }
+            Err(error) => {
+                iroha_logger::error!(%error, "lane-drain vote output failed closed");
             }
         }
     }
@@ -9168,7 +9240,10 @@ pub(super) mod tests {
             BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
             consensus::{CertPhase, LaneBlockQcV1, LaneBlockVoteBodyV1},
         },
-        merge::{MergeLedgerEntry, MergeQuorumCertificate},
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        merge::{
+            LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeLedgerEntry, MergeQuorumCertificate,
+        },
     };
     use tempfile::TempDir;
 
@@ -9560,16 +9635,48 @@ pub(super) mod tests {
 
     fn merge_share(label: &[u8]) -> MergeCommitteeSignature {
         MergeCommitteeSignature {
+            version: iroha_data_model::merge::MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
             epoch_id: 7,
             view: 11,
             signer: 0,
             message_digest: Hash::new(label),
             bls_sig: vec![9; 48],
+            leader_candidate_body: None,
         }
     }
 
     fn merge_share_message(label: &[u8]) -> NetworkMessage {
         NetworkMessage::MergeCommitteeSignature(Arc::new(merge_share(label)))
+    }
+
+    fn lane_drain_vote(keypair: &KeyPair) -> LaneDrainVoteV1 {
+        let signer = PeerId::new(keypair.public_key().clone());
+        let validator_set = vec![signer.clone()];
+        LaneDrainVoteV1::new_signed(
+            LaneDrainCertificateBodyV1 {
+                version: 1,
+                intent: LaneDrainIntentV1 {
+                    version: 1,
+                    chain_id_digest: Hash::new(b"v2-worker-drain-chain"),
+                    lane_id: LaneId::new(3),
+                    dataspace_id: DataSpaceId::new(5),
+                    lane_incarnation: Hash::new(b"v2-worker-drain-incarnation"),
+                    close_global_height: 1,
+                    initial_merged_lane_height: 0,
+                    initial_merged_descriptor_hash: None,
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validator_set),
+                    validator_set,
+                    validator_count: 1,
+                    min_quorum: 1,
+                },
+                final_lane_block_height: 0,
+                final_lane_block_descriptor_hash: None,
+            },
+            signer,
+            keypair.private_key(),
+        )
+        .expect("valid worker lane-drain vote")
     }
 
     fn native_amx_output(context: &wire::HeightContext, signer: PeerId) -> NativeAmxMessage {
@@ -12540,6 +12647,49 @@ pub(super) mod tests {
         let (_request, chunk) = certified_sidecar_outputs(&service.local_peer, &peer);
         service.post_certified_merge_sidecar(peer, chunk);
         assert!(service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn lane_drain_vote_uses_one_authenticated_exact_output_claim() {
+        let (service, keys) = fixture();
+        let target = service.context.roster[1].validator.clone();
+        let vote = lane_drain_vote(&keys[0]);
+        let effect = V2LaneWorkEffect::PostLaneDrainVote {
+            peer: target.clone(),
+            vote: vote.clone(),
+        };
+        assert_eq!(service.can_retain_lane_work_effect(&effect), Ok(true));
+
+        service.post_lane_drain_vote(target.clone(), vote.clone());
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect retained lane-drain output");
+        assert_eq!(pending.fanouts.len(), 1);
+        let fanout = &pending.fanouts[0];
+        assert_eq!(fanout.semantic_peers(), vec![target.clone()]);
+        assert!(matches!(
+            fanout.messages.as_slice(),
+            [NetworkMessage::LaneDrainVote(queued)] if queued.as_ref() == &vote
+        ));
+        assert!(matches!(
+            &fanout.rollover_claim,
+            ExactOutputRolloverClaim::LaneDrainVote {
+                target: claimed_target,
+                vote_hash,
+                ..
+            } if claimed_target == &target && *vote_hash == HashOf::new(&vote)
+        ));
+        drop(pending);
+
+        let mut tampered = vote;
+        tampered.bls_signature[0] ^= 0x01;
+        let error = service
+            .can_retain_lane_work_effect(&V2LaneWorkEffect::PostLaneDrainVote {
+                peer: target,
+                vote: tampered,
+            })
+            .expect_err("tampered drain vote must fail before corridor reservation");
+        assert!(error.contains("invalid vote evidence"));
     }
 
     #[test]

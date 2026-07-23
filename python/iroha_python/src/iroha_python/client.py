@@ -80,11 +80,9 @@ from iroha_torii_client.client import (
     OfflineActiveTopUpShieldVerifier,
     OfflineActiveTransferVerifier,
     OfflineReadiness,
-    SumeragiSafetyHaltStatus as _CanonicalSumeragiSafetyHaltStatus,
     SumeragiV2CommitQcStatus as _CanonicalSumeragiV2CommitQcStatus,
     SumeragiV2HeightContextStatus as _CanonicalSumeragiV2HeightContextStatus,
     SumeragiV2LivenessStatus,
-    SumeragiV2OperatorStatus as _CanonicalSumeragiV2OperatorStatus,
     SumeragiV2Round,
     SumeragiV2Status as _CanonicalSumeragiV2Status,
     OfflineReadinessBlocker,
@@ -124,6 +122,13 @@ from iroha_torii_client.client import (
     OfflineVerifiedFoldRecordBundleJson,
     OfflineVerifiedFoldStepJson,
     OfflineVerifiedFoldVerifierRecordJson,
+    SumeragiDataspaceCommitmentStatus as _CanonicalSumeragiDataspaceCommitmentStatus,
+    SumeragiDiagnosticsStatus as _CanonicalSumeragiDiagnosticsStatus,
+    SumeragiLaneCommitmentStatus as _CanonicalSumeragiLaneCommitmentStatus,
+    SumeragiLaneGovernanceStatus as _CanonicalSumeragiLaneGovernanceStatus,
+    SumeragiNativeAmxParticipantApplication as _CanonicalSumeragiNativeAmxParticipantApplication,
+    SumeragiNposDiagnostics as _CanonicalSumeragiNposDiagnostics,
+    SumeragiPipelineExecutionStatus as _CanonicalSumeragiPipelineExecutionStatus,
     SubscriptionActionResult,
     SubscriptionCreateResult,
     SubscriptionListItem,
@@ -7493,7 +7498,7 @@ class SumeragiNativeAmxPhase(str, Enum):
     COMMIT = "commit"
 
 
-_MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096
+_MAX_NATIVE_AMX_GROUP_SOURCES = 4096
 
 
 def _required_field(payload: Mapping[str, Any], field_name: str, context: str) -> Any:
@@ -7611,6 +7616,13 @@ def _strict_hex_string(
             f"{context} `{field_name}` must be exactly {byte_length} bytes of uppercase hex"
         )
     return value
+
+
+def _require_strictly_ordered_source_ids(
+    source_ids: Sequence[str], context: str
+) -> None:
+    if any(left >= right for left, right in zip(source_ids, source_ids[1:])):
+        raise ValueError(f"{context} source IDs must be strictly ordered and unique")
 
 
 def _crc16_ccitt_false(value: bytes) -> int:
@@ -7792,7 +7804,6 @@ class SumeragiNativeAmxAttestationBody:
         if (
             round_value.height == 0
             or authority_context_height != round_value.height
-            or coordinator_view != round_value.view
             or planned_height == 0
             or participant_height == 0
             or participant_previous_height + 1 != participant_height
@@ -7937,8 +7948,13 @@ class SumeragiNativeAmxAttestationQc:
                     f"{context} validator at index {index} must be a non-empty string"
                 )
             validator_set.append(validator)
-        if len(set(validator_set)) != len(validator_set):
-            raise ValueError(f"{context} `validator_set` contains duplicate validators")
+        if any(
+            left >= right
+            for left, right in zip(validator_set, validator_set[1:])
+        ):
+            raise ValueError(
+                f"{context} `validator_set` must be strictly ordered by validator id"
+            )
         expected_quorum = len(validator_set) - (len(validator_set) - 1) // 3
         validator_set_hash = _strict_hash_literal(
             payload, "validator_set_hash", context
@@ -8116,8 +8132,10 @@ class SumeragiNativeAmxParticipantLaneBlockDescriptor:
                     f"{context} validator at index {index} must be a non-empty string"
                 )
             validators.append(validator)
-        if len(set(validators)) != len(validators):
-            raise ValueError(f"{context} validator set contains duplicates")
+        if any(left >= right for left, right in zip(validators, validators[1:])):
+            raise ValueError(
+                f"{context} validator set must be strictly ordered by validator id"
+            )
         validator_count = _strict_uint(payload, "validator_count", 32, context)
         min_quorum = _strict_uint(payload, "min_quorum", 32, context)
         expected_quorum = len(validators) - (len(validators) - 1) // 3
@@ -8197,6 +8215,7 @@ class SumeragiNativeAmxLeg:
     participant_proposal: SumeragiNativeAmxParticipantLaneBlockProposal
     participant_settlement: SumeragiLaneSettlementCommitment
     participant_settlement_hash: str
+    requires_mixed_role_anchor_validation: bool
     prepare_qc: SumeragiNativeAmxAttestationQc
     commit_qc: SumeragiNativeAmxAttestationQc
 
@@ -8240,7 +8259,7 @@ class SumeragiNativeAmxLeg:
             not isinstance(settlement_receipts_payload, list)
             or not settlement_receipts_payload
             or len(settlement_receipts_payload)
-            > _MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS
+            > _MAX_NATIVE_AMX_GROUP_SOURCES
         ):
             raise ValueError(
                 f"{context} participant settlement receipts must be bounded and non-empty"
@@ -8294,6 +8313,32 @@ class SumeragiNativeAmxLeg:
         ):
             raise ValueError(f"{context} participant proposal differs from its QC bodies")
         settlement_sources = [receipt.source_id for receipt in settlement.receipts]
+        _require_strictly_ordered_source_ids(
+            settlement_sources, f"{context} participant settlement"
+        )
+        matching_entrypoint_positions = tuple(
+            index
+            for index, entrypoint_hash in enumerate(
+                descriptor.accepted_transaction_hashes
+            )
+            if entrypoint_hash == body.tx_entrypoint_hash
+        )
+        if len(matching_entrypoint_positions) > 1:
+            raise ValueError(
+                f"{context} participant descriptor repeats the current transaction entrypoint"
+            )
+        requires_mixed_role_anchor_validation = not matching_entrypoint_positions
+        if not requires_mixed_role_anchor_validation:
+            position = matching_entrypoint_positions[0]
+            if (
+                len(descriptor.accepted_candidate_indices) != len(settlement.receipts)
+                or len(descriptor.accepted_transaction_hashes)
+                != len(settlement.receipts)
+                or settlement.receipts[position].source_id != body.source_id
+            ):
+                raise ValueError(
+                    f"{context} participant descriptor and grouped settlement are not aligned"
+                )
         if (
             settlement_hash != body.participant_settlement_commitment
             or settlement.block_height != body.participant_lane_block_height
@@ -8327,6 +8372,7 @@ class SumeragiNativeAmxLeg:
             participant_proposal=proposal,
             participant_settlement=settlement,
             participant_settlement_hash=settlement_hash,
+            requires_mixed_role_anchor_validation=requires_mixed_role_anchor_validation,
             prepare_qc=prepare,
             commit_qc=commit,
         )
@@ -8403,14 +8449,19 @@ class SumeragiNativeAmxReceipt:
         entrypoint_hash: Optional[str] = None
         for leg in legs:
             body = leg.prepare_qc.body
-            if (
-                leg.lane_id == lane_id
-                and leg.dataspace_id == dataspace_id
-                and leg.lane_incarnation != lane_incarnation
-            ):
-                raise ValueError(
-                    f"{context} coordinator leg uses a different lane incarnation"
-                )
+            if leg.lane_id == lane_id and leg.dataspace_id == dataspace_id:
+                descriptor = leg.participant_proposal.descriptor
+                if (
+                    leg.lane_incarnation != lane_incarnation
+                    or descriptor.lane_incarnation != lane_incarnation
+                    or descriptor.lane_block_height != lane_block_height
+                    or descriptor.lane_block_view != lane_block_view
+                    or leg.participant_proposal.proposal_hash
+                    != coordinator_proposal_hash
+                ):
+                    raise ValueError(
+                        f"{context} same-route proposal is not the coordinator identity"
+                    )
             if body.round != expected_round or body.epoch != expected_epoch:
                 raise ValueError(f"{context} legs carry mismatched frozen round context")
             if body.chain_id_hash != chain_id_hash:
@@ -8673,9 +8724,19 @@ class SumeragiLaneSettlementCommitment:
         native_amx_payload = _required_field(payload, "native_amx_receipts", context)
         if not isinstance(native_amx_payload, list):
             raise TypeError("lane settlement `native_amx_receipts` must be a list")
+        if len(native_amx_payload) > _MAX_NATIVE_AMX_GROUP_SOURCES:
+            raise ValueError(
+                "lane settlement `native_amx_receipts` exceeds the grouped source bound"
+            )
         native_amx_receipts = tuple(
             SumeragiNativeAmxReceipt.from_payload(receipt)
             for receipt in native_amx_payload
+        )
+        native_amx_sources = tuple(
+            receipt.source_id for receipt in native_amx_receipts
+        )
+        _require_strictly_ordered_source_ids(
+            native_amx_sources, "lane settlement native AMX receipt group"
         )
         for receipt in nexus_fee_receipts:
             if (
@@ -8700,10 +8761,17 @@ class SumeragiLaneSettlementCommitment:
             nexus_fee_receipts
         ):
             raise ValueError("lane settlement contains duplicate Nexus fee receipt sources")
-        if len({receipt.source_id for receipt in native_amx_receipts}) != len(
-            native_amx_receipts
-        ):
-            raise ValueError("lane settlement contains duplicate native AMX receipt sources")
+        for receipt in native_amx_receipts:
+            for leg in receipt.legs:
+                participant_sources = tuple(
+                    settlement_receipt.source_id
+                    for settlement_receipt in leg.participant_settlement.receipts
+                )
+                if participant_sources != native_amx_sources:
+                    raise ValueError(
+                        "lane settlement native AMX receipt does not bind the exact "
+                        "ordered source group"
+                    )
 
         swap_metadata_payload = _required_field(payload, "swap_metadata", context)
         swap_metadata: Optional[SumeragiLaneSwapMetadata]
@@ -8932,6 +9000,13 @@ class SumeragiV2GlobalPhase(str, Enum):
     COMMIT = "commit"
 
 
+_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
+_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
+_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
+    "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
+)
+
+
 def _sumeragi_v2_exact_fields(
     payload: Mapping[str, Any], allowed: Sequence[str], context: str
 ) -> None:
@@ -9048,6 +9123,9 @@ class SumeragiV2ExecutionCommitment:
     ordinary_writes_root: str
     topup_anchor_root: Optional[str]
     topup_anchor_count: int
+    native_amx_application_manifest_version: int
+    native_amx_application_manifest_root: str
+    native_amx_application_manifest_count: int
     executed_block_wire_hash: str
 
     @classmethod
@@ -9064,6 +9142,9 @@ class SumeragiV2ExecutionCommitment:
                 "ordinary_writes_root",
                 "topup_anchor_root",
                 "topup_anchor_count",
+                "native_amx_application_manifest_version",
+                "native_amx_application_manifest_root",
+                "native_amx_application_manifest_count",
                 "executed_block_wire_hash",
             ),
             context,
@@ -9086,6 +9167,34 @@ class SumeragiV2ExecutionCommitment:
                 f"{context}.topup_anchor_root must be present exactly when "
                 "topup_anchor_count is positive"
             )
+        native_manifest_version = _sumeragi_v2_uint(
+            payload.get("native_amx_application_manifest_version"),
+            f"{context}.native_amx_application_manifest_version",
+            maximum=(1 << 16) - 1,
+        )
+        if native_manifest_version != _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION:
+            raise ValueError(
+                f"{context}.native_amx_application_manifest_version must equal "
+                f"{_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION}"
+            )
+        native_manifest_root = _strict_hash_literal(
+            payload,
+            "native_amx_application_manifest_root",
+            context,
+        )
+        native_manifest_count = _sumeragi_v2_uint(
+            payload.get("native_amx_application_manifest_count"),
+            f"{context}.native_amx_application_manifest_count",
+            maximum=_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES,
+        )
+        if (native_manifest_count == 0) != (
+            native_manifest_root
+            == _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+        ):
+            raise ValueError(
+                f"{context}.native_amx_application_manifest_count must be zero "
+                "exactly for the canonical empty root"
+            )
         return cls(
             parent_state_root=_sumeragi_v2_string(
                 payload.get("parent_state_root"), f"{context}.parent_state_root"
@@ -9099,6 +9208,9 @@ class SumeragiV2ExecutionCommitment:
             ),
             topup_anchor_root=topup_anchor_root,
             topup_anchor_count=topup_anchor_count,
+            native_amx_application_manifest_version=native_manifest_version,
+            native_amx_application_manifest_root=native_manifest_root,
+            native_amx_application_manifest_count=native_manifest_count,
             executed_block_wire_hash=_sumeragi_v2_string(
                 payload.get("executed_block_wire_hash"),
                 f"{context}.executed_block_wire_hash",
@@ -9195,7 +9307,7 @@ class SumeragiV2TimeoutCertificateRef:
 
 @dataclass(frozen=True)
 class SumeragiStatusSnapshot:
-    """Canonical flattened protocol-v2 snapshot from `/v1/sumeragi/status`."""
+    """Authoritative protocol-v2 reducer snapshot from `/v1/sumeragi/status`."""
 
     protocol_version: int
     node_fingerprint: str
@@ -9217,14 +9329,6 @@ class SumeragiStatusSnapshot:
     height_context: _CanonicalSumeragiV2HeightContextStatus
     last_commit_qc: Optional[_CanonicalSumeragiV2CommitQcStatus]
     liveness: SumeragiV2LivenessStatus
-    safety_halt: _CanonicalSumeragiSafetyHaltStatus
-    lane_settlement_commitments: List[SumeragiLaneSettlementCommitment]
-    lane_relay_envelopes: List[SumeragiLaneRelayEnvelope]
-    lane_payload_ownerships: List[Dict[str, Any]]
-    committed_lane_blocks: List[Dict[str, Any]]
-    lane_block_sessions: List[Dict[str, Any]]
-    local_peer_removed: bool
-    operator: _CanonicalSumeragiV2OperatorStatus
 
     @staticmethod
     def _subject_from_canonical(subject: Any) -> SumeragiV2BlockSubject:
@@ -9244,6 +9348,15 @@ class SumeragiStatusSnapshot:
             ordinary_writes_root=execution_commitment.ordinary_writes_root,
             topup_anchor_root=execution_commitment.topup_anchor_root,
             topup_anchor_count=execution_commitment.topup_anchor_count,
+            native_amx_application_manifest_version=(
+                execution_commitment.native_amx_application_manifest_version
+            ),
+            native_amx_application_manifest_root=(
+                execution_commitment.native_amx_application_manifest_root
+            ),
+            native_amx_application_manifest_count=(
+                execution_commitment.native_amx_application_manifest_count
+            ),
             executed_block_wire_hash=execution_commitment.executed_block_wire_hash,
         )
 
@@ -9331,7 +9444,59 @@ class SumeragiStatusSnapshot:
             height_context=canonical.height_context,
             last_commit_qc=canonical.last_commit_qc,
             liveness=canonical.liveness,
-            safety_halt=canonical.safety_halt,
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiDiagnosticsSnapshot:
+    """Bounded operator and lane evidence from `/v1/sumeragi/diagnostics`."""
+
+    pipeline_execution: _CanonicalSumeragiPipelineExecutionStatus
+    tx_queue_depth: int
+    tx_queue_capacity: int
+    tx_queue_retained_bytes: int
+    tx_queue_max_retained_bytes: int
+    tx_queue_saturated: bool
+    tx_queue_saturated_by_count: bool
+    tx_queue_saturated_by_bytes: bool
+    tx_queue_saturated_by_age: bool
+    tx_queue_oldest_queued_age_ms: int
+    npos: Optional[_CanonicalSumeragiNposDiagnostics]
+    lane_commitments: List[_CanonicalSumeragiLaneCommitmentStatus]
+    dataspace_commitments: List[_CanonicalSumeragiDataspaceCommitmentStatus]
+    lane_settlement_commitments: List[SumeragiLaneSettlementCommitment]
+    lane_relay_envelopes: List[SumeragiLaneRelayEnvelope]
+    lane_payload_ownerships: List[Dict[str, Any]]
+    committed_lane_blocks: List[Dict[str, Any]]
+    lane_block_sessions: List[Dict[str, Any]]
+    lane_governance_sealed_total: int
+    lane_governance_sealed_aliases: List[str]
+    lane_governance: List[_CanonicalSumeragiLaneGovernanceStatus]
+    native_amx_participant_applications: List[
+        _CanonicalSumeragiNativeAmxParticipantApplication
+    ]
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "SumeragiDiagnosticsSnapshot":
+        """Validate one diagnostics payload through the canonical parser."""
+
+        canonical = _CanonicalSumeragiDiagnosticsStatus.from_payload(payload)
+        return cls(
+            pipeline_execution=canonical.pipeline_execution,
+            tx_queue_depth=canonical.tx_queue_depth,
+            tx_queue_capacity=canonical.tx_queue_capacity,
+            tx_queue_retained_bytes=canonical.tx_queue_retained_bytes,
+            tx_queue_max_retained_bytes=canonical.tx_queue_max_retained_bytes,
+            tx_queue_saturated=canonical.tx_queue_saturated,
+            tx_queue_saturated_by_count=canonical.tx_queue_saturated_by_count,
+            tx_queue_saturated_by_bytes=canonical.tx_queue_saturated_by_bytes,
+            tx_queue_saturated_by_age=canonical.tx_queue_saturated_by_age,
+            tx_queue_oldest_queued_age_ms=canonical.tx_queue_oldest_queued_age_ms,
+            npos=canonical.npos,
+            lane_commitments=list(canonical.lane_commitments),
+            dataspace_commitments=list(canonical.dataspace_commitments),
             lane_settlement_commitments=[
                 SumeragiLaneSettlementCommitment.from_payload(entry)
                 for entry in canonical.lane_settlement_commitments
@@ -9340,11 +9505,19 @@ class SumeragiStatusSnapshot:
                 SumeragiLaneRelayEnvelope.from_payload(entry)
                 for entry in canonical.lane_relay_envelopes
             ],
-            lane_payload_ownerships=copy.deepcopy(canonical.lane_payload_ownerships),
+            lane_payload_ownerships=copy.deepcopy(
+                canonical.lane_payload_ownerships
+            ),
             committed_lane_blocks=copy.deepcopy(canonical.committed_lane_blocks),
             lane_block_sessions=copy.deepcopy(canonical.lane_block_sessions),
-            local_peer_removed=canonical.local_peer_removed,
-            operator=canonical.operator,
+            lane_governance_sealed_total=canonical.lane_governance_sealed_total,
+            lane_governance_sealed_aliases=list(
+                canonical.lane_governance_sealed_aliases
+            ),
+            lane_governance=list(canonical.lane_governance),
+            native_amx_participant_applications=list(
+                canonical.native_amx_participant_applications
+            ),
         )
 
 
@@ -11197,6 +11370,7 @@ __all__ = [
     "SumeragiRbcStoreStatus",
     "SumeragiPrfStatus",
     "SumeragiStatusSnapshot",
+    "SumeragiDiagnosticsSnapshot",
     "SumeragiV2LivenessStatus",
     "SumeragiV2StatusPhase",
     "SumeragiV2BodyState",
@@ -18013,12 +18187,29 @@ class ToriiClient(_BaseToriiClient):
         return self.request_json("GET", "/v1/sumeragi/status", expected_status=(200,))
 
     def get_sumeragi_status_typed(self) -> SumeragiStatusSnapshot:
-        """Validate the fail-closed flattened v2 reducer and lane snapshot."""
+        """Validate the fail-closed authoritative v2 reducer snapshot."""
 
         payload = self.request_json("GET", "/v1/sumeragi/status", expected_status=(200,))
         if not isinstance(payload, Mapping):
             raise TypeError("sumeragi status response must be a JSON object")
         return SumeragiStatusSnapshot.from_payload(payload)
+
+    def get_sumeragi_diagnostics(self) -> Optional[Any]:
+        """Fetch raw bounded Sumeragi operator and lane diagnostics."""
+
+        return self.request_json(
+            "GET", "/v1/sumeragi/diagnostics", expected_status=(200,)
+        )
+
+    def get_sumeragi_diagnostics_typed(self) -> SumeragiDiagnosticsSnapshot:
+        """Validate `/v1/sumeragi/diagnostics` as a separate typed payload."""
+
+        payload = self.request_json(
+            "GET", "/v1/sumeragi/diagnostics", expected_status=(200,)
+        )
+        if not isinstance(payload, Mapping):
+            raise TypeError("sumeragi diagnostics response must be a JSON object")
+        return SumeragiDiagnosticsSnapshot.from_payload(payload)
 
     def get_sumeragi_pacemaker(self) -> Optional[Any]:
         """Fetch pacemaker configuration (`GET /v1/sumeragi/pacemaker`)."""

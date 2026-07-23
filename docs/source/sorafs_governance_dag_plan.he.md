@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_governance_dag_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5a624184be91a1529c018ef68e8544fde7c6dfa3c567f496641724076359f6e9
+source_hash: fe9f35a5a076c189eae66a5602f793803b16da6eb35572836438d945b7be1e82
 source_last_modified: "2026-07-06T20:48:18.492409+00:00"
 translation_last_reviewed: 2026-07-06
 source_mtime: "2026-07-06T20:48:18.492409+00:00"

@@ -41,6 +41,11 @@ def _canonical_hash(seed: int) -> str:
     return f"hash:{body}#{crc:04X}"
 
 
+_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
+    "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
+)
+
+
 class _ToriiHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
@@ -101,6 +106,7 @@ class _MockState:
         self.attachments: Dict[str, Dict[str, Any]] = {}
         self.prover_reports: Dict[str, Dict[str, Any]] = {}
         self.sumeragi_status: Dict[str, Any] = {}
+        self.sumeragi_diagnostics: Dict[str, Any] = {}
         self.sumeragi_leader: Dict[str, Any] = {}
         self.sumeragi_telemetry: Dict[str, Any] = {}
         self.pipeline_sequences: Dict[str, Dict[str, Any]] = {}
@@ -228,6 +234,8 @@ class _MockState:
             return self._gov_unlock_stats()
         if method == "GET" and path == "/v1/sumeragi/status":
             return _json_response(HTTPStatus.OK, self.sumeragi_status)
+        if method == "GET" and path == "/v1/sumeragi/diagnostics":
+            return _json_response(HTTPStatus.OK, self.sumeragi_diagnostics)
         if method == "GET" and path == "/v1/sumeragi/leader":
             return _json_response(HTTPStatus.OK, self.sumeragi_leader)
         if method == "GET" and path == "/v1/sumeragi/telemetry":
@@ -1678,6 +1686,11 @@ class _MockState:
                         "post_state_root": _canonical_hash(0x52),
                         "ordinary_writes_root": _canonical_hash(0x52),
                         "topup_anchor_count": 0,
+                        "native_amx_application_manifest_version": 1,
+                        "native_amx_application_manifest_root": (
+                            _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+                        ),
+                        "native_amx_application_manifest_count": 0,
                         "executed_block_wire_hash": _canonical_hash(0x53),
                     },
                 },
@@ -1707,48 +1720,48 @@ class _MockState:
                 "blocker": None,
                 "ignore_counts": [],
             },
-            "safety_halt": {
-                "active": False,
-                "reason": None,
-                "height": 0,
-                "epoch": 0,
-                "first_block_hash": None,
-                "conflicting_block_hash": None,
-                "first_parent_state_root": None,
-                "first_post_state_root": None,
-                "conflicting_parent_state_root": None,
-                "conflicting_post_state_root": None,
+        }
+        self.sumeragi_diagnostics = {
+            "pipeline_execution": {
+                "tx_vertices_total": 0,
+                "tx_edges_total": 0,
+                "overlay_count_total": 0,
+                "overlay_instr_total": 0,
+                "overlay_bytes_total": 0,
+                "rbc_chunks_total": 0,
+                "rbc_bytes_total": 0,
+                "detached_prepared_total": 0,
+                "detached_merged_total": 0,
+                "detached_fallback_total": 0,
+                "detached_fallback_fee_postprocessing_total": 0,
+                "detached_fallback_user_executor_total": 0,
+                "detached_fallback_durable_state_total": 0,
+                "detached_fallback_unsupported_instruction_total": 0,
+                "detached_fallback_rejected_eval_total": 0,
+                "detached_fallback_overlay_error_total": 0,
+                "quarantine_executed_total": 0,
             },
+            "tx_queue_depth": 3,
+            "tx_queue_capacity": 32,
+            "tx_queue_retained_bytes": 4096,
+            "tx_queue_max_retained_bytes": 65536,
+            "tx_queue_saturated": False,
+            "tx_queue_saturated_by_count": False,
+            "tx_queue_saturated_by_bytes": False,
+            "tx_queue_saturated_by_age": False,
+            "tx_queue_oldest_queued_age_ms": 25,
+            "npos": None,
+            "lane_commitments": [],
+            "dataspace_commitments": [],
             "lane_settlement_commitments": [],
             "lane_relay_envelopes": [],
             "lane_payload_ownerships": [],
             "committed_lane_blocks": [],
             "lane_block_sessions": [],
-            "local_peer_removed": False,
-            "operator": {
-                "view_change_install_total": 7,
-                "busy_deferral_total": 3,
-                "adapter_queues": {
-                    "ingress_keys": 2,
-                    "ingress_capacity": 16,
-                    "deferred_completion": 1,
-                    "deferred_progress": 2,
-                    "deferred_progress_capacity": 4,
-                    "deferred_normal": 3,
-                    "deferred_normal_capacity": 8,
-                },
-                "tx_queue": {
-                    "tracked_transactions": 5,
-                    "queued_transactions": 3,
-                    "capacity": 32,
-                    "retained_bytes": 4096,
-                    "max_retained_bytes": 65536,
-                    "oldest_queued_age_ms": 25,
-                    "saturated_by_count": False,
-                    "saturated_by_bytes": False,
-                    "saturated_by_age": False,
-                },
-            },
+            "lane_governance_sealed_total": 0,
+            "lane_governance_sealed_aliases": [],
+            "lane_governance": [],
+            "native_amx_participant_applications": [],
         }
         self.sumeragi_leader = {
             "leader_index": 3,

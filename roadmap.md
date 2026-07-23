@@ -1,9 +1,21 @@
 # Roadmap
 
-Last updated: 2026-07-22
+Last updated: 2026-07-23
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## SoraFS V1 production closure
+
+The canonical first-release implementation, validation, documentation,
+authority-removal, and rollout-evidence mapping is
+[`docs/source/sorafs/v1_closure_ledger.md`](./docs/source/sorafs/v1_closure_ledger.md).
+Repository conformance and production promotion are separate: the current
+production aggregate remains blocked with zero recognized lane summaries and
+no trusted foundational envelope. Promotion requires one reviewed production
+deployment, all 17 fresh lane summaries, the ordered nine-prerequisite signed
+envelope, deterministic aggregate replay, and retained rollback capability.
+Taira and Minamoto mutation remains separately authorized cutover work.
 
 Mixed-executable-batch follow-up is limited to completing the full workspace
 suite and the complete platform SDK suites on toolchains with their required
@@ -5205,9 +5217,9 @@ from the first release and must not appear as launch blockers or evidence rows.
   report ready,
   rejects raw reports/response bodies/fixture payloads/runtime secrets, now has
   missing-field regressions proving payload-safety fields and non-applicable
-  HTTP/3 booleans must be explicitly encoded as `false`, and
-  keeps HTTP/3 load evidence explicitly scoped as deferred until a committed
-  gateway transport exists. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
+  HTTP/3 booleans must be explicitly encoded as `false`, and keeps HTTP/3 load
+  evidence explicitly non-applicable to V1; any later HTTP/3 transport project
+  is separately scoped. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
   emits the matching collection dry-run plan and evidence contract, and now
   validates the schema-closed collection-plan envelope plus canonical nested
   required-kind, threshold, external-evidence, checker-backed evidence-contract,
@@ -5216,8 +5228,8 @@ from the first release and must not appear as launch blockers or evidence rows.
   checked-in canary artifacts for each SF-5a gate kind, requires complete
   deterministic scenario and gateway metric coverage where applicable, enforces
   reviewed `gateway-load-provider-*` staging-provider inventory, reviewed
-  hardware/cache staging metadata, rejects `--http3-endpoint-committed` until a
-  reviewed SoraFS HTTP/3 gateway endpoint is committed, and generated
+  hardware/cache staging metadata, rejects `--http3-endpoint-committed` because
+  HTTP/3 is outside the V1 contract, and generated
   per-stream inventory,
   suite/staging digest bindings, and SLO threshold facts before writing,
   rejects out-of-range `--success-rate-bps` values before staging-load evidence
@@ -6081,29 +6093,28 @@ from the first release and must not appear as launch blockers or evidence rows.
   `ModerationPrivacyAggregateV1` plus explicit
   `ModerationPrivacyParametersV1` epsilon/delta/suppression metadata,
   deterministic aggregate hashing, sorted metric/metadata validation, and
-  conversion into `PrivacyAggregate` ledger entries. `sorafs_node` now also
-  exposes `NodeHandle::publish_privacy_aggregate_cycle(...)` to validate
-  aggregate payloads, require them to fit the target cycle window, sort them
-  deterministically, derive stable transparency entry ids, build a cycle
-  publication, and publish it through the configured Governance DAG publisher.
-  `sorafs_node` now also exposes local aggregate source-event ingestion via
-  `record_privacy_aggregate_source_event(...)` and publication from retained
-  source events via `publish_privacy_aggregate_cycle_from_source_events(...)`,
+  conversion into `PrivacyAggregate` ledger entries. `sorafs_node` exposes
+  local aggregate source-event ingestion via
+  `record_privacy_aggregate_source_event(...)` and the single production
+  publication path
+  `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`,
   including duplicate source-event rejection, cycle-window filtering,
-  suppression-threshold enforcement, deterministic bounded noising from runtime
-  seed material, source-payload digest binding, and publication through the
-  existing Governance DAG bridge. `PrivacyAggregateScheduleConfig` plus
-  `publish_due_privacy_aggregate_cycle_from_source_events(...)` now derive due
+  distinct-subject suppression, per-subject clipping, exact integer
+  discrete-Laplace sampling, source-payload digest binding, and atomic
+  composition-budget/cycle/outbox persistence. `PrivacyAggregateScheduleConfig`
+  now derives due
   publication windows, deterministic cycle ids, stale-window catch-up for the
   oldest due unpublished window with retained source events, and structured
   skip outcomes for not-due, already-published, empty, and fully suppressed
   cycles while publishing each due cycle at most once per node runtime.
-  `iroha_config` now also exposes dormant-by-default `[sorafs.storage.privacy_aggregates]`
-  enablement/cadence knobs, `sorafs_node::StorageConfig` projects enabled
-  config into the scheduler, and
+  `iroha_config` now also exposes the dormant-by-default
+  `[sorafs.storage.privacy_aggregates]` cadence, canonical rational privacy
+  policy, per-subject cap, suppression threshold, governed digest, and durable
+  composition budget. `sorafs_node::StorageConfig` projects that single
+  production policy, and
   `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
-  runs due-cycle publication from the configured cadence while keeping privacy
-  policy and noise seed material runtime-only. Torii now also exposes
+  runs due-cycle publication while accepting only runtime threshold-PRF output
+  and predecessor hash material. Torii now also exposes
   `/v1/sorafs/transparency/privacy-aggregates/source-events` as a
   canonical-authenticated local feed boundary for privacy aggregate source
   events, routing accepted events into the duplicate-checked aggregate worker
@@ -6111,8 +6122,8 @@ from the first release and must not appear as launch blockers or evidence rows.
   values. Torii now also exposes
   `/v1/sorafs/transparency/privacy-aggregates/publish-due` as a
   canonical-authenticated local trigger for configured due aggregate
-  publication, with stale due event-backed window catch-up, runtime-only
-  privacy policy/noise seed inputs, and structured
+  publication, with stale due event-backed window catch-up, config-authoritative
+  privacy policy, atomic composition-budget/outbox persistence, and structured
   published/skipped/already-published outcomes. `iroha::Client` and
   `iroha sorafs transparency privacy-aggregate source-event|publish-due
 	  --payload PATH` now wrap those signed routes for producer and scheduler
@@ -7314,22 +7325,20 @@ from the first release and must not appear as launch blockers or evidence rows.
   block/head/CAR/checkpoint/response flags to `false`,
   validates each generated artifact through the SF-12 checker, and
   writes atomically without following output symlinks. The
-	  rollout-gate static contract pins the SF-12 plan's IPFS/IPNS, live-head,
-  public-checkpoint, runtime mirror-service, and runtime/IPFS dashboard work as
-  explicitly unshipped with reusable matchers and segment-aware negative
-  controls while preserving local dashboard/head, block/node, publish-index,
-  CAR queue, runtime signed-DAG query routes, local `sorafs_cli governance dag`
-  commands, telemetry, and payload-free canary evidence labels. It also scans
+	  rollout-gate static contract pins the shipped SF-12 service's IPFS/IPNS,
+  signed-head CAS, authenticated checkpoint recovery, bounded public mirror,
+  health, dashboard, and Prometheus boundaries while preserving local
+  dashboard/head, block/node, publish-index, CAR queue, runtime signed-DAG query
+  routes, local `sorafs_cli governance dag` commands, telemetry, and payload-free
+  canary evidence labels. It also scans
   CLI sources for nested `governance dag
   live-head|fetch-head|checkpoint-publish|ipfs-publish|ipns-publish` spellings
-  so live public operator commands cannot land accidentally while local
-  checkpoint/mirror commands remain allowed, but SF-12 still
-  needs the always-on ingest/publisher services,
-  IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service,
-  live-head/public-checkpoint publication and recovery operator commands,
-  runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror
-  metric emission, IPFS-backed tests, and staged/live publication evidence that
-  passes this gate.
+  so unreviewed operator command aliases cannot land accidentally while local
+  checkpoint/mirror commands remain allowed. SF-12 now needs supported
+  package/supervisor integration, two-instance deployment with runtime-only
+  governed credentials, public IPFS/IPNS/dashboard/alert-routing and recovery
+  evidence, and a capacity decision proving the bounded authenticated JSON
+  mirror is sufficient or selecting the optional RocksDB/IPLD backend.
   Prioritize signed service boundaries before adding public rollout evidence
   for those lanes.
 - SoraFS repair auditor submission wiring now accepts JSON or Norito

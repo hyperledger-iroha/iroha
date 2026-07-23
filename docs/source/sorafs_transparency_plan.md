@@ -98,45 +98,44 @@ moderation ledger publication service described by the original plan.
   differential-privacy and suppression parameters, sorted public metrics and
   metadata, a domain-separated aggregate hash, and conversion into a
   `PrivacyAggregate` transparency ledger entry.
-- `sorafs_node::NodeHandle::publish_privacy_aggregate_cycle(...)` validates
-  privacy aggregate payloads, requires them to fit within the requested cycle
-  window, sorts them deterministically, derives stable transparency entry ids,
-  builds a `ModerationLedgerCyclePublicationV1`, and publishes it through the
-  configured Governance DAG publisher.
 - `sorafs_node::NodeHandle::record_privacy_aggregate_source_event(...)` and
-  `publish_privacy_aggregate_cycle_from_source_events(...)` provide the local
-  source-event worker foundation: duplicate source-event rejection, cycle-window
-  filtering, suppression-threshold enforcement, deterministic bounded noising
-  from runtime seed material, source-payload digest binding, and handoff to the
-  existing aggregate cycle publisher.
-- `PrivacyAggregateScheduleConfig` and
-  `NodeHandle::publish_due_privacy_aggregate_cycle_from_source_events(...)`
-  provide due-cycle scheduling for the aggregate worker. The method derives
+  `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
+  are the sole production worker path. They enforce duplicate rejection,
+  cycle-window filtering, distinct-subject suppression, per-subject clipping,
+  exact integer discrete-Laplace sampling, source-payload digest binding, and
+  atomic composition-budget/cycle/outbox persistence. Caller-supplied
+  aggregate payload and policy publication helpers exist only in unit-test
+  builds.
+- `PrivacyAggregateScheduleConfig` provides due-cycle scheduling for the
+  aggregate worker. The configured method derives
   deterministic cycle ids from due windows, catches up the oldest due
   unpublished window with retained source events before considering the latest
   due window empty, skips not-due/empty/already published/fully suppressed
   windows explicitly, and publishes each due cycle at most once per node
   runtime.
 - `iroha_config` exposes the dormant-by-default
-  `[sorafs.storage.privacy_aggregates]` scheduler knobs for enablement, cycle
-  width, and publish delay. `sorafs_node::StorageConfig` projects enabled config
-  into `PrivacyAggregateScheduleConfig`, and
+  `[sorafs.storage.privacy_aggregates]` scheduler and governed policy: cadence,
+  aggregate-id prefix, privacy mode, reduced rational epsilon, per-subject
+  contribution cap, suppression threshold, policy digest, and bounded
+  composition budget. Delta is fixed at zero. `sorafs_node::StorageConfig`
+  validates and projects that single production policy, and
   `NodeHandle::publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
-  uses that cadence while keeping privacy policy and noise seed material as
-  explicit runtime-only inputs.
+  accepts only the runtime threshold-PRF output and predecessor block hash.
 - Torii exposes
   `/v1/sorafs/transparency/privacy-aggregates/source-events` for
   canonical-authenticated local aggregate source-event ingestion. The handler
-  records one source event in the duplicate-checked aggregate worker for later
-  configured cycle publication and returns only event ids, digests, and counts
-  rather than raw metric values.
+  requires a private-subject digest, records one source event in the
+  duplicate-checked aggregate worker for per-subject clipping and configured
+  cycle publication, and returns only event ids, digests, and counts rather
+  than raw metric values.
 - Torii exposes
   `/v1/sorafs/transparency/privacy-aggregates/publish-due` for
   canonical-authenticated local configured aggregate publication. The handler
   evaluates the configured schedule, catches up stale due event-backed windows,
-  accepts privacy policy, optional noise seed, policy digest, previous block
-  hash, and public aggregate metadata as runtime-only request material, and
-  returns structured
+  accepts only an optional hidden threshold-PRF output and previous block hash,
+  uses exact integer discrete-Laplace sampling, and atomically commits the
+  composition-budget charge, processed-cycle state, source-event removal, and
+  durable Governance DAG outbox entry. It returns structured
   published/skipped/already-published outcomes with cycle hashes when a cycle is
   published.
 - `iroha::Client` and

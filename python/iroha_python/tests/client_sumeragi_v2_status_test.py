@@ -9,6 +9,7 @@ import iroha_python.client as client_module
 import pytest
 
 from iroha_python.client import (
+    SumeragiDiagnosticsSnapshot,
     SumeragiStatusSnapshot,
     SumeragiV2BodyState,
     SumeragiV2ExecutionCommitment,
@@ -34,6 +35,11 @@ def _canonical_hash(seed: int) -> str:
     return f"hash:{body}#{crc:04X}"
 
 
+_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
+    "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
+)
+
+
 def _subject(seed: int = 0x31) -> dict[str, str]:
     return {
         "parent_block_hash": _canonical_hash(seed),
@@ -49,6 +55,11 @@ def _execution_commitment(seed: int = 0x51) -> dict[str, object]:
         "ordinary_writes_root": _canonical_hash(seed + 2),
         "topup_anchor_root": None,
         "topup_anchor_count": 0,
+        "native_amx_application_manifest_version": 1,
+        "native_amx_application_manifest_root": (
+            _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+        ),
+        "native_amx_application_manifest_count": 0,
         "executed_block_wire_hash": _canonical_hash(seed + 3),
     }
 
@@ -167,48 +178,68 @@ def _healthy_status() -> dict[str, object]:
             "blocker": None,
             "ignore_counts": [],
         },
-        "safety_halt": {
-            "active": False,
-            "reason": None,
-            "height": 0,
-            "epoch": 0,
-            "first_block_hash": None,
-            "conflicting_block_hash": None,
-            "first_parent_state_root": None,
-            "first_post_state_root": None,
-            "conflicting_parent_state_root": None,
-            "conflicting_post_state_root": None,
+    }
+
+
+def _healthy_diagnostics() -> dict[str, object]:
+    return {
+        "pipeline_execution": {
+            "tx_vertices_total": 1,
+            "tx_edges_total": 0,
+            "overlay_count_total": 1,
+            "overlay_instr_total": 2,
+            "overlay_bytes_total": 128,
+            "rbc_chunks_total": 1,
+            "rbc_bytes_total": 256,
+            "detached_prepared_total": 1,
+            "detached_merged_total": 1,
+            "detached_fallback_total": 0,
+            "detached_fallback_fee_postprocessing_total": 0,
+            "detached_fallback_user_executor_total": 0,
+            "detached_fallback_durable_state_total": 0,
+            "detached_fallback_unsupported_instruction_total": 0,
+            "detached_fallback_rejected_eval_total": 0,
+            "detached_fallback_overlay_error_total": 0,
+            "quarantine_executed_total": 0,
         },
+        "tx_queue_depth": 3,
+        "tx_queue_capacity": 32,
+        "tx_queue_retained_bytes": 4096,
+        "tx_queue_max_retained_bytes": 65536,
+        "tx_queue_saturated": False,
+        "tx_queue_saturated_by_count": False,
+        "tx_queue_saturated_by_bytes": False,
+        "tx_queue_saturated_by_age": False,
+        "tx_queue_oldest_queued_age_ms": 25,
+        "npos": None,
+        "lane_commitments": [],
+        "dataspace_commitments": [],
         "lane_settlement_commitments": [],
         "lane_relay_envelopes": [],
         "lane_payload_ownerships": [],
         "committed_lane_blocks": [],
         "lane_block_sessions": [],
-        "local_peer_removed": False,
-        "operator": {
-            "view_change_install_total": 7,
-            "busy_deferral_total": 3,
-            "adapter_queues": {
-                "ingress_keys": 2,
-                "ingress_capacity": 16,
-                "deferred_completion": 1,
-                "deferred_progress": 2,
-                "deferred_progress_capacity": 4,
-                "deferred_normal": 3,
-                "deferred_normal_capacity": 8,
-            },
-            "tx_queue": {
-                "tracked_transactions": 5,
-                "queued_transactions": 3,
-                "capacity": 32,
-                "retained_bytes": 4096,
-                "max_retained_bytes": 65536,
-                "oldest_queued_age_ms": 25,
-                "saturated_by_count": False,
-                "saturated_by_bytes": False,
-                "saturated_by_age": False,
-            },
-        },
+        "lane_governance_sealed_total": 0,
+        "lane_governance_sealed_aliases": [],
+        "lane_governance": [],
+        "native_amx_participant_applications": [
+            {
+                "lane_id": 3,
+                "dataspace_id": 8,
+                "lane_incarnation": _canonical_hash(0x65),
+                "participant_height": 8,
+                "participant_view": 1,
+                "predecessor_height": 7,
+                "predecessor_descriptor_hash": _canonical_hash(0x68),
+                "descriptor_hash": _canonical_hash(0x73),
+                "proposal_hash": _canonical_hash(0x69),
+                "settlement_hash": _canonical_hash(0x6B),
+                "source_count": 2,
+                "application_block_height": 15,
+                "application_block_hash": _canonical_hash(0x79),
+                "state": "durably_applied",
+            }
+        ],
     }
 
 
@@ -260,12 +291,21 @@ def test_status_parses_authoritative_reducer_state() -> None:
         outbound_intent.execution_commitment.executed_block_wire_hash
         == _canonical_hash(0x54)
     )
-    assert status.safety_halt.active is False
-    assert status.lane_payload_ownerships == []
-    assert status.committed_lane_blocks == []
-    assert status.lane_block_sessions == []
-    assert status.local_peer_removed is False
-    assert status.operator.tx_queue.queued_transactions == 3
+    assert not hasattr(status, "lane_payload_ownerships")
+    assert not hasattr(status, "operator")
+
+
+def test_diagnostics_parse_separately_from_authoritative_status() -> None:
+    diagnostics = SumeragiDiagnosticsSnapshot.from_payload(_healthy_diagnostics())
+
+    assert diagnostics.tx_queue_depth == 3
+    assert diagnostics.pipeline_execution.tx_vertices_total == 1
+    assert diagnostics.native_amx_participant_applications[0].state == "durably_applied"
+
+    status = _healthy_status()
+    status["lane_settlement_commitments"] = []
+    with pytest.raises(RuntimeError, match="unknown field lane_settlement_commitments"):
+        SumeragiStatusSnapshot.from_payload(status)
 
 
 def test_qc_reference_preserves_execution_commitment() -> None:
@@ -285,8 +325,65 @@ def test_qc_reference_preserves_execution_commitment() -> None:
         ordinary_writes_root=_canonical_hash(0x53),
         topup_anchor_root=_canonical_hash(0x55),
         topup_anchor_count=2,
+        native_amx_application_manifest_version=1,
+        native_amx_application_manifest_root=(
+            _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+        ),
+        native_amx_application_manifest_count=0,
         executed_block_wire_hash=_canonical_hash(0x54),
     )
+
+
+def test_execution_commitment_accepts_nonempty_native_manifest() -> None:
+    payload = _execution_commitment()
+    payload["native_amx_application_manifest_root"] = _canonical_hash(0x55)
+    payload["native_amx_application_manifest_count"] = 1
+
+    commitment = SumeragiV2ExecutionCommitment.from_payload(
+        payload, "test_commitment"
+    )
+
+    assert commitment.native_amx_application_manifest_root == _canonical_hash(0x55)
+    assert commitment.native_amx_application_manifest_count == 1
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (
+            lambda payload: payload.update(
+                native_amx_application_manifest_version=2
+            ),
+            "native_amx_application_manifest_version must equal 1",
+        ),
+        (
+            lambda payload: payload.update(
+                native_amx_application_manifest_count=1025
+            ),
+            "native_amx_application_manifest_count",
+        ),
+        (
+            lambda payload: payload.update(
+                native_amx_application_manifest_root=_canonical_hash(0x55)
+            ),
+            "must be zero exactly for the canonical empty root",
+        ),
+        (
+            lambda payload: payload.update(
+                native_amx_application_manifest_count=1
+            ),
+            "must be zero exactly for the canonical empty root",
+        ),
+    ],
+)
+def test_execution_commitment_rejects_invalid_native_manifest(
+    mutate, error: str
+) -> None:
+    payload = _execution_commitment()
+    mutate(payload)
+
+    with pytest.raises((TypeError, ValueError), match=error):
+        SumeragiV2ExecutionCommitment.from_payload(payload, "test_commitment")
 
 
 def test_status_allows_genesis_without_optional_certificates() -> None:
@@ -475,16 +572,6 @@ def test_retained_rbc_store_telemetry_models_parse_snapshot() -> None:
                 "execution_commitment"
             ),
             "execution_commitment",
-        ),
-        (
-            lambda payload: payload["operator"]["tx_queue"].update(
-                queued_transactions=6
-            ),
-            "tx_queue occupancy exceeds capacity",
-        ),
-        (
-            lambda payload: payload.pop("lane_payload_ownerships"),
-            "lane_payload_ownerships must be an array",
         ),
         (
             lambda payload: payload.update(last_committed_subject=None),

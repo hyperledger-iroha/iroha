@@ -44,6 +44,11 @@ kotlin {
 tasks.test {
     useJUnitPlatform()
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/sumeragi_v2/wire_v2.tsv"))
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .file("fixtures/sumeragi_v2/native_amx_v2_grouped.json"),
+    )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/peer_transport_v1.json"))
 

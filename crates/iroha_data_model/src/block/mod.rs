@@ -61,8 +61,10 @@ pub mod header;
 pub mod payload;
 
 pub use execution_context::{
-    BlockExecutionContextBundle, CertifiedMergeLedgerReference, ExternalExecutionContext,
-    ExternalExecutionRouteLeg, ExternalExecutionRouteRole,
+    AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
+    BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1, BlockExecutionContextBundle,
+    CertifiedMergeLedgerReference, ExternalExecutionContext, ExternalExecutionRouteLeg,
+    ExternalExecutionRouteRole,
 };
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
@@ -1711,6 +1713,7 @@ mod tests {
     fn signed_block_with_only_certified_merge_reference_is_not_empty() {
         let validators = Vec::<PeerId>::new();
         let entry = MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: 1,
             lane_catalog_hash: Hash::new(b"merge-only-catalog"),
             active_lanes: Vec::new(),

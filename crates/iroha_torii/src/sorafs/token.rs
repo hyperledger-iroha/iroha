@@ -15,6 +15,7 @@ use std::{
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use iroha_config::parameters::actual;
+use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::OsRng,
@@ -61,6 +62,7 @@ const MAX_SIGNING_KEY_FILE_BYTES: u64 = 64;
 pub struct StreamTokenIssuer {
     signing_key: SigningKey,
     verifying_key: VerifyingKey,
+    potr_provider_signing_key: KeyPair,
     defaults: TokenDefaults,
     client_budgets: Mutex<BTreeMap<String, ClientBudget>>,
     max_client_budgets: usize,
@@ -143,10 +145,14 @@ impl StreamTokenIssuer {
             requests_per_minute: config.default_requests_per_minute,
         };
         defaults.validate()?;
+        let potr_provider_signing_key =
+            KeyPair::try_from_seed(signing_key.to_bytes().to_vec(), Algorithm::MlDsa)
+                .map_err(|error| StreamTokenIssuerError::PotrProviderSigning(error.to_string()))?;
 
         Ok(Some(Self {
             signing_key,
             verifying_key,
+            potr_provider_signing_key,
             defaults,
             client_budgets: Mutex::new(BTreeMap::new()),
             max_client_budgets: MAX_ISSUANCE_CLIENTS,
@@ -235,6 +241,31 @@ impl StreamTokenIssuer {
     /// PoTR receipts reuse this helper until dedicated key rotation lands.
     pub fn sign_bytes(&self, message: &[u8]) -> ed25519_dalek::Signature {
         self.signing_key.sign(message)
+    }
+
+    /// Return the ML-DSA-65 provider key governed for PoTR receipts.
+    pub fn potr_provider_public_key_bytes(&self) -> Result<Vec<u8>, StreamTokenIssuerError> {
+        let (algorithm, public_key) = self
+            .potr_provider_signing_key
+            .public_key()
+            .try_to_bytes()
+            .map_err(|error| StreamTokenIssuerError::PotrProviderSigning(error.to_string()))?;
+        if algorithm != Algorithm::MlDsa {
+            return Err(StreamTokenIssuerError::PotrProviderSigning(
+                "configured PoTR provider key is not ML-DSA-65".to_owned(),
+            ));
+        }
+        Ok(public_key.to_vec())
+    }
+
+    /// Sign a PoTR receipt payload with the governed ML-DSA-65 provider key.
+    pub fn sign_potr_provider_bytes(
+        &self,
+        message: &[u8],
+    ) -> Result<Vec<u8>, StreamTokenIssuerError> {
+        IrohaSignature::try_new(self.potr_provider_signing_key.private_key(), message)
+            .map(|signature| signature.payload().to_vec())
+            .map_err(|error| StreamTokenIssuerError::PotrProviderSigning(error.to_string()))
     }
 
     /// Return the default key version embedded in issued tokens.
@@ -709,6 +740,9 @@ pub enum StreamTokenIssuerError {
         /// Configured signing-key path.
         path: PathBuf,
     },
+    /// Deriving, encoding, or using the ML-DSA-65 PoTR provider key failed.
+    #[error("failed to use PoTR provider signing key: {0}")]
+    PotrProviderSigning(String),
     /// A configured or requested token policy was zero, unsafe, or above its ceiling.
     #[error("invalid stream-token policy {field}: {reason}")]
     InvalidPolicy {
@@ -999,9 +1033,15 @@ mod tests {
     }
 
     fn issuer_with_capacity(limit: u32, max_client_budgets: usize) -> StreamTokenIssuer {
+        let signing_key = SigningKey::from_bytes(&[0x33; 32]);
         StreamTokenIssuer {
-            signing_key: SigningKey::from_bytes(&[0x33; 32]),
-            verifying_key: SigningKey::from_bytes(&[0x33; 32]).verifying_key(),
+            verifying_key: signing_key.verifying_key(),
+            potr_provider_signing_key: KeyPair::try_from_seed(
+                signing_key.to_bytes().to_vec(),
+                Algorithm::MlDsa,
+            )
+            .expect("deterministic PoTR provider key"),
+            signing_key,
             defaults: TokenDefaults {
                 key_version: 1,
                 ttl_secs: 900,

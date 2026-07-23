@@ -1018,10 +1018,18 @@ fn preflight_singular_source_materialization(
         | SingularQueryBox::FindSorafsOrderbookOrderById(_)
         | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
         | SingularQueryBox::FindSorafsOrderbookReceiptById(_)
+        | SingularQueryBox::FindSorafsOrderbookTradeById(_)
+        | SingularQueryBox::FindSorafsOrderbookChannelById(_)
         | SingularQueryBox::FindSorafsOrderbookStatus(_)
         | SingularQueryBox::FindSorafsOrderbookOrders(_)
         | SingularQueryBox::FindSorafsOrderbookReceipts(_) => {
             return Err(reject_unbounded("SoraFS orderbook query"));
+        }
+        SingularQueryBox::FindSorafsReservePolicy(_)
+        | SingularQueryBox::FindSorafsReserveProviderById(_)
+        | SingularQueryBox::FindSorafsReserveMovementById(_)
+        | SingularQueryBox::FindSorafsReserveAppealById(_) => {
+            return Err(reject_unbounded("SoraFS reserve query"));
         }
         SingularQueryBox::FindSorafsPopIssuerPolicy(_)
         | SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_)
@@ -1031,6 +1039,9 @@ fn preflight_singular_source_materialization(
         | SingularQueryBox::FindSorafsPopAuditDigestBySequence(_)
         | SingularQueryBox::FindSorafsPopRegistryStatus(_) => {
             return Err(reject_unbounded("SoraFS PoP registry query"));
+        }
+        SingularQueryBox::FindSorafsRepairTask(_) | SingularQueryBox::FindSorafsRepairStatus(_) => {
+            return Err(reject_unbounded("SoraFS repair query"));
         }
         SingularQueryBox::FindSorafsModerationPolicy(_)
         | SingularQueryBox::FindSorafsModerationAppeal(_)
@@ -1185,6 +1196,12 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindSorafsOrderbookReceiptById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindSorafsOrderbookTradeById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsOrderbookChannelById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindSorafsOrderbookStatus(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -1192,6 +1209,18 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsOrderbookReceipts(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReservePolicy(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReserveProviderById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReserveMovementById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReserveAppealById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsPopIssuerPolicy(q) => {
@@ -1213,6 +1242,12 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsPopRegistryStatus(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsRepairTask(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsRepairStatus(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsModerationPolicy(q) => {

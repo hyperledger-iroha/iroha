@@ -400,16 +400,6 @@ impl EpochScheduleSnapshot {
     }
 }
 
-/// Resolve the signed on-chain activation lag for VRF penalties.
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
-pub(crate) fn resolve_npos_activation_lag_blocks_from_world(
-    world: &impl WorldReadOnly,
-) -> Option<u64> {
-    world
-        .sumeragi_npos_parameters()
-        .map(|params| params.activation_lag_blocks())
-}
-
 /// Resolve the signed on-chain delay before consensus-evidence penalties apply.
 pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
     world: &impl WorldReadOnly,
@@ -640,7 +630,7 @@ pub use v2_core::{
 };
 pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+#[cfg(any(test, feature = "sumeragi-npos"))]
 pub(crate) mod v2_npos;
 pub(crate) mod v2_recovery;
 pub use v2_recovery::{
@@ -728,6 +718,13 @@ pub enum LaneRelayMessage {
         reply_route: Option<NetworkReplyRoute>,
         /// Native AMX protocol message.
         message: crate::native_amx::NativeAmxMessage,
+    },
+    /// Lane-drain vote with its authenticated transport identity.
+    DrainVote {
+        /// Semantic protocol origin authenticated by transport.
+        sender: PeerId,
+        /// Exact committee-signed drain frontier vote.
+        vote: crate::lane_consensus::LaneDrainVoteV1,
     },
 }
 
@@ -4061,6 +4058,16 @@ impl SumeragiHandle {
         if !self.ingress_ready.load(Ordering::Acquire) {
             return SumeragiIngressDisposition::Retry(message);
         }
+        if let LaneRelayMessage::DrainVote { sender, vote } = &message
+            && (sender != &vote.signer || vote.validate_ingress().is_err())
+        {
+            iroha_logger::debug!(
+                %sender,
+                signer = %vote.signer,
+                "rejecting unauthenticated or invalid lane-drain vote before bounded ingress"
+            );
+            return SumeragiIngressDisposition::Rejected(message);
+        }
         match self.lane_relay.try_send(message) {
             Ok(()) => {
                 status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
@@ -4105,17 +4112,14 @@ impl SumeragiHandle {
             .accepted_or_coalesced()
     }
 
-    /// Reject a decode-only lane-drain vote while the first-release collector is retired.
+    /// Try to enqueue an authenticated lane-drain vote.
     pub fn try_incoming_lane_drain_vote(
         &self,
         sender: PeerId,
         vote: crate::lane_consensus::LaneDrainVoteV1,
     ) -> bool {
-        let _ = (sender, vote);
-        iroha_logger::debug!(
-            "rejecting decode-only lane-drain vote: the first-release collector is retired"
-        );
-        false
+        self.try_incoming_lane_relay_owned(LaneRelayMessage::DrainVote { sender, vote })
+            .accepted_or_coalesced()
     }
 
     /// Try to enqueue authenticated certified merge-sidecar traffic.
@@ -4438,6 +4442,7 @@ impl SumeragiStartArgs {
             block_rx: block,
             wake_rx,
             shutdown_signal,
+            consensus_frame_byte_capacity,
         };
 
         let child = launch_sumeragi_thread(
@@ -4502,6 +4507,7 @@ struct SumeragiWorker {
     block_rx: Arc<FairV2Ingress>,
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
+    consensus_frame_byte_capacity: usize,
 }
 
 #[cfg(test)]
@@ -4532,8 +4538,8 @@ mod authoritative_runtime_gate_tests {
     use norito::codec::Encode as _;
 
     use super::{
-        BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, test_sumeragi_handle,
-        test_sumeragi_handle_with_source_geometry,
+        BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, LaneRelayMessage,
+        test_sumeragi_handle, test_sumeragi_handle_with_source_geometry,
     };
 
     fn v2_message_with_bytes(index: u32, byte_len: usize) -> BlockMessage {
@@ -5184,20 +5190,22 @@ mod authoritative_runtime_gate_tests {
     }
 
     #[test]
-    fn first_release_lane_drain_votes_never_enter_the_live_relay_queue() {
+    fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
         let (handle, _receiver, relay_receiver) = test_sumeragi_handle(1);
         handle.ingress_ready.store(true, Ordering::Release);
-        let signer = PeerId::new(KeyPair::random().public_key().clone());
+        let keypair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+            .expect("generate BLS-normal lane-drain signer");
+        let signer = PeerId::new(keypair.public_key().clone());
         let validator_set = vec![signer.clone()];
-        let vote = crate::lane_consensus::LaneDrainVoteV1 {
-            body: LaneDrainCertificateBodyV1 {
+        let vote = crate::lane_consensus::LaneDrainVoteV1::new_signed(
+            LaneDrainCertificateBodyV1 {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    chain_id_digest: Hash::new(b"retired-drain-ingress-chain"),
+                    chain_id_digest: Hash::new(b"live-drain-ingress-chain"),
                     lane_id: LaneId::new(7),
                     dataspace_id: DataSpaceId::new(9),
-                    lane_incarnation: Hash::new(b"retired-drain-ingress-incarnation"),
+                    lane_incarnation: Hash::new(b"live-drain-ingress-incarnation"),
                     close_global_height: 3,
                     initial_merged_lane_height: 0,
                     initial_merged_descriptor_hash: None,
@@ -5210,12 +5218,31 @@ mod authoritative_runtime_gate_tests {
                 final_lane_block_height: 0,
                 final_lane_block_descriptor_hash: None,
             },
-            signer: signer.clone(),
-            proof_of_possession: vec![0xA5],
-            bls_signature: vec![0x5A],
-        };
+            signer.clone(),
+            keypair.private_key(),
+        )
+        .expect("sign valid lane-drain vote");
 
-        assert!(!handle.try_incoming_lane_drain_vote(signer, vote));
+        assert!(handle.try_incoming_lane_drain_vote(signer.clone(), vote.clone()));
+        let LaneRelayMessage::DrainVote {
+            sender,
+            vote: queued_vote,
+        } = relay_receiver
+            .try_recv()
+            .expect("valid drain vote reaches the bounded relay queue")
+        else {
+            panic!("valid drain vote changed relay message kind");
+        };
+        assert_eq!(sender, signer);
+        assert_eq!(queued_vote, vote);
+
+        let mismatched_sender = PeerId::new(KeyPair::random().public_key().clone());
+        assert!(!handle.try_incoming_lane_drain_vote(mismatched_sender, vote.clone()));
+        assert!(relay_receiver.try_recv().is_err());
+
+        let mut tampered = vote;
+        tampered.bls_signature[0] ^= 0x01;
+        assert!(!handle.try_incoming_lane_drain_vote(signer, tampered));
         assert!(relay_receiver.try_recv().is_err());
     }
 
@@ -5317,18 +5344,22 @@ mod authoritative_runtime_gate_tests {
     fn saturated_lane_ingress_returns_the_exact_owned_message_for_retry() {
         let (handle, _receiver, relay_receiver) = test_sumeragi_handle(1);
         let first = MergeCommitteeSignature {
+            version: iroha_data_model::merge::MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
             epoch_id: 7,
             view: 1,
             signer: 0,
             message_digest: Hash::new(b"first retained lane item"),
             bls_sig: vec![0xA5],
+            leader_candidate_body: None,
         };
         let second = MergeCommitteeSignature {
+            version: iroha_data_model::merge::MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
             epoch_id: 7,
             view: 2,
             signer: 0,
             message_digest: Hash::new(b"second retained lane item"),
             bls_sig: vec![0x5A],
+            leader_candidate_body: None,
         };
 
         assert!(matches!(
