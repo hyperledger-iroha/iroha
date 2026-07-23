@@ -18,13 +18,15 @@ test("deployment polling waits for exact global persisted Applied finality", asy
   const payloads = [
     {
       hash,
-      status: { kind: "Committed", block_height: 17 },
+      status: { kind: "Applied", block_height: 17 },
+      summary: "Applied",
       scope: "global",
       resolved_from: "cache",
     },
     {
       hash,
       status: { kind: "Applied", block_height: 17 },
+      summary: "Applied",
       scope: "global",
       resolved_from: "state",
     },
@@ -52,13 +54,14 @@ test("deployment polling waits for exact global persisted Applied finality", asy
   }
 });
 
-test("deployment polling rejects wrong-hash and unpersisted Applied envelopes", async () => {
+test("deployment polling rejects malformed Applied envelopes", async () => {
   const hash = "cd".repeat(32);
   for (const [payload, pattern] of [
     [
       {
         hash: "ef".repeat(32),
         status: { kind: "Applied", block_height: 1 },
+        summary: "Applied",
         scope: "global",
         resolved_from: "state",
       },
@@ -67,16 +70,8 @@ test("deployment polling rejects wrong-hash and unpersisted Applied envelopes", 
     [
       {
         hash,
-        status: { kind: "Applied", block_height: 1 },
-        scope: "global",
-        resolved_from: "cache",
-      },
-      /resolved_from must be state/u,
-    ],
-    [
-      {
-        hash,
         status: { kind: "Applied", block_height: 0 },
+        summary: "Applied",
         scope: "global",
         resolved_from: "state",
       },
@@ -100,6 +95,7 @@ test("deployment polling does not treat nested Committed markers as finality", a
       jsonResponse({
         hash,
         status: { kind: "Queued", content: { Committed: true } },
+        summary: "Queued",
         scope: "global",
         resolved_from: "queue",
       }),
@@ -111,6 +107,39 @@ test("deployment polling does not treat nested Committed markers as finality", a
   );
 });
 
+test("deployment polling retries cached failures until state resolution", async () => {
+  const hash = "23".repeat(32);
+  const payloads = [
+    {
+      hash,
+      status: { kind: "Rejected" },
+      summary: "Rejected",
+      scope: "global",
+      resolved_from: "cache",
+    },
+    {
+      hash,
+      status: { kind: "Rejected" },
+      summary: "Rejected",
+      scope: "global",
+      resolved_from: "state",
+    },
+  ];
+  let requests = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      requests += 1;
+      return jsonResponse(payloads.shift());
+    },
+  });
+
+  await assert.rejects(
+    client.waitForTransactionStatus(hash, { intervalMs: 0, maxAttempts: 2 }),
+    /terminal Rejected status/u,
+  );
+  assert.equal(requests, 2);
+});
+
 test("deployment polling fails closed on unknown status kinds and non-200 status reads", async () => {
   const hash = "34".repeat(32);
   const unknown = new ToriiBrowserClient("https://torii.example", {
@@ -118,6 +147,7 @@ test("deployment polling fails closed on unknown status kinds and non-200 status
       jsonResponse({
         hash,
         status: { kind: "Finalized", block_height: 1 },
+        summary: "Finalized",
         scope: "global",
         resolved_from: "state",
       }),

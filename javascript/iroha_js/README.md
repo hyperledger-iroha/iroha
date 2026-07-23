@@ -943,10 +943,16 @@ console.log(typedStatus?.status?.kind); // e.g. "Applied"
 // The wait helpers also ship normalised variants if you prefer structured DTOs
 await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
 await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
-// Note: `getTransactionStatus` options support only { allowShortHash, signal }.
+// Note: raw `getTransactionStatus` options support only
+// { allowShortHash, signal, scope }, where scope is the explicit diagnostic
+// choice "local" or "global" and defaults to "global". The pre-release "auto"
+// mode and cross-endpoint status fallback list are not part of the API.
 // Polling helper options support only { signal, intervalMs, timeoutMs, maxAttempts,
 // failureStatuses, onStatus }. Success is fixed to exact canonical `Applied`;
-// `Approved` and `Committed` remain progress states.
+// every finality wait is global-only. State-resolved Applied succeeds,
+// state-resolved Rejected or Expired always fails, and `failureStatuses` can
+// add other state-resolved failure labels. Cache-resolved terminal hints remain
+// progress observations and are retried.
 // intervalMs/timeoutMs must be non-negative integers (use timeoutMs: null to disable
 // the deadline), maxAttempts must be a positive integer when provided, and onStatus
 // must be a function.

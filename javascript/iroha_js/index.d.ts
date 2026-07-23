@@ -4679,7 +4679,7 @@ export interface ToriiPipelineTransactionStatus {
   summary?: string;
   diagnostics?: ReadonlyArray<Record<string, unknown>>;
   trigger_completions?: ReadonlyArray<Record<string, unknown>>;
-  scope: "local" | "auto" | "global";
+  scope: "local" | "global";
   resolved_from: "cache" | "queue" | "state";
 }
 
@@ -5867,7 +5867,7 @@ export interface ToriiClientConfigSource extends ToriiClientRetryOptions {
   torii?: {
     apiTokens?: ReadonlyArray<string>;
   };
-  toriiClient?: ToriiClientRetryOptions & Record<string, unknown>;
+  toriiClient?: ToriiClientRetryOptions;
 }
 
 export interface ResolvedToriiClientConfig {
@@ -5906,18 +5906,29 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
   ) => void;
 }
 
+/** Polling controls for global, state-authoritative transaction finality. */
 export interface TransactionStatusPollOptions {
   signal?: AbortSignal;
-  scope?: "local" | "auto" | "global";
   intervalMs?: number;
   timeoutMs?: number | null;
   maxAttempts?: number | null;
+  /**
+   * Additional state-resolved failure labels. State-resolved `Rejected` and
+   * `Expired` always fail.
+   */
   failureStatuses?: Iterable<string>;
   onStatus?: (
     status: string | null,
     payload: ToriiPipelineTransactionStatus | null,
     attempt: number,
   ) => void | Promise<void>;
+}
+
+/** Options for a single diagnostic status read; scope defaults to `global`. */
+export interface TransactionStatusReadOptions {
+  allowShortHash?: boolean;
+  signal?: AbortSignal;
+  scope?: "local" | "global";
 }
 
 export interface IsoBridgeSignerSnapshot {
@@ -8778,7 +8789,6 @@ export interface IvmProvedContractCallOptions {
   waitForCommit?: boolean;
   transactionIntervalMs?: number;
   transactionTimeoutMs?: number | null;
-  transactionStatusScope?: "local" | "auto" | "global";
 }
 
 export interface IvmProvedContractCallResult {
@@ -11891,12 +11901,11 @@ export interface ToriiBlockProofVerification {
 
 export interface ToriiBrowserTransactionStatusOptions
   extends ToriiBrowserRequestOptions {
-  scope?: "local" | "auto" | "global";
+  scope?: "local" | "global";
 }
 
 export interface ToriiBrowserTransactionStatusPollOptions
   extends ToriiBrowserRequestOptions {
-  scope?: "global";
   intervalMs?: number;
   timeoutMs?: number;
   maxAttempts?: number;
@@ -12705,12 +12714,7 @@ export declare class ToriiClient {
   ): Promise<{ acceptedCount: number; route?: unknown }>;
   getTransactionStatus(
     hashHex: string,
-    options?: {
-      allowShortHash?: boolean;
-      signal?: AbortSignal;
-      scope?: "local" | "auto" | "global";
-      endpoints?: ReadonlyArray<string> | string;
-    },
+    options?: TransactionStatusReadOptions,
   ): Promise<ToriiPipelineTransactionStatus | null>;
   waitForTransactionStatus(
     hashHex: string,
@@ -12722,12 +12726,7 @@ export declare class ToriiClient {
   ): Promise<ToriiPipelineTransactionStatus>;
   getTransactionStatusTyped(
     hashHex: string,
-    options?: {
-      allowShortHash?: boolean;
-      signal?: AbortSignal;
-      scope?: "local" | "auto" | "global";
-      endpoints?: ReadonlyArray<string> | string;
-    },
+    options?: TransactionStatusReadOptions,
   ): Promise<ToriiPipelineStatus | null>;
   waitForTransactionStatusTyped(
     hashHex: string,
@@ -14253,7 +14252,6 @@ export function submitSignedTransaction(
     pollIntervalMs?: number;
     timeoutMs?: number;
     privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
-    scope?: "local" | "auto" | "global" | string | null;
   },
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
 

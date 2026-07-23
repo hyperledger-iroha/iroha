@@ -9533,6 +9533,10 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
     kind: "Transaction",
     content: { hash: hashParam, status: { kind: "Committed", content: null } },
   });
+  const explicitUndefinedResult = await client.getTransactionStatus(hashParam, {
+    scope: undefined,
+  });
+  assert.deepEqual(explicitUndefinedResult, result);
 });
 
 test("getTransactionStatus rejects a status envelope for a different transaction", async () => {
@@ -9632,43 +9636,32 @@ test("getTransactionStatus normalizes typed pipeline status responses", async ()
   });
 });
 
-test("getTransactionStatus fans out to alternate endpoints in auto scope", async () => {
+test("getTransactionStatus preserves Torii status provenance", async () => {
   const hashHex = "ef".repeat(32);
-  const alternateBaseUrl = "https://torii-centralbank.soramitsu.io";
   const seenUrls = [];
   const fetchImpl = async (url) => {
     seenUrls.push(url);
-    if (url === `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`) {
-      return createResponse({ status: 404 });
-    }
-    if (
-      url ===
-      `${alternateBaseUrl}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`
-    ) {
-      return createResponse({
-        status: 200,
-        jsonData: {
-          kind: "Transaction",
-          content: { hash: hashHex, status: { kind: "Committed", content: null } },
-        },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    throw new Error(`Unexpected URL ${url}`);
+    assert.equal(
+      url,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=global`,
+    );
+    return createResponse({
+      status: 200,
+      jsonData: authoritativePipelineStatusResponse(hashHex, "Applied", {
+        resolvedFrom: "cache",
+        blockHeight: 7,
+      }),
+      headers: { "content-type": "application/json" },
+    });
   };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    transactionStatusScope: "auto",
-    statusEndpoints: [alternateBaseUrl],
-  });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.getTransactionStatus(hashHex);
-  assert.equal(seenUrls.length, 2);
-  assert.equal(payload?.resolved_from, alternateBaseUrl);
+  assert.equal(seenUrls.length, 1);
+  assert.equal(payload?.resolved_from, "cache");
 });
 
-test("getTransactionStatus local scope does not fan out", async () => {
+test("getTransactionStatus supports raw local reads", async () => {
   const hashHex = "01".repeat(32);
-  const alternateBaseUrl = "https://torii-centralbank.soramitsu.io";
   const seenUrls = [];
   const fetchImpl = async (url) => {
     seenUrls.push(url);
@@ -9677,10 +9670,7 @@ test("getTransactionStatus local scope does not fan out", async () => {
     }
     throw new Error(`Unexpected URL ${url}`);
   };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    statusEndpoints: [alternateBaseUrl],
-  });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.getTransactionStatus(hashHex, { scope: "local" });
   assert.equal(payload, null);
   assert.deepEqual(seenUrls, [
@@ -9722,6 +9712,13 @@ test("getTransactionStatus rejects unsupported options", async () => {
       }),
     /getTransactionStatus options contains unsupported fields: extra/,
   );
+  await assert.rejects(
+    () =>
+      client.getTransactionStatus("ab".repeat(32), {
+        endpoints: ["https://fallback.example"],
+      }),
+    /getTransactionStatus options contains unsupported fields: endpoints/,
+  );
 });
 
 test("getTransactionStatus validates allowShortHash option type", async () => {
@@ -9738,13 +9735,15 @@ test("getTransactionStatus validates allowShortHash option type", async () => {
 
 test("getTransactionStatus validates scope option", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 404 }) });
-  await assert.rejects(
-    () =>
-      client.getTransactionStatus("ab".repeat(32), {
-        scope: "invalid",
-      }),
-    /getTransactionStatus options\.scope must be one of: local, auto, global/,
-  );
+  for (const scope of [null, "", "auto", "invalid", "GLOBAL", " global "]) {
+    await assert.rejects(
+      () =>
+        client.getTransactionStatus("ab".repeat(32), {
+          scope,
+        }),
+      /getTransactionStatus options\.scope must be one of: local, global/,
+    );
+  }
 });
 
   test("getTransactionStatus retries 425 via pipeline profile", async () => {
@@ -10046,7 +10045,7 @@ test("getTransactionStatusTyped normalises typed pipeline status responses", asy
       jsonData: {
         hash: hashHex,
         resolved_from: "state",
-        scope: "auto",
+        scope: "global",
         status: {
           kind: "Applied",
           block_height: 11,
@@ -10456,16 +10455,12 @@ test("waitForTransactionStatus validates signal option type", async () => {
   );
 });
 
-test("waitForTransactionStatus validates scope option", async () => {
+test("waitForTransactionStatus rejects the removed scope option", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
   const hashHex = "ce".repeat(32);
   await assert.rejects(
-    () => client.waitForTransactionStatus(hashHex, { scope: "global&scope=local" }),
-    /waitForTransactionStatus options\.scope must be one of: local, auto, global/,
-  );
-  await assert.rejects(
-    () => client.waitForTransactionStatus(hashHex, { scope: "global,local" }),
-    /waitForTransactionStatus options\.scope must be one of: local, auto, global/,
+    () => client.waitForTransactionStatus(hashHex, { scope: "local" }),
+    /waitForTransactionStatus options contains unsupported fields: scope/,
   );
 });
 
@@ -10500,6 +10495,7 @@ test("waitForTransactionStatus keeps polling through Committed until Applied", a
   const result = await client.waitForTransactionStatus(requestHash, {
     intervalMs: 0,
     timeoutMs: 50,
+    failureStatuses: ["Committed"],
     onStatus: (status, payload, attempt) => observed.push({ status, attempt, payload }),
   });
 
@@ -10538,7 +10534,7 @@ test("waitForTransactionStatus rejects a non-authoritative status envelope", asy
   );
 });
 
-test("waitForTransactionStatus requires global state-resolved Applied evidence", async () => {
+test("waitForTransactionStatus rejects malformed or non-global Applied evidence", async () => {
   const requestHash = "db".repeat(32);
   for (const [payload, expected] of [
     [
@@ -10558,9 +10554,9 @@ test("waitForTransactionStatus requires global state-resolved Applied evidence",
     [
       {
         ...authoritativePipelineStatus(requestHash, "Applied"),
-        resolved_from: "cache",
+        resolved_from: "queue",
       },
-      /state-resolved/u,
+      /cache- or state-resolved/u,
     ],
   ]) {
     const client = new ToriiClient(BASE_URL, {
@@ -10574,6 +10570,106 @@ test("waitForTransactionStatus requires global state-resolved Applied evidence",
           maxAttempts: 1,
         }),
       expected,
+    );
+  }
+});
+
+test("waitForTransactionStatus retries cached Applied until state resolution", async () => {
+  const requestHash = "da".repeat(32);
+  const cached = authoritativePipelineStatus(requestHash, "Applied", {
+    resolvedFrom: "cache",
+    blockHeight: 7,
+  });
+  const resolved = authoritativePipelineStatus(requestHash, "Applied", {
+    resolvedFrom: "state",
+    blockHeight: 7,
+  });
+  const statuses = [cached, resolved];
+  const observed = [];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 200 }),
+  });
+  client.getTransactionStatus = async () => statuses.shift();
+
+  const result = await client.waitForTransactionStatus(requestHash, {
+    intervalMs: 0,
+    maxAttempts: 2,
+    onStatus: (status, payload, attempt) =>
+      observed.push({ status, payload, attempt }),
+  });
+
+  assert.strictEqual(result, resolved);
+  assert.deepEqual(
+    observed.map(({ status, attempt, payload }) => ({
+      status,
+      attempt,
+      resolvedFrom: payload.resolved_from,
+    })),
+    [
+      { status: "Applied", attempt: 1, resolvedFrom: "cache" },
+      { status: "Applied", attempt: 2, resolvedFrom: "state" },
+    ],
+  );
+});
+
+test("waitForTransactionStatus retains cached Applied as timeout context", async () => {
+  const requestHash = "d9".repeat(32);
+  const cached = authoritativePipelineStatus(requestHash, "Applied", {
+    resolvedFrom: "cache",
+    blockHeight: 9,
+  });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 200 }),
+  });
+  client.getTransactionStatus = async () => cached;
+
+  await assert.rejects(
+    () =>
+      client.waitForTransactionStatus(requestHash, {
+        intervalMs: 0,
+        maxAttempts: 1,
+      }),
+    (error) =>
+      error instanceof TransactionTimeoutError &&
+      error.payload === cached,
+  );
+});
+
+test("waitForTransactionStatus treats cached failures as progress hints", async () => {
+  for (const failureKind of ["Rejected", "Expired"]) {
+    const requestHash = failureKind === "Rejected" ? "d8".repeat(32) : "d7".repeat(32);
+    const cachedFailure = authoritativePipelineStatus(requestHash, failureKind, {
+      resolvedFrom: "cache",
+    });
+    const resolved = authoritativePipelineStatus(requestHash, "Applied", {
+      resolvedFrom: "state",
+      blockHeight: 10,
+    });
+    const statuses = [cachedFailure, resolved];
+    const observed = [];
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({ status: 200 }),
+    });
+    client.getTransactionStatus = async () => statuses.shift();
+
+    const result = await client.waitForTransactionStatus(requestHash, {
+      intervalMs: 0,
+      maxAttempts: 2,
+      onStatus: (status, payload, attempt) =>
+        observed.push({ status, payload, attempt }),
+    });
+
+    assert.strictEqual(result, resolved);
+    assert.deepEqual(
+      observed.map(({ status, payload, attempt }) => ({
+        status,
+        resolvedFrom: payload.resolved_from,
+        attempt,
+      })),
+      [
+        { status: failureKind, resolvedFrom: "cache", attempt: 1 },
+        { status: "Applied", resolvedFrom: "state", attempt: 2 },
+      ],
     );
   }
 });
@@ -10607,55 +10703,10 @@ test("waitForTransactionStatus forwards signal and aborts polling", async () => 
   );
   assert.equal(attempts, 1);
   assert.equal(seenSignal, controller.signal);
-  assert.equal(seenScope, null);
+  assert.equal(seenScope, "global");
 });
 
-test("waitForTransactionStatus forwards explicit local scope", async () => {
-  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
-  const txHash = "67".repeat(32);
-  const observed = [];
-  client.getTransactionStatus = async (_hashHex, options = {}) => {
-    observed.push(options);
-    return authoritativePipelineStatus(txHash, "Applied");
-  };
-
-  await client.waitForTransactionStatus(txHash, {
-    intervalMs: 0,
-    maxAttempts: 1,
-    scope: "local",
-  });
-
-  assert.equal(observed.length, 1);
-  assert.equal(observed[0].scope, "local");
-});
-
-test("waitForTransactionStatus explicit scope overrides configured scope", async () => {
-  const txHash = "69".repeat(32);
-  const seenUrls = [];
-  const client = new ToriiClient(BASE_URL, {
-    transactionStatusScope: "local",
-    fetchImpl: async (url) => {
-      seenUrls.push(url);
-      return createResponse({
-        status: 200,
-        jsonData: authoritativePipelineStatusResponse(txHash, "Applied"),
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-
-  await client.waitForTransactionStatus(txHash, {
-    intervalMs: 0,
-    maxAttempts: 1,
-    scope: "global",
-  });
-
-  assert.deepEqual(seenUrls, [
-    `${BASE_URL}/v1/pipeline/transactions/status?hash=${txHash}&scope=global`,
-  ]);
-});
-
-test("waitForTransactionStatus inherits configured transaction status scope", async () => {
+test("waitForTransactionStatus always requests global status", async () => {
   const txHash = "68".repeat(32);
   const seenUrls = [];
   const fetchImpl = async (url) => {
@@ -10666,10 +10717,7 @@ test("waitForTransactionStatus inherits configured transaction status scope", as
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    transactionStatusScope: "local",
-  });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   await client.waitForTransactionStatus(txHash, {
     intervalMs: 0,
@@ -10677,33 +10725,7 @@ test("waitForTransactionStatus inherits configured transaction status scope", as
   });
 
   assert.deepEqual(seenUrls, [
-    `${BASE_URL}/v1/pipeline/transactions/status?hash=${txHash}&scope=local`,
-  ]);
-});
-
-test("waitForTransactionStatus treats null scope as inherited configured scope", async () => {
-  const txHash = "6a".repeat(32);
-  const seenUrls = [];
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url) => {
-      seenUrls.push(url);
-      return createResponse({
-        status: 200,
-        jsonData: authoritativePipelineStatusResponse(txHash, "Applied"),
-        headers: { "content-type": "application/json" },
-      });
-    },
-    transactionStatusScope: "auto",
-  });
-
-  await client.waitForTransactionStatus(txHash, {
-    intervalMs: 0,
-    maxAttempts: 1,
-    scope: null,
-  });
-
-  assert.deepEqual(seenUrls, [
-    `${BASE_URL}/v1/pipeline/transactions/status?hash=${txHash}&scope=auto`,
+    `${BASE_URL}/v1/pipeline/transactions/status?hash=${txHash}&scope=global`,
   ]);
 });
 
@@ -10878,6 +10900,26 @@ test("submitTransactionAndWait enforces hashHex option", async () => {
     () => client.submitTransactionAndWait(dummy, {}),
     /options\.hashHex must be a hex string/,
   );
+});
+
+test("submitTransactionAndWait validates poll options before submission", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 200 }),
+  });
+  let submissions = 0;
+  client.submitTransaction = async () => {
+    submissions += 1;
+  };
+
+  await assert.rejects(
+    () =>
+      client.submitTransactionAndWait(Buffer.from([0]), {
+        hashHex: "57".repeat(32),
+        scope: "local",
+      }),
+    /submitTransactionAndWait options contains unsupported fields: scope/,
+  );
+  assert.equal(submissions, 0);
 });
 
 test("submitTransactionAndWaitTyped normalises the final payload", async () => {
@@ -17784,6 +17826,42 @@ test("resolveToriiClientConfig merges config, env, and overrides", async () => {
       assert.deepEqual(resolved.retryProfiles.pipeline.maxRetries, 6);
       assert.ok(resolved.retryProfiles.pipeline.retryMethods.has("POST"));
       assert.equal(resolved.retryProfiles.streaming.maxRetries, 9);
+    },
+  );
+});
+
+test("removed transaction status fallback configuration fails fast", () => {
+  assert.throws(
+    () =>
+      new ToriiClient(BASE_URL, {
+        fetchImpl: async () => createResponse({ status: 404 }),
+        statusEndpoints: ["https://fallback.example"],
+      }),
+    /statusEndpoints is no longer supported/,
+  );
+  assert.throws(
+    () =>
+      resolveToriiClientConfig({
+        config: {
+          toriiClient: {
+            transactionStatusScope: "local",
+          },
+        },
+      }),
+    /transactionStatusScope is no longer supported/,
+  );
+});
+
+test("retired transaction status environment variables are ignored", async () => {
+  await withEnv(
+    {
+      IROHA_TORII_TX_STATUS_SCOPE: "local",
+      IROHA_TORII_STATUS_ENDPOINTS: "https://fallback.example",
+    },
+    () => {
+      const resolved = resolveToriiClientConfig();
+      assert.equal("transactionStatusScope" in resolved, false);
+      assert.equal("statusEndpoints" in resolved, false);
     },
   );
 });

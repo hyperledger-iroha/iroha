@@ -29,6 +29,15 @@ const DEFAULT_TORII_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_STATUS_POLL_TIMEOUT_MS = 30_000;
 const DEFAULT_FAILURE_STATUSES = Object.freeze(["Rejected", "Expired"]);
+const PIPELINE_STATUS_KINDS = new Set([
+  "Queued",
+  "Approved",
+  "Committed",
+  "Applied",
+  "Rejected",
+  "Expired",
+]);
+const PIPELINE_STATUS_SOURCES = new Set(["queue", "cache", "state"]);
 const abortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
     ? null
@@ -413,7 +422,6 @@ const FINALIZE_OPTION_FIELDS = new Set([
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
-  "scope",
   "failureStatuses",
   "onStatus",
   "signal",
@@ -424,7 +432,6 @@ const STATUS_WAIT_OPTION_FIELDS = Object.freeze([
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
-  "scope",
   "failureStatuses",
   "onStatus",
   "signal",
@@ -1069,9 +1076,9 @@ function normalizeStatusSet(value, fallback, context) {
 }
 
 function normalizeStatusScope(value) {
-  const scope = value ?? "global";
-  if (scope !== "local" && scope !== "auto" && scope !== "global") {
-    throw new TypeError("transaction status scope must be local, auto, or global");
+  const scope = value === undefined ? "global" : value;
+  if (scope !== "local" && scope !== "global") {
+    throw new TypeError("transaction status scope must be local or global");
   }
   return scope;
 }
@@ -1142,6 +1149,11 @@ function normalizeTransactionStatusOptions(options = {}) {
       "transaction status options contains unsupported field successStatuses",
     );
   }
+  if (Object.getOwnPropertyDescriptor(options, "scope")) {
+    throw new TypeError(
+      "transaction status options contains unsupported field scope; finality waits are global",
+    );
+  }
   const intervalMs = normalizeNonNegativeInteger(
     options.intervalMs,
     DEFAULT_STATUS_POLL_INTERVAL_MS,
@@ -1188,7 +1200,6 @@ function normalizeTransactionStatusOptions(options = {}) {
     intervalMs,
     timeoutMs,
     maxAttempts,
-    scope: normalizeStatusScope(options.scope),
     failureStatuses: Object.freeze([...failureStatuses]),
     onStatus: options.onStatus ?? null,
     signal,
@@ -1334,24 +1345,7 @@ function parseJsonResponse(text, context) {
   return payload;
 }
 
-function pipelineStatusKind(payload) {
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
-    return null;
-  }
-  const value = payload.status ?? payload.content?.status;
-  if (typeof value === "string") return value;
-  if (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    typeof value.kind === "string"
-  ) {
-    return value.kind;
-  }
-  return null;
-}
-
-function requireAuthoritativeAppliedStatus(payload, expectedHash, context) {
+function classifyPipelineStatus(payload, expectedHash, context) {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
     throw new TypeError(`${context} must be an object`);
   }
@@ -1368,17 +1362,49 @@ function requireAuthoritativeAppliedStatus(payload, expectedHash, context) {
     payload.status === null ||
     typeof payload.status !== "object" ||
     Array.isArray(payload.status) ||
-    payload.status.kind !== "Applied"
+    typeof payload.status.kind !== "string" ||
+    !PIPELINE_STATUS_KINDS.has(payload.status.kind)
   ) {
-    throw new TypeError(`${context}.status.kind must be exact Applied`);
+    throw new TypeError(`${context}.status.kind is missing or unsupported`);
   }
-  if (
-    payload.resolved_from !== "state" ||
-    !Number.isSafeInteger(payload.status.block_height) ||
-    payload.status.block_height <= 0
-  ) {
+  const kind = payload.status.kind;
+  const resolvedFrom = payload.resolved_from;
+  if (!PIPELINE_STATUS_SOURCES.has(resolvedFrom)) {
+    throw new TypeError(`${context}.resolved_from is unsupported`);
+  }
+  if (kind === "Applied") {
+    if (
+      !Number.isSafeInteger(payload.status.block_height) ||
+      payload.status.block_height <= 0
+    ) {
+      throw new TypeError(
+        `${context} Applied status must have a positive block height`,
+      );
+    }
+    if (resolvedFrom !== "cache" && resolvedFrom !== "state") {
+      throw new TypeError(
+        `${context} Applied status must be cache- or state-resolved`,
+      );
+    }
+  } else if (kind === "Rejected" || kind === "Expired") {
+    if (resolvedFrom !== "cache" && resolvedFrom !== "state") {
+      throw new TypeError(
+        `${context} terminal failure must be cache- or state-resolved`,
+      );
+    }
+  }
+  return { kind, resolvedFrom };
+}
+
+function requireAuthoritativeAppliedStatus(payload, expectedHash, context) {
+  const { kind, resolvedFrom } = classifyPipelineStatus(
+    payload,
+    expectedHash,
+    context,
+  );
+  if (kind !== "Applied" || resolvedFrom !== "state") {
     throw new TypeError(
-      `${context} Applied status must be state-resolved with a positive block height`,
+      `${context} must be state-resolved Applied finality`,
     );
   }
   return payload;
@@ -1665,6 +1691,9 @@ class BrowserToriiPipelineClient {
       "transaction status hash",
       "invalid_transaction_hash",
     );
+    if (options === null || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("transaction status options must be an object");
+    }
     const scope = normalizeStatusScope(options.scope);
     const query = new URLSearchParams({ hash, scope });
     const request = await this._open(
@@ -1783,12 +1812,20 @@ class BrowserToriiPipelineClient {
         throwIfDeadlineReached();
         attempts += 1;
         lastPayload = await this.getTransactionStatus(hashHex, {
-          scope: normalized.scope,
+          scope: "global",
           signal: controller.signal,
         });
         throwIfAbortSignalAborted(controller.signal);
         throwIfDeadlineReached();
-        const status = pipelineStatusKind(lastPayload);
+        const resolution =
+          lastPayload === null
+            ? null
+            : classifyPipelineStatus(
+                lastPayload,
+                hashHex,
+                "transaction status response",
+              );
+        const status = resolution?.kind ?? null;
         if (normalized.onStatus) {
           const callback = Promise.resolve().then(() =>
             Reflect.apply(normalized.onStatus, undefined, [
@@ -1804,14 +1841,22 @@ class BrowserToriiPipelineClient {
         }
         throwIfAbortSignalAborted(controller.signal);
         throwIfDeadlineReached();
-        if (status === "Applied") {
-          return requireAuthoritativeAppliedStatus(
-            lastPayload,
-            hashHex,
-            "transaction status response",
-          );
+        if (status === "Applied" && resolution.resolvedFrom === "state") {
+          return lastPayload;
         }
-        if (status !== null && failureStatuses.has(status)) {
+        const isCanonicalTerminalFailure =
+          status === "Rejected" || status === "Expired";
+        const isStateTerminalFailure =
+          isCanonicalTerminalFailure &&
+          resolution?.resolvedFrom === "state";
+        const isConfiguredStateFailure =
+          failureStatuses.has(status) &&
+          resolution?.resolvedFrom === "state";
+        if (
+          status !== null &&
+          (isStateTerminalFailure ||
+            isConfiguredStateFailure)
+        ) {
           throw new BrowserTransactionRejectedError(status, lastPayload);
         }
         if (normalized.maxAttempts !== null && attempts >= normalized.maxAttempts) {

@@ -11,8 +11,6 @@ const DEFAULT_TORII_CLIENT_CONFIG = Object.freeze({
   defaultHeaders: Object.freeze({ Accept: "application/json" }),
   authToken: null,
   apiToken: null,
-  transactionStatusScope: "global",
-  statusEndpoints: Object.freeze([]),
   retryTelemetryHook: null,
   insecureTransportTelemetryHook: null,
 });
@@ -45,8 +43,6 @@ const ENV_KEYS = Object.freeze({
   retryMethods: "IROHA_TORII_RETRY_METHODS",
   apiToken: "IROHA_TORII_API_TOKEN",
   authToken: "IROHA_TORII_AUTH_TOKEN",
-  transactionStatusScope: "IROHA_TORII_TX_STATUS_SCOPE",
-  statusEndpoints: "IROHA_TORII_STATUS_ENDPOINTS",
 });
 
 const defaultEnv =
@@ -133,28 +129,6 @@ function normalizeHeaders(headers) {
     normalized.Accept = "application/json";
   }
   return normalized;
-}
-
-function normalizeTransactionStatusScope(value, name) {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-  const normalized = String(value).trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  if (normalized === "local" || normalized === "auto" || normalized === "global") {
-    return normalized;
-  }
-  throw new TypeError(`${name} must be one of: local, auto, global`);
-}
-
-function normalizeStatusEndpointList(value) {
-  const parsed = parseList(value, (entry) => {
-    const normalized = String(entry ?? "").trim();
-    return normalized ? normalized : null;
-  });
-  return [...new Set(parsed)];
 }
 
 function extractToriiClientSource(config) {
@@ -266,8 +240,6 @@ function applyRetryProfilePatch(target, patch) {
  *   defaultHeaders: Record<string, string>;
  *   authToken: string | null;
  *   apiToken: string | null;
- *   transactionStatusScope: "local" | "auto" | "global";
- *   statusEndpoints: Array<string>;
  *   retryProfiles: Record<string, {
  *     maxRetries: number;
  *     backoffInitialMs: number;
@@ -291,8 +263,6 @@ export function resolveToriiClientConfig(input = {}) {
     defaultHeaders: { ...DEFAULT_TORII_CLIENT_CONFIG.defaultHeaders },
     authToken: DEFAULT_TORII_CLIENT_CONFIG.authToken,
     apiToken: pickApiToken(config),
-    transactionStatusScope: DEFAULT_TORII_CLIENT_CONFIG.transactionStatusScope,
-    statusEndpoints: [...DEFAULT_TORII_CLIENT_CONFIG.statusEndpoints],
     retryTelemetryHook: DEFAULT_TORII_CLIENT_CONFIG.retryTelemetryHook,
     insecureTransportTelemetryHook: DEFAULT_TORII_CLIENT_CONFIG.insecureTransportTelemetryHook,
   };
@@ -320,6 +290,11 @@ export function resolveToriiClientConfig(input = {}) {
   for (const source of sources) {
     if (!source || typeof source !== "object") {
       continue;
+    }
+    for (const removedOption of ["transactionStatusScope", "statusEndpoints"]) {
+      if (Object.prototype.hasOwnProperty.call(source, removedOption)) {
+        throw new TypeError(`${removedOption} is no longer supported`);
+      }
     }
     collectProfileOverrides(source);
     const timeout = coercePositiveInt(
@@ -384,18 +359,6 @@ export function resolveToriiClientConfig(input = {}) {
     }
     if (source.apiToken) {
       result.apiToken = String(source.apiToken);
-    }
-    if (source.transactionStatusScope !== undefined) {
-      const normalizedScope = normalizeTransactionStatusScope(
-        source.transactionStatusScope,
-        "transactionStatusScope",
-      );
-      if (normalizedScope) {
-        result.transactionStatusScope = normalizedScope;
-      }
-    }
-    if (source.statusEndpoints !== undefined) {
-      result.statusEndpoints = normalizeStatusEndpointList(source.statusEndpoints);
     }
     if (typeof source.retryTelemetryHook === "function") {
       result.retryTelemetryHook = source.retryTelemetryHook;
@@ -468,19 +431,6 @@ export function resolveToriiClientConfig(input = {}) {
   if (ENV_KEYS.authToken in env && env[ENV_KEYS.authToken]) {
     result.authToken = env[ENV_KEYS.authToken] || null;
   }
-  if (ENV_KEYS.transactionStatusScope in env && env[ENV_KEYS.transactionStatusScope]) {
-    const normalizedScope = normalizeTransactionStatusScope(
-      env[ENV_KEYS.transactionStatusScope],
-      "IROHA_TORII_TX_STATUS_SCOPE",
-    );
-    if (normalizedScope) {
-      result.transactionStatusScope = normalizedScope;
-    }
-  }
-  if (ENV_KEYS.statusEndpoints in env && env[ENV_KEYS.statusEndpoints]) {
-    result.statusEndpoints = normalizeStatusEndpointList(env[ENV_KEYS.statusEndpoints]);
-  }
-
   const defaultOverride = profileOverrides.get("default");
   if (defaultOverride) {
     profileOverrides.delete("default");

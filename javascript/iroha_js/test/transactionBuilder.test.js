@@ -1147,7 +1147,10 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
       [{ waitForCommit: "true" }, /waitForCommit must be a boolean/],
       [{ transactionIntervalMs: -1 }, /intervalMs.*non-negative/i],
       [{ transactionTimeoutMs: -1 }, /timeoutMs.*non-negative/i],
-      [{ transactionStatusScope: "attacker" }, /scope.*local.*auto.*global/i],
+      [
+        { transactionStatusScope: "global" },
+        /transactionStatusScope is unsupported/u,
+      ],
     ]) {
       const calls = await rejectsBeforeSigning({ options, expected });
       assert.equal(calls.simulate, 0);

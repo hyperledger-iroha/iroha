@@ -59,6 +59,11 @@ const waitOptions: NexusWaitFinalizeOptions = {
   wait: true,
   signal: new AbortController().signal,
 };
+const removedWaitScope: NexusWaitFinalizeOptions = {
+  wait: true,
+  // @ts-expect-error finality waits are global-only.
+  scope: "global",
+};
 const invalidSuccessOverride: NexusWaitFinalizeOptions = {
   wait: true,
   // @ts-expect-error the success state is immutable and exact Applied.
@@ -85,5 +90,6 @@ void stronglyTypedBatchPayload;
 void codecPayload;
 void validated;
 void finalizeOptions;
+void removedWaitScope;
 void submittedErrorContext;
 void invalidNoWaitOptions;

@@ -288,204 +288,60 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   );
 });
 
-test("submitSignedTransaction forwards explicit transaction status scope", async () => {
+test("submitSignedTransaction rejects removed scope before signing or submission", async () => {
   const txBytes = Buffer.from([0xcc]);
-  const signedBytes = Buffer.from([0xdd]);
+  let nativeCalls = 0;
   const binding = {
-    hashSignedTransaction: () => Buffer.alloc(32, 0x66),
-    signTransaction: () => signedBytes,
+    hashSignedTransaction: () => {
+      nativeCalls += 1;
+      return Buffer.alloc(32, 0x66);
+    },
+    signTransaction: () => {
+      nativeCalls += 1;
+      return Buffer.from([0xdd]);
+    },
   };
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (url.endsWith("/v1/pipeline/transactions")) {
-      return createResponse({
-        status: 202,
-        jsonData: { status: "Accepted" },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return createResponse({
-      status: 200,
-      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x66), "Applied"),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-
-  await withNativeBinding(binding, () =>
-    submitSignedTransaction(client, txBytes, {
-      waitForCommit: true,
-      pollIntervalMs: 0,
-      privateKey: Buffer.alloc(32, 0x01),
-      scope: "local",
-    }),
-  );
-
-  const statusCall = calls.find((call) =>
-    String(call.url).includes("/v1/pipeline/transactions/status"),
-  );
-  assert.ok(statusCall);
-  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "local");
-});
-
-test("submitSignedTransaction explicit status scope overrides client configuration", async () => {
-  const txBytes = Buffer.from([0xd0]);
-  const signedBytes = Buffer.from([0xd1]);
-  const binding = {
-    hashSignedTransaction: () => Buffer.alloc(32, 0x68),
-    signTransaction: () => signedBytes,
-  };
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (url.endsWith("/v1/pipeline/transactions")) {
-      return createResponse({
-        status: 202,
-        jsonData: { status: "Accepted" },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return createResponse({
-      status: 200,
-      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x68), "Applied"),
-      headers: { "content-type": "application/json" },
-    });
-  };
+  let fetchCalls = 0;
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    transactionStatusScope: "local",
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("removed scope must fail before fetch");
+    },
   });
 
-  await withNativeBinding(binding, () =>
-    submitSignedTransaction(client, txBytes, {
-      waitForCommit: true,
-      pollIntervalMs: 0,
-      privateKey: Buffer.alloc(32, 0x01),
-      scope: "global",
-    }),
+  await assert.rejects(
+    withNativeBinding(binding, () =>
+      submitSignedTransaction(client, txBytes, {
+        waitForCommit: true,
+        privateKey: Buffer.alloc(32, 0x01),
+        scope: "global",
+      }),
+    ),
+    /scope is unsupported; finality waits always use global scope/u,
   );
-
-  const statusCall = calls.find((call) =>
-    String(call.url).includes("/v1/pipeline/transactions/status"),
-  );
-  assert.ok(statusCall);
-  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "global");
+  assert.equal(nativeCalls, 0);
+  assert.equal(fetchCalls, 0);
 });
 
-test("submitSignedTransaction inherits client transaction status scope", async () => {
-  const txBytes = Buffer.from([0xce]);
-  const signedBytes = Buffer.from([0xcf]);
+test("submitSignedTransaction rejects even null removed scope", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("removed scope must fail before fetch");
+    },
+  });
   const binding = {
     hashSignedTransaction: () => Buffer.alloc(32, 0x67),
-    signTransaction: () => signedBytes,
+    signTransaction: () => Buffer.from([0xdd]),
   };
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (url.endsWith("/v1/pipeline/transactions")) {
-      return createResponse({
-        status: 202,
-        jsonData: { status: "Accepted" },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return createResponse({
-      status: 200,
-      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x67), "Applied"),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    transactionStatusScope: "local",
-  });
 
-  await withNativeBinding(binding, () =>
-    submitSignedTransaction(client, txBytes, {
-      waitForCommit: true,
-      pollIntervalMs: 0,
-      privateKey: Buffer.alloc(32, 0x01),
-    }),
+  await assert.rejects(
+    withNativeBinding(binding, () =>
+      submitSignedTransaction(client, Buffer.from([0xce]), {
+        scope: null,
+      }),
+    ),
+    /scope is unsupported/u,
   );
-
-  const statusCall = calls.find((call) =>
-    String(call.url).includes("/v1/pipeline/transactions/status"),
-  );
-  assert.ok(statusCall);
-  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "local");
-});
-
-test("submitSignedTransaction null status scope inherits client configuration", async () => {
-  const txBytes = Buffer.from([0xd2]);
-  const signedBytes = Buffer.from([0xd3]);
-  const binding = {
-    hashSignedTransaction: () => Buffer.alloc(32, 0x69),
-    signTransaction: () => signedBytes,
-  };
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (url.endsWith("/v1/pipeline/transactions")) {
-      return createResponse({
-        status: 202,
-        jsonData: { status: "Accepted" },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return createResponse({
-      status: 200,
-      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x69), "Applied"),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    transactionStatusScope: "auto",
-  });
-
-  await withNativeBinding(binding, () =>
-    submitSignedTransaction(client, txBytes, {
-      waitForCommit: true,
-      pollIntervalMs: 0,
-      privateKey: Buffer.alloc(32, 0x01),
-      scope: null,
-    }),
-  );
-
-  const statusCall = calls.find((call) =>
-    String(call.url).includes("/v1/pipeline/transactions/status"),
-  );
-  assert.ok(statusCall);
-  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "auto");
 });
 
 test("submitSignedTransaction times out when no terminal status", async () => {

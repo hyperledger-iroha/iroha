@@ -2149,6 +2149,11 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   }
   const record = normalizePlainObject(input, "input");
   const opts = normalizePlainObject(options, "options");
+  if (Object.prototype.hasOwnProperty.call(opts, "transactionStatusScope")) {
+    throw new TypeError(
+      "options.transactionStatusScope is unsupported; finality waits always use global scope",
+    );
+  }
   const { signal } = ToriiClient._normalizeOptionsWithSignal(
     opts.signal === undefined ? {} : { signal: opts.signal },
     "submitIvmProvedContractCall",
@@ -2177,7 +2182,6 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   const hasTransactionPollOptions =
     opts.transactionIntervalMs !== undefined ||
     opts.transactionTimeoutMs !== undefined ||
-    opts.transactionStatusScope !== undefined ||
     opts.waitForCommit === true;
   const transactionPollOptions = hasTransactionPollOptions
     ? ToriiClient._normalizeTransactionStatusPollOptions(
@@ -2188,9 +2192,6 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
           ...(opts.transactionTimeoutMs === undefined
             ? {}
             : { timeoutMs: opts.transactionTimeoutMs }),
-          ...(opts.transactionStatusScope === undefined
-            ? {}
-            : { scope: opts.transactionStatusScope }),
           ...(signal === undefined ? {} : { signal }),
         },
         "submitIvmProvedContractCall transaction status options",
@@ -2573,9 +2574,6 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     ? await client.waitForTransactionStatusTyped(hashHex, {
         intervalMs: transactionPollOptions.intervalMs,
         timeoutMs: transactionPollOptions.timeoutMs,
-        ...(transactionPollOptions.scope === undefined
-          ? {}
-          : { scope: transactionPollOptions.scope }),
         ...(transactionPollOptions.signal === undefined
           ? {}
           : { signal: transactionPollOptions.signal }),
@@ -5351,6 +5349,11 @@ export async function submitSignedTransaction(
   if (!(client instanceof ToriiClient)) {
     throw new TypeError("client must be an instance of ToriiClient");
   }
+  if (Object.prototype.hasOwnProperty.call(options, "scope")) {
+    throw new TypeError(
+      "options.scope is unsupported; finality waits always use global scope",
+    );
+  }
   let txBuffer = toBuffer(signedTransaction);
   if (options.privateKey) {
     txBuffer = resignSignedTransaction(txBuffer, options.privateKey);
@@ -5370,7 +5373,7 @@ export async function submitSignedTransaction(
  * Submit a raw transaction entrypoint payload and optionally wait for authoritative Applied finality.
  * @param {ToriiClient} client
  * @param {ArrayBufferView | ArrayBuffer | Buffer} transactionEntrypoint
- * @param {{ hashHex: string, waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number, scope?: "local" | "auto" | "global" }} options
+ * @param {{ hashHex: string, waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number }} options
  * @returns {Promise<{hash: string, submission: any, status?: any}>}
  */
 export async function submitTransactionEntrypoint(
@@ -5384,6 +5387,11 @@ export async function submitTransactionEntrypoint(
   if (!options || typeof options !== "object") {
     throw new TypeError(
       "options.hashHex is required for entrypoint submission",
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(options, "scope")) {
+    throw new TypeError(
+      "options.scope is unsupported; finality waits always use global scope",
     );
   }
   const hashHex = String(options.hashHex ?? "").trim();
@@ -5406,9 +5414,6 @@ async function waitForAuthoritativeApplied(client, hashHex, options) {
     intervalMs: options.pollIntervalMs ?? 500,
     timeoutMs: options.timeoutMs ?? 30_000,
   };
-  if (options.scope !== undefined && options.scope !== null) {
-    pollOptions.scope = options.scope;
-  }
   return client.waitForTransactionStatusTyped(hashHex, pollOptions);
 }
 

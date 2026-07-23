@@ -2373,7 +2373,9 @@ test("NexusAppClient prevalidates all wait options before Torii side effects", a
     { intervalMs: -1 },
     { timeoutMs: Number.MAX_SAFE_INTEGER + 1 },
     { maxAttempts: 0 },
-    { scope: "remote" },
+    { scope: undefined },
+    { scope: null },
+    { scope: "global" },
     { onStatus: "not-a-callback" },
     { signal: { aborted: false } },
     { signal: aborted.signal },
@@ -2432,6 +2434,7 @@ test("NexusAppClient prevalidates all wait options before Torii side effects", a
   assert.ok(Array.isArray(observedOptions.failureStatuses));
   assert.ok(Object.isFrozen(observedOptions.failureStatuses));
   assert.equal("successStatuses" in observedOptions, false);
+  assert.equal("scope" in observedOptions, false);
   assert.deepEqual(observedOptions.failureStatuses, ["Rejected"]);
 });
 
