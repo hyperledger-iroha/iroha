@@ -2219,8 +2219,8 @@ impl ContractEntrypointAuthorizationSnapshot {
             })?;
         if live_code_hash != self.code_hash {
             return Err(ValidationFail::NotPermitted(format!(
-                "contract instance `{}` changed code binding while its call was prepared",
-                self.contract_address
+                "contract instance `{}` changed code binding while its call was prepared: captured `{}`, live `{}`",
+                self.contract_address, self.code_hash, live_code_hash
             )));
         }
 
@@ -17940,7 +17940,8 @@ seiyaku GuardedValueRebound {
             .expect_err("a signed direct call must not cross a live code rebind");
         assert!(
             matches!(rebound, ValidationFail::NotPermitted(ref message)
-                if message.contains(&code_hash.to_string())
+                if message.contains(&contract_address.to_string())
+                    && message.contains(&code_hash.to_string())
                     && message.contains(&rebound_code_hash.to_string())),
             "unexpected live-rebind error: {rebound}"
         );

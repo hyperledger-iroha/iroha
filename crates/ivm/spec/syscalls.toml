@@ -1040,9 +1040,9 @@ gas = "G_sysvar + bytes"
 
 [[syscall]]
 number = "0x010026"
-args = "r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1)"
+args = "r10=raw &NoritoBytes(EntrypointArgumentRecordV1) or prepared &NoritoBytes(record binding), r11=&NoritoBytes(EntrypointArgumentSchemaV1)"
 ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))"
-gas = "G_argument_decode + record + schema + output"
+gas = "G_argument_decode + record + schema + complete materialization"
 
 [[syscall]]
 number = "0x010027"

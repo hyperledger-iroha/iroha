@@ -5129,7 +5129,7 @@ seiyaku ProtectedParameterizedOverlay {
     fn protected_contract_call_is_checked_before_vm_and_again_before_overlay_apply() {
         use iroha_data_model::{
             permission::{Permission, Permissions},
-            transaction::executable::ContractInvocation,
+            transaction::executable::{ContractArgumentRecord, ContractInvocation},
         };
 
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
@@ -5141,8 +5141,30 @@ seiyaku ProtectedParameterizedOverlay {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive guarded contract address");
-        let (artifact, manifest) =
-            minimal_contract_artifact_with_permission(1, Some(REQUIRED_PERMISSION));
+        let (artifact, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku GuardedOverlay {
+  kotoage fn main(int value) authorize("CanInvokeContractEntrypoint") {
+    let _value = value;
+  }
+}
+"#,
+            )
+            .expect("compile parameterized guarded overlay contract");
+        let prepared = ivm::prepare_contract(Arc::from(artifact.clone()))
+            .expect("prepare parameterized guarded overlay contract");
+        let schema = prepared
+            .entrypoint_descriptor("main")
+            .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
+            .expect("main argument schema");
+        let arguments = ivm::encode_argument_record_from_json(
+            schema,
+            &Json::from(norito::json!({ "value": "7" })),
+        )
+        .expect("encode guarded overlay arguments");
+        let arguments =
+            ContractArgumentRecord::try_new(arguments).expect("bounded guarded overlay arguments");
         let code_hash = manifest.code_hash.expect("verified code hash");
         let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
             "guarded",
@@ -5198,7 +5220,7 @@ seiyaku ProtectedParameterizedOverlay {
             contract_address: contract_address.clone(),
             expected_code_hash: code_hash,
             entrypoint: "main".to_owned(),
-            arguments: None,
+            arguments: Some(arguments),
         }))
         .sign(keypair.private_key());
 
@@ -5214,8 +5236,17 @@ seiyaku ProtectedParameterizedOverlay {
             "unexpected authorization error: {denied:?}"
         );
 
-        let (rebound_artifact, rebound_manifest) =
-            minimal_contract_artifact_with_permission(1, Some("ReboundPermission"));
+        let (rebound_artifact, rebound_manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku GuardedOverlayRebound {
+  kotoage fn main(int value) authorize("CanInvokeContractEntrypoint") {
+    let _value = value + 1;
+  }
+}
+"#,
+            )
+            .expect("compile parameterized rebound overlay contract");
         let rebound_code_hash = rebound_manifest.code_hash.expect("rebound code hash");
         assert_ne!(rebound_code_hash, code_hash);
         let mut rebound_state = make_state(true);
@@ -5231,16 +5262,23 @@ seiyaku ProtectedParameterizedOverlay {
             .world
             .contract_instances
             .insert(contract_address.clone(), rebound_code_hash);
+        ivm::reset_argument_record_decode_count();
         let rebound_error = build_overlay_for_transaction(&transaction, &rebound_state.view())
             .expect_err("a signed call must not execute after its address is rebound");
         assert!(
             matches!(
                 &rebound_error,
                 OverlayBuildError::ContractCall(message)
-                    if message.contains(&code_hash.to_string())
+                    if message.contains(&contract_address.to_string())
+                        && message.contains(&code_hash.to_string())
                         && message.contains(&rebound_code_hash.to_string())
             ),
             "unexpected code-binding error: {rebound_error:?}"
+        );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "code-hash drift must reject before argument decoding"
         );
 
         let authorized_state = make_state(true);
@@ -5479,10 +5517,11 @@ seiyaku ProtectedParameterizedOverlay {
 
         let mut rebound_block = authorized_state.block(header.clone());
         let mut rebound_transaction = rebound_block.transaction();
+        let changed_code_hash = Hash::new(b"changed-guarded-code");
         rebound_transaction
             .world
             .contract_instances
-            .insert(contract_address.clone(), Hash::new(b"changed-guarded-code"));
+            .insert(contract_address.clone(), changed_code_hash);
         let error = overlay
             .apply(&mut rebound_transaction, &authority)
             .expect_err("a changed code binding must invalidate a prepared contract overlay");
@@ -5491,6 +5530,9 @@ seiyaku ProtectedParameterizedOverlay {
                 &error,
                 ValidationFail::NotPermitted(message)
                     if message.contains("changed code binding")
+                        && message.contains(&contract_address.to_string())
+                        && message.contains(&code_hash.to_string())
+                        && message.contains(&changed_code_hash.to_string())
             ),
             "unexpected changed-code error: {error:?}"
         );
@@ -6813,6 +6855,7 @@ seiyaku ProtectedProvedOverlay {
             "universal",
         )
         .expect("valid replacement proved-overlay alias");
+        let changed_code_hash = Hash::new(b"changed-proved-overlay-code");
         for (mutation, expected_error) in [
             ("permission", REQUIRED_PERMISSION),
             ("instance", "no longer active"),
@@ -6834,10 +6877,10 @@ seiyaku ProtectedProvedOverlay {
                         .remove(contract_address.clone());
                 }
                 "code" => {
-                    state_tx.world.contract_instances.insert(
-                        contract_address.clone(),
-                        Hash::new(b"changed-proved-overlay-code"),
-                    );
+                    state_tx
+                        .world
+                        .contract_instances
+                        .insert(contract_address.clone(), changed_code_hash);
                 }
                 "alias" => {
                     state_tx
@@ -6877,6 +6920,17 @@ seiyaku ProtectedProvedOverlay {
                 ),
                 "unexpected {mutation} mutation error: {error:?}"
             );
+            if mutation == "code" {
+                let ValidationFail::NotPermitted(message) = &error else {
+                    unreachable!("code mutation is reported as a permission denial");
+                };
+                assert!(
+                    message.contains(&contract_address.to_string())
+                        && message.contains(&summary.code_hash.to_string())
+                        && message.contains(&changed_code_hash.to_string()),
+                    "proved code-drift revalidation must identify the address and both hashes: {error:?}"
+                );
+            }
             assert!(
                 state_tx
                     .world
@@ -8873,7 +8927,27 @@ seiyaku ProtectedProved {
         use iroha_primitives::json::Json;
         use std::sync::Arc;
 
-        let (program, header_len, meta) = sample_program_zk_mode();
+        let compiler =
+            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+                force_zk: true,
+                max_cycles: 10_000,
+                ..ivm::kotodama::compiler::CompilerOptions::default()
+            });
+        let (program, manifest) = compiler
+            .compile_source_with_manifest(
+                r#"
+seiyaku AliasBoundArguments {
+  kotoage fn main(int value) authorize("CanInvokeOverlayFixture") {
+    let _value = value;
+  }
+}
+"#,
+            )
+            .expect("compile parameterized ZK alias-binding fixture");
+        let parsed =
+            ivm::ProgramMetadata::parse(&program).expect("parse parameterized alias fixture");
+        let header_len = parsed.header_len;
+        let meta = parsed.metadata;
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let bytecode = IvmBytecode::from_compiled(program);
         let kp = checked_keypair();
@@ -8889,50 +8963,42 @@ seiyaku ProtectedProved {
             "router::universal".parse().expect("active alias");
         let spoofed_alias = "benefit::universal";
 
-        let mut world = crate::state::World::default();
+        let domain = iroha_data_model::domain::Domain::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+        )
+        .build(&authority);
+        let account = build_wonderland_account(&authority);
+        let mut world = crate::state::World::with([domain], [account], []);
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
         world
             .contract_code
             .insert(code_hash, bytecode.as_ref().to_vec());
-        world.contract_manifests.insert(
-            code_hash,
-            ContractManifest {
-                seiyaku_name: None,
-                code_hash: Some(code_hash),
-                abi_hash: Some(abi_hash),
-                compiler_fingerprint: None,
-                features_bitmap: None,
-                access_set_hints: None,
-                entrypoints: None,
-                states: None,
-                kotoba: None,
-                error_codes: None,
-                provenance: None,
-            }
-            .signed(&kp),
+        assert_eq!(manifest.abi_hash, Some(abi_hash));
+        world.contract_manifests.insert(code_hash, manifest);
+        world
+            .bind_contract_alias(&contract_address, active_alias.clone(), None, None, 0)
+            .expect("bind canonical alias");
+        let mut permissions = iroha_data_model::permission::Permissions::new();
+        assert!(
+            permissions.insert(iroha_data_model::permission::Permission::new(
+                "CanInvokeOverlayFixture".to_owned(),
+                Json::new(()),
+            ))
         );
         world
-            .bind_contract_alias(&contract_address, active_alias, None, None, 0)
-            .expect("bind canonical alias");
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+        state.zk.halo2.enabled = true;
         let summary = IvmCache::new()
             .summarize_program(bytecode.as_ref())
             .expect("program summary");
 
-        let executable_variants = [
-            Executable::Ivm(bytecode.clone()),
-            Executable::IvmProved(IvmProved {
-                bytecode,
-                overlay: Vec::<InstructionBox>::new().into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            }),
-        ];
-        for executable in executable_variants {
+        let assert_spoofed_alias_denied_without_decode = |label: &str, executable: Executable| {
             let mut metadata = Metadata::default();
             metadata.insert(
                 "contract_address".parse().expect("metadata key"),
@@ -8942,6 +9008,14 @@ seiyaku ProtectedProved {
                 "contract_alias".parse().expect("metadata key"),
                 Json::new(spoofed_alias),
             );
+            metadata.insert(
+                "contract_entrypoint".parse().expect("metadata key"),
+                Json::new("main"),
+            );
+            metadata.insert(
+                "contract_payload".parse().expect("metadata key"),
+                Json::from(norito::json!({ "value": "7" })),
+            );
             let tx = TransactionBuilder::new(
                 state.chain_id.clone(),
                 authority.clone(),
@@ -8950,17 +9024,76 @@ seiyaku ProtectedProved {
             .with_metadata(metadata)
             .with_executable(executable)
             .sign(kp.private_key());
-            let error = validate_contract_binding(&state.view(), &tx, &summary)
+            ivm::reset_argument_record_decode_count();
+            let error = build_overlay_for_transaction(&tx, &state.view())
                 .expect_err("spoofed alias must fail before VM/proof execution");
             assert!(
                 matches!(
                     error,
                     OverlayBuildError::ContractCall(ref message)
-                        if message.contains("is not bound in live state")
+                        if message.contains("contract alias")
+                            && message.contains(spoofed_alias)
+                            && message.contains("is not bound in live state")
                 ),
-                "unexpected spoofed-alias error: {error:?}"
+                "unexpected {label} spoofed-alias error: {error:?}"
             );
-        }
+            assert_eq!(
+                ivm::argument_record_decode_count(),
+                0,
+                "{label} spoofed-alias denial must precede argument decoding"
+            );
+
+            let mut canonical_metadata = Metadata::default();
+            canonical_metadata.insert(
+                "contract_address".parse().expect("metadata key"),
+                Json::new(contract_address.to_string()),
+            );
+            canonical_metadata.insert(
+                "contract_alias".parse().expect("metadata key"),
+                Json::new(active_alias.to_string()),
+            );
+            canonical_metadata.insert(
+                "contract_entrypoint".parse().expect("metadata key"),
+                Json::new("main"),
+            );
+            canonical_metadata.insert(
+                "contract_payload".parse().expect("metadata key"),
+                Json::from(norito::json!({ "value": "7" })),
+            );
+            let canonical_tx = TransactionBuilder::new(
+                state.chain_id.clone(),
+                authority.clone(),
+                test_fee_payment(),
+            )
+            .with_metadata(canonical_metadata)
+            .with_executable(tx.instructions().clone())
+            .sign(kp.private_key());
+            ivm::reset_argument_record_decode_count();
+            validate_contract_binding(&state.view(), &canonical_tx, &summary)
+                .expect("canonical alias must satisfy the live binding");
+            authorize_and_prepare_raw_contract_dispatch(
+                &state.view(),
+                &canonical_tx,
+                &summary,
+                TEST_GAS_LIMIT,
+            )
+            .expect("canonical alias control must reach argument preparation");
+            assert_eq!(
+                ivm::argument_record_decode_count(),
+                1,
+                "{label} canonical-alias control must prove the decoder is reachable"
+            );
+        };
+        assert_spoofed_alias_denied_without_decode("raw IVM", Executable::Ivm(bytecode.clone()));
+        assert_spoofed_alias_denied_without_decode(
+            "proved IVM",
+            Executable::IvmProved(IvmProved {
+                bytecode,
+                overlay: Vec::<InstructionBox>::new().into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            }),
+        );
     }
 
     #[test]

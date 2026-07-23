@@ -899,15 +899,15 @@ def test_registry_rejects_legacy_or_ambiguous_v2_finality_anchor(
     (
         (
             "bsc-mainnet",
-            "e2ce4a5df24ee62891f0f856b3e418f5bd3e2705baefd80a5fbf5e8cc2d3de1e",
-            "2958dc4b874a166fbca91d1d1342c57c5150264c96c8d65fd64df8d57b46ab24",
-            "0fc9aacab4fda553fff88ac434294fa879b4205e723c377a82754bdc2db152c6",
+            "cf29ff20ded900ee5571d1d2ded8cd14c85018fd63af0da89a040b4bfde30280",
+            "50542cf770b037dc5762d23945b3f7985e41ba0d431daa92ebef76a2313f021e",
+            "57f92589f513d0dda3edb5baaf7490b32937320971d7dc4efc579abd1e84787d",
         ),
         (
             "tron-nile",
-            "f24976e50078da09188c4a2101facfba7b905cfd33cc895d3e12fc64e52a654a",
-            "5d9d742ae3e48271dc66edd579f23ce7dbe29c92fb3bfa1956da2ac97272fec3",
-            "a806a759ea6104c7202276811a0ac8dd8e6f40ac37d6050f93f7d0106c921f9d",
+            "70d4c2848f70d990c4b0947bb7b80b7f099d69512924846e756e53cf521e3c28",
+            "5e81199cba1d4025c631a2066c7021da08f857f0d2adbe9f6e2f59830ab5d192",
+            "53438fa035a8cb92d9d6528dd4977eb04647def1c543ad4517dc735e2baab74d",
         ),
     ),
 )

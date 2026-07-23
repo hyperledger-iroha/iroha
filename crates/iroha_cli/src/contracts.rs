@@ -44,8 +44,9 @@ use crate::{
     Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override, wait_for_transaction_status,
 };
 
-// Canonical argument preparation reserves the bounded 1 MiB HEAP before
-// decoding; keep the default above that floor with room for a small call.
+// Canonical argument preparation checks a conservative predecode gas quote
+// covering bounded complete materialization; keep the default above that
+// bound with room for a small call.
 const DEFAULT_CONTRACT_GAS_LIMIT: u64 = 1_500_000;
 
 #[derive(clap::Subcommand, Debug)]

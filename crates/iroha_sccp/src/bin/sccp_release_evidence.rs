@@ -79,7 +79,7 @@ const SEMANTIC_ARTIFACT_ROLES: [(&str, &str, &str); 7] = [
     ("honest-witness", "honest-witness", "honest-witness.bin"),
     ("honest-proof", "honest-proof", "honest-proof.norito"),
 ];
-const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 67] = [
+const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 71] = [
     "3908a9df4eb45c2c3eb744f5a5fde5af87f346a59a4995378e95c3895b9e2d5d",
     "4baed4d3a15b3269ab5e710393de6f01944c3af9691dc7a8661474ced9a033f2",
     "0ffb0e0e942b1f2250eb5674aa5674334cb0e84a7374369cc9d9ec636392198e",
@@ -147,6 +147,10 @@ const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 67] = [
     "e61d512ed09e72e6d680872844ac1c3632f2bb4f676155eab5492a8439132232",
     "55e4ba52faa1a07a3e8630dcdd1c0472153d58497bb81e2c92dfcbf7d172f857",
     "bd463cf2379a295d6efdd6e3815d9f8724f5e4118a3a9e430192d3a0480e6f4e",
+    "41bc028d4c26c0e813ad4e34be3107e6e24df9acc308062a571d1a7fa9faad6b",
+    "be17b849954015736c16fcfda8f4116c3afc8bf33aefd9205e3f016ce17b0e80",
+    "0dbd733d77a26492584a6784c21197718eb5dcea70adc75e4b14a494394eb832",
+    "6009fe506d323c679d696d0660ef1218ef079a7782f82f7ac80730c9adf2fe86",
 ];
 const REQUIRED_PHASES: [&str; 12] = [
     "rust-sccp",
@@ -3554,7 +3558,7 @@ mod tests {
 
         validate_destination_readback(
             &route,
-            readback(semantic_profile_hash, sora_finality_anchor_hash),
+            &readback(semantic_profile_hash, sora_finality_anchor_hash),
         )
         .expect("exact EVM destination readback must validate");
 
@@ -3563,7 +3567,7 @@ mod tests {
         assert!(
             validate_destination_readback(
                 &route,
-                readback(mutated_semantic_profile_hash, sora_finality_anchor_hash),
+                &readback(mutated_semantic_profile_hash, sora_finality_anchor_hash),
             )
             .is_err()
         );
@@ -3573,7 +3577,7 @@ mod tests {
         assert!(
             validate_destination_readback(
                 &route,
-                readback(semantic_profile_hash, mutated_sora_finality_anchor_hash),
+                &readback(semantic_profile_hash, mutated_sora_finality_anchor_hash),
             )
             .is_err()
         );
@@ -3681,15 +3685,15 @@ mod tests {
                 .expect("exact governed TRON route configuration must hash"),
         };
 
-        validate_tron_destination_readback(&state, &route, deployment)
+        validate_tron_destination_readback(&state, &route, &deployment)
             .expect("exact TRON destination readback must validate");
 
         state.semantic_proof_profile_hash[0] ^= 1;
-        assert!(validate_tron_destination_readback(&state, &route, deployment).is_err());
+        assert!(validate_tron_destination_readback(&state, &route, &deployment).is_err());
         state.semantic_proof_profile_hash = semantic_proof_profile_hash;
 
         state.sora_finality_anchor_hash[0] ^= 1;
-        assert!(validate_tron_destination_readback(&state, &route, deployment).is_err());
+        assert!(validate_tron_destination_readback(&state, &route, &deployment).is_err());
     }
 
     fn validated_destination() -> ValidatedDestinationStateV1 {

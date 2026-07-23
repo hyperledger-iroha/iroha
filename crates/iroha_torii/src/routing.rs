@@ -19051,8 +19051,9 @@ pub fn validate_contract_view_batch_request(req: &ContractViewBatchDto) -> Resul
 }
 
 #[cfg(feature = "app_api")]
-// Canonical argument preparation reserves the bounded 1 MiB HEAP before
-// decoding; keep implicit contract-call/view budgets above that floor.
+// Canonical argument preparation checks a conservative predecode gas quote
+// covering bounded complete materialization; keep implicit contract-call/view
+// budgets above that bound.
 const DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT: u64 = 1_500_000;
 
 #[cfg(feature = "app_api")]

@@ -23056,7 +23056,7 @@ seiyaku Callee {
         host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
             .expect("root transfer should enqueue");
 
-        let nested_target = callee_contract.to_string();
+        let nested_target = callee_contract.subject_id().to_string();
         let nested_asset = asset_def_id.to_string();
         let nested_payload = Json::from(norito::json!({
             "target": nested_target,

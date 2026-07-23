@@ -309,10 +309,9 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         ret = "r10=ptr (&Blob(entrypoint)) or 0".into();
         gas = "G_sysvar + bytes".into();
     } else if up.contains("DECODE_ARGUMENT_RECORD") || n == 0x01_0026 {
-        args = "r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1)"
-            .into();
+        args = "r10=raw &NoritoBytes(EntrypointArgumentRecordV1) or prepared &NoritoBytes(record binding), r11=&NoritoBytes(EntrypointArgumentSchemaV1)".into();
         ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))".into();
-        gas = "G_argument_decode + record + schema + output".into();
+        gas = "G_argument_decode + record + schema + complete materialization".into();
     } else if up.contains("NORMALIZE_NORITO_BYTES") || n == 0x01_0028 {
         args = "r10=&Blob or &NoritoBytes (validated public TLV)".into();
         ret = "r10=&NoritoBytes(same payload)".into();
