@@ -84,10 +84,11 @@ public final class NoritoDecoder {
   }
 
   public long readLength(boolean compact) {
-    if (compact) {
-      return readVarint();
+    final long length = compact ? readVarint() : readUInt(64);
+    if (length < 0 || length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("Norito length exceeds the supported JVM range");
     }
-    return readUInt(64);
+    return length;
   }
 
   public long readVarint() {

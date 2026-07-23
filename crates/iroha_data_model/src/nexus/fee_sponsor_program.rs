@@ -168,6 +168,38 @@ pub struct FeeSponsorNativeInstructionSelector {
     pub asset_definition_id: Option<AssetDefinitionId>,
 }
 
+/// Multisig operation that a sponsor rule may authorize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "operation", content = "value", rename_all = "snake_case")]
+pub enum FeeSponsorMultisigOperation {
+    /// Propose a transaction for an existing multisig account.
+    Propose,
+    /// Approve an existing proposal for a multisig account.
+    Approve,
+    /// Cancel an existing proposal for a multisig account.
+    Cancel,
+    /// Register a new multisig account.
+    Register,
+}
+
+/// Exact selector for explicitly enumerated multisig operations and target accounts.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct FeeSponsorMultisigSelector {
+    /// Non-empty, strictly ordered set of explicitly allowed operations.
+    pub operations: Vec<FeeSponsorMultisigOperation>,
+    /// Non-empty, strictly ordered set of exact target account IDs.
+    pub account_ids: Vec<AccountId>,
+}
+
 /// Exact selector payload for one deployed contract and code version.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -212,6 +244,8 @@ pub struct FeeSponsorIvmSelector {
 pub enum FeeSponsorRuleSelector {
     /// One native instruction wire ID, optionally restricted to an asset definition.
     NativeInstruction(FeeSponsorNativeInstructionSelector),
+    /// Explicit multisig operations restricted to exact target accounts.
+    Multisig(FeeSponsorMultisigSelector),
     /// One deployed contract and code version, optionally restricted to entrypoints.
     ContractCall(FeeSponsorContractSelector),
     /// One exact raw IVM program hash.
@@ -324,6 +358,18 @@ pub enum FeeSponsorProgramRevisionError {
     /// Native instruction wire IDs must be nonempty, unpadded canonical strings.
     #[error("fee sponsor rule `{0}` contains an invalid native instruction wire id")]
     InvalidInstructionWireId(Name),
+    /// Multisig selectors must enumerate at least one operation.
+    #[error("fee sponsor rule `{0}` contains a multisig selector without operations")]
+    EmptyMultisigOperations(Name),
+    /// Multisig operations must be unique and strictly ordered.
+    #[error("fee sponsor rule `{0}` contains non-canonical multisig operations")]
+    NonCanonicalMultisigOperations(Name),
+    /// Multisig selectors must enumerate at least one exact account ID.
+    #[error("fee sponsor rule `{0}` contains a multisig selector without account ids")]
+    EmptyMultisigAccounts(Name),
+    /// Multisig account IDs must be unique and strictly ordered.
+    #[error("fee sponsor rule `{0}` contains non-canonical multisig account ids")]
+    NonCanonicalMultisigAccounts(Name),
     /// Contract selectors must enumerate at least one exact entrypoint.
     #[error("fee sponsor rule `{0}` contains a contract selector without exact entrypoints")]
     EmptyContractEntrypoints(Name),
@@ -398,6 +444,40 @@ impl FeeSponsorProgramRevision {
                         return Err(FeeSponsorProgramRevisionError::InvalidInstructionWireId(
                             rule.id.clone(),
                         ));
+                    }
+                    FeeSponsorRuleSelector::Multisig(selector) => {
+                        if selector.operations.is_empty() {
+                            return Err(FeeSponsorProgramRevisionError::EmptyMultisigOperations(
+                                rule.id.clone(),
+                            ));
+                        }
+                        if selector
+                            .operations
+                            .windows(2)
+                            .any(|pair| pair[0] >= pair[1])
+                        {
+                            return Err(
+                                FeeSponsorProgramRevisionError::NonCanonicalMultisigOperations(
+                                    rule.id.clone(),
+                                ),
+                            );
+                        }
+                        if selector.account_ids.is_empty() {
+                            return Err(FeeSponsorProgramRevisionError::EmptyMultisigAccounts(
+                                rule.id.clone(),
+                            ));
+                        }
+                        if selector
+                            .account_ids
+                            .windows(2)
+                            .any(|pair| pair[0] >= pair[1])
+                        {
+                            return Err(
+                                FeeSponsorProgramRevisionError::NonCanonicalMultisigAccounts(
+                                    rule.id.clone(),
+                                ),
+                            );
+                        }
                     }
                     FeeSponsorRuleSelector::ContractCall(selector) => {
                         if selector.entrypoints.is_empty() {
@@ -849,6 +929,12 @@ mod tests {
         AccountId::new(keypair.public_key().clone())
     }
 
+    fn fixture_account(seed: u8) -> AccountId {
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
+        AccountId::new(keypair.public_key().clone())
+    }
+
     fn program_id() -> FeeSponsorProgramId {
         FeeSponsorProgramId::new(
             sponsor_account(),
@@ -963,6 +1049,97 @@ mod tests {
             FeeSponsorProgram::decode(&mut program_bytes.as_slice()).unwrap(),
             program
         );
+    }
+
+    #[test]
+    fn multisig_selector_roundtrips_binary_and_json() {
+        let mut account_ids = vec![fixture_account(0x31), fixture_account(0x32)];
+        account_ids.sort();
+        let selector = FeeSponsorRuleSelector::Multisig(FeeSponsorMultisigSelector {
+            operations: vec![
+                FeeSponsorMultisigOperation::Propose,
+                FeeSponsorMultisigOperation::Approve,
+                FeeSponsorMultisigOperation::Cancel,
+            ],
+            account_ids,
+        });
+
+        let bytes = selector.encode();
+        assert_eq!(
+            FeeSponsorRuleSelector::decode(&mut bytes.as_slice()).unwrap(),
+            selector
+        );
+
+        let json = norito::json::to_json(&selector).expect("serialize multisig selector");
+        assert!(json.contains("\"kind\":\"multisig\""), "{json}");
+        assert!(json.contains("\"operation\":\"propose\""), "{json}");
+        assert!(json.contains("\"operation\":\"approve\""), "{json}");
+        assert!(json.contains("\"operation\":\"cancel\""), "{json}");
+        assert_eq!(
+            norito::json::from_str::<FeeSponsorRuleSelector>(&json)
+                .expect("deserialize multisig selector"),
+            selector
+        );
+    }
+
+    #[test]
+    fn multisig_selector_validation_requires_canonical_explicit_sets() {
+        let mut account_ids = vec![fixture_account(0x41), fixture_account(0x42)];
+        account_ids.sort();
+        let selector = FeeSponsorMultisigSelector {
+            operations: vec![
+                FeeSponsorMultisigOperation::Propose,
+                FeeSponsorMultisigOperation::Approve,
+                FeeSponsorMultisigOperation::Cancel,
+            ],
+            account_ids,
+        };
+        let mut revision = sample_revision();
+        revision.rules[0].selectors = vec![FeeSponsorRuleSelector::Multisig(selector.clone())];
+        assert_eq!(revision.validate(), Ok(()));
+
+        let mut invalid = revision.clone();
+        let FeeSponsorRuleSelector::Multisig(selector) = &mut invalid.rules[0].selectors[0] else {
+            panic!("fixture selector must be multisig")
+        };
+        selector.operations.clear();
+        assert!(matches!(
+            invalid.validate(),
+            Err(FeeSponsorProgramRevisionError::EmptyMultisigOperations(_))
+        ));
+
+        let mut invalid = revision.clone();
+        let FeeSponsorRuleSelector::Multisig(selector) = &mut invalid.rules[0].selectors[0] else {
+            panic!("fixture selector must be multisig")
+        };
+        selector.operations = vec![
+            FeeSponsorMultisigOperation::Approve,
+            FeeSponsorMultisigOperation::Propose,
+        ];
+        assert!(matches!(
+            invalid.validate(),
+            Err(FeeSponsorProgramRevisionError::NonCanonicalMultisigOperations(_))
+        ));
+
+        let mut invalid = revision.clone();
+        let FeeSponsorRuleSelector::Multisig(selector) = &mut invalid.rules[0].selectors[0] else {
+            panic!("fixture selector must be multisig")
+        };
+        selector.account_ids.clear();
+        assert!(matches!(
+            invalid.validate(),
+            Err(FeeSponsorProgramRevisionError::EmptyMultisigAccounts(_))
+        ));
+
+        let mut invalid = revision;
+        let FeeSponsorRuleSelector::Multisig(selector) = &mut invalid.rules[0].selectors[0] else {
+            panic!("fixture selector must be multisig")
+        };
+        selector.account_ids.reverse();
+        assert!(matches!(
+            invalid.validate(),
+            Err(FeeSponsorProgramRevisionError::NonCanonicalMultisigAccounts(_))
+        ));
     }
 
     #[test]

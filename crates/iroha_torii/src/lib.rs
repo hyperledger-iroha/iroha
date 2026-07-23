@@ -72,6 +72,8 @@ pub mod profile_stats;
 mod push;
 #[doc(hidden)]
 pub mod query_load_profiles;
+#[cfg(feature = "app_api")]
+mod validation_fee_api;
 mod vpn;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
@@ -13094,7 +13096,7 @@ mod offline_kagemusha_readiness_tests {
     }
 
     #[test]
-    fn readiness_projects_exact_abi20_five_role_registry_and_artifact_set() {
+    fn readiness_projects_exact_abi21_five_role_registry_and_artifact_set() {
         let transfer = projected_verifier("transfer", "transfer-circuit", 0x11, 0x21);
         let topup = projected_verifier("topup", "topup-circuit", 0x12, 0x22);
         let unshield = projected_verifier("unshield", "unshield-circuit", 0x13, 0x23);
@@ -49847,6 +49849,11 @@ pub struct ToriiRuntimeDeps {
         Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     #[cfg(feature = "app_api")]
     sorafs_privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_gateway_acme_client: Option<Arc<dyn sorafs::gateway::AcmeClient>>,
+    #[cfg(feature = "app_api")]
+    sorafs_gateway_compliance_feed_transport:
+        Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
     torii_proxy_bridge_signer: Option<KeyPair>,
@@ -49867,6 +49874,10 @@ impl ToriiRuntimeDeps {
             sorafs_moderation_quarantine_key_wrapper: None,
             #[cfg(feature = "app_api")]
             sorafs_privacy_cycle_prf_provider: None,
+            #[cfg(feature = "app_api")]
+            sorafs_gateway_acme_client: None,
+            #[cfg(feature = "app_api")]
+            sorafs_gateway_compliance_feed_transport: None,
             sorafs_cache: None,
             vpn_helper_ticket_secret: None,
             torii_proxy_bridge_signer: None,
@@ -49929,6 +49940,30 @@ impl ToriiRuntimeDeps {
         provider: Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>,
     ) -> Self {
         self.sorafs_privacy_cycle_prf_provider = Some(provider);
+        self
+    }
+
+    /// Attach the runtime-only audited ACME client used by SoraFS gateway TLS
+    /// automation. The client owns no configuration fallback.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_gateway_acme_client(
+        mut self,
+        client: Arc<dyn sorafs::gateway::AcmeClient>,
+    ) -> Self {
+        self.sorafs_gateway_acme_client = Some(client);
+        self
+    }
+
+    /// Attach the runtime-only authenticated DNS/HTTPS transport used to fetch
+    /// configured SoraFS gateway compliance feeds.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_gateway_compliance_feed_transport(
+        mut self,
+        transport: Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>,
+    ) -> Self {
+        self.sorafs_gateway_compliance_feed_transport = Some(transport);
         self
     }
 
@@ -52860,6 +52895,22 @@ impl Torii {
             mount_get!(MINISTRY_AGENDA_GET, handler_ministry_agenda_proposal_get);
             mount_post!(GOV_PROPOSE_DEPLOY, handler_gov_propose_deploy);
             mount_post!(GOV_PROPOSE_SCCP, handler_gov_propose_sccp_route_governance);
+            mount_post!(
+                VALIDATION_FEE_CURRENT_POLICY_PROOF,
+                validation_fee_api::handler_current_policy_proof
+            );
+            mount_get!(
+                VALIDATION_FEE_PROPOSALS,
+                validation_fee_api::handler_proposals
+            );
+            mount_get!(
+                VALIDATION_FEE_PROPOSAL_DETAIL,
+                validation_fee_api::handler_proposal_detail
+            );
+            mount_post!(
+                VALIDATION_FEE_PROPOSAL_DRAFT,
+                validation_fee_api::handler_proposal_draft
+            );
             mount_get!(GOV_PROPOSAL_GET, handler_gov_proposal_get);
             mount_get!(GOV_LOCKS_GET, handler_gov_locks_get);
             mount_get!(GOV_REFERENDUM_GET, handler_gov_referendum_get);
@@ -53014,6 +53065,12 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let shared_sorafs_privacy_cycle_prf_provider =
             runtime_deps.sorafs_privacy_cycle_prf_provider.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_gateway_acme_client = runtime_deps.sorafs_gateway_acme_client.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_gateway_compliance_feed_transport = runtime_deps
+            .sorafs_gateway_compliance_feed_transport
+            .clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
         #[cfg(feature = "app_api")]
@@ -53502,10 +53559,23 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let sorafs_publish_discovery = config.sorafs_discovery.publish.clone();
         #[cfg(feature = "app_api")]
+        if !sorafs_node.is_enabled()
+            && (config.sorafs_gateway.acme.enabled
+                || config.sorafs_gateway.compliance.is_some()
+                || shared_sorafs_gateway_acme_client.is_some()
+                || shared_sorafs_gateway_compliance_feed_transport.is_some())
+        {
+            panic!(
+                "SoraFS gateway ACME/compliance runtime dependencies require torii.sorafs.storage.enabled"
+            );
+        }
+        #[cfg(feature = "app_api")]
         let sorafs_gateway_security = if sorafs_node.is_enabled() {
             Some(build_sorafs_gateway_security(
                 &config.sorafs_gateway,
                 sorafs_admission.clone(),
+                shared_sorafs_gateway_acme_client,
+                shared_sorafs_gateway_compliance_feed_transport,
             ))
         } else {
             None
@@ -55026,17 +55096,106 @@ struct GatewaySecurityComponents {
     denylist_catalog: Option<Arc<GatewayDenylistCatalogSnapshot>>,
     tls_state: Arc<RwLock<sorafs::gateway::TlsStateSnapshot>>,
     tls_automation: Option<Arc<sorafs::gateway::TlsAutomationHandle>>,
+    compliance_controller: Option<Arc<sorafs::gateway::GatewayComplianceController>>,
+    compliance_feed_transport: Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
     blinded_resolver: Option<Arc<sorafs::BlindedCidResolver>>,
+}
+
+#[cfg(feature = "app_api")]
+fn gateway_acme_config(
+    config: &iroha_config::parameters::actual::SorafsGatewayAcme,
+) -> sorafs::gateway::AcmeConfig {
+    sorafs::gateway::AcmeConfig {
+        enabled: config.enabled,
+        account_email: config.account_email.clone(),
+        directory_url: config.directory_url.clone(),
+        hostnames: config.hostnames.clone(),
+        dns_provider_id: config.dns_provider_id.clone(),
+        renewal_window: config.renewal_window,
+        retry_backoff: config.retry_backoff,
+        retry_jitter: config.retry_jitter,
+        challenge: sorafs::gateway::ChallengeProfile {
+            dns01: config.challenges.dns01,
+            tls_alpn_01: config.challenges.tls_alpn_01,
+        },
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn gateway_compliance_controller_config(
+    config: &iroha_config::parameters::actual::SorafsGatewayCompliance,
+) -> sorafs::gateway::GatewayComplianceControllerConfig {
+    use sorafs::gateway::{
+        GatewayComplianceFeedHostPolicy, GatewayComplianceFeedPolicy, GatewayComplianceFetchLimits,
+        GatewayComplianceTrustPolicyV1, GatewayComplianceTrustedSignerV1,
+    };
+
+    let convert_signer =
+        |signer: &iroha_config::parameters::actual::SorafsGatewayComplianceSigner| {
+            GatewayComplianceTrustedSignerV1 {
+                signer_id: signer.signer_id.clone(),
+                public_key: signer.public_key,
+            }
+        };
+    let trust_policy = GatewayComplianceTrustPolicyV1 {
+        policy_id: config.policy_id,
+        catalog_threshold: config.catalog_threshold,
+        catalog_signers: config.catalog_signers.iter().map(convert_signer).collect(),
+        revoked_catalog_signer_ids: config.revoked_catalog_signer_ids.clone(),
+        gateway_ack_threshold: config.gateway_ack_threshold,
+        gateway_signers: config.gateway_signers.iter().map(convert_signer).collect(),
+        revoked_gateway_signer_ids: config.revoked_gateway_signer_ids.clone(),
+    };
+    let feeds = config
+        .feeds
+        .iter()
+        .map(|feed| GatewayComplianceFeedPolicy {
+            feed_id: feed.feed_id.clone(),
+            url: feed.url.clone(),
+            required: feed.required,
+            hosts: feed
+                .hosts
+                .iter()
+                .map(|host| GatewayComplianceFeedHostPolicy {
+                    hostname: host.hostname.clone(),
+                    accepted_spki_sha256: host.accepted_spki_sha256.iter().copied().collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    GatewayComplianceControllerConfig {
+        trust_policy,
+        feeds,
+        fetch_limits: GatewayComplianceFetchLimits {
+            max_encoded_bytes: usize::try_from(config.max_encoded_bytes.0).unwrap_or_else(|_| {
+                panic!("torii.sorafs.gateway.compliance.max_encoded_bytes exceeds platform usize")
+            }),
+            max_decoded_bytes: usize::try_from(config.max_decoded_bytes.0).unwrap_or_else(|_| {
+                panic!("torii.sorafs.gateway.compliance.max_decoded_bytes exceeds platform usize")
+            }),
+            max_redirects: config.max_redirects,
+            max_dns_addresses: config.max_dns_addresses,
+            connect_timeout: config.connect_timeout,
+            total_timeout: config.total_timeout,
+        },
+        max_clock_skew_secs: config.max_clock_skew.as_secs(),
+        max_feed_age_secs: config.max_feed_age.as_secs(),
+        max_catalog_validity_secs: config.max_catalog_validity.as_secs(),
+        max_history_entries: config.max_history_entries,
+    }
 }
 
 #[cfg(feature = "app_api")]
 fn build_sorafs_gateway_security(
     config: &iroha_config::parameters::actual::SorafsGateway,
     admission: Option<Arc<sorafs::AdmissionRegistry>>,
+    acme_client: Option<Arc<dyn sorafs::gateway::AcmeClient>>,
+    compliance_feed_transport: Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
 ) -> GatewaySecurityComponents {
     use sorafs::gateway::{
-        GatewayDenylist, GatewayPolicy, GatewayPolicyConfig, GatewayRateLimitConfig,
-        GatewayRateLimiter, TlsStateSnapshot,
+        FileGatewayComplianceStore, GatewayComplianceController, GatewayDenylist, GatewayPolicy,
+        GatewayPolicyConfig, GatewayRateLimitConfig, GatewayRateLimiter, TlsAutomationHandle,
+        TlsStateSnapshot,
     };
 
     let denylist = Arc::new(GatewayDenylist::new());
@@ -55062,12 +55221,52 @@ fn build_sorafs_gateway_security(
     ));
     let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(config.acme.ech_enabled)));
 
-    let tls_automation = if config.acme.enabled {
-        panic!(
-            "torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected"
-        );
-    } else {
-        None
+    let tls_automation = match (config.acme.enabled, acme_client) {
+        (true, Some(client)) => Some(Arc::new(TlsAutomationHandle::new(
+            gateway_acme_config(&config.acme),
+            client,
+            Arc::clone(&tls_state),
+        ))),
+        (true, None) => {
+            panic!("torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected")
+        }
+        (false, Some(_)) => {
+            panic!(
+                "a SoraFS gateway ACME client was injected without enabling torii.sorafs.gateway.acme"
+            )
+        }
+        (false, None) => None,
+    };
+
+    let (compliance_controller, compliance_feed_transport) = match (
+        config.compliance.as_ref(),
+        compliance_feed_transport,
+    ) {
+        (Some(config), Some(transport)) => {
+            let store = FileGatewayComplianceStore::new(config.checkpoint_path.clone())
+                .unwrap_or_else(|err| {
+                    panic!("invalid torii.sorafs.gateway.compliance checkpoint storage: {err}")
+                });
+            let controller = GatewayComplianceController::new(
+                gateway_compliance_controller_config(config),
+                Arc::new(store),
+            )
+            .unwrap_or_else(|err| {
+                panic!("invalid torii.sorafs.gateway.compliance policy/checkpoint: {err}")
+            });
+            (Some(Arc::new(controller)), Some(transport))
+        }
+        (Some(_), None) => {
+            panic!(
+                "torii.sorafs.gateway.compliance is enabled but no runtime authenticated feed transport was injected"
+            )
+        }
+        (None, Some(_)) => {
+            panic!(
+                "a SoraFS gateway compliance feed transport was injected without enabling torii.sorafs.gateway.compliance"
+            )
+        }
+        (None, None) => (None, None),
     };
 
     let blinded_resolver = config.salt_schedule_dir.as_ref().map_or_else(
@@ -55093,7 +55292,334 @@ fn build_sorafs_gateway_security(
         denylist_catalog,
         tls_state,
         tls_automation,
+        compliance_controller,
+        compliance_feed_transport,
         blinded_resolver,
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod gateway_runtime_config_tests {
+    use ed25519_dalek::SigningKey;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct TestAcmeClient;
+
+    impl sorafs::gateway::AcmeClient for TestAcmeClient {
+        fn order_certificate(
+            &self,
+            _order: &sorafs::gateway::CertificateOrder,
+        ) -> Result<sorafs::gateway::CertificateBundle, sorafs::gateway::AcmeClientError> {
+            Err(sorafs::gateway::AcmeClientError::Rejected {
+                reason: "test client must not be invoked".into(),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestComplianceFeedTransport;
+
+    impl sorafs::gateway::GatewayComplianceFeedTransport for TestComplianceFeedTransport {
+        fn resolve(
+            &self,
+            _hostname: &str,
+            _timeout: Duration,
+        ) -> Result<Vec<IpAddr>, sorafs::gateway::GatewayComplianceError> {
+            Err(sorafs::gateway::GatewayComplianceError::InvalidFeed(
+                "test transport must not be invoked".into(),
+            ))
+        }
+
+        fn fetch(
+            &self,
+            _request: &sorafs::gateway::GatewayComplianceFetchRequest,
+        ) -> Result<
+            sorafs::gateway::GatewayComplianceFetchResponse,
+            sorafs::gateway::GatewayComplianceError,
+        > {
+            Err(sorafs::gateway::GatewayComplianceError::InvalidFeed(
+                "test transport must not be invoked".into(),
+            ))
+        }
+    }
+
+    fn compliance_signer(
+        signer_id: &str,
+        signing_key_byte: u8,
+    ) -> iroha_config::parameters::actual::SorafsGatewayComplianceSigner {
+        let signing_key = SigningKey::from_bytes(&[signing_key_byte; 32]);
+        iroha_config::parameters::actual::SorafsGatewayComplianceSigner {
+            signer_id: signer_id.into(),
+            public_key: signing_key.verifying_key().to_bytes(),
+        }
+    }
+
+    fn compliance_config(
+        checkpoint_path: PathBuf,
+    ) -> iroha_config::parameters::actual::SorafsGatewayCompliance {
+        iroha_config::parameters::actual::SorafsGatewayCompliance {
+            checkpoint_path,
+            policy_id: [0xA5; 32],
+            catalog_threshold: 2,
+            catalog_signers: vec![
+                compliance_signer("catalog-a", 0x11),
+                compliance_signer("catalog-b", 0x22),
+                compliance_signer("catalog-c", 0x33),
+            ],
+            revoked_catalog_signer_ids: vec!["catalog-c".into()],
+            gateway_ack_threshold: 2,
+            gateway_signers: vec![
+                compliance_signer("gateway-apac", 0x44),
+                compliance_signer("gateway-emea", 0x55),
+                compliance_signer("gateway-na", 0x66),
+            ],
+            revoked_gateway_signer_ids: vec!["gateway-na".into()],
+            feeds: vec![
+                iroha_config::parameters::actual::SorafsGatewayComplianceFeed {
+                    feed_id: "governed-baseline".into(),
+                    url: "https://feed.example.test/catalog".into(),
+                    required: true,
+                    hosts: vec![
+                        iroha_config::parameters::actual::SorafsGatewayComplianceFeedHost {
+                            hostname: "feed.example.test".into(),
+                            accepted_spki_sha256: vec![[0x71; 32], [0x72; 32]],
+                        },
+                    ],
+                },
+            ],
+            max_encoded_bytes: iroha_config::base::util::Bytes(4_096),
+            max_decoded_bytes: iroha_config::base::util::Bytes(8_192),
+            max_redirects: 4,
+            max_dns_addresses: 6,
+            connect_timeout: Duration::from_secs(7),
+            total_timeout: Duration::from_secs(23),
+            max_clock_skew: Duration::from_secs(301),
+            max_feed_age: Duration::from_secs(3_601),
+            max_catalog_validity: Duration::from_secs(7_201),
+            max_history_entries: 37,
+        }
+    }
+
+    #[test]
+    fn acme_runtime_mapping_preserves_every_resolved_field() {
+        let source = iroha_config::parameters::actual::SorafsGatewayAcme {
+            enabled: true,
+            account_email: Some("gateway-ops@example.test".into()),
+            directory_url: "https://acme.example.test/directory".into(),
+            hostnames: vec!["gateway-a.example.test".into(), "gateway-b.example.test".into()],
+            dns_provider_id: Some("runtime-dns-provider".into()),
+            renewal_window: Duration::from_secs(91),
+            retry_backoff: Duration::from_secs(92),
+            retry_jitter: Duration::from_secs(93),
+            challenges:
+                iroha_config::parameters::actual::SorafsGatewayAcmeChallenges {
+                    dns01: true,
+                    tls_alpn_01: false,
+                },
+            ech_enabled: true,
+        };
+
+        let mapped = gateway_acme_config(&source);
+
+        assert_eq!(mapped.enabled, source.enabled);
+        assert_eq!(mapped.account_email, source.account_email);
+        assert_eq!(mapped.directory_url, source.directory_url);
+        assert_eq!(mapped.hostnames, source.hostnames);
+        assert_eq!(mapped.dns_provider_id, source.dns_provider_id);
+        assert_eq!(mapped.renewal_window, source.renewal_window);
+        assert_eq!(mapped.retry_backoff, source.retry_backoff);
+        assert_eq!(mapped.retry_jitter, source.retry_jitter);
+        assert_eq!(mapped.challenge.dns01, source.challenges.dns01);
+        assert_eq!(
+            mapped.challenge.tls_alpn_01,
+            source.challenges.tls_alpn_01
+        );
+    }
+
+    #[test]
+    fn compliance_runtime_mapping_preserves_every_resolved_field() {
+        let source = compliance_config(PathBuf::from(
+            "/var/lib/iroha/sorafs/compliance-checkpoint.norito",
+        ));
+
+        let mapped = gateway_compliance_controller_config(&source);
+
+        assert_eq!(mapped.trust_policy.policy_id, source.policy_id);
+        assert_eq!(
+            mapped.trust_policy.catalog_threshold,
+            source.catalog_threshold
+        );
+        assert_eq!(
+            mapped
+                .trust_policy
+                .catalog_signers
+                .iter()
+                .map(|signer| (&signer.signer_id, signer.public_key))
+                .collect::<Vec<_>>(),
+            source
+                .catalog_signers
+                .iter()
+                .map(|signer| (&signer.signer_id, signer.public_key))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            mapped.trust_policy.revoked_catalog_signer_ids,
+            source.revoked_catalog_signer_ids
+        );
+        assert_eq!(
+            mapped.trust_policy.gateway_ack_threshold,
+            source.gateway_ack_threshold
+        );
+        assert_eq!(
+            mapped
+                .trust_policy
+                .gateway_signers
+                .iter()
+                .map(|signer| (&signer.signer_id, signer.public_key))
+                .collect::<Vec<_>>(),
+            source
+                .gateway_signers
+                .iter()
+                .map(|signer| (&signer.signer_id, signer.public_key))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            mapped.trust_policy.revoked_gateway_signer_ids,
+            source.revoked_gateway_signer_ids
+        );
+        assert_eq!(mapped.feeds.len(), 1);
+        assert_eq!(mapped.feeds[0].feed_id, source.feeds[0].feed_id);
+        assert_eq!(mapped.feeds[0].url, source.feeds[0].url);
+        assert_eq!(mapped.feeds[0].required, source.feeds[0].required);
+        assert_eq!(mapped.feeds[0].hosts.len(), 1);
+        assert_eq!(
+            mapped.feeds[0].hosts[0].hostname,
+            source.feeds[0].hosts[0].hostname
+        );
+        assert_eq!(
+            mapped.feeds[0].hosts[0].accepted_spki_sha256,
+            source.feeds[0].hosts[0]
+                .accepted_spki_sha256
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        );
+        assert_eq!(
+            mapped.fetch_limits.max_encoded_bytes,
+            usize::try_from(source.max_encoded_bytes.0).expect("test value fits usize")
+        );
+        assert_eq!(
+            mapped.fetch_limits.max_decoded_bytes,
+            usize::try_from(source.max_decoded_bytes.0).expect("test value fits usize")
+        );
+        assert_eq!(
+            mapped.fetch_limits.max_redirects,
+            source.max_redirects
+        );
+        assert_eq!(
+            mapped.fetch_limits.max_dns_addresses,
+            source.max_dns_addresses
+        );
+        assert_eq!(
+            mapped.fetch_limits.connect_timeout,
+            source.connect_timeout
+        );
+        assert_eq!(mapped.fetch_limits.total_timeout, source.total_timeout);
+        assert_eq!(
+            mapped.max_clock_skew_secs,
+            source.max_clock_skew.as_secs()
+        );
+        assert_eq!(mapped.max_feed_age_secs, source.max_feed_age.as_secs());
+        assert_eq!(
+            mapped.max_catalog_validity_secs,
+            source.max_catalog_validity.as_secs()
+        );
+        assert_eq!(mapped.max_history_entries, source.max_history_entries);
+        mapped.validate().expect("mapped policy must remain valid");
+    }
+
+    #[test]
+    fn runtime_dependency_builders_retain_injected_instances() {
+        let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
+        let compliance_transport: Arc<
+            dyn sorafs::gateway::GatewayComplianceFeedTransport,
+        > = Arc::new(TestComplianceFeedTransport);
+
+        let dependencies = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
+            .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
+            .with_sorafs_gateway_compliance_feed_transport(Arc::clone(&compliance_transport));
+
+        assert!(Arc::ptr_eq(
+            dependencies
+                .sorafs_gateway_acme_client
+                .as_ref()
+                .expect("ACME client retained"),
+            &acme_client
+        ));
+        assert!(Arc::ptr_eq(
+            dependencies
+                .sorafs_gateway_compliance_feed_transport
+                .as_ref()
+                .expect("compliance transport retained"),
+            &compliance_transport
+        ));
+    }
+
+    #[test]
+    fn gateway_security_builds_only_from_resolved_config_and_runtime_dependencies() {
+        let checkpoint_dir = tempfile::tempdir().expect("temporary checkpoint directory");
+        let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
+        let compliance_transport: Arc<
+            dyn sorafs::gateway::GatewayComplianceFeedTransport,
+        > = Arc::new(TestComplianceFeedTransport);
+        let mut config = iroha_config::parameters::actual::SorafsGateway::default();
+        config.acme.enabled = true;
+        config.compliance = Some(compliance_config(
+            checkpoint_dir.path().join("checkpoint.norito"),
+        ));
+
+        let components = build_sorafs_gateway_security(
+            &config,
+            None,
+            Some(acme_client),
+            Some(Arc::clone(&compliance_transport)),
+        );
+
+        assert!(components.tls_automation.is_some());
+        assert!(components.compliance_controller.is_some());
+        assert!(Arc::ptr_eq(
+            components
+                .compliance_feed_transport
+                .as_ref()
+                .expect("compliance transport retained"),
+            &compliance_transport
+        ));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected"
+    )]
+    fn acme_enabled_without_runtime_client_fails_closed() {
+        let mut config = iroha_config::parameters::actual::SorafsGateway::default();
+        config.acme.enabled = true;
+
+        let _ = build_sorafs_gateway_security(&config, None, None, None);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "torii.sorafs.gateway.compliance is enabled but no runtime authenticated feed transport was injected"
+    )]
+    fn compliance_enabled_without_runtime_transport_fails_closed() {
+        let mut config = iroha_config::parameters::actual::SorafsGateway::default();
+        config.compliance = Some(compliance_config(
+            std::env::temp_dir().join("unused-compliance-checkpoint.norito"),
+        ));
+
+        let _ = build_sorafs_gateway_security(&config, None, None, None);
     }
 }
 
@@ -58510,8 +59036,13 @@ pub(crate) mod tests_runtime_handlers {
         #[cfg(feature = "app_api")]
         let sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>> = None;
         #[cfg(feature = "app_api")]
-        let sorafs_node =
-            sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
+        // Test fixtures opt into an isolated storage directory explicitly. Never
+        // let a unit-test helper inherit the production data path.
+        let sorafs_node = sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .enabled(false)
+                .build(),
+        );
         #[cfg(feature = "app_api")]
         let sorafs_limits = Arc::new(sorafs::SorafsQuotaEnforcer::unlimited());
         #[cfg(feature = "app_api")]

@@ -1,12 +1,19 @@
 package org.hyperledger.iroha.sdk.core.model
 
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
+
 private const val BECH32M_CHECKSUM = 0x2BC830A3
 private const val CONTRACT_ADDRESS_VERSION_V1 = 1
 private const val CONTRACT_ADDRESS_PAYLOAD_BYTES_V1 = 29
+private const val CONTRACT_SUBJECT_COUNTER_MAX = 0xFFFF_FFFFL
 private const val CHECKSUM_WORDS = 6
 private const val MAX_BECH32_LENGTH = 90
 private const val MAX_HRP_LENGTH = 83
 private const val BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+private val CONTRACT_SUBJECT_HASH_TO_POINT_TAG_V1 =
+    "iroha:contract-subject:hash-to-point:v1:".toByteArray(Charsets.UTF_8)
 private val BECH32_GENERATORS = intArrayOf(
     0x3B6A57B2,
     0x26508E6D,
@@ -15,8 +22,13 @@ private val BECH32_GENERATORS = intArrayOf(
     0x2A1462B3,
 )
 
-/** Validate the canonical contract-address subset that Core can decode as ABI V1. */
-internal fun requireCanonicalV1ContractAddress(value: String): String {
+/**
+ * Validate the canonical contract-address subset that Core can decode as ABI V1.
+ *
+ * This public primitive is intended for clients embedding a typed
+ * `ContractAddress` inside larger authenticated Norito payloads.
+ */
+fun requireCanonicalV1ContractAddress(value: String): String {
     require(value.isNotEmpty() && value == value.trim()) {
         "contractAddress must be an exact non-empty string"
     }
@@ -49,6 +61,41 @@ internal fun requireCanonicalV1ContractAddress(value: String): String {
         "contractAddress uses an unsupported payload version"
     }
     return value
+}
+
+/**
+ * Derive the canonical non-signable account subject for an ABI V1 contract address.
+ *
+ * The domain separator, big-endian retry counter, marked Blake2b-256 hash, and
+ * prime-order Ed25519 admission rule are consensus-visible. This helper is the
+ * client-side parity surface for Rust `ContractAddress::subject_id()`.
+ */
+@JvmOverloads
+fun contractSubjectAccountIdV1(
+    contractAddress: String,
+    networkDiscriminant: Int = AccountAddress.DEFAULT_I105_DISCRIMINANT,
+): String {
+    val canonicalAddress = requireCanonicalV1ContractAddress(contractAddress)
+    val addressBytes = canonicalAddress.toByteArray(Charsets.UTF_8)
+    var counter = 0L
+    while (counter <= CONTRACT_SUBJECT_COUNTER_MAX) {
+        val counterBytes = byteArrayOf(
+            ((counter ushr 24) and 0xFF).toByte(),
+            ((counter ushr 16) and 0xFF).toByte(),
+            ((counter ushr 8) and 0xFF).toByte(),
+            (counter and 0xFF).toByte(),
+        )
+        val candidate = IrohaHash.prehash(
+            CONTRACT_SUBJECT_HASH_TO_POINT_TAG_V1 + addressBytes + counterBytes,
+        )
+        if (Ed25519PublicKeyAdmission.isValid(candidate)) {
+            return AccountAddress
+                .fromAccount(candidate, "ed25519")
+                .toI105(networkDiscriminant)
+        }
+        counter += 1
+    }
+    throw IllegalArgumentException("contract subject hash-to-point retry counter exhausted")
 }
 
 private fun bech32Polymod(hrp: String, data: IntArray): Int {

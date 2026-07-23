@@ -10,15 +10,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
-import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
 class NexusAppClientTest {
 
@@ -65,7 +68,9 @@ class NexusAppClientTest {
         )
 
         assertEquals(ACCOUNT_ID, approved.accountId)
-        assertEquals("Committed", receipt.finalStatus?.get("status"))
+        @Suppress("UNCHECKED_CAST")
+        val finalStatus = receipt.finalStatus?.get("status") as? Map<String, Any>
+        assertEquals("Applied", finalStatus?.get("kind"))
         assertEquals(receipt.transactionHashHex, torii.submittedHash)
         assertEquals(receipt.transactionHashHex, SignedTransactionHasher.hashHex(receipt.signedTransaction))
         assertContentEquals(PUBLIC_KEY, receipt.signedTransaction.publicKey())
@@ -101,9 +106,19 @@ class NexusAppClientTest {
         )
 
         val draft = client.buildTransferDraft(sampleInput())
+        val fixtureSignature = hexToBytes(string(expected, "wallet_signature_hex"))
+        val signed = SignedTransaction.builder()
+            .setEncodedPayload(draft.signable.payloadBytes)
+            .setSignature(fixtureSignature)
+            .setPublicKey(PUBLIC_KEY)
+            .setSchemaName(NoritoJavaCodecAdapter().schemaName())
+            .build()
 
         assertEquals(string(expected, "payload_hash_hex"), draft.signable.payloadHashHex)
         assertContentEquals(hexToBytes(string(expected, "payload_bytes_hex")), draft.signable.payloadBytes)
+        assertContentEquals(signPayload(draft.signable.payloadBytes), fixtureSignature)
+        assertEquals(string(expected, "signed_transaction_hash_hex"), SignedTransactionHasher.hashHex(signed))
+        assertEquals(listOf("Submitted", "Applied"), expected["status_sequence"])
     }
 
     @Test
@@ -120,16 +135,17 @@ class NexusAppClientTest {
         )
         val draft = client.buildTransferDraft(sampleInput())
         val signable = draft.signable.copy(signatureAlgorithm = "0")
+        val walletSignature = signPayload(signable.payloadBytes)
 
         val receipt = client.finalizeAndSubmit(
             signable,
-            NexusWalletSignature(WALLET_SIGNATURE, "0"),
+            NexusWalletSignature(walletSignature, "0"),
             NexusFinalizeOptions(waitForFinalStatus = false),
         )
 
         assertEquals(receipt.transactionHashHex, torii.submittedHash)
         assertEquals(receipt.transactionHashHex, SignedTransactionHasher.hashHex(receipt.signedTransaction))
-        assertContentEquals(WALLET_SIGNATURE, receipt.signedTransaction.signature())
+        assertContentEquals(walletSignature, receipt.signedTransaction.signature())
         assertContentEquals(PUBLIC_KEY, receipt.signedTransaction.publicKey())
     }
 
@@ -286,6 +302,19 @@ class NexusAppClientTest {
             invalidKey.awaitApproval(NexusConnectSession("session-1", "sora://wallet/connect?session=session-1"))
         }
         assertEquals("invalid_signing_public_key", invalidKeyError.code)
+
+        val mixedTorsionKey = NexusAppClient(
+            config = NexusAppConfig(chainId = "test-chain"),
+            connectTransport = ApprovalConnect(
+                NexusApprovedAccount(accountId = ACCOUNT_ID, signingPublicKey = ByteArray(32) { 0x11 }),
+            ),
+        )
+        val mixedTorsionError = assertFailsWith<NexusAppError> {
+            mixedTorsionKey.awaitApproval(
+                NexusConnectSession("session-1", "sora://wallet/connect?session=session-1"),
+            )
+        }
+        assertEquals("invalid_signing_public_key", mixedTorsionError.code)
     }
 
     @Test
@@ -353,10 +382,11 @@ class NexusAppClientTest {
             toriiClient = FakeToriiClient(),
         )
         val draft = draftClient.buildTransferDraft(sampleInput())
+        val walletSignature = signPayload(draft.signable.payloadBytes)
         val localHash = SignedTransactionHasher.hashHex(
             SignedTransaction.builder()
                 .setEncodedPayload(draft.signable.payloadBytes)
-                .setSignature(WALLET_SIGNATURE)
+                .setSignature(walletSignature)
                 .setPublicKey(PUBLIC_KEY)
                 .setSchemaName(NoritoJavaCodecAdapter().schemaName())
                 .build(),
@@ -368,7 +398,7 @@ class NexusAppClientTest {
             toriiClient = FakeToriiClient(responseHash = "f".repeat(64)),
         )
         val mismatchError = assertFailsWith<NexusAppError> {
-            mismatchClient.finalizeAndSubmit(draft.signable, NexusWalletSignature(WALLET_SIGNATURE))
+            mismatchClient.finalizeAndSubmit(draft.signable, NexusWalletSignature(walletSignature))
         }
         assertEquals("transaction_hash_mismatch", mismatchError.code)
 
@@ -378,7 +408,7 @@ class NexusAppClientTest {
             toriiClient = FakeToriiClient(submitFailure = RuntimeException("down")),
         )
         val submitError = assertFailsWith<NexusAppError> {
-            submitFailureClient.finalizeAndSubmit(draft.signable, NexusWalletSignature(WALLET_SIGNATURE))
+            submitFailureClient.finalizeAndSubmit(draft.signable, NexusWalletSignature(walletSignature))
         }
         assertEquals("submit_failed", submitError.code)
 
@@ -388,9 +418,51 @@ class NexusAppClientTest {
             toriiClient = FakeToriiClient(responseHash = localHash, statusFailure = RuntimeException("timeout")),
         )
         val statusError = assertFailsWith<NexusAppError> {
-            statusFailureClient.finalizeAndSubmit(draft.signable, NexusWalletSignature(WALLET_SIGNATURE))
+            statusFailureClient.finalizeAndSubmit(draft.signable, NexusWalletSignature(walletSignature))
         }
         assertEquals("status_wait_failed", statusError.code)
+
+        val committedOnlyClient = NexusAppClient(
+            config = NexusAppConfig(chainId = "test-chain"),
+            codecAdapter = NoritoJavaCodecAdapter(),
+            toriiClient = FakeToriiClient(statusKind = "Committed"),
+        )
+        val committedOnlyError = assertFailsWith<NexusAppError> {
+            committedOnlyClient.finalizeAndSubmit(
+                draft.signable,
+                NexusWalletSignature(walletSignature),
+            )
+        }
+        assertEquals("status_wait_non_applied", committedOnlyError.code)
+    }
+
+    @Test
+    fun `finalizeAndSubmit rejects a valid signature bound to different payload bytes`() {
+        val torii = FakeToriiClient()
+        val client = NexusAppClient(
+            config = NexusAppConfig(
+                chainId = "test-chain",
+                authority = ACCOUNT_ID,
+                signingPublicKey = PUBLIC_KEY,
+            ),
+            codecAdapter = NoritoJavaCodecAdapter(),
+            toriiClient = torii,
+        )
+        val draft = client.buildTransferDraft(sampleInput())
+        val signature = signPayload(draft.signable.payloadBytes)
+        val tamperedPayload = draft.signable.payloadBytes.copyOf().also { bytes ->
+            bytes[bytes.lastIndex] = (bytes.last().toInt() xor 0x01).toByte()
+        }
+
+        val error = assertFailsWith<NexusAppError> {
+            client.finalizeAndSubmit(
+                draft.signable.copy(payloadBytes = tamperedPayload),
+                NexusWalletSignature(signature),
+            )
+        }
+
+        assertEquals("invalid_signature", error.code)
+        assertEquals(null, torii.submittedHash)
     }
 
     @Test
@@ -417,7 +489,7 @@ class NexusAppClientTest {
     }
 
     private class FakeConnect : NexusConnectTransport {
-        val signature = WALLET_SIGNATURE.copyOf()
+        lateinit var signature: ByteArray
         var lastSignable: NexusSignableTransaction? = null
 
         override fun startConnect(
@@ -446,6 +518,7 @@ class NexusAppClientTest {
         ): NexusWalletSignature {
             lastSignable = signable
             assertEquals(NEXUS_SIGNATURE_ALGORITHM_ED25519, signable.signatureAlgorithm)
+            signature = signPayload(signable.payloadBytes)
             return NexusWalletSignature(signature)
         }
     }
@@ -501,6 +574,7 @@ class NexusAppClientTest {
         private val responseHash: String? = null,
         private val submitFailure: RuntimeException? = null,
         private val statusFailure: RuntimeException? = null,
+        private val statusKind: String = "Applied",
     ) : IrohaClient {
         var submittedHash: String? = null
 
@@ -525,16 +599,32 @@ class NexusAppClientTest {
                     future.completeExceptionally(it)
                 }
             }
-            return CompletableFuture.completedFuture(mapOf("status" to "Committed", "hash" to hashHex))
+            val status = if (statusKind == "Applied") {
+                mapOf<String, Any>("kind" to statusKind, "block_height" to 7)
+            } else {
+                mapOf<String, Any>("kind" to statusKind)
+            }
+            return CompletableFuture.completedFuture(
+                mapOf(
+                    "hash" to hashHex,
+                    "status" to status,
+                    "summary" to statusKind,
+                    "scope" to "global",
+                    "resolved_from" to if (statusKind == "Applied") "state" else "cache",
+                ),
+            )
         }
     }
 
     companion object {
         private const val ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+        private val SIGNING_PRIVATE_KEY_SEED = ByteArray(32) { 0x11 }
         private val PUBLIC_KEY =
-            hexToBytes("d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737")
-        private val WALLET_SIGNATURE =
-            hexToBytes("c82d2ee732a9251153eff6f510a0d12b292cb51a5d961a7eddb84f6ee944e34eaca60ca2f1ccfe7a53fd6813fc9a6db9e35cb276b2411b7d583d45fdc6caee05")
+            Ed25519PrivateKeyParameters(SIGNING_PRIVATE_KEY_SEED, 0).generatePublicKey().encoded
+        private val WALLET_SIGNATURE by lazy {
+            val fixture = loadNexusFixture()
+            hexToBytes(string(obj(fixture, "expected"), "wallet_signature_hex"))
+        }
         private const val ACCOUNT_ID =
             "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
         private const val DESTINATION_ACCOUNT_ID =
@@ -572,6 +662,14 @@ class NexusAppClientTest {
         }
 
         private fun string(map: Map<String, Any?>, key: String): String = map[key] as String
+
+        private fun signPayload(payloadBytes: ByteArray): ByteArray {
+            val message = IrohaHash.prehash(payloadBytes)
+            val signer = Ed25519Signer()
+            signer.init(true, Ed25519PrivateKeyParameters(SIGNING_PRIVATE_KEY_SEED, 0))
+            signer.update(message, 0, message.size)
+            return signer.generateSignature()
+        }
 
         private fun hexToBytes(hex: String): ByteArray {
             require(hex.length % 2 == 0) { "hex length must be even" }

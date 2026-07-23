@@ -1,12 +1,15 @@
 package org.hyperledger.iroha.sdk.sorafs
 
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
+
 /**
  * Descriptor for a SoraFS gateway provider.
  *
  * Matches the key/value structure used by the CLI (`--provider name=...`) so Android callers can
  * construct orchestrator requests deterministically. Protocol text is accepted only in exact form:
- * provider identifiers and gateway signing keys are lowercase unprefixed 32-byte hex, while stream
- * tokens are canonical standard Base64. The constructor never trims or rewrites caller input.
+ * provider identifiers are lowercase unprefixed 32-byte hex, gateway signing keys additionally
+ * encode canonical prime-order Ed25519 points, and stream tokens are canonical standard Base64.
+ * The constructor never trims or rewrites caller input.
  */
 class GatewayProvider(
     name: String,
@@ -24,10 +27,9 @@ class GatewayProvider(
 
     @JvmField
     val gatewayPublicKeyHex: String =
-        SorafsInputValidator.requireCanonicalHexBytes(
+        requireCanonicalGatewayPublicKeyHex(
             gatewayPublicKeyHex,
             "gatewayPublicKeyHex",
-            32,
         )
 
     @JvmField
@@ -49,4 +51,17 @@ class GatewayProvider(
         "base_url" to baseUrl,
         "stream_token_b64" to streamTokenBase64,
     )
+}
+
+private fun requireCanonicalGatewayPublicKeyHex(value: String, field: String): String {
+    val canonical = SorafsInputValidator.requireCanonicalHexBytes(value, field, 32)
+    val publicKey = ByteArray(Ed25519PublicKeyAdmission.PUBLIC_KEY_LENGTH) { index ->
+        val offset = index * 2
+        ((Character.digit(canonical[offset], 16) shl 4) or
+            Character.digit(canonical[offset + 1], 16)).toByte()
+    }
+    require(Ed25519PublicKeyAdmission.isValid(publicKey)) {
+        "$field must encode a canonical prime-order Ed25519 public key"
+    }
+    return canonical
 }

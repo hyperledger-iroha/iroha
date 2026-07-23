@@ -32,6 +32,8 @@ function demoAccountId() {
 }
 
 const ACCOUNT_ID = demoAccountId();
+const RESOLVER_PUBLIC_KEY =
+  "ed25519:ed0120D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737";
 const POLICY_ID = "phone#retail";
 const PROGRAM_ID = "identifier_lookup_retail";
 const OUTPUT_OPENING_PUBLIC_KEY = "ed25519:output-opening-key";
@@ -1159,7 +1161,7 @@ test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes"
     owner: ACCOUNT_ID,
     active: true,
     normalization: "exact",
-    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    resolver_public_key: RESOLVER_PUBLIC_KEY,
     backend: "bfv-affine-sha3-256-v1",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters_decoded: BFV_PUBLIC_PARAMETERS,
@@ -1223,7 +1225,7 @@ test("encryptIdentifierInputForPolicy matches shared Soracloud BFV operation inp
     owner: ACCOUNT_ID,
     active: true,
     normalization: "exact",
-    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    resolver_public_key: RESOLVER_PUBLIC_KEY,
     backend: "bfv-programmed-sha3-256-v1",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters_decoded:
@@ -1366,7 +1368,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV operation vector i
     owner: ACCOUNT_ID,
     active: true,
     normalization: "exact",
-    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    resolver_public_key: RESOLVER_PUBLIC_KEY,
     backend: "bfv-programmed-sha3-256-v1",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters_decoded:
@@ -1455,7 +1457,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial BFV public parameters"
     owner: ACCOUNT_ID,
     active: true,
     normalization: "exact",
-    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    resolver_public_key: RESOLVER_PUBLIC_KEY,
     backend: "bfv-affine-sha3-256-v1",
     input_encryption: "bfv-v1",
   };
@@ -1560,7 +1562,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial client encryption inpu
     owner: ACCOUNT_ID,
     active: true,
     normalization: "exact",
-    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    resolver_public_key: RESOLVER_PUBLIC_KEY,
     backend: "bfv-affine-sha3-256-v1",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters_decoded: BFV_PUBLIC_PARAMETERS,
@@ -1673,7 +1675,7 @@ test("buildIdentifierRequestForPolicy rejects plaintext request bodies", () => {
     owner: ACCOUNT_ID,
     active: true,
     normalization: "phone_e164",
-    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    resolver_public_key: RESOLVER_PUBLIC_KEY,
     backend: "bfv-programmed-sha3-256-v1",
     input_encryption: "bfv-v1",
   };

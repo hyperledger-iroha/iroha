@@ -130,18 +130,20 @@ impl OfflineRecipientRegistrationLineage {
             || verified_at_ms == 0
             || trusted_checkpoint_height == 0
             || self.evaluated_block_height == 0
-            || trusted_checkpoint_context_id.iter().all(|byte| *byte == 0)
-            || trusted_checkpoint_context_id[31] & 1 == 0
         {
             return Err(
                 "unsupported receiver-lineage version or non-canonical verification anchor"
                     .to_owned(),
             );
         }
+        require_nonzero_hash(
+            "trusted receiver-lineage checkpoint context id",
+            &trusted_checkpoint_context_id,
+        )?;
         request
             .validate_at(verified_at_ms)
             .map_err(|error| format!("recipient request validation failed: {error}"))?;
-        if &self.selector.chain_id != request.chain_id()
+        if self.selector.chain_id != *request.chain_id()
             || self.selector.recipient != *request.recipient()
             || self.selector.receiver_device_id != request.receiver_device_id()
             || self.selector.asset != *request.asset()
@@ -151,9 +153,7 @@ impl OfflineRecipientRegistrationLineage {
 
         let evaluated_block_hash =
             exact_lower_hex_32("evaluated_block_hash", &self.evaluated_block_hash)?;
-        if evaluated_block_hash.iter().all(|byte| *byte == 0) || evaluated_block_hash[31] & 1 == 0 {
-            return Err("evaluated block hash is not a canonical Iroha hash".to_owned());
-        }
+        require_nonzero_hash("evaluated block hash", &evaluated_block_hash)?;
 
         if self.finality_chain.is_empty()
             || self.finality_chain.len() > OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_PROOFS
@@ -337,7 +337,7 @@ impl OfflineRecipientReceiveOfferV2 {
         else {
             return Err("portable receiver offer contains an ambiguous receiver tuple".into());
         };
-        if &self.lineage.selector.chain_id != self.request.chain_id()
+        if self.lineage.selector.chain_id != *self.request.chain_id()
             || self.lineage.selector.recipient != *self.request.recipient()
             || self.lineage.selector.receiver_device_id != self.request.receiver_device_id()
             || self.lineage.selector.asset != *self.request.asset()
@@ -377,6 +377,13 @@ fn exact_lower_hex_32(field: &str, value: &str) -> Result<[u8; 32], String> {
     hex::decode_to_slice(value, &mut decoded)
         .map_err(|_| format!("{field} must be canonical lowercase 32-byte hex"))?;
     Ok(decoded)
+}
+
+fn require_nonzero_hash(label: &str, value: &[u8; 32]) -> Result<(), String> {
+    if value.iter().all(|byte| *byte == 0) {
+        return Err(format!("{label} must be non-zero"));
+    }
+    Ok(())
 }
 
 /// Finalized anchor returned by an applied offline top-up.
@@ -933,6 +940,16 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+
+    #[test]
+    fn lineage_hash_validation_accepts_nonzero_even_ending_hashes() {
+        require_nonzero_hash("checkpoint context", &[0x02; 32])
+            .expect("Iroha finalized hashes have no parity validity bit");
+        assert_eq!(
+            require_nonzero_hash("checkpoint context", &[0; 32]),
+            Err("checkpoint context must be non-zero".to_owned())
+        );
+    }
 
     #[derive(Debug, JsonDeserialize, JsonSerialize, PartialEq, Eq)]
     struct JsonDefaultByteMappingProbe {

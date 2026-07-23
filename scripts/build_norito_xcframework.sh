@@ -452,6 +452,8 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_validation_fee_current_policy_proof_request_v1",
+    "connect_norito_validation_fee_current_policy_proof_verify_v1",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",

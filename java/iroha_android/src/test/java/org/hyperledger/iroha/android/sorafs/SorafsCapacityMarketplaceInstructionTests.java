@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.sorafs;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import org.hyperledger.iroha.android.model.instructions.RegisterCapacityDeclarationInstruction;
@@ -33,6 +34,7 @@ public final class SorafsCapacityMarketplaceInstructionTests {
     testDisputeRejectsInvalidBase64();
     testDisputeValidationFailure();
     testSetPricingScheduleBuilder();
+    testPricingScheduleIntegerParsing();
     testUpsertProviderCreditBuilder();
     System.out.println(
         "[IrohaAndroid] SorafsCapacityMarketplaceInstructionTests passed (declaration/dispute/pricing/credit).");
@@ -145,8 +147,18 @@ public final class SorafsCapacityMarketplaceInstructionTests {
   }
 
   private static void testSetPricingScheduleBuilder() {
-    final SetPricingScheduleInstruction schedule =
-        SetPricingScheduleInstruction.builder()
+    final SetPricingScheduleInstruction schedule = newPricingSchedule();
+
+    final Map<String, String> args = schedule.toArguments();
+    assert "SetPricingSchedule".equals(args.get("action")) : "action mismatch";
+    assert "xor".equals(args.get("schedule.currency_code")) : "currency mismatch";
+    assert "hot".equals(args.get("schedule.tiers.0.storage_class")) : "tier mismatch";
+    assert schedule.tiers().size() == 2 : "tier count mismatch";
+    assert "Test schedule".equals(schedule.notes()) : "notes mismatch";
+  }
+
+  private static SetPricingScheduleInstruction newPricingSchedule() {
+    return SetPricingScheduleInstruction.builder()
             .setVersion(1)
             .setCurrencyCode("xor")
             .setDefaultStorageClass(StorageClass.HOT)
@@ -186,13 +198,52 @@ public final class SorafsCapacityMarketplaceInstructionTests {
                     .build())
             .setNotes("Test schedule")
             .build();
+  }
 
-    final Map<String, String> args = schedule.toArguments();
-    assert "SetPricingSchedule".equals(args.get("action")) : "action mismatch";
-    assert "xor".equals(args.get("schedule.currency_code")) : "currency mismatch";
-    assert "hot".equals(args.get("schedule.tiers.0.storage_class")) : "tier mismatch";
-    assert schedule.tiers().size() == 2 : "tier count mismatch";
-    assert "Test schedule".equals(schedule.notes()) : "notes mismatch";
+  private static void testPricingScheduleIntegerParsing() {
+    final Map<String, String> base = newPricingSchedule().toArguments();
+    final String commitmentPrefix = "schedule.discounts.commitment_tiers.0.";
+    final String[] integerKeys = {
+      "schedule.credit.low_balance_alert_bps",
+      "schedule.discounts.loyalty_months_required",
+      "schedule.discounts.loyalty_discount_bps",
+      commitmentPrefix + "discount_bps"
+    };
+
+    for (final String key : integerKeys) {
+      assertPricingIntegerRejected(base, key, "4294967296");
+      assertPricingIntegerRejected(base, key, "-2147483649");
+    }
+
+    final Map<String, String> maximums = new LinkedHashMap<>(base);
+    for (final String key : integerKeys) {
+      maximums.put(key, Integer.toString(Integer.MAX_VALUE));
+    }
+    final String minimumCommitmentKey = commitmentPrefix + "minimum_commitment_gib_month";
+    maximums.put(minimumCommitmentKey, "4294967296");
+
+    final Map<String, String> parsed =
+        SetPricingScheduleInstruction.fromArguments(maximums).toArguments();
+    for (final String key : integerKeys) {
+      assert Integer.toString(Integer.MAX_VALUE).equals(parsed.get(key))
+          : key + " should retain Integer.MAX_VALUE";
+    }
+    assert "4294967296".equals(parsed.get(minimumCommitmentKey))
+        : "long minimum commitment should not be narrowed";
+  }
+
+  private static void assertPricingIntegerRejected(
+      final Map<String, String> base, final String key, final String value) {
+    final Map<String, String> arguments = new LinkedHashMap<>(base);
+    arguments.put(key, value);
+    try {
+      SetPricingScheduleInstruction.fromArguments(arguments);
+      throw new AssertionError(key + " should reject " + value);
+    } catch (final IllegalArgumentException ex) {
+      final String expected =
+          "Instruction argument '" + key + "' is outside the signed 32-bit integer range";
+      assert expected.equals(ex.getMessage()) : "unexpected range error for " + key;
+    }
   }
 
   private static void testUpsertProviderCreditBuilder() {

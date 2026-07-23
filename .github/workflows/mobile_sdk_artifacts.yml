@@ -44,6 +44,9 @@ env:
   ANDROID_PLATFORM_PACKAGE: platforms;android-35
   ANDROID_BUILD_TOOLS_PACKAGE: build-tools;35.0.0
   ANDROID_NDK_VERSION: 28.0.12674087
+  # Tagged release artifacts always carry the real production prover. Manual
+  # non-tag builds remain an explicit opt-in and pull requests stay fail-closed.
+  PRIVACY_PRODUCTION_ENABLED: ${{ github.ref_type == 'tag' || inputs.privacy_production_enabled == true }}
 
 jobs:
   checker-self-test:
@@ -86,8 +89,6 @@ jobs:
       - name: Install Apple Rust targets
         run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
       - name: Build NoritoBridge XCFramework
-        env:
-          PRIVACY_PRODUCTION_ENABLED: ${{ inputs.privacy_production_enabled || false }}
         run: |
           build_args=()
           if [[ "$PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
@@ -167,12 +168,15 @@ jobs:
         run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Build Android native bridge libraries
         working-directory: kotlin
-        run: ./gradlew :client-android:buildNativeLibs
+        run: >-
+          ./gradlew :client-android:buildNativeLibs
+          -PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED"
       - name: Test, lint, publish, and build Android SDK artifacts
         working-directory: kotlin
         run: |
           rm -rf ../dist/mobile-sdk-maven
           ./gradlew \
+            -PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED" \
             -PirohaSdkVersion="$MOBILE_SDK_MAVEN_VERSION" \
             -PirohaSdkRepoDir="$PWD/../dist/mobile-sdk-maven" \
             :core-jvm:test \

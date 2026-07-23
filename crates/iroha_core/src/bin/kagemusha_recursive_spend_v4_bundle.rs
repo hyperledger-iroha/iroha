@@ -18,11 +18,12 @@ use std::{
 
 use iroha_core::zk::kagemusha_artifact_v4::{
     KagemushaPastaCycleProverArtifactsV4, KagemushaValidatedArtifactPayloadV4,
-    read_kagemusha_pasta_cycle_artifact_v4, write_kagemusha_pasta_cycle_artifact_v4,
+    read_kagemusha_pasta_cycle_artifact_v4, write_kagemusha_pasta_cycle_artifact_streaming_v4,
 };
 use iroha_core::zk::kagemusha_v2::{
-    generate_kagemusha_pasta_cycle_artifacts_v4, validate_kagemusha_proof_pair_measurement_v4,
-    validate_kagemusha_step_bootstrap_payload_v4,
+    KagemushaGeneratedArtifactSpoolV4, KagemushaGeneratedParityProfileV4,
+    generate_kagemusha_pasta_cycle_artifacts_streaming_with_progress_v4,
+    validate_kagemusha_proof_pair_measurement_v4, validate_kagemusha_step_bootstrap_payload_v4,
 };
 use iroha_data_model::{
     ChainId,
@@ -444,19 +445,133 @@ struct BundleMetadata {
     profiles: [ProfileMetadata; 2],
 }
 
-struct PreparedArtifact {
+struct StagedArtifact {
     spec: InputSpec,
-    payload: Vec<u8>,
-    circuit_params: KagemushaStepCircuitParamsV4,
-    compiled_protocol_structure_sha256: [u8; 32],
-    step_proof_size_bytes: u32,
     header: KagemushaPastaCycleFramedArtifactHeaderV4,
-    total_size: u64,
+    descriptor: KagemushaPastaCycleArtifactV4,
 }
 
-struct GeneratedArtifact {
-    spec: InputSpec,
-    payload: Vec<u8>,
+/// One complete canonical frame held only by an unlinked owner-private file.
+///
+/// The hours-long guarded generator must not create named publication state:
+/// an abrupt resource-supervisor kill cannot run Rust destructors. Unix closes
+/// and reclaims these link-count-zero files when the process exits. Only after
+/// generation and source revalidation are their authenticated bytes copied
+/// into the short-lived, atomically published named staging directory.
+struct FramedArtifactSpool {
+    artifact: StagedArtifact,
+    file: File,
+}
+
+impl FramedArtifactSpool {
+    fn authenticate(&mut self) -> Result<(), Box<dyn Error>> {
+        let metadata = self.file.metadata()?;
+        if !metadata.is_file() || metadata.len() != self.artifact.descriptor.size_bytes {
+            return Err(format!(
+                "anonymous {} frame has an unexpected file type or length",
+                self.artifact.spec.file_name
+            )
+            .into());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+            if metadata.nlink() != 0 || metadata.permissions().mode() & 0o777 != 0o600 {
+                return Err(format!(
+                    "anonymous {} frame is not unlinked with exact owner-private mode",
+                    self.artifact.spec.file_name
+                )
+                .into());
+            }
+        }
+        self.file.seek(SeekFrom::Start(0))?;
+        let sha256 = hash_open_file(
+            &mut self.file,
+            self.artifact.descriptor.size_bytes,
+            Path::new(self.artifact.spec.file_name),
+        )?;
+        self.file.seek(SeekFrom::Start(0))?;
+        if sha256 != self.artifact.descriptor.sha256 {
+            return Err(format!(
+                "anonymous {} frame changed after generation",
+                self.artifact.spec.file_name
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn read_bootstrap_payload(&mut self) -> Result<Vec<u8>, Box<dyn Error>> {
+        if self.artifact.spec.kind != KagemushaPastaCycleArtifactKindV4::BootstrapWitness {
+            return Err("only a Kagemusha bootstrap spool may be materialized".into());
+        }
+        self.authenticate()?;
+        let header_len = u64::try_from(norito::to_bytes(&self.artifact.header)?.len())?;
+        let payload_offset = u64::try_from(
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4.len() + std::mem::size_of::<u32>(),
+        )?
+        .checked_add(header_len)
+        .ok_or_else(|| io::Error::other("Kagemusha V4 frame offset overflow"))?;
+        let capacity = usize::try_from(self.artifact.descriptor.payload_size_bytes)
+            .map_err(|_| "Kagemusha V4 bootstrap size does not fit memory")?;
+        let mut payload = Vec::new();
+        payload
+            .try_reserve_exact(capacity)
+            .map_err(|_| "failed to reserve Kagemusha V4 bootstrap payload")?;
+        self.file.seek(SeekFrom::Start(payload_offset))?;
+        Read::by_ref(&mut self.file)
+            .take(self.artifact.descriptor.payload_size_bytes)
+            .read_to_end(&mut payload)?;
+        if payload.len() != capacity
+            || <[u8; 32]>::from(Sha256::digest(&payload)) != self.artifact.descriptor.payload_sha256
+        {
+            return Err(format!(
+                "anonymous {} bootstrap payload changed",
+                self.artifact.spec.file_name
+            )
+            .into());
+        }
+        self.authenticate()?;
+        Ok(payload)
+    }
+
+    fn stage(
+        mut self,
+        publication: &PublicationDirectory,
+    ) -> Result<StagedArtifact, Box<dyn Error>> {
+        self.authenticate()?;
+        let mut output = publication.create_file(self.artifact.spec.file_name)?;
+        let mut remaining = self.artifact.descriptor.size_bytes;
+        let mut sha256 = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        while remaining != 0 {
+            let limit = usize::try_from(remaining.min(buffer.len() as u64))?;
+            self.file.read_exact(&mut buffer[..limit])?;
+            output.write_all(&buffer[..limit])?;
+            sha256.update(&buffer[..limit]);
+            remaining -= u64::try_from(limit)?;
+        }
+        let mut trailing = [0_u8; 1];
+        if self.file.read(&mut trailing)? != 0
+            || <[u8; 32]>::from(sha256.finalize()) != self.artifact.descriptor.sha256
+        {
+            return Err(format!(
+                "anonymous {} frame changed while staging",
+                self.artifact.spec.file_name
+            )
+            .into());
+        }
+        output.sync_all()?;
+        drop(output);
+        publication.verify_file_digest(
+            self.artifact.spec.file_name,
+            self.artifact.descriptor.size_bytes,
+            self.artifact.descriptor.sha256,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
+        )?;
+        Ok(self.artifact)
+    }
 }
 
 #[derive(Debug, JsonSerialize)]
@@ -772,11 +887,15 @@ fn decode_canonical_circuit_params(
     Ok(params)
 }
 
-fn prepare_bundle_metadata(
+fn prepare_bundle_metadata<P>(
     options: &BTreeMap<String, String>,
     step_eq_params_input: &mut OpenedInput,
     step_ep_params_input: &mut OpenedInput,
-) -> Result<(BundleMetadata, Vec<GeneratedArtifact>), Box<dyn Error>> {
+    progress: P,
+) -> Result<(BundleMetadata, Vec<FramedArtifactSpool>), Box<dyn Error>>
+where
+    P: FnMut(&'static str) -> Result<(), String>,
+{
     let chain_id: ChainId = required(options, "chain-id").parse()?;
     if chain_id.as_str().is_empty()
         || chain_id.as_str().len() > 128
@@ -827,14 +946,109 @@ fn prepare_bundle_metadata(
     requested_step_ep_params
         .validate_release_generation_profile()
         .map_err(|error| format!("Ep release-generation profile is not reviewed: {error}"))?;
-    let generated = generate_kagemusha_pasta_cycle_artifacts_v4(
+    let mut generated_profiles: [Option<KagemushaGeneratedParityProfileV4>; 2] = [None, None];
+    let mut framed_spools = Vec::with_capacity(INPUTS.len());
+    let mut emitted_names = BTreeSet::new();
+    let mut payload_digests = BTreeMap::new();
+    let artifact_generation = generation.clone();
+    let artifact_parameter_generation = parameter_generation.clone();
+    let measured_proof_pair = generate_kagemusha_pasta_cycle_artifacts_streaming_with_progress_v4(
         requested_step_eq_params,
         requested_step_ep_params,
+        |profile, kind, spool| {
+            let profile_index = match profile.parity {
+                KagemushaPastaCycleParityV1::StepEq => 0,
+                KagemushaPastaCycleParityV1::StepEp => 1,
+            };
+            if let Some(previous) = &generated_profiles[profile_index] {
+                if previous != profile {
+                    return Err(
+                        "current-source Kagemusha V4 profile changed between emitted roles"
+                            .to_owned(),
+                    );
+                }
+            } else {
+                generated_profiles[profile_index] = Some(profile.clone());
+            }
+            let spec = INPUTS
+                .iter()
+                .copied()
+                .find(|spec| spec.parity == profile.parity && spec.kind == kind)
+                .ok_or_else(|| {
+                    "current-source Kagemusha V4 generator emitted an unknown role".to_owned()
+                })?;
+            if !emitted_names.insert(spec.file_name) {
+                return Err(format!(
+                    "current-source Kagemusha V4 generator repeated {}",
+                    spec.file_name
+                ));
+            }
+            let payload_size = spool.size_bytes();
+            let payload_sha256 = spool.sha256();
+            if payload_size == 0
+                || payload_size >= KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+                || payload_digests.insert(payload_sha256, spec).is_some()
+            {
+                return Err(format!(
+                    "generated {} payload violates the V4 artifact corridor",
+                    spec.file_name
+                ));
+            }
+            let staged = package_generated_artifact(
+                spec,
+                &artifact_generation,
+                &artifact_parameter_generation,
+                profile,
+                spool,
+            )
+            .map_err(|error| error.to_string())?;
+            framed_spools.push(staged);
+            Ok(())
+        },
+        progress,
     )
     .map_err(|error| format!("current-source Kagemusha V4 generation failed: {error}"))?;
-    let step_eq = generated.step_eq;
-    let step_ep = generated.step_ep;
-    let measured_proof_pair = generated.measured_live_pair_bytes;
+    if framed_spools.len() != INPUTS.len() || emitted_names.len() != INPUTS.len() {
+        return Err(
+            "current-source Kagemusha V4 generator did not emit exactly eight roles".into(),
+        );
+    }
+    framed_spools.sort_by_key(|spool| {
+        INPUTS
+            .iter()
+            .position(|spec| spec == &spool.artifact.spec)
+            .expect("generated role belongs to the fixed inventory")
+    });
+    let step_eq = generated_profiles[0]
+        .take()
+        .ok_or("current-source Kagemusha V4 Eq profile is missing")?;
+    let step_ep = generated_profiles[1]
+        .take()
+        .ok_or("current-source Kagemusha V4 Ep profile is missing")?;
+
+    for spool in &mut framed_spools {
+        if spool.artifact.spec.kind != KagemushaPastaCycleArtifactKindV4::BootstrapWitness {
+            continue;
+        }
+        let profile = match spool.artifact.spec.parity {
+            KagemushaPastaCycleParityV1::StepEq => &step_eq,
+            KagemushaPastaCycleParityV1::StepEp => &step_ep,
+        };
+        let bootstrap = spool.read_bootstrap_payload()?;
+        let measured = validate_kagemusha_step_bootstrap_payload_v4(
+            &bootstrap,
+            &profile.circuit_params,
+            profile.parity,
+            profile.compiled_protocol_structure_sha256,
+        )?;
+        if u32::try_from(measured) != Ok(profile.step_proof_size_bytes) {
+            return Err(format!(
+                "generated {} bootstrap measurement differs from its profile",
+                spool.artifact.spec.file_name
+            )
+            .into());
+        }
+    }
 
     let eq_layout = step_eq
         .circuit_params
@@ -856,24 +1070,6 @@ fn prepare_bundle_metadata(
         return Err("generated V4 profile calibration metadata is inconsistent".into());
     }
 
-    let measured_eq = validate_kagemusha_step_bootstrap_payload_v4(
-        &step_eq.bootstrap_witness,
-        &step_eq.circuit_params,
-        KagemushaPastaCycleParityV1::StepEq,
-        step_eq.compiled_protocol_structure_sha256,
-    )?;
-    let measured_ep = validate_kagemusha_step_bootstrap_payload_v4(
-        &step_ep.bootstrap_witness,
-        &step_ep.circuit_params,
-        KagemushaPastaCycleParityV1::StepEp,
-        step_ep.compiled_protocol_structure_sha256,
-    )?;
-    if u32::try_from(measured_eq) != Ok(step_eq.step_proof_size_bytes)
-        || u32::try_from(measured_ep) != Ok(step_ep.step_proof_size_bytes)
-    {
-        return Err("generated bootstrap measurements differ from calibrated Step sizes".into());
-    }
-
     let max_proof_bytes = u32::try_from(measured_proof_pair.len())
         .map_err(|_| "measured V4 proof pair length does not fit u32")?;
     let measured_steps = step_eq
@@ -893,57 +1089,6 @@ fn prepare_bundle_metadata(
     )?;
     if measured != measured_proof_pair.len() {
         return Err("V4 proof-pair validator returned a different measurement".into());
-    }
-
-    let generated_artifacts = vec![
-        GeneratedArtifact {
-            spec: INPUTS[0],
-            payload: step_eq.parameters,
-        },
-        GeneratedArtifact {
-            spec: INPUTS[1],
-            payload: step_eq.proving_key,
-        },
-        GeneratedArtifact {
-            spec: INPUTS[2],
-            payload: step_eq.verifying_key,
-        },
-        GeneratedArtifact {
-            spec: INPUTS[3],
-            payload: step_eq.bootstrap_witness,
-        },
-        GeneratedArtifact {
-            spec: INPUTS[4],
-            payload: step_ep.parameters,
-        },
-        GeneratedArtifact {
-            spec: INPUTS[5],
-            payload: step_ep.proving_key,
-        },
-        GeneratedArtifact {
-            spec: INPUTS[6],
-            payload: step_ep.verifying_key,
-        },
-        GeneratedArtifact {
-            spec: INPUTS[7],
-            payload: step_ep.bootstrap_witness,
-        },
-    ];
-    let mut payload_digests = BTreeMap::new();
-    for artifact in &generated_artifacts {
-        let payload_size = u64::try_from(artifact.payload.len())?;
-        let digest: [u8; 32] = Sha256::digest(&artifact.payload).into();
-        let duplicate = payload_digests.insert(digest, artifact.spec);
-        if payload_size == 0
-            || payload_size >= KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
-            || duplicate.is_some()
-        {
-            return Err(format!(
-                "generated {} payload violates the V4 artifact corridor",
-                artifact.spec.file_name
-            )
-            .into());
-        }
     }
 
     let metadata =
@@ -982,14 +1127,7 @@ fn prepare_bundle_metadata(
                 },
             ],
         };
-    Ok((metadata, generated_artifacts))
-}
-
-fn profile_for(metadata: &BundleMetadata, parity: KagemushaPastaCycleParityV1) -> &ProfileMetadata {
-    match parity {
-        KagemushaPastaCycleParityV1::StepEq => &metadata.profiles[0],
-        KagemushaPastaCycleParityV1::StepEp => &metadata.profiles[1],
-    }
+    Ok((metadata, framed_spools))
 }
 
 fn validate_header_v4(
@@ -1114,57 +1252,6 @@ fn validate_header_against_candidate_v4(
         return Err("Kagemusha V4 artifact header is not exactly manifest-bound".to_owned());
     }
     Ok(())
-}
-
-fn prepare_artifact(
-    artifact: GeneratedArtifact,
-    metadata: &BundleMetadata,
-) -> Result<PreparedArtifact, Box<dyn Error>> {
-    let GeneratedArtifact { spec, payload } = artifact;
-    let profile = profile_for(metadata, spec.parity);
-    let payload_size_bytes = u64::try_from(payload.len())?;
-    let payload_sha256 = Sha256::digest(&payload).into();
-    let header = KagemushaPastaCycleFramedArtifactHeaderV4 {
-        version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4,
-        manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
-        bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-        proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
-        transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
-        generation: metadata.generation.clone(),
-        parity: spec.parity,
-        circuit_id: profile.circuit_id.to_owned(),
-        parameter_generation: metadata.parameter_generation.clone(),
-        ipa_k: profile.circuit_params.k,
-        circuit_params_sha256: profile.circuit_params_sha256,
-        compiled_protocol_structure_sha256: profile.compiled_protocol_structure_sha256,
-        step_proof_size_bytes: profile.step_proof_size_bytes,
-        kind: spec.kind,
-        payload_size_bytes,
-        payload_sha256,
-    };
-    validate_header_v4(&header, profile)
-        .map_err(|error| format!("invalid {} header: {error}", spec.file_name))?;
-    let header_bytes = norito::to_bytes(&header)?;
-    let header_len = u32::try_from(header_bytes.len())?;
-    if header_len == 0 || header_len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4 {
-        return Err(format!("{} header exceeds the V4 bound", spec.file_name).into());
-    }
-    let total_size = u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4.len() + 4)?
-        .checked_add(u64::from(header_len))
-        .and_then(|size| size.checked_add(payload_size_bytes))
-        .ok_or_else(|| io::Error::other("V4 framed artifact size overflow"))?;
-    if total_size > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4 {
-        return Err(format!("{} exceeds the V4 framed-file bound", spec.file_name).into());
-    }
-    Ok(PreparedArtifact {
-        spec,
-        payload,
-        circuit_params: profile.circuit_params.clone(),
-        compiled_protocol_structure_sha256: profile.compiled_protocol_structure_sha256,
-        step_proof_size_bytes: profile.step_proof_size_bytes,
-        header,
-        total_size,
-    })
 }
 
 fn validate_clean_signed_source(source_commit: &str) -> Result<(), Box<dyn Error>> {
@@ -1301,17 +1388,25 @@ fn build_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Err
             1024 * 1024,
             "Ep inline circuit parameters",
         )?;
+
         resource_guard.write_phase("bundle.generate-candidate.artifact-generation.begin")?;
-        let (metadata, generated_artifacts) = prepare_bundle_metadata(
+        let (metadata, framed_spools) = prepare_bundle_metadata(
             options,
             &mut step_eq_params_input,
             &mut step_ep_params_input,
+            |phase| {
+                resource_guard
+                    .write_phase(phase)
+                    .map_err(|error| error.to_string())
+            },
         )?;
         resource_guard.write_phase("bundle.generate-candidate.artifact-generation.complete")?;
-        let prepared = generated_artifacts
-            .into_iter()
-            .map(|artifact| prepare_artifact(artifact, &metadata))
-            .collect::<Result<Vec<_>, _>>()?;
+        step_eq_params_input.rewind_and_verify()?;
+        step_ep_params_input.rewind_and_verify()?;
+        validate_current_source(
+            required(options, "source-commit"),
+            parse_digest(options, "source-tree-sha256")?,
+        )?;
 
         let mut roster_input = open_input(
             Path::new(required(options, "topup-finality-roster")),
@@ -1326,9 +1421,9 @@ fn build_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Err
         }
         let (roster_bytes, roster_descriptor) =
             prepare_topup_finality_roster(&mut roster_input, &metadata)?;
-        if prepared
+        if framed_spools
             .iter()
-            .any(|artifact| artifact.header.payload_sha256 == roster_descriptor.sha256)
+            .any(|spool| spool.artifact.header.payload_sha256 == roster_descriptor.sha256)
         {
             return Err("top-up finality roster aliases a cryptographic artifact digest".into());
         }
@@ -1350,10 +1445,14 @@ fn build_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Err
             staging.path().to_owned(),
             &staging_name,
         )?;
+        let staged_artifacts = framed_spools
+            .into_iter()
+            .map(|spool| spool.stage(&publication))
+            .collect::<Result<Vec<_>, _>>()?;
         if let Err(error) = write_candidate(
             &publication,
             metadata,
-            prepared,
+            staged_artifacts,
             &roster_bytes,
             roster_descriptor,
         ) {
@@ -2122,20 +2221,19 @@ fn prepare_topup_finality_roster(
 fn write_candidate(
     publication: &PublicationDirectory,
     metadata: BundleMetadata,
-    prepared: Vec<PreparedArtifact>,
+    staged_artifacts: Vec<StagedArtifact>,
     roster_bytes: &[u8],
     roster_descriptor: KagemushaTopUpFinalityRosterArtifactReferenceV4,
 ) -> Result<(), Box<dyn Error>> {
     let mut eq_artifacts = Vec::with_capacity(4);
     let mut ep_artifacts = Vec::with_capacity(4);
     let mut staged_headers = Vec::with_capacity(8);
-    for artifact in prepared {
-        let (header, descriptor) = package_artifact(publication, artifact)?;
-        match header.parity {
-            KagemushaPastaCycleParityV1::StepEq => eq_artifacts.push(descriptor.clone()),
-            KagemushaPastaCycleParityV1::StepEp => ep_artifacts.push(descriptor.clone()),
+    for artifact in staged_artifacts {
+        match artifact.header.parity {
+            KagemushaPastaCycleParityV1::StepEq => eq_artifacts.push(artifact.descriptor.clone()),
+            KagemushaPastaCycleParityV1::StepEp => ep_artifacts.push(artifact.descriptor.clone()),
         }
-        staged_headers.push((header, descriptor));
+        staged_headers.push((artifact.header, artifact.descriptor));
     }
 
     let mut roster_output =
@@ -2273,48 +2371,131 @@ fn write_candidate(
     Ok(())
 }
 
-fn package_artifact(
-    publication: &PublicationDirectory,
-    artifact: PreparedArtifact,
-) -> Result<
-    (
-        KagemushaPastaCycleFramedArtifactHeaderV4,
-        KagemushaPastaCycleArtifactV4,
-    ),
-    Box<dyn Error>,
-> {
+#[allow(clippy::too_many_arguments)]
+fn package_streamed_artifact<F>(
+    output: &mut File,
+    spec: InputSpec,
+    generation: &str,
+    parameter_generation: &str,
+    profile: &KagemushaGeneratedParityProfileV4,
+    payload_size_bytes: u64,
+    payload_sha256: [u8; 32],
+    stream_payload: F,
+) -> Result<StagedArtifact, Box<dyn Error>>
+where
+    F: FnOnce(&mut dyn Write) -> Result<(), String>,
+{
+    if profile.parity != spec.parity {
+        return Err(format!("generated {} parity mismatch", spec.file_name).into());
+    }
+    let circuit_id = match profile.parity {
+        KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+        KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+    };
+    let profile_metadata = ProfileMetadata {
+        parity: profile.parity,
+        circuit_id,
+        circuit_params_sha256: profile
+            .circuit_params
+            .sha256()
+            .map_err(|error| format!("failed to identify generated circuit parameters: {error}"))?,
+        circuit_params: profile.circuit_params.clone(),
+        compiled_protocol_structure_sha256: profile.compiled_protocol_structure_sha256,
+        step_proof_size_bytes: profile.step_proof_size_bytes,
+    };
+    let header = KagemushaPastaCycleFramedArtifactHeaderV4 {
+        version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4,
+        manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
+        bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+        proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+        transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
+        generation: generation.to_owned(),
+        parity: spec.parity,
+        circuit_id: circuit_id.to_owned(),
+        parameter_generation: parameter_generation.to_owned(),
+        ipa_k: profile.circuit_params.k,
+        circuit_params_sha256: profile_metadata.circuit_params_sha256,
+        compiled_protocol_structure_sha256: profile.compiled_protocol_structure_sha256,
+        step_proof_size_bytes: profile.step_proof_size_bytes,
+        kind: spec.kind,
+        payload_size_bytes,
+        payload_sha256,
+    };
+    validate_header_v4(&header, &profile_metadata)
+        .map_err(|error| format!("invalid {} header: {error}", spec.file_name))?;
+    let header_bytes = norito::to_bytes(&header)?;
+    let header_len = u32::try_from(header_bytes.len())?;
+    if header_len == 0 || header_len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4 {
+        return Err(format!("{} header exceeds the V4 bound", spec.file_name).into());
+    }
+    let total_size = u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4.len() + 4)?
+        .checked_add(u64::from(header_len))
+        .and_then(|size| size.checked_add(payload_size_bytes))
+        .ok_or_else(|| io::Error::other("V4 framed artifact size overflow"))?;
+    if total_size > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4 {
+        return Err(format!("{} exceeds the V4 framed-file bound", spec.file_name).into());
+    }
     let export_profile = KagemushaPastaCycleProofProfileV4 {
-        parity: artifact.header.parity,
-        circuit_id: artifact.header.circuit_id.clone(),
-        parameter_generation: artifact.header.parameter_generation.clone(),
-        ipa_k: artifact.header.ipa_k,
-        circuit_params: artifact.circuit_params,
-        compiled_protocol_structure_sha256: artifact.compiled_protocol_structure_sha256,
-        step_proof_size_bytes: artifact.step_proof_size_bytes,
+        parity: profile.parity,
+        circuit_id: circuit_id.to_owned(),
+        parameter_generation: parameter_generation.to_owned(),
+        ipa_k: profile.circuit_params.k,
+        circuit_params: profile.circuit_params.clone(),
+        compiled_protocol_structure_sha256: profile.compiled_protocol_structure_sha256,
+        step_proof_size_bytes: profile.step_proof_size_bytes,
         artifacts: Vec::new(),
     };
-    let mut output = publication.create_file(artifact.spec.file_name)?;
-    let descriptor = write_kagemusha_pasta_cycle_artifact_v4(
-        &mut output,
-        &artifact.header.generation,
+    let descriptor = write_kagemusha_pasta_cycle_artifact_streaming_v4(
+        output,
+        generation,
         &export_profile,
-        artifact.spec.kind,
-        &artifact.payload,
+        spec.kind,
+        payload_size_bytes,
+        payload_sha256,
+        stream_payload,
     )?;
     output.sync_all()?;
-    drop(output);
-    if descriptor.file_name != artifact.spec.file_name
-        || descriptor.size_bytes != artifact.total_size
-        || descriptor.payload_size_bytes != artifact.header.payload_size_bytes
-        || descriptor.payload_sha256 != artifact.header.payload_sha256
+    if descriptor.file_name != spec.file_name
+        || descriptor.size_bytes != total_size
+        || descriptor.payload_size_bytes != payload_size_bytes
+        || descriptor.payload_sha256 != payload_sha256
     {
-        return Err(format!(
-            "core framing changed generated {} metadata",
-            artifact.spec.file_name
-        )
-        .into());
+        return Err(format!("core framing changed generated {} metadata", spec.file_name).into());
     }
-    Ok((artifact.header, descriptor))
+    Ok(StagedArtifact {
+        spec,
+        header,
+        descriptor,
+    })
+}
+
+fn package_generated_artifact(
+    spec: InputSpec,
+    generation: &str,
+    parameter_generation: &str,
+    profile: &KagemushaGeneratedParityProfileV4,
+    spool: &mut KagemushaGeneratedArtifactSpoolV4,
+) -> Result<FramedArtifactSpool, Box<dyn Error>> {
+    let mut file = tempfile::tempfile()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    let artifact = package_streamed_artifact(
+        &mut file,
+        spec,
+        generation,
+        parameter_generation,
+        profile,
+        spool.size_bytes(),
+        spool.sha256(),
+        |writer| spool.copy_to(writer),
+    )?;
+    let mut framed = FramedArtifactSpool { artifact, file };
+    framed.authenticate()?;
+    Ok(framed)
 }
 
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
@@ -2963,8 +3144,8 @@ mod tests {
         let circuit_params = KagemushaStepCircuitParamsV4 {
             version: iroha_data_model::offline::KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             k,
-            num_advice_per_phase: vec![8, 1, 1],
-            num_lookup_advice_per_phase: vec![1, 0, 0],
+            num_advice_per_phase: vec![8],
+            num_lookup_advice_per_phase: vec![1],
             num_fixed: 1,
             lookup_bits: k - 1,
             num_instance_columns: 1,
@@ -3010,19 +3191,59 @@ mod tests {
         let publication = PublicationDirectory::open_existing(publication_path.clone())
             .expect("open publication");
         let spec = INPUTS[0];
-        let (_, descriptor) = package_artifact(
-            &publication,
-            PreparedArtifact {
-                spec,
-                payload: payload.to_vec(),
+        let mut anonymous_frame = tempfile::tempfile().expect("anonymous test frame");
+        let generated = package_streamed_artifact(
+            &mut anonymous_frame,
+            spec,
+            &header.generation,
+            &header.parameter_generation,
+            &KagemushaGeneratedParityProfileV4 {
+                parity: spec.parity,
                 circuit_params,
                 compiled_protocol_structure_sha256: [0x43; 32],
                 step_proof_size_bytes: 4096,
-                header: header.clone(),
-                total_size,
+            },
+            u64::try_from(payload.len()).expect("small payload"),
+            Sha256::digest(payload).into(),
+            |writer| {
+                writer
+                    .write_all(payload)
+                    .map_err(|error| format!("failed to stream test payload: {error}"))
             },
         )
         .expect("frame test payload");
+        assert_eq!(generated.header, header);
+        let mut spooled = FramedArtifactSpool {
+            artifact: generated,
+            file: anonymous_frame,
+        };
+        spooled
+            .file
+            .seek(SeekFrom::End(-1))
+            .expect("seek to anonymous frame tail");
+        spooled
+            .file
+            .write_all(&[payload[payload.len() - 1] ^ 0xff])
+            .expect("tamper anonymous frame");
+        assert!(
+            spooled.authenticate().is_err(),
+            "anonymous frame mutation must fail before named staging"
+        );
+        spooled
+            .file
+            .seek(SeekFrom::End(-1))
+            .expect("seek to restore anonymous frame tail");
+        spooled
+            .file
+            .write_all(&payload[payload.len() - 1..])
+            .expect("restore anonymous frame");
+        spooled
+            .authenticate()
+            .expect("restored anonymous frame authenticates");
+        let staged = spooled
+            .stage(&publication)
+            .expect("stage authenticated anonymous frame");
+        let descriptor = staged.descriptor;
         let bytes = fs::read(publication_path.join(spec.file_name)).expect("read staged frame");
         assert_eq!(&bytes[..8], KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4);
         assert_eq!(

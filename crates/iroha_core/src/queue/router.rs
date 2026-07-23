@@ -8688,8 +8688,13 @@ mod tests {
                 dataspace_id: lane.dataspace_id,
                 lane_incarnation: Hash::new(b"queue-router-drain-incarnation"),
                 close_global_height,
-                initial_merged_lane_height: 0,
-                initial_merged_descriptor_hash: None,
+                initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                    lane.id,
+                    lane.dataspace_id,
+                    Hash::new(b"queue-router-drain-incarnation"),
+                    0,
+                    None,
+                ),
                 validator_set_hash_version:
                     iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash: HashOf::new(&validator_set),

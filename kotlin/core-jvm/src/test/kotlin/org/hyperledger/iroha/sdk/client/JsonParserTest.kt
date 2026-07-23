@@ -31,6 +31,43 @@ class JsonParserTest {
     }
 
     @Test
+    fun contractResponseRejectsInvalidRustUnsignedNumbers() {
+        for (creationTimeMs in listOf("-1", "9223372036854775808")) {
+            assertFailsWith<IllegalStateException> {
+                ContractJsonParser.parseCallResponse(
+                    contractCallResponse(creationTimeMs = creationTimeMs, gasUsed = "1"),
+                )
+            }
+        }
+        for (gasUsed in listOf("-1", "9223372036854775808")) {
+            assertFailsWith<IllegalStateException> {
+                ContractJsonParser.parseCallResponse(
+                    contractCallResponse(creationTimeMs = "1", gasUsed = gasUsed),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun contractResponseRejectsNonStringTextAndBase64Fields() {
+        val valid = contractCallResponse(creationTimeMs = "1", gasUsed = "1").toString(Charsets.UTF_8)
+        val malformed = listOf(
+            valid.replaceFirst("\"ok\":true", "\"ok\":\"true\""),
+            valid.replaceFirst("\"dataspace\":\"router\"", "\"dataspace\":7"),
+            valid.replaceFirst("\"operation_receipt\":", "\"entrypoint\":7,\"operation_receipt\":"),
+            valid.replaceFirst(
+                "\"operation_receipt\":",
+                "\"signing_message_b64\":7,\"operation_receipt\":",
+            ),
+        )
+        for (payload in malformed) {
+            assertFailsWith<IllegalStateException> {
+                ContractJsonParser.parseCallResponse(payload.toByteArray())
+            }
+        }
+    }
+
+    @Test
     fun oversizedIntegerTokensRemainAvailableForBigIntegerConsumers() {
         val raw = "184467440737095516160000000000000000000"
         assertEquals(BigInteger(raw), JsonParser.parse(raw))
@@ -72,4 +109,24 @@ class JsonParserTest {
         val rejected = "[".repeat(129) + "0" + "]".repeat(129)
         assertFailsWith<IllegalStateException> { JsonParser.parse(rejected) }
     }
+
+    private fun contractCallResponse(creationTimeMs: String, gasUsed: String): ByteArray =
+        """
+            {
+              "ok":true,
+              "submitted":true,
+              "dataspace":"router",
+              "code_hash_hex":"${"11".repeat(32)}",
+              "abi_hash_hex":"${"22".repeat(32)}",
+              "creation_time_ms":$creationTimeMs,
+              "operation_receipt":{
+                "operation_kind":"contract_call",
+                "status":"queued",
+                "transport":"torii",
+                "dataspace":"router",
+                "gas_used":$gasUsed,
+                "payload_digest_hex":"${"33".repeat(32)}"
+              }
+            }
+        """.trimIndent().toByteArray()
 }

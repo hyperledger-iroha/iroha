@@ -15,11 +15,107 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "package_sorafs_validate_release.sh"
 
+FAKE_RELEASE_MANIFEST_HANDLER = r"""
+import hashlib
+import sys
+from pathlib import Path
+
+def _release_fail(message):
+    print(message, file=sys.stderr)
+    raise SystemExit(2)
+
+def _release_signature(public_key, manifest):
+    return hashlib.sha512(
+        b"sorafs-test-release-signature-v1\x00" + public_key + manifest
+    ).digest()
+
+def _release_option_values(arguments):
+    values = {}
+    development = False
+    index = 0
+    value_options = {
+        "--manifest",
+        "--public-key",
+        "--public-key-fingerprint",
+        "--signature",
+        "--signing-seed",
+        "--signature-out",
+    }
+    while index < len(arguments):
+        option = arguments[index]
+        if option == "--development-local-signing":
+            if development:
+                _release_fail("duplicate development signing flag")
+            development = True
+            index += 1
+            continue
+        if option not in value_options or index + 1 >= len(arguments):
+            _release_fail(f"unsupported fake release-manifest option: {option}")
+        if option in values:
+            _release_fail(f"duplicate fake release-manifest option: {option}")
+        values[option] = arguments[index + 1]
+        index += 2
+    return values, development
+
+if len(sys.argv) > 1 and sys.argv[1] == "release-manifest":
+    values, development = _release_option_values(sys.argv[2:])
+    for required in ("--manifest", "--public-key", "--public-key-fingerprint"):
+        if required not in values:
+            _release_fail(f"missing fake release-manifest option: {required}")
+    manifest = Path(values["--manifest"]).read_bytes()
+    public_key = Path(values["--public-key"]).read_bytes()
+    if len(public_key) != 32:
+        _release_fail("release manifest public key must contain exactly 32 raw bytes")
+    if not any(public_key):
+        _release_fail("release manifest public key must not be all zero")
+    if public_key == b"\x01" + (b"\x00" * 31):
+        _release_fail("release manifest public key must not be weak or small-order")
+    fingerprint = hashlib.sha256(public_key).hexdigest()
+    if values["--public-key-fingerprint"] != fingerprint:
+        _release_fail(
+            "release manifest public key does not match the reviewed fingerprint"
+        )
+    if "--signature" in values:
+        if development or "--signing-seed" in values or "--signature-out" in values:
+            _release_fail("external verification received development signing options")
+        signature = Path(values["--signature"]).read_bytes()
+        if len(signature) != 64:
+            _release_fail("release manifest signature must contain exactly 64 raw bytes")
+        if not any(signature):
+            _release_fail("release manifest signature must not be all zero")
+        if signature != _release_signature(public_key, manifest):
+            _release_fail("release manifest Ed25519 signature verification failed")
+        raise SystemExit(0)
+    if not development or "--signing-seed" not in values or "--signature-out" not in values:
+        _release_fail("development signing option set is incomplete")
+    seed = Path(values["--signing-seed"]).read_bytes()
+    if len(seed) != 32:
+        _release_fail(
+            "release manifest development signing seed must contain exactly 32 raw bytes"
+        )
+    derived_public = hashlib.sha256(
+        b"sorafs-test-release-public-key-v1\x00" + seed
+    ).digest()
+    if derived_public != public_key:
+        _release_fail(
+            "release manifest public key does not match the development signing seed"
+        )
+    output = Path(values["--signature-out"])
+    with output.open("xb") as handle:
+        handle.write(_release_signature(public_key, manifest))
+    raise SystemExit(0)
+"""
+
 
 def write_fake_validator(path: Path, body: str) -> Path:
     """Write an executable fake sorafs-validate binary."""
 
-    path.write_text(body, encoding="utf-8")
+    shebang, separator, remainder = body.partition("\n")
+    assert separator and shebang == "#!/usr/bin/env python3"
+    path.write_text(
+        f"{shebang}\n{FAKE_RELEASE_MANIFEST_HANDLER}\n{remainder}",
+        encoding="utf-8",
+    )
     path.chmod(0o755)
     return path
 
@@ -65,116 +161,37 @@ def run_packager(
     )
 
 
-def require_openssl() -> str:
-    """Return the openssl executable path or skip tests requiring it."""
-
-    openssl = shutil.which("openssl")
-    if openssl is None:
-        pytest.skip("openssl not available")
-    return openssl
-
-
 def write_signing_keypair(tmp_path: Path) -> tuple[Path, Path]:
-    """Generate a temporary Ed25519 keypair for manifest signing tests."""
+    """Write a deterministic raw-seed/key pair for packager plumbing tests."""
 
-    openssl = require_openssl()
-    private_key = tmp_path / "manifest-private.pem"
-    public_key = tmp_path / "manifest-public.pem"
-    subprocess.run(
-        [
-            openssl,
-            "genpkey",
-            "-algorithm",
-            "ED25519",
-            "-out",
-            str(private_key),
-        ],
-        cwd=REPO_ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=True,
-    )
+    private_key = tmp_path / "manifest-private.seed"
+    public_key = tmp_path / "manifest-public.key"
+    seed = hashlib.sha256(
+        b"sorafs-test-release-seed-v1\x00" + str(tmp_path).encode("utf-8")
+    ).digest()
+    private_key.write_bytes(seed)
     private_key.chmod(0o600)
-    subprocess.run(
-        [
-            openssl,
-            "pkey",
-            "-in",
-            str(private_key),
-            "-pubout",
-            "-out",
-            str(public_key),
-        ],
-        cwd=REPO_ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=True,
+    public_key.write_bytes(
+        hashlib.sha256(b"sorafs-test-release-public-key-v1\x00" + seed).digest()
     )
     return private_key, public_key
 
 
-def write_rsa_keypair(tmp_path: Path) -> tuple[Path, Path]:
-    """Generate a temporary RSA keypair for incompatible-key tests."""
+def write_incompatible_keypair(tmp_path: Path) -> tuple[Path, Path]:
+    """Write encoded key material that violates the strict raw-key contract."""
 
-    openssl = require_openssl()
-    private_key = tmp_path / "rsa-private.pem"
-    public_key = tmp_path / "rsa-public.pem"
-    subprocess.run(
-        [
-            openssl,
-            "genpkey",
-            "-algorithm",
-            "RSA",
-            "-pkeyopt",
-            "rsa_keygen_bits:2048",
-            "-out",
-            str(private_key),
-        ],
-        cwd=REPO_ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=True,
-    )
+    private_key = tmp_path / "encoded-private.pem"
+    public_key = tmp_path / "encoded-public.pem"
+    private_key.write_bytes(b"-----BEGIN PRIVATE KEY-----\nnot-raw\n")
     private_key.chmod(0o600)
-    subprocess.run(
-        [
-            openssl,
-            "pkey",
-            "-in",
-            str(private_key),
-            "-pubout",
-            "-out",
-            str(public_key),
-        ],
-        cwd=REPO_ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=True,
-    )
+    public_key.write_bytes(b"-----BEGIN PUBLIC KEY-----\nnot-raw\n")
     return private_key, public_key
 
 
 def public_key_fingerprint(public_key: Path) -> str:
-    """Return the canonical DER SubjectPublicKeyInfo SHA256 fingerprint."""
+    """Return the SHA256 fingerprint of the exact raw public-key bytes."""
 
-    openssl = require_openssl()
-    result = subprocess.run(
-        [
-            openssl,
-            "pkey",
-            "-pubin",
-            "-in",
-            str(public_key),
-            "-pubout",
-            "-outform",
-            "DER",
-        ],
-        cwd=REPO_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=True,
-    )
-    return hashlib.sha256(result.stdout).hexdigest()
+    return hashlib.sha256(public_key.read_bytes()).hexdigest()
 
 
 def signing_args(private_key: Path, public_key: Path) -> list[str]:
@@ -204,38 +221,14 @@ def external_signature_args(signature: Path, public_key: Path) -> list[str]:
     ]
 
 
-def write_openssl_signature_wrapper(
-    tmp_path: Path,
-    signature: bytes,
-) -> tuple[Path, dict[str, str]]:
-    """Wrap openssl while replacing only the raw signing result."""
+def fake_release_signature(manifest: Path, public_key: Path) -> bytes:
+    """Return the fake validator's deterministic detached signature."""
 
-    openssl = require_openssl()
-    wrapper_dir = tmp_path / "openssl-wrapper"
-    wrapper_dir.mkdir()
-    wrapper = wrapper_dir / "openssl"
-    wrapper.write_text(
-        "\n".join(
-            [
-                "#!/usr/bin/env python3",
-                "import os",
-                "from pathlib import Path",
-                "import sys",
-                f"REAL_OPENSSL = {openssl!r}",
-                f"SIGNATURE = bytes.fromhex({signature.hex()!r})",
-                "arguments = sys.argv[1:]",
-                'if arguments and arguments[0] == "pkeyutl" and "-sign" in arguments:',
-                '    output = Path(arguments[arguments.index("-out") + 1])',
-                "    output.write_bytes(SIGNATURE)",
-                "    raise SystemExit(0)",
-                "os.execv(REAL_OPENSSL, [REAL_OPENSSL, *arguments])",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    wrapper.chmod(0o755)
-    return wrapper, {"PATH": f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}"}
+    return hashlib.sha512(
+        b"sorafs-test-release-signature-v1\x00"
+        + public_key.read_bytes()
+        + manifest.read_bytes()
+    ).digest()
 
 
 def test_release_packager_accepts_regular_staged_files(tmp_path: Path) -> None:
@@ -387,26 +380,7 @@ def test_release_packager_writes_manifest_signature_through_hardened_path(
     assert len(signature_bytes) == 64
     assert any(signature_bytes)
     assert f"Manifest signer fingerprint (reviewed): {fingerprint}" in result.stdout
-    verification = subprocess.run(
-        [
-            require_openssl(),
-            "pkeyutl",
-            "-verify",
-            "-rawin",
-            "-pubin",
-            "-inkey",
-            str(public_key),
-            "-in",
-            str(manifest),
-            "-sigfile",
-            str(signature),
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert verification.returncode == 0, verification.stderr
+    assert signature_bytes == fake_release_signature(manifest, public_key)
     assert private_key.name not in manifest.read_text(encoding="utf-8")
     assert public_key.name not in manifest.read_text(encoding="utf-8")
 
@@ -420,7 +394,7 @@ def test_release_packager_pins_signing_inputs_before_packaging(
     key_b_dir.mkdir()
     private_key, public_key = write_signing_keypair(key_a_dir)
     replacement_private, replacement_public = write_signing_keypair(key_b_dir)
-    trusted_public = tmp_path / "trusted-public.pem"
+    trusted_public = tmp_path / "trusted-public.key"
     shutil.copyfile(public_key, trusted_public)
     fake_binary = write_fake_validator(
         tmp_path / "sorafs-validate",
@@ -448,26 +422,7 @@ def test_release_packager_pins_signing_inputs_before_packaging(
     package_name = "sorafs-validate-test-version-test-target"
     manifest = tmp_path / "out" / f"{package_name}.manifest.json"
     signature = tmp_path / "out" / f"{package_name}.manifest.json.sig"
-    verification = subprocess.run(
-        [
-            require_openssl(),
-            "pkeyutl",
-            "-verify",
-            "-rawin",
-            "-pubin",
-            "-inkey",
-            str(trusted_public),
-            "-in",
-            str(manifest),
-            "-sigfile",
-            str(signature),
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert verification.returncode == 0, verification.stderr
+    assert signature.read_bytes() == fake_release_signature(manifest, trusted_public)
     assert public_key.read_bytes() == replacement_public.read_bytes()
 
 
@@ -486,23 +441,7 @@ def test_release_packager_verifies_external_hsm_signature(
     manifest = tmp_path / "out" / f"{package_name}.manifest.json"
     manifest_before = manifest.read_bytes()
     external_signature = tmp_path / "hsm-manifest.sig"
-    subprocess.run(
-        [
-            require_openssl(),
-            "pkeyutl",
-            "-sign",
-            "-rawin",
-            "-inkey",
-            str(private_key),
-            "-in",
-            str(manifest),
-            "-out",
-            str(external_signature),
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        check=True,
-    )
+    external_signature.write_bytes(fake_release_signature(manifest, public_key))
 
     signed = run_packager(
         tmp_path,
@@ -599,7 +538,7 @@ def test_release_packager_requires_public_key_for_signed_manifest(
     assert not (tmp_path / "out").exists()
 
 
-def test_release_packager_keeps_local_pem_signing_development_only(
+def test_release_packager_keeps_local_raw_seed_signing_development_only(
     tmp_path: Path,
 ) -> None:
     private_key, public_key = write_signing_keypair(tmp_path)
@@ -700,10 +639,11 @@ def test_release_packager_rejects_hardlinked_private_key(
     assert not (tmp_path / "out").exists()
 
 
-def test_release_packager_rejects_rsa_private_key_without_leaking_material(
+def test_release_packager_rejects_encoded_private_key_without_leaking_material(
     tmp_path: Path,
 ) -> None:
-    private_key, public_key = write_rsa_keypair(tmp_path)
+    private_key, public_key = write_incompatible_keypair(tmp_path)
+    public_key.write_bytes(b"\x33" * 32)
     fake_binary = write_fake_validator(
         tmp_path / "sorafs-validate",
         "#!/usr/bin/env python3\nprint('fake help')\n",
@@ -716,10 +656,7 @@ def test_release_packager_rejects_rsa_private_key_without_leaking_material(
     )
 
     assert result.returncode != 0
-    assert (
-        "manifest signing key must contain exactly an Ed25519 private key"
-        in result.stderr
-    )
+    assert "manifest signing key must contain exactly 32 raw bytes" in result.stderr
     assert "-----BEGIN PRIVATE KEY-----" not in result.stderr
     assert not (tmp_path / "out").exists()
 
@@ -728,7 +665,7 @@ def test_release_packager_rejects_non_ed25519_public_key(
     tmp_path: Path,
 ) -> None:
     private_key, _public_key = write_signing_keypair(tmp_path)
-    _rsa_private_key, rsa_public_key = write_rsa_keypair(tmp_path)
+    _encoded_private_key, encoded_public_key = write_incompatible_keypair(tmp_path)
     fake_binary = write_fake_validator(
         tmp_path / "sorafs-validate",
         "#!/usr/bin/env python3\nprint('fake help')\n",
@@ -737,15 +674,35 @@ def test_release_packager_rejects_non_ed25519_public_key(
     result = run_packager(
         tmp_path,
         fake_binary,
-        extra_args=signing_args(private_key, rsa_public_key),
+        extra_args=signing_args(private_key, encoded_public_key),
     )
 
     assert result.returncode != 0
-    assert (
-        "manifest public key must contain exactly an Ed25519 public key"
-        in result.stderr
-    )
+    assert "manifest public key must contain exactly 32 raw bytes" in result.stderr
     assert not (tmp_path / "out").exists()
+
+
+def test_release_packager_rejects_weak_ed25519_public_key(
+    tmp_path: Path,
+) -> None:
+    _private_key, public_key = write_signing_keypair(tmp_path)
+    public_key.write_bytes(b"\x01" + (b"\x00" * 31))
+    external_signature = tmp_path / "external.sig"
+    external_signature.write_bytes(b"\x01" * 64)
+    fake_binary = write_fake_validator(
+        tmp_path / "sorafs-validate",
+        "#!/usr/bin/env python3\nprint('fake help')\n",
+    )
+
+    result = run_packager(
+        tmp_path,
+        fake_binary,
+        extra_args=external_signature_args(external_signature, public_key),
+    )
+
+    assert result.returncode != 0
+    assert "release manifest public key must not be weak or small-order" in result.stderr
+    assert not list((tmp_path / "out").glob("*.manifest.json.sig"))
 
 
 def test_release_packager_rejects_mismatched_ed25519_keypair(
@@ -769,7 +726,10 @@ def test_release_packager_rejects_mismatched_ed25519_keypair(
     )
 
     assert result.returncode != 0
-    assert "manifest public key does not match manifest signing key" in result.stderr
+    assert (
+        "release manifest public key does not match the development signing seed"
+        in result.stderr
+    )
     assert not (tmp_path / "out").exists()
 
 
@@ -861,11 +821,11 @@ def test_release_packager_rejects_symlinked_manifest_public_key(
 @pytest.mark.parametrize(
     ("signature", "expected_error"),
     [
-        (b"\x01" * 63, "must be exactly 64 bytes"),
+        (b"\x01" * 63, "must contain exactly 64 raw bytes"),
         (b"\x00" * 64, "must not be all zero"),
         (
             b"\x01" * 64,
-            "raw Ed25519 manifest signature verification failed",
+            "release manifest Ed25519 signature verification failed",
         ),
     ],
     ids=["short", "all-zero", "cryptographically-invalid"],
@@ -875,18 +835,20 @@ def test_release_packager_rejects_malformed_ed25519_signature(
     signature: bytes,
     expected_error: str,
 ) -> None:
-    private_key, public_key = write_signing_keypair(tmp_path)
-    _wrapper, wrapper_env = write_openssl_signature_wrapper(tmp_path, signature)
+    _private_key, public_key = write_signing_keypair(tmp_path)
     fake_binary = write_fake_validator(
         tmp_path / "sorafs-validate",
         "#!/usr/bin/env python3\nprint('fake help')\n",
     )
+    unsigned = run_packager(tmp_path, fake_binary)
+    assert unsigned.returncode == 0, unsigned.stderr
+    external_signature = tmp_path / "malformed-external.sig"
+    external_signature.write_bytes(signature)
 
     result = run_packager(
         tmp_path,
         fake_binary,
-        extra_args=signing_args(private_key, public_key),
-        env=wrapper_env,
+        extra_args=external_signature_args(external_signature, public_key),
     )
 
     assert result.returncode != 0

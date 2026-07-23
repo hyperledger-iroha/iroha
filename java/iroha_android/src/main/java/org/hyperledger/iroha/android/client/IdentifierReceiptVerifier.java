@@ -4,6 +4,7 @@ import java.util.Objects;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
+import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
 import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
@@ -68,6 +69,9 @@ public final class IdentifierReceiptVerifier {
 
   private static boolean verifyEd25519(
       final byte[] publicKey, final byte[] message, final byte[] signature) {
+    if (!Ed25519PublicKeyAdmission.isValid(publicKey)) {
+      return false;
+    }
     try {
       final Ed25519Signer verifier = new Ed25519Signer();
       verifier.init(false, new Ed25519PublicKeyParameters(publicKey, 0));

@@ -55,6 +55,14 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, Quantity};
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
+pub use iroha_torii_shared::validation_fee_api::{
+    VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+    VALIDATION_FEE_PROPOSAL_API_VERSION_V1, ValidationFeeCurrentPolicyProofRequestV1,
+    ValidationFeeCurrentPolicyProofV1, ValidationFeeProposalDetailV1,
+    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
+    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalListV1,
+    ValidationFeeProposalRecordV1, ValidationFeeVerifiedPolicyProjectionV1,
+};
 use iroha_torii_shared::{
     AccountReadResponse, ErrorEnvelope, FeeQuoteRequest, FeeQuoteResponse,
     FeeSponsorProgramByIdRequest, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
@@ -132,6 +140,9 @@ const APPLICATION_JSON: &str = "application/json";
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const SCCP_JSON_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
+const VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES: usize =
+    iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES;
 const CONTRACT_CODE_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES: usize =
     ((CONTRACT_CODE_ARTIFACT_MAX_BYTES + 2) / 3) * 4;
@@ -2401,6 +2412,179 @@ pub struct SccpRouteGovernanceDraftResponse {
     pub proposal_id: String,
     /// Exactly one typed `ProposeSccpRouteGovernance` instruction.
     pub tx_instructions: Vec<SccpRouteGovernanceInstructionDraft>,
+}
+
+/// Result of verifying one or more bounded validation-fee checkpoint-promotion pages.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidationFeePolicyProofCatchUp {
+    /// Final proof page containing the most recent observed registry snapshot.
+    pub final_page: ValidationFeeCurrentPolicyProofV1,
+    /// Number of independently verified pages.
+    pub pages_verified: u32,
+    /// Height of the promoted durable checkpoint.
+    pub promoted_checkpoint_height: u64,
+    /// Context id of the promoted durable checkpoint.
+    pub promoted_checkpoint_context_id: [u8; 32],
+}
+
+fn canonical_validation_fee_draft_instruction(
+    request: &ValidationFeeProposalDraftRequestV1,
+) -> Result<(
+    iroha_data_model::governance::types::ProposalKind,
+    InstructionBox,
+)> {
+    use iroha_data_model::{
+        governance::types::ProposalKind,
+        isi::governance::{
+            ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy, VotingMode,
+        },
+    };
+
+    if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1 {
+        return Err(eyre!("unsupported validation-fee proposal draft version"));
+    }
+    if request
+        .referendum_window
+        .is_some_and(|window| window.upper < window.lower)
+    {
+        return Err(eyre!("validation-fee referendum window is reversed"));
+    }
+    if request.mode == Some(VotingMode::Zk) {
+        return Err(eyre!(
+            "validation-fee governance supports plain referendum voting only"
+        ));
+    }
+    let proposal_kind = request.proposal.proposal_kind();
+    let instruction = match &request.proposal {
+        ValidationFeeProposalDraftPayloadV1::Policy {
+            policy,
+            payout_lifecycle_proposal_id,
+        } => {
+            if let Some(reason) = policy.policy_invariant_error() {
+                return Err(eyre!("invalid validation-fee policy: {reason}"));
+            }
+            match (
+                policy.treasury_payout_binding.as_ref(),
+                payout_lifecycle_proposal_id,
+            ) {
+                (None, None) => {}
+                (Some(_), Some(id)) if *id != [0; 32] => {}
+                (Some(_), _) => {
+                    return Err(eyre!(
+                        "payout-enabled policy requires a non-zero lifecycle proposal id"
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(eyre!(
+                        "policy without a payout binding cannot select a lifecycle proposal"
+                    ));
+                }
+            }
+            let kind = ProposalKind::ValidationFeePolicy(
+                iroha_data_model::governance::types::ValidationFeePolicyProposal {
+                    policy: policy.clone(),
+                    payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
+                },
+            );
+            debug_assert_eq!(kind, proposal_kind);
+            let instruction: InstructionBox = ProposeValidationFeePolicy {
+                policy: policy.clone(),
+                payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
+                referendum_window: request.referendum_window,
+                mode: Some(VotingMode::Plain),
+            }
+            .into();
+            instruction
+        }
+        ValidationFeeProposalDraftPayloadV1::PayoutLifecycle { payout_binding } => {
+            if let Some(reason) = payout_binding.invariant_error() {
+                return Err(eyre!("invalid validation-fee payout lifecycle: {reason}"));
+            }
+            let lifecycle_seal = payout_binding
+                .lifecycle_seal()
+                .wrap_err("failed to derive validation-fee payout lifecycle seal")?;
+            if lifecycle_seal == [0; 32] {
+                return Err(eyre!(
+                    "validation-fee payout lifecycle derives an invalid zero seal"
+                ));
+            }
+            let instruction: InstructionBox = ProposeValidationFeePayoutLifecycle {
+                payout_binding: payout_binding.clone(),
+                referendum_window: request.referendum_window,
+                mode: Some(VotingMode::Plain),
+            }
+            .into();
+            instruction
+        }
+    };
+    Ok((proposal_kind, instruction))
+}
+
+fn validate_validation_fee_draft_response(
+    response: &ValidationFeeProposalDraftResponseV1,
+    request: &ValidationFeeProposalDraftRequestV1,
+) -> Result<InstructionBox> {
+    if response.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1 {
+        return Err(eyre!(
+            "validation-fee draft response has an unsupported version"
+        ));
+    }
+    let (expected_kind, expected_instruction) =
+        canonical_validation_fee_draft_instruction(request)?;
+    if response.proposal_kind != expected_kind
+        || response.proposal_id != hex::encode(expected_kind.fingerprint())
+    {
+        return Err(eyre!(
+            "validation-fee draft response differs from the exact requested proposal"
+        ));
+    }
+    let [draft] = response.tx_instructions.as_slice() else {
+        return Err(eyre!(
+            "validation-fee draft must contain exactly one instruction"
+        ));
+    };
+    if draft.payload_hex.is_empty()
+        || draft.payload_hex.len() % 2 != 0
+        || !draft
+            .payload_hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(eyre!(
+            "validation-fee instruction payload must be lowercase canonical hex"
+        ));
+    }
+    let payload =
+        hex::decode(&draft.payload_hex).wrap_err("failed to decode validation-fee draft")?;
+    let instruction = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &payload)
+        .wrap_err("failed to decode native validation-fee proposal instruction")?;
+    if iroha_data_model::isi::Instruction::id(&*instruction)
+        != iroha_data_model::isi::Instruction::id(&*expected_instruction)
+        || iroha_data_model::isi::Instruction::dyn_encode(&*instruction)
+            != iroha_data_model::isi::Instruction::dyn_encode(&*expected_instruction)
+    {
+        return Err(eyre!(
+            "validation-fee draft returned a different native instruction"
+        ));
+    }
+    Ok(instruction)
+}
+
+fn validate_validation_fee_proposal_record(record: &ValidationFeeProposalRecordV1) -> Result<()> {
+    use iroha_data_model::{governance::types::ProposalKind, isi::governance::VotingMode};
+    let expected_id = hex::encode(record.proposal_kind.fingerprint());
+    if record.proposal_id != expected_id
+        || record.referendum.mode != VotingMode::Plain
+        || !matches!(
+            record.proposal_kind,
+            ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_)
+        )
+    {
+        return Err(eyre!(
+            "validation-fee proposal read response is not bound to its exact native proposal"
+        ));
+    }
+    Ok(())
 }
 
 fn sccp_route_governance_proposal_id(
@@ -7146,7 +7330,7 @@ impl Client {
             && readiness.active_recursive_step_ep_verifier.is_some();
         if readiness.recursive_lineage_supported != expected_recursive_lineage_supported {
             return Err(eyre!(
-                "offline readiness response has an inconsistent exact ABI-20 recursive lineage capability"
+                "offline readiness response has an inconsistent exact ABI-21 recursive lineage capability"
             ));
         }
         if readiness.recursive_lineage_supported == has_blocker("recursive_lineage_unavailable") {
@@ -7168,7 +7352,7 @@ impl Client {
             && readiness.blockers.is_empty();
         if readiness.ready != expected_ready {
             return Err(eyre!(
-                "offline readiness response has an inconsistent complete ABI-20 readiness claim"
+                "offline readiness response has an inconsistent complete ABI-21 readiness claim"
             ));
         }
         Ok(readiness)
@@ -19190,6 +19374,242 @@ impl Client {
             .wrap_err("failed to decode typed SCCP route-governance draft response")?;
         validate_sccp_route_governance_draft_response(&response, request)?;
         Ok(response)
+    }
+
+    /// Fetch and verify one bounded validation-fee policy proof page.
+    ///
+    /// The caller supplies a previously trusted checkpoint. The returned page
+    /// must begin at that exact height/context and advances by at most 63
+    /// blocks, authenticating the complete registry through the Commit-QC
+    /// ordinary-write root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid anchor, transport/HTTP failure,
+    /// non-Norito response, malformed proof, or any finality/registry/witness
+    /// verification failure.
+    pub fn get_validation_fee_current_policy_proof_page(
+        &self,
+        trusted_checkpoint_height: u64,
+        trusted_checkpoint_context_id: [u8; 32],
+    ) -> Result<ValidationFeeCurrentPolicyProofV1> {
+        let request = ValidationFeeCurrentPolicyProofRequestV1 {
+            version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+            trusted_checkpoint_height,
+        };
+        let body = to_bytes(&request)
+            .wrap_err("failed to encode validation-fee proof request as Norito")?;
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_uri::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+        );
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES)
+                .body(body),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to fetch validation-fee policy proof: {} {}",
+                response.status(),
+                std::str::from_utf8(response.body()).unwrap_or("")
+            ));
+        }
+        let content_type = Self::response_content_type(&response);
+        if !content_type.starts_with(APPLICATION_NORITO) {
+            return Err(eyre!(
+                "validation-fee policy proof response has invalid content type {content_type}"
+            ));
+        }
+        let proof: ValidationFeeCurrentPolicyProofV1 = decode_from_bytes(response.body())
+            .wrap_err("failed to decode validation-fee policy proof")?;
+        proof
+            .verify_against(
+                self.chain.clone(),
+                trusted_checkpoint_height,
+                trusted_checkpoint_context_id,
+            )
+            .map_err(|error| eyre!("validation-fee policy proof verification failed: {error}"))?;
+        Ok(proof)
+    }
+
+    /// Repeatedly verify bounded validation-fee proof pages until Torii's observed tip.
+    ///
+    /// Applications that persist checkpoints should call the page method
+    /// directly and durably store each returned height/context before
+    /// requesting the next page. This convenience method verifies the same
+    /// sequence in memory and returns the final promoted checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any page fails or does not advance, or when a
+    /// hostile endpoint attempts an unbounded pagination loop.
+    pub fn catch_up_validation_fee_current_policy_proof(
+        &self,
+        trusted_checkpoint_height: u64,
+        trusted_checkpoint_context_id: [u8; 32],
+    ) -> Result<ValidationFeePolicyProofCatchUp> {
+        const MAX_PAGES_PER_CALL: u32 = 4_096;
+
+        let mut checkpoint_height = trusted_checkpoint_height;
+        let mut checkpoint_context_id = trusted_checkpoint_context_id;
+        for pages_verified in 1..=MAX_PAGES_PER_CALL {
+            let page = self.get_validation_fee_current_policy_proof_page(
+                checkpoint_height,
+                checkpoint_context_id,
+            )?;
+            if page.evaluated_block_height < checkpoint_height
+                || (page.more_available && page.evaluated_block_height == checkpoint_height)
+            {
+                return Err(eyre!("validation-fee checkpoint promotion did not advance"));
+            }
+            checkpoint_height = page.evaluated_block_height;
+            checkpoint_context_id = *page.evaluated_context_id.0.as_ref();
+            if !page.more_available {
+                return Ok(ValidationFeePolicyProofCatchUp {
+                    final_page: page,
+                    pages_verified,
+                    promoted_checkpoint_height: checkpoint_height,
+                    promoted_checkpoint_context_id: checkpoint_context_id,
+                });
+            }
+        }
+        Err(eyre!(
+            "validation-fee checkpoint promotion exceeded {MAX_PAGES_PER_CALL} pages"
+        ))
+    }
+
+    /// List all typed validation-fee Parliament proposals.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for transport/HTTP/JSON failure or a response whose
+    /// proposal id, kind, version, or voting mode is inconsistent.
+    pub fn list_validation_fee_proposals(&self) -> Result<ValidationFeeProposalListV1> {
+        let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSALS);
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to list validation-fee proposals: {} {}",
+                response.status(),
+                std::str::from_utf8(response.body()).unwrap_or("")
+            ));
+        }
+        let result: ValidationFeeProposalListV1 = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode validation-fee proposal list")?;
+        if result.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1 {
+            return Err(eyre!(
+                "validation-fee proposal list has an unsupported version"
+            ));
+        }
+        for proposal in &result.proposals {
+            validate_validation_fee_proposal_record(proposal)?;
+        }
+        if result.proposals.windows(2).any(|pair| {
+            (pair[0].created_height, pair[0].proposal_id.as_str())
+                > (pair[1].created_height, pair[1].proposal_id.as_str())
+        }) {
+            return Err(eyre!(
+                "validation-fee proposal list is not canonically ordered"
+            ));
+        }
+        Ok(result)
+    }
+
+    /// Read one typed validation-fee Parliament proposal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed id, transport/HTTP/JSON failure, or a
+    /// response not bound to the requested native proposal fingerprint.
+    pub fn get_validation_fee_proposal(
+        &self,
+        proposal_id: &str,
+    ) -> Result<ValidationFeeProposalDetailV1> {
+        Self::require_lower_hex_32(proposal_id, "proposal_id")?;
+        let path = torii_uri::VALIDATION_FEE_PROPOSAL_DETAIL.replace("{proposal_id}", proposal_id);
+        let url = join_torii_url(&self.torii_url, &path);
+        let response = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get validation-fee proposal: {} {}",
+                response.status(),
+                std::str::from_utf8(response.body()).unwrap_or("")
+            ));
+        }
+        let result: ValidationFeeProposalDetailV1 = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode validation-fee proposal detail")?;
+        if result.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1
+            || result.proposal.proposal_id != proposal_id
+        {
+            return Err(eyre!(
+                "validation-fee proposal detail differs from the requested id or version"
+            ));
+        }
+        validate_validation_fee_proposal_record(&result.proposal)?;
+        Ok(result)
+    }
+
+    /// Draft one exact native validation-fee proposal for local signing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before HTTP for ZK mode or malformed payloads, and
+    /// rejects any server response whose proposal kind/id/instruction differs
+    /// from the exact request.
+    pub fn post_validation_fee_proposal_draft(
+        &self,
+        request: &ValidationFeeProposalDraftRequestV1,
+    ) -> Result<ValidationFeeProposalDraftResponseV1> {
+        let _ = canonical_validation_fee_draft_instruction(request)?;
+        let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSAL_DRAFT);
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode validation-fee proposal draft")?;
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES)
+                .body(body),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to draft validation-fee proposal: {} {}",
+                response.status(),
+                std::str::from_utf8(response.body()).unwrap_or("")
+            ));
+        }
+        let result: ValidationFeeProposalDraftResponseV1 =
+            norito::json::from_slice(response.body())
+                .wrap_err("failed to decode validation-fee proposal draft response")?;
+        let _ = validate_validation_fee_draft_response(&result, request)?;
+        Ok(result)
+    }
+
+    /// Draft, locally sign, and submit one native validation-fee proposal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if strict draft validation or normal transaction
+    /// submission fails.
+    pub fn submit_validation_fee_proposal(
+        &self,
+        request: &ValidationFeeProposalDraftRequestV1,
+        fee_payment: FeePaymentIntent,
+    ) -> Result<HashOf<SignedTransaction>> {
+        let response = self.post_validation_fee_proposal_draft(request)?;
+        let instruction = validate_validation_fee_draft_response(&response, request)?;
+        self.submit(instruction, fee_payment)
     }
 
     /// POST `/v1/gov/ballots/zk` with a JSON DTO body.

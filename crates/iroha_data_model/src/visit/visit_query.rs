@@ -97,6 +97,8 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_sorafs_moderation_outcome(FindSorafsModerationOutcome),
         visit_find_sorafs_moderation_no_show(FindSorafsModerationNoShow),
         visit_find_sorafs_moderation_status(FindSorafsModerationStatus),
+        visit_find_sorafs_moderation_snapshot(FindSorafsModerationSnapshot),
+        visit_find_sorafs_moderation_events(FindSorafsModerationEvents),
         visit_find_dataspace_name_owner_by_id(FindDataspaceNameOwnerById),
         visit_find_musubi_release_by_ref(FindMusubiReleaseByRef),
         visit_find_musubi_package_versions(FindMusubiPackageVersions),
@@ -332,6 +334,12 @@ macro_rules! query_visitors {
             visit_find_sorafs_moderation_status(
                 &$crate::query::sorafs::prelude::FindSorafsModerationStatus
             ),
+            visit_find_sorafs_moderation_snapshot(
+                &$crate::query::sorafs::prelude::FindSorafsModerationSnapshot
+            ),
+            visit_find_sorafs_moderation_events(
+                &$crate::query::sorafs::prelude::FindSorafsModerationEvents
+            ),
             visit_find_dataspace_name_owner_by_id(
                 &$crate::query::sns::prelude::FindDataspaceNameOwnerById
             ),
@@ -483,6 +491,8 @@ mod tests {
             SingularQueryBox::FindSorafsModerationOutcome(_) => {}
             SingularQueryBox::FindSorafsModerationNoShow(_) => {}
             SingularQueryBox::FindSorafsModerationStatus(_) => {}
+            SingularQueryBox::FindSorafsModerationSnapshot(_) => {}
+            SingularQueryBox::FindSorafsModerationEvents(_) => {}
             SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
             SingularQueryBox::FindMusubiReleaseByRef(_) => {}
             SingularQueryBox::FindMusubiPackageVersions(_) => {}

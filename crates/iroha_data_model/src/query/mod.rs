@@ -1135,6 +1135,10 @@ mod model {
         FindSorafsModerationNoShow(sorafs::prelude::FindSorafsModerationNoShow),
         /// Fetch constant-time authoritative moderation-ledger counters.
         FindSorafsModerationStatus(sorafs::prelude::FindSorafsModerationStatus),
+        /// Fetch a complete bounded moderation projection at one finalized block.
+        FindSorafsModerationSnapshot(sorafs::prelude::FindSorafsModerationSnapshot),
+        /// Fetch a cursor-bounded page of committed moderation events.
+        FindSorafsModerationEvents(sorafs::prelude::FindSorafsModerationEvents),
         /// Fetch the active SNS owner for a dataspace alias.
         FindDataspaceNameOwnerById(sns::prelude::FindDataspaceNameOwnerById),
         /// Fetch a Musubi release by exact package reference.
@@ -1291,6 +1295,12 @@ mod model {
         SorafsModerationNoShow(crate::sorafs::moderation_ledger::ModerationNoShowRecordV1),
         /// Authoritative `SoraFS` moderation status payload.
         SorafsModerationStatus(crate::sorafs::moderation_ledger::ModerationLedgerStatusV1),
+        /// Complete bounded moderation projection at one finalized block.
+        SorafsModerationSnapshot(
+            crate::sorafs::moderation_ledger::ModerationFinalizedLedgerSnapshotV1,
+        ),
+        /// Cursor-bounded page of committed moderation events.
+        SorafsModerationEventPage(crate::sorafs::moderation_ledger::ModerationFinalizedEventPageV1),
         /// Protected native FX corridor policy registry payload.
         FxCorridorPolicyRegistry(crate::isi::settlement::FxCorridorPolicyRegistry),
         /// Native FX corridor policy payload.
@@ -5308,7 +5318,11 @@ pub mod sorafs {
 
     use crate::{
         account::AccountId,
-        sorafs::{capacity::ProviderId, orderbook::OrderbookOrderStatusV1},
+        sorafs::{
+            capacity::ProviderId,
+            moderation_ledger::{ModerationFinalizedCursorV1, ModerationFinalizedEventCursorV1},
+            orderbook::OrderbookOrderStatusV1,
+        },
     };
 
     queries! {
@@ -5573,6 +5587,26 @@ pub mod sorafs {
         /// Fetch constant-time authoritative moderation-ledger counters.
         #[derive(Copy)]
         pub struct FindSorafsModerationStatus;
+
+        /// Fetch a complete bounded moderation projection at one finalized block.
+        #[derive(Copy)]
+        pub struct FindSorafsModerationSnapshot {
+            /// Maximum appeals and activated cases accepted in the projection.
+            pub max_cases: u32,
+            /// Maximum latest committed events accepted in the projection.
+            pub max_events: u32,
+        }
+
+        /// Fetch a cursor-bounded page of committed moderation events.
+        #[derive(Copy)]
+        pub struct FindSorafsModerationEvents {
+            /// Finalized anchor that must still identify the immutable state view.
+            pub expected_finalized_cursor: ModerationFinalizedCursorV1,
+            /// Exclusive committed-event cursor, when continuing a page.
+            pub after: Option<ModerationFinalizedEventCursorV1>,
+            /// Requested page size, checked against the hard query ceiling.
+            pub limit: u32,
+        }
     }
 
     impl fmt::Display for FindSorafsProviderOwner {
@@ -5852,13 +5886,34 @@ pub mod sorafs {
         }
     }
 
+    impl fmt::Display for FindSorafsModerationSnapshot {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS moderation snapshot with at most {} cases and {} events",
+                self.max_cases, self.max_events
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsModerationEvents {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS moderation events at finalized height {} with limit {}",
+                self.expected_finalized_cursor.height, self.limit
+            )
+        }
+    }
+
     /// Prelude re-exports for `SoraFS` queries.
     pub mod prelude {
         pub use super::{
             FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
-            FindSorafsModerationCommit, FindSorafsModerationJurorEligibility,
-            FindSorafsModerationNoShow, FindSorafsModerationOutcome, FindSorafsModerationPolicy,
-            FindSorafsModerationReveal, FindSorafsModerationStatus,
+            FindSorafsModerationCommit, FindSorafsModerationEvents,
+            FindSorafsModerationJurorEligibility, FindSorafsModerationNoShow,
+            FindSorafsModerationOutcome, FindSorafsModerationPolicy, FindSorafsModerationReveal,
+            FindSorafsModerationSnapshot, FindSorafsModerationStatus,
             FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookChannelById,
             FindSorafsOrderbookOrderById, FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy,
             FindSorafsOrderbookReceiptById, FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus,
@@ -6030,6 +6085,14 @@ impl_sorafs_orderbook_singular_query!(
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsModerationStatus
         => crate::sorafs::moderation_ledger::ModerationLedgerStatusV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationSnapshot
+        => crate::sorafs::moderation_ledger::ModerationFinalizedLedgerSnapshotV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsModerationEvents
+        => crate::sorafs::moderation_ledger::ModerationFinalizedEventPageV1
 );
 
 pub mod sns {
@@ -7037,6 +7100,23 @@ mod tests {
             )
             .into(),
             sorafs::prelude::FindSorafsModerationStatus.into(),
+            sorafs::prelude::FindSorafsModerationSnapshot::new(64, 128).into(),
+            sorafs::prelude::FindSorafsModerationEvents::new(
+                crate::sorafs::moderation_ledger::ModerationFinalizedCursorV1 {
+                    height: 9,
+                    block_hash: [0x31; 32],
+                },
+                Some(
+                    crate::sorafs::moderation_ledger::ModerationFinalizedEventCursorV1 {
+                        sequence: 12,
+                        block_height: 8,
+                        block_hash: [0x32; 32],
+                        event_index: 2,
+                    },
+                ),
+                25,
+            )
+            .into(),
         ];
 
         for query in queries {

@@ -11,7 +11,7 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import secrets
 import selectors
@@ -20,6 +20,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 
@@ -70,6 +71,13 @@ _MAX_TOOL_BYTES = 512 * 1024 * 1024
 _MAX_REPLAY_OUTPUT_BYTES = 4 * 1024 * 1024
 _MAX_LOCALNET_MANIFEST_INDEX_BYTES = 1024 * 1024
 _MAX_LOCALNET_MANIFEST_BYTES = 64 * 1024 * 1024
+_MAX_SCALING_JSON_BYTES = 16 * 1024 * 1024
+_MAX_SCALING_BUNDLE_FILE_COUNT = 256
+_MAX_SCALING_BUNDLE_DIRECTORY_COUNT = 512
+_MAX_SCALING_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
+_MAX_SCALING_BUNDLE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_G12_TSV_BYTES = 1024 * 1024
+_MAX_G12_LOG_BYTES = 16 * 1024 * 1024
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
     "4c7c161667924706d79346a447a7ddd3e19be1e1868a30f24526ad475a4e7525"
@@ -122,6 +130,44 @@ _FORMAL_FINAL_MARKER = (
     "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
     "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness "
     "mutations, bounded TLC, trace replay, and production Verus"
+)
+_SCALING_REPORT_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.validation.v1"
+_SCALING_SAFE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_APALACHE_VERSION = "0.52.2"
+_APALACHE_LAUNCHER_SHA256 = (
+    "bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501898d33ea7d1da3a8cd7"
+)
+_APALACHE_JAR_SHA256 = (
+    "1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a"
+)
+_APALACHE_RESULTS = (
+    (
+        "autoscale-lifecycle",
+        "SumeragiV2AutoscaleLifecycle",
+        "multilane_autoscale_lifecycle_fixed.cfg",
+        "8",
+    ),
+    (
+        "native-application-evidence",
+        "SumeragiV2NativeApplicationEvidence",
+        "multilane_native_application_evidence_fixed.cfg",
+        "5",
+    ),
+    (
+        "autonomous-reservation-carrier",
+        "SumeragiV2AutonomousReservationCarrier",
+        "multilane_autonomous_reservation_carrier_fixed.cfg",
+        "10",
+    ),
+)
+_G12_SEED_PREFIX = "nexus-cross-dataspace-v1-seed-"
+_G12_SEED_TEST = (
+    "nexus::cross_dataspace_localnet::"
+    "cross_dataspace_atomic_swap_is_all_or_nothing"
+)
+_G12_SOAK_TEST = (
+    "nexus::cross_dataspace_localnet::"
+    "cross_dataspace_two_hour_fault_soak_preserves_multilane_application"
 )
 _CHAOS_MARKER = (
     "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
@@ -434,7 +480,7 @@ def _canonical_production_tests(repo_root: Path) -> list[str]:
 def _production_module_command(module: str) -> str:
     if module == "sumeragi_v2_runner":
         return (
-            "cargo test --locked -p integration_tests --test "
+            "cargo test --locked --offline -p integration_tests --test "
             "sumeragi_v2_runner_isolated "
             f"{_PRODUCTION_INTEGRATION_MODULE} -- --test-threads=1"
         )
@@ -444,7 +490,10 @@ def _production_module_command(module: str) -> str:
         "network::inbound_source_memory_bound_tests",
         "network::handle_update_tests",
     }:
-        return f"cargo test --locked -p iroha_p2p --lib {module} -- --test-threads=1"
+        return (
+            "cargo test --locked --offline -p iroha_p2p --lib "
+            f"{module} -- --test-threads=1"
+        )
     if module in {
         "consensus_message_control::tests",
         "network_relay_tests",
@@ -452,18 +501,24 @@ def _production_module_command(module: str) -> str:
         "genesis_bootstrap::tests",
     }:
         return (
-            "cargo test --locked -p irohad --bin irohad "
+            "cargo test --locked --offline -p irohad --bin irohad "
             "--features test-network-message-control "
             f"{module} -- --test-threads=1"
         )
     if module.startswith("parameters::"):
-        return f"cargo test --locked -p iroha_config --lib {module} -- --test-threads=1"
-    if module in _DATA_MODEL_PRODUCTION_MODULES:
         return (
-            "cargo test --locked -p iroha_data_model --lib "
+            "cargo test --locked --offline -p iroha_config --lib "
             f"{module} -- --test-threads=1"
         )
-    return f"cargo test --locked -p iroha_core --lib {module} -- --test-threads=1"
+    if module in _DATA_MODEL_PRODUCTION_MODULES:
+        return (
+            "cargo test --locked --offline -p iroha_data_model --lib "
+            f"{module} -- --test-threads=1"
+        )
+    return (
+        "cargo test --locked --offline -p iroha_core --lib "
+        f"{module} -- --test-threads=1"
+    )
 
 
 def _corridor_legs() -> list[tuple[str, str, int, str]]:
@@ -481,7 +536,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             "status-rust",
             "cargo-exact",
             1,
-            "cargo test --locked -p iroha_data_model --lib "
+            "cargo test --locked --offline -p iroha_data_model --lib "
             f"{_DATA_STATUS_TEST} -- --test-threads=1",
         )
     )
@@ -490,29 +545,48 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             "lane-certificate-rust",
             "cargo-exact",
             1,
-            "cargo test --locked -p iroha_data_model --lib "
+            "cargo test --locked --offline -p iroha_data_model --lib "
             f"{_DATA_LANE_CERTIFICATE_TEST} -- --exact --test-threads=1",
         )
     )
     legs.extend(
         (
             (
+                "source-sealed-workspace-format",
+                "command",
+                0,
+                "cargo fmt --all -- --check",
+            ),
+            (
+                "source-sealed-legacy-codec-guard",
+                "command",
+                0,
+                "bash scripts/check_no_legacy_codec.sh",
+            ),
+            (
+                "source-sealed-workspace-build",
+                "command",
+                0,
+                "cargo build --locked --offline --workspace",
+            ),
+            (
                 "source-sealed-workspace-clippy",
                 "command",
                 0,
-                "cargo clippy --workspace --all-targets -- -D warnings",
+                "cargo clippy --locked --offline --workspace --all-targets "
+                "-- -D warnings",
             ),
             (
                 "source-sealed-workspace-tests",
                 "command",
                 0,
-                "cargo test --locked --workspace",
+                "cargo test --locked --offline --workspace",
             ),
             (
                 "source-sealed-irohad-tests",
                 "command",
                 0,
-                "cargo test --locked -p irohad --bin irohad "
+                "cargo test --locked --offline -p irohad --bin irohad "
                 "--features test-network-message-control",
             ),
         )
@@ -522,7 +596,8 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             f"taira-contract-{index}",
             "cargo-exact",
             1,
-            "cargo test --locked -p integration_tests --test consensus_and_da "
+            "cargo test --locked --offline -p integration_tests "
+            "--test consensus_and_da "
             f"{test} -- --exact --test-threads=1",
         )
         for index, test in enumerate(_TAIRA_CONTRACT_TESTS)
@@ -533,7 +608,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
                 "cross-sdk-rust",
                 "cargo-exact",
                 2,
-                "cargo test --locked -p iroha_data_model --test "
+                "cargo test --locked --offline -p iroha_data_model --test "
                 "iroha_data_model_group_02 sumeragi_v2_cross_sdk_fixtures:: "
                 "-- --test-threads=1",
             ),
@@ -3181,13 +3256,66 @@ def _artifact(path: Path) -> dict[str, str]:
     return {"path": str(path), "sha256": _sha256(path)}
 
 
+def _validate_multilane_apalache_evidence(
+    path: Path, sealed_source_manifest: str
+) -> None:
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise ReceiptError("formal multilane Apalache evidence is unreadable") from error
+    if (
+        len(data) > _MAX_SCALING_JSON_BYTES
+        or not data.endswith(b"\n")
+        or b"\r" in data
+        or b"\0" in data
+    ):
+        raise ReceiptError(
+            "formal multilane Apalache evidence is not bounded LF-only TSV"
+        )
+    try:
+        lines = data.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise ReceiptError(
+            "formal multilane Apalache evidence is not UTF-8"
+        ) from error
+    expected_header = [
+        "schema_version\t1",
+        "backend\tapalache",
+        f"version\t{_APALACHE_VERSION}",
+        f"launcher_sha256\t{_APALACHE_LAUNCHER_SHA256}",
+        f"jar_sha256\t{_APALACHE_JAR_SHA256}",
+        f"source_manifest_sha256\t{sealed_source_manifest}",
+        f"result_count\t{len(_APALACHE_RESULTS)}",
+    ]
+    if len(lines) != len(expected_header) + len(_APALACHE_RESULTS):
+        raise ReceiptError(
+            "formal multilane Apalache evidence has the wrong result inventory"
+        )
+    if lines[: len(expected_header)] != expected_header:
+        raise ReceiptError(
+            "formal multilane Apalache evidence header is not the exact pinned profile"
+        )
+    for index, expected in enumerate(_APALACHE_RESULTS):
+        fields = lines[len(expected_header) + index].split("\t")
+        expected_prefix = ("result", *expected, "NoError")
+        if (
+            len(fields) != 9
+            or tuple(fields[:6]) != expected_prefix
+            or any(_DIGEST_RE.fullmatch(value) is None for value in fields[6:])
+        ):
+            raise ReceiptError(
+                "formal multilane Apalache evidence result "
+                f"{index} is not exact source-bound NoError evidence"
+            )
+
+
 def _formal_artifacts(
     completion_path: Path,
     fields: dict[str, str],
     sealed: dict[str, Any],
     checker_environment: dict[str, str],
     repo_root: Path,
-) -> tuple[Path, Path, Path, Path, Path, Path, Path, Path]:
+) -> tuple[Path, Path, Path, Path, Path, Path, Path, Path, Path]:
     ledger = _regular_file(
         completion_path.with_name("proof_coverage.json"), "formal proof ledger"
     )
@@ -3203,6 +3331,7 @@ def _formal_artifacts(
         "proof_evidence_sha256",
         "verus_evidence_sha256",
         "verus_log_sha256",
+        "multilane_apalache_evidence_sha256",
         "cross_tool_evidence_sha256",
         "harness_cargo_lock_sha256",
         "formal_toolchain_sha256",
@@ -3235,6 +3364,10 @@ def _formal_artifacts(
     verus_log = _regular_file(
         completion_path.with_name("verus.log"), "formal Verus log"
     )
+    multilane_apalache_evidence = _regular_file(
+        completion_path.with_name("multilane_apalache_evidence.tsv"),
+        "formal multilane Apalache evidence",
+    )
     cross_tool_evidence = _regular_file(
         completion_path.with_name("cross_tool_evidence.json"),
         "formal cross-tool evidence",
@@ -3252,6 +3385,11 @@ def _formal_artifacts(
         (verus_evidence, "verus_evidence_sha256", "formal Verus evidence"),
         (verus_log, "verus_log_sha256", "formal Verus log"),
         (
+            multilane_apalache_evidence,
+            "multilane_apalache_evidence_sha256",
+            "formal multilane Apalache evidence",
+        ),
+        (
             cross_tool_evidence,
             "cross_tool_evidence_sha256",
             "formal cross-tool evidence",
@@ -3261,6 +3399,10 @@ def _formal_artifacts(
     ):
         if _sha256(artifact) != fields[digest_field]:
             raise ReceiptError(f"{name} digest mismatch")
+    _validate_multilane_apalache_evidence(
+        multilane_apalache_evidence,
+        sealed["workspace_source_manifest_sha256"],
+    )
     if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
         raise ReceiptError("formal harness lock is not the pinned dependency graph")
     cross_tool_result = subprocess.run(
@@ -3387,6 +3529,7 @@ def _formal_artifacts(
         evidence,
         verus_evidence,
         verus_log,
+        multilane_apalache_evidence,
         cross_tool_evidence,
         harness_lock,
         toolchain_path,
@@ -3601,7 +3744,10 @@ def _corridor_artifacts(
             for index, test in enumerate(_TAIRA_CONTRACT_TESTS)
         }
     )
-    for index, (row, expected_leg) in enumerate(zip(rows, expected_legs, strict=True)):
+    # The exact-length equality above provides the same fail-closed guarantee
+    # as ``zip(strict=True)`` while retaining the repository's Python 3.9
+    # compatibility.
+    for index, (row, expected_leg) in enumerate(zip(rows, expected_legs)):
         leg_id, kind, required_count, command = expected_leg
         expected_log = f"logs/{index:02d}-{leg_id}.log"
         expected_row = {
@@ -3866,6 +4012,740 @@ def _seed_localnet_manifests(
     return index_path, manifests
 
 
+def _scan_scaling_bundle(
+    root: Path,
+) -> tuple[list[tuple[str, Path, os.stat_result]], list[str], int]:
+    try:
+        root_metadata = root.lstat()
+    except OSError as error:
+        raise ReceiptError("scaling evidence bundle root is unavailable") from error
+    if (
+        root.resolve(strict=True) != root
+        or stat.S_ISLNK(root_metadata.st_mode)
+        or not stat.S_ISDIR(root_metadata.st_mode)
+        or root_metadata.st_uid != os.geteuid()
+    ):
+        raise ReceiptError(
+            "scaling evidence bundle root must be an owner-owned resolved "
+            "non-symlink directory"
+        )
+
+    files: list[tuple[str, Path, os.stat_result]] = []
+    directories: list[str] = []
+    inodes: dict[tuple[int, int], str] = {}
+    total_bytes = 0
+
+    def visit(directory: Path, prefix: PurePosixPath | None) -> None:
+        nonlocal total_bytes
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError as error:
+            raise ReceiptError(
+                "scaling evidence bundle directory cannot be enumerated"
+            ) from error
+        for entry in entries:
+            component = entry.name
+            if _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(component) is None:
+                raise ReceiptError(
+                    "scaling evidence bundle contains an unsafe path component"
+                )
+            relative_path = (
+                PurePosixPath(component)
+                if prefix is None
+                else prefix / component
+            )
+            relative = relative_path.as_posix()
+            path = directory / component
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise ReceiptError(
+                    f"scaling evidence bundle entry is unavailable: {relative}"
+                ) from error
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ReceiptError(
+                    f"scaling evidence bundle contains a symlink: {relative}"
+                )
+            if stat.S_ISDIR(metadata.st_mode):
+                directories.append(relative)
+                if len(directories) > _MAX_SCALING_BUNDLE_DIRECTORY_COUNT:
+                    raise ReceiptError(
+                        "scaling evidence bundle exceeds its directory-count limit"
+                    )
+                visit(path, relative_path)
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ReceiptError(
+                    f"scaling evidence bundle contains a nonregular entry: {relative}"
+                )
+            if metadata.st_uid != os.geteuid():
+                raise ReceiptError(
+                    f"scaling evidence bundle file has an untrusted owner: {relative}"
+                )
+            if metadata.st_nlink != 1:
+                raise ReceiptError(
+                    f"scaling evidence bundle file has a hard-link alias: {relative}"
+                )
+            inode = (metadata.st_dev, metadata.st_ino)
+            alias = inodes.get(inode)
+            if alias is not None:
+                raise ReceiptError(
+                    "scaling evidence bundle files are hard-link aliases: "
+                    f"{alias} and {relative}"
+                )
+            inodes[inode] = relative
+            if metadata.st_size > _MAX_SCALING_BUNDLE_FILE_BYTES:
+                raise ReceiptError(
+                    f"scaling evidence bundle file exceeds its size limit: {relative}"
+                )
+            total_bytes += metadata.st_size
+            if total_bytes > _MAX_SCALING_BUNDLE_TOTAL_BYTES:
+                raise ReceiptError(
+                    "scaling evidence bundle exceeds its aggregate size limit"
+                )
+            files.append((relative, path, metadata))
+            if len(files) > _MAX_SCALING_BUNDLE_FILE_COUNT:
+                raise ReceiptError(
+                    "scaling evidence bundle exceeds its file-count limit"
+                )
+
+    visit(root, None)
+    files.sort(key=lambda item: item[0])
+    directories.sort()
+    return files, directories, total_bytes
+
+
+def _capture_scaling_bundle(
+    root: Path,
+) -> tuple[list[tuple[str, PathContract]], list[str], int]:
+    scanned, directories, _ = _scan_scaling_bundle(root)
+    directory_contracts = [
+        _capture_directory_contract(root, "scaling evidence bundle root")
+    ]
+    directory_contracts.extend(
+        _capture_directory_contract(
+            root.joinpath(*PurePosixPath(relative).parts),
+            f"scaling evidence bundle directory {index}",
+        )
+        for index, relative in enumerate(directories)
+    )
+    files: list[tuple[str, PathContract]] = []
+    for index, (relative, path, metadata) in enumerate(scanned):
+        contract = _capture_path_contract(
+            path,
+            f"scaling evidence bundle file {index}",
+            expected_sha256=None,
+            expected_owner=os.geteuid(),
+            expected_nlink=1,
+            expected_size=metadata.st_size,
+        )
+        files.append((relative, contract))
+
+    final_scan, final_directories, final_total = _scan_scaling_bundle(root)
+    if [item[0] for item in final_scan] != [item[0] for item in scanned]:
+        raise ReceiptError("scaling evidence bundle file inventory changed while read")
+    if final_directories != directories:
+        raise ReceiptError(
+            "scaling evidence bundle directory inventory changed while read"
+        )
+    for index, ((_, contract), (_, _, metadata)) in enumerate(
+        zip(files, final_scan)
+    ):
+        observed = (
+            metadata.st_dev,
+            metadata.st_ino,
+            stat.S_IMODE(metadata.st_mode),
+            metadata.st_uid,
+            metadata.st_nlink,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+        expected = (
+            contract.device,
+            contract.inode,
+            contract.mode,
+            contract.owner,
+            contract.nlink,
+            contract.size,
+            contract.mtime_ns,
+            contract.ctime_ns,
+        )
+        if observed != expected:
+            raise ReceiptError(
+                f"scaling evidence bundle file {index} changed after hashing"
+            )
+    for index, contract in enumerate(directory_contracts):
+        if (
+            _capture_directory_contract(
+                contract.path, f"scaling evidence stable directory {index}"
+            )
+            != contract
+        ):
+            raise ReceiptError(
+                "scaling evidence bundle directory changed while files were hashed"
+            )
+    if final_total != sum(contract.size for _, contract in files):
+        raise ReceiptError("scaling evidence bundle size changed while read")
+    return files, directories, final_total
+
+
+def _load_scaling_json(path: Path, name: str) -> tuple[bytes, dict[str, Any]]:
+    snapshot = _read_evidence_snapshot(
+        path,
+        name,
+        maximum_bytes=_MAX_SCALING_JSON_BYTES,
+        allowed_owners={os.geteuid()},
+    )
+
+    def reject_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ReceiptError(f"{name} contains a duplicate JSON field")
+            value[key] = item
+        return value
+
+    def reject_constant(value: str) -> None:
+        raise ReceiptError(f"{name} contains a nonfinite JSON value: {value}")
+
+    try:
+        value = json.loads(
+            snapshot.data.decode("utf-8"),
+            object_pairs_hook=reject_pairs,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReceiptError(f"{name} is not strict UTF-8 JSON") from error
+    if not isinstance(value, dict):
+        raise ReceiptError(f"{name} must contain one JSON object")
+    return snapshot.data, value
+
+
+def _scaling_ref_path(
+    value: Any,
+    *,
+    root: Path,
+    contracts: dict[str, PathContract],
+    name: str,
+) -> tuple[str, PathContract]:
+    if not isinstance(value, dict) or set(value) != {"path", "sha256"}:
+        raise ReceiptError(f"{name} is not one canonical scaling artifact reference")
+    relative = value.get("path")
+    digest = value.get("sha256")
+    if not isinstance(relative, str) or not isinstance(digest, str):
+        raise ReceiptError(f"{name} scaling artifact reference is malformed")
+    pure = PurePosixPath(relative)
+    if (
+        relative != pure.as_posix()
+        or pure.is_absolute()
+        or not pure.parts
+        or any(
+            part in {"", ".", ".."}
+            or _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(part) is None
+            for part in pure.parts
+        )
+    ):
+        raise ReceiptError(f"{name} is not a safe normalized in-bundle path")
+    contract = contracts.get(relative)
+    if contract is None:
+        raise ReceiptError(f"{name} is absent from the scaling bundle inventory")
+    if _require_digest(digest, f"{name} digest") != contract.sha256:
+        raise ReceiptError(f"{name} digest does not match the scaling bundle")
+    expected_path = root.joinpath(*pure.parts)
+    if contract.path != expected_path:
+        raise ReceiptError(f"{name} resolves outside the scaling evidence bundle")
+    return relative, contract
+
+
+def _path_contract_artifact(contract: PathContract) -> dict[str, Any]:
+    return {
+        "path": str(contract.path),
+        "sha256": contract.sha256,
+        "size_bytes": contract.size,
+        "mode": f"{contract.mode:04o}",
+        "owner_uid": contract.owner,
+        "nlink": contract.nlink,
+    }
+
+
+def _validate_scaling_evidence(
+    *,
+    manifest_path: Path,
+    sealed: dict[str, Any],
+    repo_root: Path,
+    checker_environment: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if (
+        not manifest_path.is_absolute()
+        or Path(os.path.abspath(manifest_path)) != manifest_path
+        or manifest_path.name != "scaling_evidence.json"
+    ):
+        raise ReceiptError(
+            "scaling evidence manifest must be the absolute normalized "
+            "scaling_evidence.json bundle root file"
+        )
+    root = manifest_path.parent
+    files, directories, total_bytes = _capture_scaling_bundle(root)
+    contracts = dict(files)
+    manifest_contract = contracts.get("scaling_evidence.json")
+    report_contract = contracts.get("validation_report.json")
+    if manifest_contract is None:
+        raise ReceiptError("scaling evidence manifest is absent from its bundle")
+    if report_contract is None:
+        raise ReceiptError(
+            "scaling evidence bundle lacks canonical validation_report.json"
+        )
+    if manifest_contract.path != manifest_path:
+        raise ReceiptError("scaling evidence manifest path is not its exact bundle file")
+
+    manifest_data, manifest = _load_scaling_json(
+        manifest_path, "scaling evidence manifest"
+    )
+    report_data, report = _load_scaling_json(
+        report_contract.path, "scaling validation report"
+    )
+    if set(report) != {
+        "schema",
+        "result",
+        "manifest_sha256",
+        "errors",
+        "metrics",
+    }:
+        raise ReceiptError("scaling validation report fields are not canonical")
+    if (
+        report.get("schema") != _SCALING_REPORT_SCHEMA
+        or report.get("result") != "pass"
+        or report.get("errors") != []
+        or not isinstance(report.get("metrics"), dict)
+        or report.get("manifest_sha256") != manifest_contract.sha256
+    ):
+        raise ReceiptError(
+            "scaling validation report is not an exact pass for this manifest"
+        )
+    canonical_report = (
+        json.dumps(report, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    if report_data != canonical_report:
+        raise ReceiptError("scaling validation report is not canonical JSON")
+    if hashlib.sha256(report_data).hexdigest() != report_contract.sha256:
+        raise ReceiptError("scaling validation report changed while decoded")
+
+    _, identity_contract = _scaling_ref_path(
+        manifest.get("identity"),
+        root=root,
+        contracts=contracts,
+        name="scaling identity",
+    )
+    identity_data, identity = _load_scaling_json(
+        identity_contract.path, "scaling identity"
+    )
+    if hashlib.sha256(identity_data).hexdigest() != identity_contract.sha256:
+        raise ReceiptError("scaling identity changed while decoded")
+    software = identity.get("software")
+    if not isinstance(software, dict):
+        raise ReceiptError("scaling identity lacks its software binding")
+    if software.get("source_revision") != sealed["head_commit"]:
+        raise ReceiptError(
+            "scaling identity source_revision is not the sealed head_commit"
+        )
+    if (
+        software.get("workspace_source_sha256")
+        != sealed["workspace_source_manifest_sha256"]
+    ):
+        raise ReceiptError(
+            "scaling identity workspace_source_sha256 is not the sealed "
+            "workspace manifest"
+        )
+
+    retained_validator = _regular_file(
+        repo_root
+        / "scripts"
+        / "nexus"
+        / "validate_multilane_scaling_evidence.py",
+        "retained scaling evidence validator",
+    )
+    retained_contract = _capture_path_contract(
+        retained_validator,
+        "retained scaling evidence validator",
+        expected_sha256=None,
+        expected_owner=os.geteuid(),
+        expected_nlink=1,
+    )
+    _, archived_validator = _scaling_ref_path(
+        manifest.get("validator"),
+        root=root,
+        contracts=contracts,
+        name="archived scaling validator",
+    )
+    if archived_validator.sha256 != retained_contract.sha256:
+        raise ReceiptError(
+            "archived scaling validator is not the retained sealed validator"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="sumeragi-v2-scaling-replay-") as temporary:
+        replay_report = Path(temporary).resolve(strict=True) / "validation_report.json"
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    str(retained_validator),
+                    str(manifest_path),
+                    "--report",
+                    str(replay_report),
+                    "--quiet",
+                ],
+                cwd=repo_root,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=checker_environment,
+                timeout=_REPLAY_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise ReceiptError(
+                "retained scaling evidence validator timed out"
+            ) from error
+        if result.returncode != 0:
+            raise ReceiptError(
+                "scaling evidence bundle failed retained-validator revalidation"
+            )
+        replay_data, replay = _load_scaling_json(
+            replay_report, "recomputed scaling validation report"
+        )
+        if replay != report or replay_data != report_data:
+            raise ReceiptError(
+                "scaling validation report does not match retained revalidation"
+            )
+
+    final_files, final_directories, final_total = _capture_scaling_bundle(root)
+    if (
+        final_files != files
+        or final_directories != directories
+        or final_total != total_bytes
+    ):
+        raise ReceiptError(
+            "scaling evidence bundle changed during retained revalidation"
+        )
+    final_retained = _capture_path_contract(
+        retained_validator,
+        "retained scaling evidence validator after replay",
+        expected_sha256=retained_contract.sha256,
+        expected_mode=retained_contract.mode,
+        expected_owner=retained_contract.owner,
+        expected_nlink=retained_contract.nlink,
+        expected_size=retained_contract.size,
+    )
+    if final_retained != retained_contract:
+        raise ReceiptError("retained scaling evidence validator changed during replay")
+    if hashlib.sha256(manifest_data).hexdigest() != manifest_contract.sha256:
+        raise ReceiptError("scaling evidence manifest changed while decoded")
+
+    bundle = {
+        "root": str(root),
+        "file_count": len(files),
+        "total_size_bytes": total_bytes,
+        "directories": directories,
+        "files": [
+            {
+                "relative_path": relative,
+                **_path_contract_artifact(contract),
+            }
+            for relative, contract in files
+        ],
+    }
+    return bundle, _path_contract_artifact(retained_contract)
+
+
+def _read_g12_snapshot(
+    path: Path, name: str, *, maximum_bytes: int
+) -> EvidenceSnapshot:
+    return _read_evidence_snapshot(
+        path,
+        name,
+        maximum_bytes=maximum_bytes,
+        allowed_owners={os.geteuid()},
+    )
+
+
+def _decode_g12_tsv(
+    snapshot: EvidenceSnapshot,
+    name: str,
+    *,
+    expected_header: tuple[str, ...] | None = None,
+) -> list[list[str]]:
+    data = snapshot.data
+    if not data.endswith(b"\n") or b"\r" in data or b"\0" in data:
+        raise ReceiptError(f"{name} must be terminal-LF, LF-only TSV")
+    try:
+        text = data.decode("utf-8")
+        rows = list(csv.reader(io.StringIO(text), delimiter="\t", strict=True))
+    except (UnicodeDecodeError, csv.Error) as error:
+        raise ReceiptError(f"{name} is not strict UTF-8 TSV") from error
+    if not rows or any(not row or any(not field for field in row) for row in rows):
+        raise ReceiptError(f"{name} contains an empty TSV field")
+    if expected_header is not None and tuple(rows[0]) != expected_header:
+        raise ReceiptError(f"{name} does not have its exact canonical header")
+    return rows
+
+
+def _g12_completion_fields(
+    snapshot: EvidenceSnapshot, name: str
+) -> dict[str, str]:
+    rows = _decode_g12_tsv(snapshot, name)
+    fields: dict[str, str] = {}
+    for row in rows:
+        if len(row) != 2 or row[0] in fields:
+            raise ReceiptError(f"{name} contains malformed or duplicate fields")
+        fields[row[0]] = row[1]
+    return fields
+
+
+def _validate_g12_log(snapshot: EvidenceSnapshot, name: str, test: str) -> None:
+    data = snapshot.data
+    if not data.endswith(b"\n") or b"\r" in data or b"\0" in data:
+        raise ReceiptError(f"{name} is not terminal-LF, LF-only output")
+    try:
+        lines = data.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise ReceiptError(f"{name} is not UTF-8") from error
+    results = [line for line in lines if line.startswith("test result:")]
+    if (
+        lines.count("running 1 test") != 1
+        or lines.count(f"test {test} ... ok") != 1
+        or len(results) != 1
+        or re.fullmatch(
+            r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
+            r"[0-9]+ filtered out; finished in .+",
+            results[0],
+        )
+        is None
+    ):
+        raise ReceiptError(f"{name} does not prove one exact passing G-12P test")
+
+
+def _require_g12_directory_inventory(
+    directory: Path, expected_names: set[str], name: str
+) -> None:
+    try:
+        metadata = directory.lstat()
+        entries = list(directory.iterdir())
+    except OSError as error:
+        raise ReceiptError(f"{name} directory is unavailable") from error
+    if (
+        directory.resolve(strict=True) != directory
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+    ):
+        raise ReceiptError(
+            f"{name} directory must be an owner-owned resolved non-symlink directory"
+        )
+    actual_names: set[str] = set()
+    for entry in entries:
+        if (
+            _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(entry.name) is None
+            or entry.name in actual_names
+        ):
+            raise ReceiptError(f"{name} directory contains an unsafe entry")
+        actual_names.add(entry.name)
+        try:
+            entry_metadata = entry.lstat()
+        except OSError as error:
+            raise ReceiptError(f"{name} directory entry is unavailable") from error
+        if (
+            stat.S_ISLNK(entry_metadata.st_mode)
+            or not stat.S_ISREG(entry_metadata.st_mode)
+            or entry_metadata.st_uid != os.geteuid()
+            or entry_metadata.st_nlink != 1
+        ):
+            raise ReceiptError(
+                f"{name} directory contains a nonregular or aliased artifact"
+            )
+    if actual_names != expected_names:
+        raise ReceiptError(
+            f"{name} directory inventory differs from its exact evidence schema"
+        )
+
+
+def _validate_g12_evidence(
+    *,
+    seed_completion_path: Path,
+    fault_soak_completion_path: Path,
+    sealed: dict[str, Any],
+) -> dict[str, Any]:
+    seed_completion = _read_g12_snapshot(
+        seed_completion_path,
+        "G-12P seed completion",
+        maximum_bytes=_MAX_G12_TSV_BYTES,
+    )
+    seed_fields = _g12_completion_fields(
+        seed_completion, "G-12P seed completion"
+    )
+    expected_seed_fields = {
+        "schema_version",
+        "mode",
+        "head_commit",
+        "head_tree",
+        "source_manifest_sha256",
+        "cargo_lock_sha256",
+        "expected_runs",
+        "passed_runs",
+        "failed_runs",
+        "process_retry_runs",
+        "runs_sha256",
+    }
+    if set(seed_fields) != expected_seed_fields:
+        raise ReceiptError("G-12P seed completion fields are not canonical")
+    expected_identity = {
+        "schema_version": "1",
+        "mode": "deterministic-seed-matrix",
+        "head_commit": sealed["head_commit"],
+        "head_tree": sealed["head_tree"],
+        "source_manifest_sha256": sealed["workspace_source_manifest_sha256"],
+        "cargo_lock_sha256": sealed["cargo_lock_sha256"],
+        "expected_runs": "10",
+        "passed_runs": "10",
+        "failed_runs": "0",
+        "process_retry_runs": "0",
+    }
+    if any(seed_fields.get(field) != value for field, value in expected_identity.items()):
+        raise ReceiptError(
+            "G-12P seed completion is not exact passing release-bound accounting"
+        )
+    _require_digest(seed_fields["runs_sha256"], "G-12P seed summary digest")
+    seed_summary_path = seed_completion.path.with_name("runs.tsv")
+    seed_summary = _read_g12_snapshot(
+        seed_summary_path,
+        "G-12P seed summary",
+        maximum_bytes=_MAX_G12_TSV_BYTES,
+    )
+    if seed_summary.sha256 != seed_fields["runs_sha256"]:
+        raise ReceiptError("G-12P seed summary digest mismatch")
+    rows = _decode_g12_tsv(
+        seed_summary,
+        "G-12P seed summary",
+        expected_header=(
+            "ordinal",
+            "seed",
+            "status",
+            "process_retries",
+            "log_sha256",
+            "log",
+        ),
+    )
+    if len(rows) != 11:
+        raise ReceiptError("G-12P seed summary must contain exactly ten runs")
+    seed_logs: list[EvidenceSnapshot] = []
+    expected_seed_names = {"COMPLETED.tsv", "runs.tsv"}
+    for ordinal, row in enumerate(rows[1:]):
+        expected_log = f"seed-{ordinal:02d}.log"
+        expected_row = (
+            str(ordinal),
+            f"{_G12_SEED_PREFIX}{ordinal:02d}",
+            "passed",
+            "0",
+        )
+        if (
+            len(row) != 6
+            or tuple(row[:4]) != expected_row
+            or row[5] != expected_log
+            or _DIGEST_RE.fullmatch(row[4]) is None
+        ):
+            raise ReceiptError(
+                f"G-12P seed summary row {ordinal} is not canonical"
+            )
+        log = _read_g12_snapshot(
+            seed_completion.path.with_name(expected_log),
+            f"G-12P seed log {ordinal}",
+            maximum_bytes=_MAX_G12_LOG_BYTES,
+        )
+        if log.sha256 != row[4]:
+            raise ReceiptError(f"G-12P seed log {ordinal} digest mismatch")
+        _validate_g12_log(log, f"G-12P seed log {ordinal}", _G12_SEED_TEST)
+        seed_logs.append(log)
+        expected_seed_names.add(expected_log)
+    _require_g12_directory_inventory(
+        seed_completion.path.parent,
+        expected_seed_names,
+        "G-12P seed evidence",
+    )
+
+    soak_completion = _read_g12_snapshot(
+        fault_soak_completion_path,
+        "G-12P fault-soak completion",
+        maximum_bytes=_MAX_G12_TSV_BYTES,
+    )
+    soak_fields = _g12_completion_fields(
+        soak_completion, "G-12P fault-soak completion"
+    )
+    expected_soak_fields = {
+        "schema_version",
+        "mode",
+        "head_commit",
+        "head_tree",
+        "source_manifest_sha256",
+        "cargo_lock_sha256",
+        "seed",
+        "duration_seconds",
+        "expected_runs",
+        "passed_runs",
+        "failed_runs",
+        "process_retry_runs",
+        "log_sha256",
+    }
+    if set(soak_fields) != expected_soak_fields:
+        raise ReceiptError("G-12P fault-soak completion fields are not canonical")
+    expected_soak = {
+        "schema_version": "1",
+        "mode": "two-hour-fault-soak",
+        "head_commit": sealed["head_commit"],
+        "head_tree": sealed["head_tree"],
+        "source_manifest_sha256": sealed["workspace_source_manifest_sha256"],
+        "cargo_lock_sha256": sealed["cargo_lock_sha256"],
+        "seed": f"{_G12_SEED_PREFIX}00",
+        "duration_seconds": "7200",
+        "expected_runs": "1",
+        "passed_runs": "1",
+        "failed_runs": "0",
+        "process_retry_runs": "0",
+    }
+    if any(soak_fields.get(field) != value for field, value in expected_soak.items()):
+        raise ReceiptError(
+            "G-12P fault-soak completion is not exact passing "
+            "release-bound accounting"
+        )
+    _require_digest(soak_fields["log_sha256"], "G-12P fault-soak log digest")
+    soak_log = _read_g12_snapshot(
+        soak_completion.path.with_name("fault-soak.log"),
+        "G-12P fault-soak log",
+        maximum_bytes=_MAX_G12_LOG_BYTES,
+    )
+    if soak_log.sha256 != soak_fields["log_sha256"]:
+        raise ReceiptError("G-12P fault-soak log digest mismatch")
+    _validate_g12_log(soak_log, "G-12P fault-soak log", _G12_SOAK_TEST)
+    _require_g12_directory_inventory(
+        soak_completion.path.parent,
+        {"COMPLETED.tsv", "fault-soak.log"},
+        "G-12P fault-soak evidence",
+    )
+    if seed_completion.path.parent == soak_completion.path.parent:
+        raise ReceiptError("G-12P seed and fault-soak evidence must be distinct")
+
+    return {
+        "seed_completion": _snapshot_receipt_artifact(seed_completion),
+        "seed_summary": _snapshot_receipt_artifact(seed_summary),
+        "seed_run_logs": [
+            _snapshot_receipt_artifact(snapshot) for snapshot in seed_logs
+        ],
+        "fault_soak_completion": _snapshot_receipt_artifact(soak_completion),
+        "fault_soak_log": _snapshot_receipt_artifact(soak_log),
+    }
+
+
 def build_receipt(
     *,
     candidate_identity_path: Path,
@@ -3897,6 +4777,9 @@ def build_receipt(
     seed_completion_path: Path,
     chaos_completion_path: Path,
     taira_completion_path: Path,
+    g12_seed_completion_path: Path,
+    g12_fault_soak_completion_path: Path,
+    scaling_evidence_manifest_path: Path,
     repository_root_path: Path,
     runner_logs_sealed: bool = False,
 ) -> dict[str, Any]:
@@ -3972,6 +4855,18 @@ def build_receipt(
         }
     )
 
+    scaling_bundle, retained_scaling_validator = _validate_scaling_evidence(
+        manifest_path=scaling_evidence_manifest_path,
+        sealed=sealed,
+        repo_root=repo_root,
+        checker_environment=checker_environment,
+    )
+    g12_evidence = _validate_g12_evidence(
+        seed_completion_path=g12_seed_completion_path,
+        fault_soak_completion_path=g12_fault_soak_completion_path,
+        sealed=sealed,
+    )
+
     corridor_path, corridor_completion = _load_tsv(
         corridor_completion_path, "corridor completion"
     )
@@ -3988,6 +4883,7 @@ def build_receipt(
         formal_evidence,
         formal_verus_evidence,
         formal_verus_log,
+        formal_multilane_apalache_evidence,
         formal_cross_tool_evidence,
         formal_harness_lock,
         formal_toolchain,
@@ -4209,6 +5105,9 @@ def build_receipt(
             "formal_proof_evidence": _artifact(formal_evidence),
             "formal_verus_evidence": _artifact(formal_verus_evidence),
             "formal_verus_log": _artifact(formal_verus_log),
+            "formal_multilane_apalache_evidence": _artifact(
+                formal_multilane_apalache_evidence
+            ),
             "formal_cross_tool_evidence": _artifact(formal_cross_tool_evidence),
             "formal_harness_lock": _artifact(formal_harness_lock),
             "formal_toolchain": _artifact(formal_toolchain),
@@ -4226,6 +5125,9 @@ def build_receipt(
             "taira_completion": _artifact(taira_path),
             "taira_evidence": _artifact(taira_evidence),
             "taira_run_log": _artifact(taira_log),
+            "multilane_scaling_bundle": scaling_bundle,
+            "multilane_scaling_retained_validator": retained_scaling_validator,
+            "g12_cross_dataspace": g12_evidence,
         },
     }
 
@@ -4250,13 +5152,14 @@ def _capture_path_contract(
     path: Path,
     name: str,
     *,
-    expected_sha256: str,
+    expected_sha256: str | None,
     expected_mode: int | None = None,
     expected_owner: int | None = None,
     expected_nlink: int | None = None,
     expected_size: int | None = None,
 ) -> PathContract:
-    _require_digest(expected_sha256, f"{name} digest")
+    if expected_sha256 is not None:
+        _require_digest(expected_sha256, f"{name} digest")
     if not path.is_absolute() or Path(os.path.abspath(path)) != path:
         raise ReceiptError(f"{name} path must be absolute and normalized")
     try:
@@ -4315,7 +5218,10 @@ def _capture_path_contract(
         if any(getattr(after, field) != getattr(opened, field) for field in fields):
             raise ReceiptError(f"{name} changed while it was hashed")
         observed_sha = digest.hexdigest()
-        if observed_sha != expected_sha256 or size != opened.st_size:
+        if (
+            (expected_sha256 is not None and observed_sha != expected_sha256)
+            or size != opened.st_size
+        ):
             raise ReceiptError(f"{name} digest changed before receipt publication")
         return PathContract(
             path=path,
@@ -4372,6 +5278,74 @@ def _snapshot_receipt_inputs(
                 raise ReceiptError("aggregate receipt contains conflicting artifact aliases")
             continue
         by_path[path] = record
+
+    scaling_bundle = receipt["evidence"].get("multilane_scaling_bundle")
+    if not isinstance(scaling_bundle, dict):
+        raise ReceiptError("aggregate receipt lacks its scaling bundle inventory")
+    scaling_root_raw = scaling_bundle.get("root")
+    scaling_files_raw = scaling_bundle.get("files")
+    scaling_directories_raw = scaling_bundle.get("directories")
+    if (
+        not isinstance(scaling_root_raw, str)
+        or not isinstance(scaling_files_raw, list)
+        or not isinstance(scaling_directories_raw, list)
+    ):
+        raise ReceiptError("aggregate receipt scaling bundle inventory is malformed")
+    scaling_root = Path(scaling_root_raw)
+    expected_scaling_files: list[str] = []
+    expected_scaling_size = 0
+    for index, record in enumerate(scaling_files_raw):
+        if not isinstance(record, dict):
+            raise ReceiptError("aggregate receipt scaling file record is malformed")
+        relative = record.get("relative_path")
+        size = record.get("size_bytes")
+        path_value = record.get("path")
+        if (
+            not isinstance(relative, str)
+            or type(size) is not int
+            or not isinstance(path_value, str)
+            or Path(path_value)
+            != scaling_root.joinpath(*PurePosixPath(relative).parts)
+        ):
+            raise ReceiptError(
+                f"aggregate receipt scaling file {index} path is malformed"
+            )
+        expected_scaling_files.append(relative)
+        expected_scaling_size += size
+    if expected_scaling_files != sorted(expected_scaling_files) or len(
+        expected_scaling_files
+    ) != len(set(expected_scaling_files)):
+        raise ReceiptError(
+            "aggregate receipt scaling files are not one deterministic inventory"
+        )
+    if (
+        scaling_bundle.get("file_count") != len(expected_scaling_files)
+        or scaling_bundle.get("total_size_bytes") != expected_scaling_size
+        or any(not isinstance(item, str) for item in scaling_directories_raw)
+        or scaling_directories_raw != sorted(scaling_directories_raw)
+    ):
+        raise ReceiptError("aggregate receipt scaling bundle accounting is inconsistent")
+    current_scaling, current_directories, current_scaling_size = (
+        _scan_scaling_bundle(scaling_root)
+    )
+    if (
+        [item[0] for item in current_scaling] != expected_scaling_files
+        or current_directories != scaling_directories_raw
+        or current_scaling_size != expected_scaling_size
+    ):
+        raise ReceiptError(
+            "scaling evidence bundle inventory changed before receipt publication"
+        )
+
+    g12 = receipt["evidence"].get("g12_cross_dataspace")
+    if not isinstance(g12, dict):
+        raise ReceiptError("aggregate receipt lacks its G-12P evidence")
+    try:
+        g12_seed_root = Path(g12["seed_completion"]["path"]).parent
+        g12_soak_root = Path(g12["fault_soak_completion"]["path"]).parent
+    except (KeyError, TypeError) as error:
+        raise ReceiptError("aggregate receipt G-12P evidence is malformed") from error
+
     snapshots: list[PathContract | DirectoryContract] = []
     inodes: dict[tuple[int, int], Path] = {}
     for index, (path, record) in enumerate(by_path.items()):
@@ -4404,10 +5378,17 @@ def _snapshot_receipt_inputs(
     ).parent
     directory_paths = {
         evidence_root,
+        scaling_root,
+        g12_seed_root,
+        g12_soak_root,
         Path(receipt["authentication"]["bootstrap"]["candidate_root"]),
         Path(receipt["authentication"]["bootstrap"]["runner"]["tool_directory"]),
         Path(receipt["authentication"]["release_identity"]["release_root"]),
     }
+    directory_paths.update(
+        scaling_root.joinpath(*PurePosixPath(relative).parts)
+        for relative in scaling_directories_raw
+    )
     for path in by_path:
         parent = path.parent
         while parent == evidence_root or evidence_root in parent.parents:
@@ -4798,6 +5779,9 @@ def main() -> int:
     parser.add_argument("--seed-completion", type=Path, required=True)
     parser.add_argument("--chaos-completion", type=Path, required=True)
     parser.add_argument("--taira-completion", type=Path, required=True)
+    parser.add_argument("--g12-seed-completion", type=Path, required=True)
+    parser.add_argument("--g12-fault-soak-completion", type=Path, required=True)
+    parser.add_argument("--scaling-evidence-manifest", type=Path, required=True)
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
@@ -4839,6 +5823,9 @@ def main() -> int:
             seed_completion_path=args.seed_completion,
             chaos_completion_path=args.chaos_completion,
             taira_completion_path=args.taira_completion,
+            g12_seed_completion_path=args.g12_seed_completion,
+            g12_fault_soak_completion_path=args.g12_fault_soak_completion,
+            scaling_evidence_manifest_path=args.scaling_evidence_manifest,
             repository_root_path=args.repository_root,
             runner_logs_sealed=args.verify_existing,
         )

@@ -8811,6 +8811,8 @@ pub struct SorafsGateway {
     pub untrusted_hosting: SorafsGatewayUntrustedHosting,
     /// ACME automation configuration.
     pub acme: SorafsGatewayAcme,
+    /// Governed signed compliance controller configuration.
+    pub compliance: Option<SorafsGatewayCompliance>,
     /// Optional direct-mode override configuration.
     pub direct_mode: Option<SorafsGatewayDirectMode>,
 }
@@ -8833,6 +8835,7 @@ impl Default for SorafsGateway {
             ),
             untrusted_hosting: SorafsGatewayUntrustedHosting::default(),
             acme: SorafsGatewayAcme::default(),
+            compliance: None,
             direct_mode: None,
         }
     }
@@ -9042,6 +9045,80 @@ impl Default for SorafsGatewayAcme {
             ech_enabled: defaults::sorafs::gateway::acme::ECH_ENABLED,
         }
     }
+}
+
+/// One governed Ed25519 identity in the gateway compliance policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsGatewayComplianceSigner {
+    /// Stable payload-free signer identifier.
+    pub signer_id: String,
+    /// Raw Ed25519 verifying key.
+    pub public_key: [u8; 32],
+}
+
+/// One exact HTTPS host and its accepted TLS SPKI identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsGatewayComplianceFeedHost {
+    /// Canonical lowercase DNS hostname.
+    pub hostname: String,
+    /// Accepted SHA-256 SPKI digests in canonical order.
+    pub accepted_spki_sha256: Vec<[u8; 32]>,
+}
+
+/// One authenticated external compliance feed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsGatewayComplianceFeed {
+    /// Stable feed identifier.
+    pub feed_id: String,
+    /// Exact credential-free HTTPS URL.
+    pub url: String,
+    /// Whether every promoted catalog must bind this feed.
+    pub required: bool,
+    /// Exact initial/redirect host allowlist.
+    pub hosts: Vec<SorafsGatewayComplianceFeedHost>,
+}
+
+/// Non-secret production policy for the governed gateway compliance controller.
+#[derive(Debug, Clone)]
+pub struct SorafsGatewayCompliance {
+    /// Absolute durable checkpoint file path.
+    pub checkpoint_path: PathBuf,
+    /// Non-zero governance policy identity.
+    pub policy_id: [u8; 32],
+    /// Required distinct catalog approvals.
+    pub catalog_threshold: u16,
+    /// Canonically ordered catalog signers.
+    pub catalog_signers: Vec<SorafsGatewayComplianceSigner>,
+    /// Canonically ordered revoked catalog signer identifiers.
+    pub revoked_catalog_signer_ids: Vec<String>,
+    /// Required distinct regional-gateway acknowledgements.
+    pub gateway_ack_threshold: u16,
+    /// Canonically ordered regional-gateway signers.
+    pub gateway_signers: Vec<SorafsGatewayComplianceSigner>,
+    /// Canonically ordered revoked gateway signer identifiers.
+    pub revoked_gateway_signer_ids: Vec<String>,
+    /// Canonically ordered authenticated feeds.
+    pub feeds: Vec<SorafsGatewayComplianceFeed>,
+    /// Maximum encoded feed response bytes.
+    pub max_encoded_bytes: Bytes<u64>,
+    /// Maximum normalized/decompressed feed response bytes.
+    pub max_decoded_bytes: Bytes<u64>,
+    /// Maximum redirect count.
+    pub max_redirects: u8,
+    /// Maximum distinct public DNS answers.
+    pub max_dns_addresses: usize,
+    /// Per-connection timeout.
+    pub connect_timeout: Duration,
+    /// Total feed operation timeout.
+    pub total_timeout: Duration,
+    /// Maximum timestamp skew.
+    pub max_clock_skew: Duration,
+    /// Maximum age of a source feed at catalog construction.
+    pub max_feed_age: Duration,
+    /// Maximum signed catalog validity interval.
+    pub max_catalog_validity: Duration,
+    /// Maximum durable promotion/rollback history.
+    pub max_history_entries: usize,
 }
 
 /// Optional direct-mode override details for gateway configuration.

@@ -987,7 +987,8 @@ aggregate signatures, finality/header geometry, compact offline QCs, and parent
 height-context identity to the signed origin.
 
 The final successor/recovery closure adds six exact regressions without adding
-a module or corridor leg, yielding the current 515-test, 38-module, 61-leg
+a module. Three source-sealed format, build, and legacy-codec guard legs harden
+the release corridor, yielding the current 515-test, 38-module, 64-leg
 inventory. The canonical module/test TSV inventory SHA-256 is
 `b45ba53a16889f89b7ef9301bcba4143ae35cb2b6c7ec304f80b5b43622c53f7`.
 The added boundaries preserve the frozen predecessor CommitQC through
@@ -1025,13 +1026,13 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The five integration names share a module-filtered leg; the pre-network corridor
-now has 61 legs, including separate exact data-model status and atomic
+now has 64 legs, including separate exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
 geometry modules, the daemon genesis module, and source-sealed command-success
 legs. Its finality, offline compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the thirty-eight-module, sixty-one-leg corridor. It
+tests are not claimed by the thirty-eight-module, sixty-four-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the

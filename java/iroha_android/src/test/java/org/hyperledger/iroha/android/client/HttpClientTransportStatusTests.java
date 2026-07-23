@@ -24,6 +24,7 @@ public final class HttpClientTransportStatusTests {
   private HttpClientTransportStatusTests() {}
 
   public static void main(final String[] args) {
+    pipelineSuccessStatusIsNotConfigurable();
     waitForTransactionStatusWaitsThroughCommitUntilApplied();
     waitForTransactionStatusTreatsNotFoundAsPending();
     waitForTransactionStatusIgnoresNoritoBodyOnNotFound();
@@ -46,6 +47,18 @@ public final class HttpClientTransportStatusTests {
     submitTransactionProvidesCanonicalHashForPolling();
     submitTransactionPrefersAuthoritativeReceiptHashHeaderForPolling();
     System.out.println("[IrohaAndroid] HTTP client status tests passed.");
+  }
+
+  private static void pipelineSuccessStatusIsNotConfigurable() {
+    for (final java.lang.reflect.Method method : PipelineStatusOptions.class.getMethods()) {
+      assert !"successStatuses".equals(method.getName())
+          : "success status override must not be exposed";
+    }
+    for (final java.lang.reflect.Method method :
+        PipelineStatusOptions.Builder.class.getMethods()) {
+      assert !"successStatuses".equals(method.getName())
+          : "success status builder override must not be exposed";
+    }
   }
 
   private static void waitForTransactionStatusWaitsThroughCommitUntilApplied() {

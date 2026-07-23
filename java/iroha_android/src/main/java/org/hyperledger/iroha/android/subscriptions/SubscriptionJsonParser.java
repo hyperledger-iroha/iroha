@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import org.hyperledger.iroha.android.client.JsonNumbers;
 import org.hyperledger.iroha.android.client.JsonParser;
 
 /** JSON parser for subscription Torii endpoints. */
@@ -43,7 +44,8 @@ public final class SubscriptionJsonParser {
         asString(object.get("billing_trigger_id"), "billing_trigger_id");
     final String usageTriggerId =
         asOptionalString(object.get("usage_trigger_id"), "usage_trigger_id");
-    final long firstChargeMs = asLong(object.get("first_charge_ms"), "first_charge_ms");
+    final long firstChargeMs =
+        asNonNegativeLong(object.get("first_charge_ms"), "first_charge_ms");
     final String txHashHex = asString(object.get("tx_hash_hex"), "tx_hash_hex");
     return new SubscriptionCreateResponse(
         ok, subscriptionId, billingTriggerId, usageTriggerId, firstChargeMs, txHashHex);
@@ -106,13 +108,10 @@ public final class SubscriptionJsonParser {
   }
 
   private static String asString(final Object value, final String path) {
-    if (value == null) {
-      throw new IllegalStateException(path + " is missing");
-    }
     if (value instanceof String string) {
       return string;
     }
-    return String.valueOf(value);
+    throw new IllegalStateException(path + " must be a string");
   }
 
   private static String asOptionalString(final Object value, final String path) {
@@ -133,24 +132,22 @@ public final class SubscriptionJsonParser {
   }
 
   private static long asLong(final Object value, final String path) {
-    if (!(value instanceof Number number)) {
-      throw new IllegalStateException(path + " is not a number");
+    return JsonNumbers.asLongAllowingIntegralFloat(value, path);
+  }
+
+  private static long asNonNegativeLong(final Object value, final String path) {
+    final long parsed = asLong(value, path);
+    if (parsed < 0L) {
+      throw new IllegalStateException(path + " must be non-negative");
     }
-    if (number instanceof Double || number instanceof Float) {
-      final double numeric = number.doubleValue();
-      if (numeric % 1 != 0) {
-        throw new IllegalStateException(path + " must be an integer");
-      }
-      return (long) numeric;
-    }
-    return number.longValue();
+    return parsed;
   }
 
   private static long asLongOrDefault(final Object value, final String path, final long defaultValue) {
     if (value == null) {
       return defaultValue;
     }
-    return asLong(value, path);
+    return asNonNegativeLong(value, path);
   }
 
   private static SubscriptionListResponse.SubscriptionRecord parseSubscriptionRecord(

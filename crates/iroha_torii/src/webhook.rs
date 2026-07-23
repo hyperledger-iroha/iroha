@@ -2256,10 +2256,10 @@ async fn process_queue_once() -> Duration {
                         .and_then(norito::json::Value::as_str)
                         .and_then(|s| STANDARD.decode(s).ok())
                         .unwrap_or_default();
-                    let attempts = m
-                        .get("attempts")
-                        .and_then(norito::json::Value::as_u64)
-                        .unwrap_or(0) as u32;
+                    let attempts = match m.get("attempts") {
+                        None => 0,
+                        Some(value) => u32::try_from(value.as_u64()?).ok()?,
+                    };
                     let next_attempt_ms = m
                         .get("next_attempt_ms")
                         .and_then(norito::json::Value::as_u64)
@@ -2662,6 +2662,61 @@ mod tests {
         });
 
         assert_eq!(super::queue_depth(), 0);
+    }
+
+    #[test]
+    fn overflowing_persisted_attempts_are_removed_without_delivery() {
+        let _env = TestDataDirGuard::new();
+        let _ = fs::remove_dir_all(super::queue_dir());
+        super::ensure_dirs();
+
+        let pending_path = super::queue_dir().join("overflowing-attempts.json");
+        let mut payload = norito::json::Map::new();
+        payload.insert(
+            "id".into(),
+            norito::json::Value::from("overflowing-attempts"),
+        );
+        payload.insert("webhook_id".into(), norito::json::Value::from(1u64));
+        payload.insert(
+            "url".into(),
+            norito::json::Value::from("http://local.test/webhook"),
+        );
+        payload.insert(
+            "content_type".into(),
+            norito::json::Value::from("application/json"),
+        );
+        payload.insert(
+            "body".into(),
+            norito::json::Value::from(STANDARD.encode(b"payload")),
+        );
+        payload.insert(
+            "attempts".into(),
+            norito::json::Value::from(u64::from(u32::MAX) + 1),
+        );
+        payload.insert("next_attempt_ms".into(), norito::json::Value::from(0u64));
+        let json = norito::json::to_json_pretty(&payload).expect("serialize pending payload");
+        fs::write(&pending_path, json.as_bytes()).expect("write pending payload");
+
+        let delivery_attempts = Arc::new(AtomicU32::new(0));
+        let recorded_attempts = Arc::clone(&delivery_attempts);
+        let _http_guard = super::install_http_post_override(move |_, _, _| {
+            recorded_attempts.fetch_add(1, Ordering::SeqCst);
+            Ok(200)
+        });
+        let rt = Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            super::process_queue_once().await;
+        });
+
+        assert!(
+            !pending_path.exists(),
+            "invalid spool record must be removed"
+        );
+        assert_eq!(
+            delivery_attempts.load(Ordering::SeqCst),
+            0,
+            "overflow must not reset the retry budget and trigger delivery"
+        );
     }
 
     #[test]

@@ -126,6 +126,16 @@ test("connect queue diagnostics rejects non-byte session ids", () => {
   );
 });
 
+test("connect queue diagnostics rejects coercible non-byte session id entries", () => {
+  const rootDir = path.join(os.tmpdir(), "iroha-js-connect-coercible");
+  for (const entry of ["1", true, null]) {
+    assert.throws(
+      () => deriveConnectSessionDirectory({ sid: [entry], rootDir }),
+      (error) => error instanceof TypeError && /Connect session id\[0\]/.test(error.message),
+    );
+  }
+});
+
 test("connect queue diagnostics accepts array-like session ids", () => {
   const rootDir = path.join(os.tmpdir(), "iroha-js-connect-array");
   const sessionDir = deriveConnectSessionDirectory({ sid: [1, 2, 3, 4], rootDir });

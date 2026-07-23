@@ -1114,7 +1114,7 @@ fn request_context(
 }
 
 /// Submit a canonical encrypted enrollment.
-pub async fn handle_post_pop_enrollment(
+pub(crate) async fn handle_post_pop_enrollment(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopCanonicalPayloadRequestV1>,
@@ -1140,7 +1140,7 @@ pub async fn handle_post_pop_enrollment(
 }
 
 /// Return payload-free enrollment status.
-pub async fn handle_post_pop_enrollment_status(
+pub(crate) async fn handle_post_pop_enrollment_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopRequestIdRequestV1>,
@@ -1163,7 +1163,7 @@ pub async fn handle_post_pop_enrollment_status(
 }
 
 /// Record one signed governed approval.
-pub async fn handle_post_pop_approval(
+pub(crate) async fn handle_post_pop_approval(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopCanonicalPayloadRequestV1>,
@@ -1189,7 +1189,7 @@ pub async fn handle_post_pop_approval(
 }
 
 /// Trigger server-resolved, HSM-backed issuance.
-pub async fn handle_post_pop_issue(
+pub(crate) async fn handle_post_pop_issue(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopRequestIdRequestV1>,
@@ -1214,7 +1214,7 @@ pub async fn handle_post_pop_issue(
 }
 
 /// Enqueue a strict signed revocation successor.
-pub async fn handle_post_pop_revocation(
+pub(crate) async fn handle_post_pop_revocation(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopCanonicalPayloadRequestV1>,
@@ -1245,7 +1245,7 @@ pub async fn handle_post_pop_revocation(
 }
 
 /// Run one authenticated registry submission step.
-pub async fn handle_post_pop_registry_submit(
+pub(crate) async fn handle_post_pop_registry_submit(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(_request): NoritoJson<PopEmptyRequestV1>,
@@ -1261,7 +1261,7 @@ pub async fn handle_post_pop_registry_submit(
 }
 
 /// Reconcile at most one finalized ledger projection.
-pub async fn handle_post_pop_registry_reconcile(
+pub(crate) async fn handle_post_pop_registry_reconcile(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(_request): NoritoJson<PopEmptyRequestV1>,
@@ -1277,7 +1277,7 @@ pub async fn handle_post_pop_registry_reconcile(
 }
 
 /// Read the authenticated finalized public root projection.
-pub async fn handle_post_pop_registry_projection(
+pub(crate) async fn handle_post_pop_registry_projection(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(_request): NoritoJson<PopEmptyRequestV1>,
@@ -1293,7 +1293,7 @@ pub async fn handle_post_pop_registry_projection(
 }
 
 /// Fetch canonical encrypted wallet delivery.
-pub async fn handle_post_pop_wallet_delivery(
+pub(crate) async fn handle_post_pop_wallet_delivery(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopRequestIdRequestV1>,
@@ -1318,7 +1318,7 @@ pub async fn handle_post_pop_wallet_delivery(
 }
 
 /// Import a finalized encrypted delivery into runtime wallet custody.
-pub async fn handle_post_pop_wallet_import(
+pub(crate) async fn handle_post_pop_wallet_import(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopRequestIdRequestV1>,
@@ -1343,7 +1343,7 @@ pub async fn handle_post_pop_wallet_import(
 }
 
 /// Acknowledge encrypted delivery without deleting recoverable ciphertext.
-pub async fn handle_post_pop_wallet_acknowledge(
+pub(crate) async fn handle_post_pop_wallet_acknowledge(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopRequestIdRequestV1>,
@@ -1366,7 +1366,7 @@ pub async fn handle_post_pop_wallet_acknowledge(
 }
 
 /// Synchronize a runtime-only witness to the current finalized roots.
-pub async fn handle_post_pop_wallet_synchronize(
+pub(crate) async fn handle_post_pop_wallet_synchronize(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopCredentialCommitmentRequestV1>,
@@ -1392,7 +1392,7 @@ pub async fn handle_post_pop_wallet_synchronize(
 }
 
 /// Generate a public zero-knowledge membership proof from local wallet custody.
-pub async fn handle_post_pop_wallet_prove(
+pub(crate) async fn handle_post_pop_wallet_prove(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopMembershipRequestV1>,
@@ -1437,7 +1437,7 @@ pub async fn handle_post_pop_wallet_prove(
 }
 
 /// Verify a membership proof and durably consume its nullifier.
-pub async fn handle_post_pop_verify(
+pub(crate) async fn handle_post_pop_verify(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     NoritoJson(request): NoritoJson<PopVerifyMembershipRequestV1>,

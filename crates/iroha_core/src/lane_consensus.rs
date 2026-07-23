@@ -17,9 +17,9 @@ use iroha_data_model::{
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::{
-        LaneDrainCertificateBodyV1, LaneDrainCertificateV1, LaneDrainIntentV1,
+        LaneDrainCertificateBodyV1, LaneDrainCertificateV1, LaneDrainFrontierV1, LaneDrainIntentV1,
         MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS,
-        MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
+        MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, lane_drain_empty_unresolved_evidence_root,
     },
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
@@ -86,13 +86,6 @@ const AUTONOMOUS_LANE_PAYLOAD_DECODE_LIMITS: norito::DecodeLimits = norito::Deco
 /// preimages. Version one and unknown versions fail closed.
 pub(crate) const LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 2;
 
-/// Current proposer-authenticated autonomous payload handoff layout.
-///
-/// Version two binds the exact reservation, routing-plan, and Native AMX
-/// receipt vectors. The former unbound version-one layout has no compatibility
-/// path in live consensus.
-pub const LANE_EXECUTABLE_PAYLOAD_HANDOFF_VERSION_V2: u8 = 2;
-
 /// Maximum authenticated view transitions retained for one lane height.
 pub(crate) const MAX_LANE_NEW_VIEW_CERTIFICATES: usize = 256;
 
@@ -137,40 +130,6 @@ pub struct LaneExecutablePayloadV1 {
     pub producer_signature: Vec<u8>,
 }
 
-/// Producer handoff carrying the exact lane payload from the authenticated
-/// global proposer to the independently selected lane committee.
-///
-/// This signature does not authorize lane execution. It only lets an active
-/// lane committee member authenticate and verify the bytes before producing a
-/// canonical [`LaneExecutablePayloadV1`] under its own committee key.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct LaneExecutablePayloadHandoffV1 {
-    /// Artifact schema version. Only version two is accepted.
-    pub version: u8,
-    /// Hash of the chain identifier that owns this payload.
-    pub chain_id_hash: Hash,
-    /// Consensus epoch at the proposal height.
-    pub epoch: u64,
-    /// Canonical view-zero proposal selected by the global proposer.
-    pub origin_proposal: LaneBlockProposalV1,
-    /// Canonical hashes of `entrypoints`, in descriptor order.
-    pub entrypoint_hashes: Vec<Hash>,
-    /// Exact executable transaction entrypoints offered to the lane committee.
-    pub entrypoints: Vec<TransactionEntrypoint>,
-    /// Exact durable queue reservation identities, aligned with `entrypoints`.
-    pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
-    /// Exact canonical routing plans, aligned with `entrypoints`.
-    pub routing_plans: Vec<RoutingPlan>,
-    /// Exact optional Native AMX receipts, aligned with `entrypoints`.
-    pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
-    /// View-neutral executable payload digest.
-    pub payload_hash: Hash,
-    /// Authenticated global proposer that supplied the bytes.
-    pub proposer: PeerId,
-    /// Signature over chain, epoch, height/view, proposal, payload, and proposer.
-    pub proposer_signature: Vec<u8>,
-}
-
 #[derive(Clone, Debug, Encode)]
 struct LaneExecutablePayloadPreimage {
     purpose: String,
@@ -209,21 +168,6 @@ struct LaneExecutablePayloadSignaturePreimage {
     origin_lane_block_view: u64,
     payload_hash: Hash,
     producer: PeerId,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct LaneExecutablePayloadHandoffSignaturePreimage {
-    purpose: String,
-    version: u8,
-    chain_id_hash: Hash,
-    epoch: u64,
-    global_proposal_hint: LaneBlockProposalPayloadHintV1,
-    proposal_height: u64,
-    origin_lane_block_view: u64,
-    origin_proposal_hash: Hash,
-    origin_descriptor_hash: Hash,
-    payload_hash: Hash,
-    proposer: PeerId,
 }
 
 /// Authenticated request to advance one lane height to the next view while
@@ -321,7 +265,7 @@ pub(crate) struct LaneDrainRemoteSignerContext {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LaneDrainRemoteSignerDecision {
     body_digest: Hash,
-    final_lane_block_height: u64,
+    final_frontier: LaneDrainFrontierV1,
     last_seen: Instant,
 }
 
@@ -447,7 +391,9 @@ impl LaneDrainVoteState {
         if let Some(existing) = self.remote_signers.get(&context)
             && existing.body_digest != body_digest
         {
-            if vote.body.final_lane_block_height <= existing.final_lane_block_height {
+            if vote.body.final_frontier.lane_block_height
+                <= existing.final_frontier.lane_block_height
+            {
                 self.remote_signers.remove(&context);
                 self.remote_equivocators.insert(context.clone(), now);
                 self.votes.remove(&context.signer);
@@ -463,7 +409,7 @@ impl LaneDrainVoteState {
             context,
             LaneDrainRemoteSignerDecision {
                 body_digest,
-                final_lane_block_height: vote.body.final_lane_block_height,
+                final_frontier: vote.body.final_frontier,
                 last_seen: now,
             },
         );
@@ -582,6 +528,15 @@ pub(crate) enum LaneDrainCertificateError {
     /// A zero/non-zero frontier was paired with the wrong optional descriptor hash shape.
     #[error("lane drain frontier descriptor hash shape is invalid")]
     FrontierHashMismatch,
+    /// Frontier route/incarnation differs from its enclosing intent.
+    #[error("lane drain frontier route or incarnation is invalid")]
+    FrontierRouteMismatch,
+    /// Native evidence is malformed or inconsistent with the bound frontier.
+    #[error("lane drain Native frontier evidence is invalid")]
+    InvalidFrontierEvidence,
+    /// The frontier does not certify the canonical empty unresolved-evidence root.
+    #[error("lane drain frontier still binds unresolved evidence")]
+    UnresolvedEvidence,
     /// The supplied validator set does not match the intent's exact committee commitment.
     #[error("lane drain validator set is invalid")]
     InvalidValidatorSet,
@@ -671,15 +626,6 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// The complete framed payload or envelope exceeds its protocol budget.
     #[error("autonomous lane payload envelope byte limit exceeded")]
     PayloadEnvelopeByteLimitExceeded,
-    /// Handoff proposer signature is missing, malformed, or invalid.
-    #[error("autonomous lane payload handoff signature is invalid")]
-    InvalidHandoffSignature,
-    /// Handoff transport sender did not match the authenticated proposer.
-    #[error("autonomous lane payload handoff sender mismatch")]
-    HandoffSenderMismatch,
-    /// Handoff proposer was not in the authenticated global authority set.
-    #[error("autonomous lane payload handoff proposer is not global authority")]
-    HandoffProposerNotAuthority,
     /// NewView body is malformed, stale, or skips a view.
     #[error("lane NewView body is malformed")]
     InvalidNewViewBody,
@@ -757,7 +703,6 @@ pub(crate) enum LaneAutonomousArtifactError {
 impl LaneExecutablePayloadV1 {
     /// Construct and sign an autonomous payload with exact durable queue
     /// ownership, routing-plan, and Native AMX receipt-slot bindings.
-    #[allow(dead_code)] // Used by the autonomous producer after its durable reservation boundary.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_signed_with_reservations(
         chain_id_hash: Hash,
@@ -801,7 +746,6 @@ impl LaneExecutablePayloadV1 {
     }
 
     /// Compute the canonical view-neutral executable payload digest.
-    #[allow(dead_code)] // Used by the autonomous producer before signing and persistence.
     pub(crate) fn computed_payload_hash(&self) -> Result<Hash, LaneAutonomousArtifactError> {
         compute_lane_executable_payload_hash(
             self.version,
@@ -878,7 +822,6 @@ impl LaneExecutablePayloadV1 {
     /// The helper validates both forms and proves that replacing the advisory
     /// hint leaves the payload hash, producer signature, exact reservations,
     /// and every consensus field unchanged.
-    #[allow(dead_code)] // Used after the globally anchored payload's carrier finalizes.
     pub(crate) fn attach_global_hint_exact(
         &self,
         hint: LaneBlockProposalPayloadHintV1,
@@ -949,7 +892,6 @@ impl LaneExecutablePayloadV1 {
 /// The finalized carrier hint can be attached with
 /// [`LaneExecutablePayloadV1::attach_global_hint_exact`] after the block hash is
 /// known.
-#[allow(dead_code)] // Wired into proposal assembly after the anchor layout is admitted.
 pub(crate) fn autonomous_lane_payload_envelope(
     payload: &LaneExecutablePayloadV1,
     expected_chain_id_hash: Hash,
@@ -998,7 +940,6 @@ pub(crate) fn autonomous_lane_payload_envelope(
 /// Both the opaque payload frame and the complete envelope are checked against
 /// their actual encoded byte budgets. Decoding followed by exact re-encoding
 /// rejects alternate layouts and trailing data before any identity is trusted.
-#[allow(dead_code)] // Wired into block admission after the anchor layout is admitted.
 pub(crate) fn decode_autonomous_lane_payload_envelope(
     envelope: &AutonomousLanePayloadEnvelopeV1,
     expected_chain_id_hash: Hash,
@@ -1641,168 +1582,6 @@ const fn lane_executable_payload_body_within_limit(encoded_len: usize) -> bool {
     encoded_len <= MAX_LANE_EXECUTABLE_PAYLOAD_BYTES
 }
 
-impl LaneExecutablePayloadHandoffV1 {
-    /// Construct a proposer-authenticated handoff for a lane committee.
-    #[allow(dead_code)] // Used by the global proposer when autonomous payload fan-out is enabled.
-    pub(crate) fn new_signed(
-        chain_id_hash: Hash,
-        epoch: u64,
-        origin_proposal: LaneBlockProposalV1,
-        entrypoints: Vec<TransactionEntrypoint>,
-        reservation_keys: Vec<LaneQueueReservationKeyV1>,
-        routing_plans: Vec<RoutingPlan>,
-        native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
-        proposer: PeerId,
-        private_key: &PrivateKey,
-    ) -> Result<Self, LaneAutonomousArtifactError> {
-        if origin_proposal.payload_block_hint.is_none() {
-            return Err(LaneAutonomousArtifactError::InvalidProposal);
-        }
-        let entrypoint_hashes = entrypoints
-            .iter()
-            .map(|entrypoint| Hash::from(entrypoint.hash()))
-            .collect::<Vec<_>>();
-        let payload_hash = compute_lane_executable_payload_hash(
-            LANE_EXECUTABLE_PAYLOAD_VERSION_V2,
-            chain_id_hash,
-            epoch,
-            &origin_proposal,
-            &entrypoints,
-            &reservation_keys,
-            &routing_plans,
-            &native_amx_receipts,
-        )?;
-        let mut handoff = Self {
-            version: LANE_EXECUTABLE_PAYLOAD_HANDOFF_VERSION_V2,
-            chain_id_hash,
-            epoch,
-            origin_proposal,
-            entrypoint_hashes,
-            entrypoints,
-            reservation_keys,
-            routing_plans,
-            native_amx_receipts,
-            payload_hash,
-            proposer,
-            proposer_signature: Vec::new(),
-        };
-        handoff.proposer_signature =
-            Signature::try_new(private_key, &handoff.proposer_signature_preimage())
-                .map_err(|_| LaneAutonomousArtifactError::InvalidHandoffSignature)?
-                .payload()
-                .to_vec();
-        handoff.validate(chain_id_hash, epoch)?;
-        Ok(handoff)
-    }
-
-    fn proposer_signature_preimage(&self) -> Vec<u8> {
-        let descriptor = &self.origin_proposal.descriptor;
-        norito::to_bytes(&LaneExecutablePayloadHandoffSignaturePreimage {
-            purpose: "nexus:lane-executable-payload-handoff:v2".to_owned(),
-            version: self.version,
-            chain_id_hash: self.chain_id_hash,
-            epoch: self.epoch,
-            global_proposal_hint: self
-                .origin_proposal
-                .payload_block_hint
-                .expect("validated lane payload handoff has a global proposal hint"),
-            proposal_height: descriptor.proposal_height,
-            origin_lane_block_view: descriptor.lane_block_view,
-            origin_proposal_hash: self.origin_proposal.proposal_hash,
-            origin_descriptor_hash: descriptor.descriptor_hash,
-            payload_hash: self.payload_hash,
-            proposer: self.proposer.clone(),
-        })
-        .expect("lane executable payload handoff signature preimage must encode")
-    }
-
-    /// Validate the complete handoff body and proposer signature.
-    pub(crate) fn validate(
-        &self,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> Result<(), LaneAutonomousArtifactError> {
-        if self.version != LANE_EXECUTABLE_PAYLOAD_HANDOFF_VERSION_V2 {
-            return Err(LaneAutonomousArtifactError::UnsupportedVersion);
-        }
-        if self.origin_proposal.payload_block_hint.is_none() {
-            return Err(LaneAutonomousArtifactError::InvalidProposal);
-        }
-        validate_lane_executable_payload_body(
-            LANE_EXECUTABLE_PAYLOAD_VERSION_V2,
-            self.chain_id_hash,
-            self.epoch,
-            &self.origin_proposal,
-            &self.entrypoint_hashes,
-            &self.entrypoints,
-            &self.reservation_keys,
-            &self.routing_plans,
-            &self.native_amx_receipts,
-            self.payload_hash,
-            expected_chain_id_hash,
-            expected_epoch,
-        )?;
-        if self.origin_proposal.descriptor.lane_block_view != 0 {
-            return Err(LaneAutonomousArtifactError::InvalidProposal);
-        }
-        Signature::try_from_bytes(&self.proposer_signature)
-            .map_err(|_| LaneAutonomousArtifactError::InvalidHandoffSignature)?
-            .verify(
-                self.proposer.public_key(),
-                &self.proposer_signature_preimage(),
-            )
-            .map_err(|_| LaneAutonomousArtifactError::InvalidHandoffSignature)
-    }
-
-    /// Re-sign the exact proposer-authenticated bytes with one lane producer key.
-    ///
-    /// The resulting payload retains the handoff's reservation, routing, Native
-    /// receipt, proposal, and payload identities byte-for-byte. This conversion
-    /// cannot manufacture or normalize any queue-ownership field.
-    #[allow(dead_code)] // Used when the durable handoff consumer emits its lane-signed payload.
-    pub(crate) fn sign_for_lane_producer(
-        &self,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-        producer: PeerId,
-        private_key: &PrivateKey,
-    ) -> Result<LaneExecutablePayloadV1, LaneAutonomousArtifactError> {
-        self.validate(expected_chain_id_hash, expected_epoch)?;
-        let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
-            self.chain_id_hash,
-            self.epoch,
-            self.origin_proposal.clone(),
-            self.entrypoints.clone(),
-            self.reservation_keys.clone(),
-            self.routing_plans.clone(),
-            self.native_amx_receipts.clone(),
-            producer,
-            private_key,
-        )?;
-        if payload.entrypoint_hashes != self.entrypoint_hashes
-            || payload.payload_hash != self.payload_hash
-        {
-            return Err(LaneAutonomousArtifactError::PayloadHashMismatch);
-        }
-        Ok(payload)
-    }
-
-    /// Enforce transport identity and authenticated global proposer authority.
-    pub(crate) fn validate_sender_authority(
-        &self,
-        sender: Option<&PeerId>,
-        global_authority: &[PeerId],
-    ) -> Result<(), LaneAutonomousArtifactError> {
-        if sender != Some(&self.proposer) {
-            return Err(LaneAutonomousArtifactError::HandoffSenderMismatch);
-        }
-        if !global_authority.contains(&self.proposer) {
-            return Err(LaneAutonomousArtifactError::HandoffProposerNotAuthority);
-        }
-        Ok(())
-    }
-}
-
 /// Derive the only valid next-view cursor for the exact same lane payload.
 pub(crate) fn retarget_lane_block_proposal_view(
     source: &LaneBlockProposalV1,
@@ -1983,8 +1762,64 @@ impl LaneBlockNewViewVoteV1 {
     }
 }
 
-fn lane_drain_frontier_hash_shape_is_valid(height: u64, descriptor_hash: Option<Hash>) -> bool {
-    (height == 0) == descriptor_hash.is_none()
+fn hash_is_nonzero(hash: Hash) -> bool {
+    hash.as_ref().iter().any(|byte| *byte != 0)
+}
+
+fn lane_drain_frontier_shape_is_valid(
+    frontier: &LaneDrainFrontierV1,
+) -> Result<(), LaneDrainCertificateError> {
+    if frontier.version != LaneDrainFrontierV1::VERSION {
+        return Err(LaneDrainCertificateError::UnsupportedVersion);
+    }
+    if !hash_is_nonzero(frontier.lane_incarnation)
+        || (frontier.lane_block_height == 0) != frontier.lane_block_descriptor_hash.is_none()
+        || frontier
+            .lane_block_descriptor_hash
+            .is_some_and(|hash| !hash_is_nonzero(hash))
+    {
+        return Err(LaneDrainCertificateError::FrontierHashMismatch);
+    }
+    if frontier.unresolved_evidence_root != lane_drain_empty_unresolved_evidence_root() {
+        return Err(LaneDrainCertificateError::UnresolvedEvidence);
+    }
+    let Some(native) = frontier.native_application else {
+        return Ok(());
+    };
+    let typed_hash_is_nonzero = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
+    if native.version != 1
+        || frontier.lane_block_height == 0
+        || native.predecessor_height.checked_add(1) != Some(frontier.lane_block_height)
+        || (native.predecessor_height == 0) != native.predecessor_descriptor_hash.is_none()
+        || native
+            .predecessor_descriptor_hash
+            .is_some_and(|hash| !hash_is_nonzero(hash))
+        || !hash_is_nonzero(native.participant_proposal_hash)
+        || !typed_hash_is_nonzero(native.participant_settlement_hash.as_ref())
+        || native.source_count == 0
+        || usize::try_from(native.source_count)
+            .map_or(true, |count| count > MAX_MERGE_EXECUTION_ENTRYPOINTS)
+        || native.application_block_height == 0
+        || !typed_hash_is_nonzero(native.application_block_hash.as_ref())
+        || !hash_is_nonzero(native.executed_block_wire_hash)
+        || !typed_hash_is_nonzero(native.finality_artifact_hash.as_ref())
+        || !hash_is_nonzero(native.application_manifest_root)
+        || native.application_manifest_leaf_count == 0
+        || native.application_manifest_leaf_index >= native.application_manifest_leaf_count
+        || !hash_is_nonzero(native.manifest_artifact_hash)
+        || !hash_is_nonzero(native.receipt_artifact_hash)
+        || !hash_is_nonzero(native.latest_index_artifact_hash)
+    {
+        return Err(LaneDrainCertificateError::InvalidFrontierEvidence);
+    }
+    Ok(())
+}
+
+/// Validate one evidence-aware drain frontier independently of mutable state.
+pub(crate) fn validate_lane_drain_frontier(
+    frontier: &LaneDrainFrontierV1,
+) -> Result<(), LaneDrainCertificateError> {
+    lane_drain_frontier_shape_is_valid(frontier)
 }
 
 /// Validate a canonical drain intent independently of mutable runtime state.
@@ -2024,11 +1859,13 @@ pub(crate) fn validate_lane_drain_intent(
     {
         return Err(LaneDrainCertificateError::InvalidIntent);
     }
-    if !lane_drain_frontier_hash_shape_is_valid(
-        intent.initial_merged_lane_height,
-        intent.initial_merged_descriptor_hash,
+    lane_drain_frontier_shape_is_valid(&intent.initial_frontier)?;
+    if !intent.initial_frontier.matches_route(
+        intent.lane_id,
+        intent.dataspace_id,
+        intent.lane_incarnation,
     ) {
-        return Err(LaneDrainCertificateError::FrontierHashMismatch);
+        return Err(LaneDrainCertificateError::FrontierRouteMismatch);
     }
     Ok(())
 }
@@ -2042,14 +1879,21 @@ pub(crate) fn validate_lane_drain_certificate_body(
         return Err(LaneDrainCertificateError::UnsupportedVersion);
     }
     validate_lane_drain_intent(&body.intent)?;
-    if body.final_lane_block_height < body.intent.initial_merged_lane_height {
+    if body.final_frontier.lane_block_height < body.intent.initial_frontier.lane_block_height {
         return Err(LaneDrainCertificateError::FrontierRegression);
     }
-    if !lane_drain_frontier_hash_shape_is_valid(
-        body.final_lane_block_height,
-        body.final_lane_block_descriptor_hash,
+    lane_drain_frontier_shape_is_valid(&body.final_frontier)?;
+    if !body.final_frontier.matches_route(
+        body.intent.lane_id,
+        body.intent.dataspace_id,
+        body.intent.lane_incarnation,
     ) {
-        return Err(LaneDrainCertificateError::FrontierHashMismatch);
+        return Err(LaneDrainCertificateError::FrontierRouteMismatch);
+    }
+    if body.final_frontier.lane_block_height == body.intent.initial_frontier.lane_block_height
+        && body.final_frontier != body.intent.initial_frontier
+    {
+        return Err(LaneDrainCertificateError::InvalidFrontierEvidence);
     }
     Ok(())
 }
@@ -2546,108 +2390,6 @@ pub(crate) enum LaneBlockNewViewCacheOutcome {
     Inserted,
     /// The same certified body was already retained.
     Duplicate,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct LaneExecutablePayloadHandoffSlotKey {
-    chain_id_hash: Hash,
-    epoch: u64,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_incarnation: Hash,
-    lane_block_height: u64,
-}
-
-impl From<&LaneExecutablePayloadHandoffV1> for LaneExecutablePayloadHandoffSlotKey {
-    fn from(handoff: &LaneExecutablePayloadHandoffV1) -> Self {
-        let descriptor = &handoff.origin_proposal.descriptor;
-        Self {
-            chain_id_hash: handoff.chain_id_hash,
-            epoch: handoff.epoch,
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            lane_block_height: descriptor.lane_block_height,
-        }
-    }
-}
-
-/// Bounded first-wins cache for authenticated handoffs awaiting their global
-/// proposal anchor.
-#[derive(Clone, Debug)]
-pub(crate) struct LaneExecutablePayloadHandoffCache {
-    capacity: usize,
-    handoffs: BTreeMap<LaneExecutablePayloadHandoffSlotKey, LaneExecutablePayloadHandoffV1>,
-    order: VecDeque<LaneExecutablePayloadHandoffSlotKey>,
-}
-
-impl LaneExecutablePayloadHandoffCache {
-    /// Construct a bounded handoff cache.
-    #[must_use]
-    pub(crate) fn new(capacity: usize) -> Self {
-        Self {
-            capacity: capacity.max(1),
-            handoffs: BTreeMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-
-    /// Retain one fully validated handoff, rejecting slot substitution.
-    pub(crate) fn insert(
-        &mut self,
-        handoff: LaneExecutablePayloadHandoffV1,
-    ) -> Result<LaneBlockNewViewCacheOutcome, LaneAutonomousArtifactError> {
-        let key = LaneExecutablePayloadHandoffSlotKey::from(&handoff);
-        if let Some(existing) = self.handoffs.get(&key) {
-            if existing == &handoff {
-                return Ok(LaneBlockNewViewCacheOutcome::Duplicate);
-            }
-            return Err(LaneAutonomousArtifactError::PayloadHashMismatch);
-        }
-        self.handoffs.insert(key, handoff);
-        self.order.push_back(key);
-        while self.handoffs.len() > self.capacity {
-            if let Some(oldest) = self.order.pop_front() {
-                self.handoffs.remove(&oldest);
-            }
-        }
-        Ok(LaneBlockNewViewCacheOutcome::Inserted)
-    }
-
-    /// Snapshot retained handoffs for anchor re-evaluation on the next tick.
-    pub(crate) fn snapshot(&self) -> Vec<LaneExecutablePayloadHandoffV1> {
-        self.handoffs.values().cloned().collect()
-    }
-
-    /// Remove the exact slot occupied by `handoff` after successful processing.
-    #[allow(dead_code)] // Used by the future durable handoff retry driver.
-    pub(crate) fn remove(&mut self, handoff: &LaneExecutablePayloadHandoffV1) {
-        let key = LaneExecutablePayloadHandoffSlotKey::from(handoff);
-        self.handoffs.remove(&key);
-        self.order.retain(|candidate| *candidate != key);
-    }
-
-    /// Retain only handoffs bound to the exact globally protected block.
-    ///
-    /// The cache is deliberately first-wins per lane slot while no global
-    /// proposal is protected. Once the reducer locks a global body, retaining
-    /// a handoff from a losing proposal would let that stale entry reject the
-    /// winning proposal's handoff for the same lane slot.
-    pub(crate) fn retain_global_anchor(
-        &mut self,
-        block_hash: HashOf<iroha_data_model::block::Header>,
-    ) -> usize {
-        let before = self.handoffs.len();
-        self.handoffs.retain(|_, handoff| {
-            handoff
-                .origin_proposal
-                .payload_block_hint
-                .is_some_and(|hint| hint.proposal_block_hash == block_hash)
-        });
-        let retained = &self.handoffs;
-        self.order.retain(|key| retained.contains_key(key));
-        before.saturating_sub(self.handoffs.len())
-    }
 }
 
 /// Bounded conflict detector for independently advancing lane views.
@@ -5680,19 +5422,116 @@ mod tests {
                     dataspace_id: DataSpaceId::new(9),
                     lane_incarnation: Hash::new(b"lane-drain-incarnation"),
                     close_global_height: 41,
-                    initial_merged_lane_height: 3,
-                    initial_merged_descriptor_hash: Some(Hash::new(b"lane-drain-initial-tip")),
+                    initial_frontier: LaneDrainFrontierV1::ordinary(
+                        LaneId::new(7),
+                        DataSpaceId::new(9),
+                        Hash::new(b"lane-drain-incarnation"),
+                        3,
+                        Some(Hash::new(b"lane-drain-initial-tip")),
+                    ),
                     validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                     validator_set_hash: HashOf::new(&validator_set),
                     validator_set: validator_set.clone(),
                     validator_count,
                     min_quorum,
                 },
-                final_lane_block_height: 5,
-                final_lane_block_descriptor_hash: Some(Hash::new(b"lane-drain-final-tip")),
+                final_frontier: LaneDrainFrontierV1::ordinary(
+                    LaneId::new(7),
+                    DataSpaceId::new(9),
+                    Hash::new(b"lane-drain-incarnation"),
+                    5,
+                    Some(Hash::new(b"lane-drain-final-tip")),
+                ),
             },
             validator_set,
         )
+    }
+
+    fn native_drain_frontier_fixture() -> LaneDrainFrontierV1 {
+        LaneDrainFrontierV1 {
+            version: LaneDrainFrontierV1::VERSION,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(9),
+            lane_incarnation: Hash::new(b"lane-drain-incarnation"),
+            lane_block_height: 5,
+            lane_block_descriptor_hash: Some(Hash::new(b"lane-drain-final-tip")),
+            native_application: Some(iroha_data_model::merge::LaneDrainNativeFrontierEvidenceV1 {
+                version: 1,
+                participant_view: 3,
+                predecessor_height: 4,
+                predecessor_descriptor_hash: Some(Hash::new(b"lane-drain-native-predecessor")),
+                participant_proposal_hash: Hash::new(b"lane-drain-native-proposal"),
+                participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"lane-drain-native-settlement",
+                )),
+                source_count: 2,
+                application_block_height: 51,
+                application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"lane-drain-native-application-block",
+                )),
+                executed_block_wire_hash: Hash::new(b"lane-drain-native-executed-wire"),
+                finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"lane-drain-native-finality",
+                )),
+                application_manifest_root: Hash::new(b"lane-drain-native-manifest-root"),
+                application_manifest_leaf_count: 2,
+                application_manifest_leaf_index: 1,
+                manifest_artifact_hash: Hash::new(b"lane-drain-native-manifest-artifact"),
+                receipt_artifact_hash: Hash::new(b"lane-drain-native-receipt-artifact"),
+                latest_index_artifact_hash: Hash::new(b"lane-drain-native-latest-index"),
+            }),
+            unresolved_evidence_root: lane_drain_empty_unresolved_evidence_root(),
+        }
+    }
+
+    #[test]
+    fn lane_drain_native_frontier_fails_closed_on_route_evidence_or_unresolved_drift() {
+        let keys = [
+            checked_bls_keypair(91),
+            checked_bls_keypair(92),
+            checked_bls_keypair(93),
+            checked_bls_keypair(94),
+        ];
+        let (mut body, _) = lane_drain_fixture(&keys);
+        body.final_frontier = native_drain_frontier_fixture();
+        validate_lane_drain_certificate_body(&body).expect("valid Native-derived drain frontier");
+
+        let without_native = {
+            let mut changed = body.clone();
+            changed.final_frontier.native_application = None;
+            changed
+        };
+        assert_ne!(
+            body.signature_preimage(),
+            without_native.signature_preimage(),
+            "missing Native evidence must change the committee-signed body"
+        );
+
+        let mut changed = body.clone();
+        changed.final_frontier.lane_incarnation = Hash::new(b"stale-drain-incarnation");
+        assert_eq!(
+            validate_lane_drain_certificate_body(&changed),
+            Err(LaneDrainCertificateError::FrontierRouteMismatch)
+        );
+
+        changed = body.clone();
+        changed
+            .final_frontier
+            .native_application
+            .as_mut()
+            .expect("Native fixture")
+            .manifest_artifact_hash = Hash::prehashed([0; Hash::LENGTH]);
+        assert_eq!(
+            validate_lane_drain_certificate_body(&changed),
+            Err(LaneDrainCertificateError::InvalidFrontierEvidence)
+        );
+
+        changed = body;
+        changed.final_frontier.unresolved_evidence_root = Hash::new(b"unresolved-lane-work");
+        assert_eq!(
+            validate_lane_drain_certificate_body(&changed),
+            Err(LaneDrainCertificateError::UnresolvedEvidence)
+        );
     }
 
     #[test]
@@ -5754,8 +5593,9 @@ mod tests {
         assert_eq!(state.insert_vote(initial_vote, now), Ok(true));
 
         let mut advanced = body;
-        advanced.final_lane_block_height += 1;
-        advanced.final_lane_block_descriptor_hash = Some(Hash::new(b"advanced-drain-frontier"));
+        advanced.final_frontier.lane_block_height += 1;
+        advanced.final_frontier.lane_block_descriptor_hash =
+            Some(Hash::new(b"advanced-drain-frontier"));
         state.retain_body(Some(advanced.clone()));
         let refreshed_vote =
             LaneDrainVoteV1::new_signed(advanced.clone(), peer(signer), signer.private_key())
@@ -5786,11 +5626,11 @@ mod tests {
 
         for (conflicting_height, conflicting_hash) in [
             (
-                body.final_lane_block_height,
+                body.final_frontier.lane_block_height,
                 b"same-height-drift".as_slice(),
             ),
             (
-                body.final_lane_block_height - 1,
+                body.final_frontier.lane_block_height - 1,
                 b"lower-frontier-regression".as_slice(),
             ),
         ] {
@@ -5803,8 +5643,8 @@ mod tests {
             assert_eq!(state.insert_vote(initial_vote.clone(), now), Ok(true));
 
             let mut conflict = body.clone();
-            conflict.final_lane_block_height = conflicting_height;
-            conflict.final_lane_block_descriptor_hash = Some(Hash::new(conflicting_hash));
+            conflict.final_frontier.lane_block_height = conflicting_height;
+            conflict.final_frontier.lane_block_descriptor_hash = Some(Hash::new(conflicting_hash));
             let conflicting_vote =
                 LaneDrainVoteV1::new_signed(conflict, peer(signer), signer.private_key())
                     .expect("structurally valid conflicting drain vote");
@@ -5986,7 +5826,7 @@ mod tests {
         forged.body.intent.close_global_height = 42;
         forged_bodies.push(forged);
         let mut forged = certificate.clone();
-        forged.body.final_lane_block_descriptor_hash = Some(Hash::new(b"wrong-final-tip"));
+        forged.body.final_frontier.lane_block_descriptor_hash = Some(Hash::new(b"wrong-final-tip"));
         forged_bodies.push(forged);
         for forged in forged_bodies {
             assert_eq!(
@@ -6050,9 +5890,11 @@ mod tests {
             Err(LaneDrainCertificateError::DuplicateSigner)
         );
         let mut conflicting_vote = votes[2].clone();
-        conflicting_vote.body.final_lane_block_height = 6;
-        conflicting_vote.body.final_lane_block_descriptor_hash =
-            Some(Hash::new(b"conflicting-final-tip"));
+        conflicting_vote.body.final_frontier.lane_block_height = 6;
+        conflicting_vote
+            .body
+            .final_frontier
+            .lane_block_descriptor_hash = Some(Hash::new(b"conflicting-final-tip"));
         assert_eq!(
             aggregate_lane_drain_votes(
                 body,
@@ -6063,13 +5905,13 @@ mod tests {
         );
 
         let (mut malformed, _) = lane_drain_fixture(&keys);
-        malformed.final_lane_block_height = 0;
+        malformed.final_frontier.lane_block_height = 0;
         assert_eq!(
             validate_lane_drain_certificate_body(&malformed),
             Err(LaneDrainCertificateError::FrontierRegression)
         );
-        malformed.final_lane_block_height = 5;
-        malformed.final_lane_block_descriptor_hash = None;
+        malformed.final_frontier.lane_block_height = 5;
+        malformed.final_frontier.lane_block_descriptor_hash = None;
         assert_eq!(
             validate_lane_drain_certificate_body(&malformed),
             Err(LaneDrainCertificateError::FrontierHashMismatch)
@@ -6464,129 +6306,6 @@ mod tests {
         assert_eq!(
             decode_autonomous_lane_payload_envelope(&oversized, chain_id_hash, epoch),
             Err(LaneAutonomousArtifactError::PayloadEnvelopeByteLimitExceeded)
-        );
-    }
-
-    #[test]
-    fn proposer_handoff_preserves_exact_reservation_bound_payload() {
-        #[derive(Encode)]
-        struct LegacyUnboundHandoff {
-            version: u8,
-            chain_id_hash: Hash,
-            epoch: u64,
-            origin_proposal: LaneBlockProposalV1,
-            entrypoint_hashes: Vec<Hash>,
-            entrypoints: Vec<TransactionEntrypoint>,
-            payload_hash: Hash,
-            proposer: PeerId,
-            proposer_signature: Vec<u8>,
-        }
-
-        let keypairs = [
-            checked_bls_keypair(31),
-            checked_bls_keypair(32),
-            checked_bls_keypair(33),
-        ];
-        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
-        let proposer = peer(&keypairs[1]);
-        let handoff = LaneExecutablePayloadHandoffV1::new_signed(
-            chain_id_hash,
-            epoch,
-            payload.origin_proposal.clone(),
-            payload.entrypoints.clone(),
-            payload.reservation_keys.clone(),
-            payload.routing_plans.clone(),
-            payload.native_amx_receipts.clone(),
-            proposer.clone(),
-            keypairs[1].private_key(),
-        )
-        .expect("global proposer can authenticate exact reservation-bound handoff bytes");
-
-        assert_eq!(handoff.version, LANE_EXECUTABLE_PAYLOAD_HANDOFF_VERSION_V2);
-        handoff
-            .validate(chain_id_hash, epoch)
-            .expect("authenticated handoff validates");
-        assert_eq!(handoff.entrypoint_hashes, payload.entrypoint_hashes);
-        assert_eq!(handoff.reservation_keys, payload.reservation_keys);
-        assert_eq!(handoff.routing_plans, payload.routing_plans);
-        assert_eq!(handoff.native_amx_receipts, payload.native_amx_receipts);
-        assert_eq!(handoff.payload_hash, payload.payload_hash);
-        let lane_producer_key = keypairs
-            .iter()
-            .find(|keypair| keypair.public_key() == payload.producer.public_key())
-            .expect("payload producer fixture key");
-        let lane_signed = handoff
-            .sign_for_lane_producer(
-                chain_id_hash,
-                epoch,
-                payload.producer.clone(),
-                lane_producer_key.private_key(),
-            )
-            .expect("lane producer re-signs the exact handoff payload");
-        assert_eq!(lane_signed.entrypoint_hashes, payload.entrypoint_hashes);
-        assert_eq!(lane_signed.reservation_keys, payload.reservation_keys);
-        assert_eq!(lane_signed.routing_plans, payload.routing_plans);
-        assert_eq!(lane_signed.native_amx_receipts, payload.native_amx_receipts);
-        assert_eq!(lane_signed.payload_hash, payload.payload_hash);
-        let legacy = LegacyUnboundHandoff {
-            version: handoff.version,
-            chain_id_hash: handoff.chain_id_hash,
-            epoch: handoff.epoch,
-            origin_proposal: handoff.origin_proposal.clone(),
-            entrypoint_hashes: handoff.entrypoint_hashes.clone(),
-            entrypoints: handoff.entrypoints.clone(),
-            payload_hash: handoff.payload_hash,
-            proposer: handoff.proposer.clone(),
-            proposer_signature: handoff.proposer_signature.clone(),
-        };
-        let legacy_bytes = legacy.encode();
-        assert!(
-            LaneExecutablePayloadHandoffV1::decode(&mut legacy_bytes.as_slice()).is_err(),
-            "the former unbound handoff layout must fail closed"
-        );
-        let mut legacy_version = handoff.clone();
-        legacy_version.version = 1;
-        assert_eq!(
-            legacy_version.validate(chain_id_hash, epoch),
-            Err(LaneAutonomousArtifactError::UnsupportedVersion)
-        );
-        let mut unknown_version = handoff.clone();
-        unknown_version.version = LANE_EXECUTABLE_PAYLOAD_HANDOFF_VERSION_V2 + 1;
-        assert_eq!(
-            unknown_version.validate(chain_id_hash, epoch),
-            Err(LaneAutonomousArtifactError::UnsupportedVersion)
-        );
-        handoff
-            .validate_sender_authority(Some(&proposer), std::slice::from_ref(&proposer))
-            .expect("transport sender and global authority are exact");
-        assert_eq!(
-            handoff.validate_sender_authority(None, std::slice::from_ref(&proposer)),
-            Err(LaneAutonomousArtifactError::HandoffSenderMismatch)
-        );
-
-        let mut missing_reservation = handoff.clone();
-        missing_reservation.reservation_keys.clear();
-        assert_eq!(
-            missing_reservation.validate(chain_id_hash, epoch),
-            Err(LaneAutonomousArtifactError::ReservationMismatch),
-            "handoff cannot omit the durable queue owner"
-        );
-
-        let mut forged = handoff;
-        forged.proposer_signature[0] ^= 0x80;
-        assert_eq!(
-            forged.validate(chain_id_hash, epoch),
-            Err(LaneAutonomousArtifactError::InvalidHandoffSignature)
-        );
-
-        let mut unbound_lane_payload = payload;
-        unbound_lane_payload.reservation_keys.clear();
-        unbound_lane_payload.routing_plans.clear();
-        unbound_lane_payload.native_amx_receipts.clear();
-        assert_eq!(
-            unbound_lane_payload.validate(chain_id_hash, epoch),
-            Err(LaneAutonomousArtifactError::ReservationMismatch),
-            "neither the handoff nor the lane payload may carry unbound bytes",
         );
     }
 

@@ -255,6 +255,8 @@ fn seed_proposal_and_referendum(
             status: iroha_core::state::GovernanceProposalStatus::Proposed,
             pipeline,
             parliament_snapshot: None,
+            finalization_evidence: None,
+            enacted_at_height: None,
         },
     );
     stx.apply();

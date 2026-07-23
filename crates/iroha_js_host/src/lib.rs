@@ -214,7 +214,9 @@ use sorafs_manifest::{
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
     OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
     OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, XorQuantity,
-    alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
+    alias_cache::{
+        AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof, unix_now_secs,
+    },
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
@@ -261,7 +263,8 @@ const SORAFS_ALIAS_REVOCATION_TTL_SECS: u64 = 5 * 60;
 const SORAFS_ALIAS_ROTATION_MAX_AGE_SECS: u64 = 6 * 60 * 60;
 const SORAFS_ALIAS_SUCCESSOR_GRACE_SECS: u64 = 5 * 60;
 const SORAFS_ALIAS_GOVERNANCE_GRACE_SECS: u64 = 0;
-const JS_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+const JS_MAX_SAFE_INTEGER_U64: u64 = 9_007_199_254_740_991;
+const JS_MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
 /// Report the stable C bridge ABI expected by the JavaScript privacy host.
 ///
@@ -269,7 +272,124 @@ const JS_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 /// a stale native module happens to expose similarly named privacy functions.
 #[napi(js_name = "connectNoritoBridgeAbiVersion")]
 pub fn connect_norito_bridge_abi_version() -> u32 {
-    19
+    21
+}
+
+fn validation_fee_fixed_hash(value: &Uint8Array, label: &str) -> napi::Result<[u8; 32]> {
+    let bytes: [u8; 32] = value.as_ref().try_into().map_err(|_| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} must contain exactly 32 bytes"),
+        )
+    })?;
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} must be a non-zero 32-byte Iroha hash"),
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Encode the frozen Norito request for one validation-fee proof page.
+#[napi(js_name = "validationFeeCurrentPolicyProofRequestV1")]
+pub fn validation_fee_current_policy_proof_request_v1(
+    trusted_checkpoint_height: JsU64,
+    trusted_checkpoint_context_id: Uint8Array,
+) -> napi::Result<Buffer> {
+    let trusted_checkpoint_height = trusted_checkpoint_height.0;
+    if trusted_checkpoint_height == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "trustedCheckpointHeight must be positive",
+        ));
+    }
+    let _ =
+        validation_fee_fixed_hash(&trusted_checkpoint_context_id, "trustedCheckpointContextId")?;
+    let request = iroha::client::ValidationFeeCurrentPolicyProofRequestV1 {
+        version: iroha::client::VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+        trusted_checkpoint_height,
+    };
+    norito::to_bytes(&request)
+        .map(Buffer::from)
+        .map_err(|error| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                format!("failed to encode validation-fee proof request: {error}"),
+            )
+        })
+}
+
+/// Locally verify one validation-fee proof page under immutable deployment bindings.
+#[napi(js_name = "validationFeeVerifyCurrentPolicyProofV1")]
+#[allow(clippy::too_many_arguments)]
+pub fn validation_fee_verify_current_policy_proof_v1(
+    proof_norito: Uint8Array,
+    chain_id: String,
+    bound_genesis_hash: Uint8Array,
+    policy_chain_genesis_hash: Uint8Array,
+    trusted_checkpoint_height: JsU64,
+    trusted_checkpoint_context_id: Uint8Array,
+) -> napi::Result<String> {
+    const MAX_PROOF_BYTES: usize = iroha::client::VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES;
+    if proof_norito.is_empty() || proof_norito.len() > MAX_PROOF_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("proofNorito must contain 1..{MAX_PROOF_BYTES} bytes"),
+        ));
+    }
+    if chain_id.is_empty()
+        || chain_id.len() > 256
+        || chain_id.trim() != chain_id
+        || chain_id.chars().any(char::is_control)
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "chainId must be canonical bounded text",
+        ));
+    }
+    let chain_id = chain_id.parse::<ChainId>().map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("chainId is invalid: {error}"),
+        )
+    })?;
+    let bound_genesis_hash = validation_fee_fixed_hash(&bound_genesis_hash, "boundGenesisHash")?;
+    let policy_chain_genesis_hash =
+        validation_fee_fixed_hash(&policy_chain_genesis_hash, "policyChainGenesisHash")?;
+    let trusted_checkpoint_height = trusted_checkpoint_height.0;
+    if trusted_checkpoint_height == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "trustedCheckpointHeight must be positive",
+        ));
+    }
+    let trusted_checkpoint_context_id =
+        validation_fee_fixed_hash(&trusted_checkpoint_context_id, "trustedCheckpointContextId")?;
+    let proof: iroha::client::ValidationFeeCurrentPolicyProofV1 =
+        decode_from_bytes(proof_norito.as_ref()).map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("proofNorito is not a validation-fee proof: {error}"),
+            )
+        })?;
+    let canonical = norito::to_bytes(&proof).map_err(norito_to_napi)?;
+    if canonical != proof_norito.as_ref() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "proofNorito is not canonical",
+        ));
+    }
+    let projection = proof
+        .verify_with_immutable_binding(
+            chain_id,
+            bound_genesis_hash,
+            policy_chain_genesis_hash,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )
+        .map_err(napi::Error::from_reason)?;
+    json::to_json(&projection).map_err(norito_to_napi)
 }
 
 const SUPPORTED_CRYPTO_ALGORITHMS: &[Algorithm] = &[
@@ -2763,27 +2883,11 @@ fn ensure_positive(value: i64, name: &str) -> napi::Result<u64> {
             format!("{name} must be greater than zero"),
         ));
     }
-    u64::try_from(value).map_err(|_| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{name} must fit within the JavaScript number range"),
-        )
-    })
+    js_number_to_u64(value, name)
 }
 
 fn ensure_non_negative(value: i64, name: &str) -> napi::Result<u64> {
-    if value < 0 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{name} must be zero or positive"),
-        ));
-    }
-    u64::try_from(value).map_err(|_| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{name} must fit within the JavaScript number range"),
-        )
-    })
+    js_number_to_u64(value, name)
 }
 
 fn parse_hex_bytes(input: &str, context: &str) -> napi::Result<Vec<u8>> {
@@ -2844,12 +2948,7 @@ pub fn sorafs_evaluate_alias_proof(
 ) -> napi::Result<JsAliasEvaluation> {
     let policy = alias_policy_from_js(policy.as_ref())?;
     let now = match now_secs {
-        Some(value) => u64::try_from(value).map_err(|_| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                "now_secs must be non-negative and fit within JavaScript number range",
-            )
-        })?,
+        Some(value) => js_number_to_u64(value, "now_secs")?,
         None => unix_now_secs(),
     };
     let trimmed = proof_b64.trim();
@@ -2867,6 +2966,25 @@ pub fn sorafs_evaluate_alias_proof(
     })?;
     let bundle = decode_alias_proof(&proof_bytes).map_err(norito_to_napi)?;
     let evaluation = policy.evaluate(&bundle, now);
+    alias_evaluation_to_js(evaluation)
+}
+
+fn u64_to_js_number(value: u64, field: &str) -> napi::Result<i64> {
+    if value > JS_MAX_SAFE_INTEGER_U64 {
+        return Err(napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("{field} exceeds JavaScript safe integer range"),
+        ));
+    }
+    i64::try_from(value).map_err(|_| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("{field} exceeds JavaScript safe integer range"),
+        )
+    })
+}
+
+fn alias_evaluation_to_js(evaluation: AliasProofEvaluation) -> napi::Result<JsAliasEvaluation> {
     let state = match evaluation.state {
         AliasProofState::Fresh => "fresh",
         AliasProofState::RefreshWindow => "refresh_window",
@@ -2875,17 +2993,21 @@ pub fn sorafs_evaluate_alias_proof(
     }
     .to_owned();
     let status_label = evaluation.status_label().to_owned();
+    let age_seconds = u64_to_js_number(evaluation.age.as_secs(), "age_seconds")?;
+    let generated_at_unix = u64_to_js_number(evaluation.generated_at_unix, "generated_at_unix")?;
+    let expires_at_unix = u64_to_js_number(evaluation.expires_at_unix, "expires_at_unix")?;
+    let expires_in_seconds = evaluation
+        .expires_in
+        .map(|duration| u64_to_js_number(duration.as_secs(), "expires_in_seconds"))
+        .transpose()?;
     Ok(JsAliasEvaluation {
         state,
         status_label,
         rotation_due: evaluation.rotation_due,
-        age_seconds: i64::try_from(evaluation.age.as_secs()).expect("age fits in i64"),
-        generated_at_unix: i64::try_from(evaluation.generated_at_unix)
-            .expect("generated_at fits in i64"),
-        expires_at_unix: i64::try_from(evaluation.expires_at_unix).expect("expires_at fits in i64"),
-        expires_in_seconds: evaluation
-            .expires_in
-            .map(|dur| i64::try_from(dur.as_secs()).expect("expires_in fits in i64")),
+        age_seconds,
+        generated_at_unix,
+        expires_at_unix,
+        expires_in_seconds,
         servable: evaluation.state.is_servable(),
     })
 }
@@ -2901,8 +3023,24 @@ fn resolve_manifest_cid(opts: &JsAliasProofFixtureOptions) -> napi::Result<Vec<u
         }
         Ok(cid)
     } else {
-        Ok(vec![0xAA, 0xBB])
+        Ok(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
     }
+}
+
+fn js_number_to_u64(value: i64, field: &str) -> napi::Result<u64> {
+    let value = u64::try_from(value).map_err(|_| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{field} must be non-negative and within JavaScript safe integer range"),
+        )
+    })?;
+    if value > JS_MAX_SAFE_INTEGER_U64 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{field} must be non-negative and within JavaScript safe integer range"),
+        ));
+    }
+    Ok(value)
 }
 
 fn resolve_fixture_timestamps(
@@ -2910,22 +3048,28 @@ fn resolve_fixture_timestamps(
     now: u64,
 ) -> napi::Result<(u64, u64)> {
     let generated = match opts.generated_at_unix {
-        Some(value) => u64::try_from(value).map_err(|_| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                "generatedAtUnix must be non-negative and fit in JavaScript number range",
-            )
-        })?,
+        Some(value) => js_number_to_u64(value, "generatedAtUnix")?,
         None => now.saturating_sub(60),
     };
     let expires = match opts.expires_at_unix {
-        Some(value) => u64::try_from(value).map_err(|_| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                "expiresAtUnix must be non-negative and fit in JavaScript number range",
-            )
-        })?,
-        None => generated + SORAFS_ALIAS_POSITIVE_TTL_SECS,
+        Some(value) => js_number_to_u64(value, "expiresAtUnix")?,
+        None => {
+            let expires = generated
+                .checked_add(SORAFS_ALIAS_POSITIVE_TTL_SECS)
+                .ok_or_else(|| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "default expiresAtUnix exceeds JavaScript safe integer range",
+                    )
+                })?;
+            if expires > JS_MAX_SAFE_INTEGER_U64 {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "default expiresAtUnix exceeds JavaScript safe integer range",
+                ));
+            }
+            expires
+        }
     };
     if expires <= generated {
         return Err(napi::Error::new(
@@ -2939,25 +3083,13 @@ fn resolve_fixture_timestamps(
 fn resolve_fixture_epochs(opts: &JsAliasProofFixtureOptions) -> napi::Result<(u64, u64)> {
     let bound_at = opts
         .bound_at_epoch
-        .map(u64::try_from)
-        .transpose()
-        .map_err(|_| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                "boundAtEpoch must be non-negative and fit in JavaScript number range",
-            )
-        })?
+        .map(|value| js_number_to_u64(value, "boundAtEpoch"))
+        .transpose()?
         .unwrap_or(1);
     let expiry_epoch = opts
         .expiry_epoch
-        .map(u64::try_from)
-        .transpose()
-        .map_err(|_| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                "expiryEpoch must be non-negative and fit in JavaScript number range",
-            )
-        })?
+        .map(|value| js_number_to_u64(value, "expiryEpoch"))
+        .transpose()?
         .unwrap_or(bound_at + 100);
     Ok((bound_at, expiry_epoch))
 }
@@ -3019,8 +3151,8 @@ pub fn sorafs_alias_proof_fixture(
     let proof_bytes = norito::to_bytes(&bundle).map_err(norito_to_napi)?;
     let proof_b64 = STANDARD.encode(proof_bytes);
     let registry_root_hex = hex::encode(bundle.registry_root);
-    let generated_i64 = i64::try_from(generated).expect("generated fits in i64");
-    let expires_i64 = i64::try_from(expires).expect("expires fits in i64");
+    let generated_i64 = u64_to_js_number(generated, "generated_at_unix")?;
+    let expires_i64 = u64_to_js_number(expires, "expires_at_unix")?;
 
     Ok(JsAliasProofFixture {
         proof_b64,
@@ -3028,8 +3160,7 @@ pub fn sorafs_alias_proof_fixture(
         generated_at_unix: generated_i64,
         expires_at_unix: expires_i64,
         registry_root_hex,
-        registry_height: i64::try_from(bundle.registry_height)
-            .expect("registry height fits in i64"),
+        registry_height: u64_to_js_number(bundle.registry_height, "registry_height")?,
     })
 }
 
@@ -3145,7 +3276,7 @@ impl FromNapiValue for JsU64 {
                         "expected integer-valued number",
                     ));
                 }
-                if raw > JS_MAX_SAFE_INTEGER {
+                if raw > JS_MAX_SAFE_INTEGER_F64 {
                     return Err(napi::Error::new(
                         napi::Status::InvalidArg,
                         "number exceeds JavaScript safe integer range; use bigint",
@@ -5985,14 +6116,16 @@ pub fn sorafs_multi_fetch_local(
 
 fn to_js_replication_assignments(
     assignments: Vec<sorafs_manifest::capacity::ReplicationAssignmentV1>,
-) -> Vec<JsReplicationAssignment> {
+) -> napi::Result<Vec<JsReplicationAssignment>> {
     assignments
         .into_iter()
-        .map(|assignment| JsReplicationAssignment {
-            provider_id_hex: hex::encode(assignment.provider_id),
-            slice_gib: i64::try_from(assignment.slice_gib)
-                .expect("slice_gib should fit within JavaScript safe integers"),
-            lane: assignment.lane,
+        .map(|assignment| {
+            let slice_gib = u64_to_js_number(assignment.slice_gib, "slice_gib")?;
+            Ok(JsReplicationAssignment {
+                provider_id_hex: hex::encode(assignment.provider_id),
+                slice_gib,
+                lane: assignment.lane,
+            })
         })
         .collect()
 }
@@ -6027,18 +6160,9 @@ fn to_js_replication_order(order: ReplicationOrderV1) -> napi::Result<JsReplicat
     let manifest_cid_base64 = STANDARD.encode(&manifest_cid);
     let manifest_cid_utf8 = String::from_utf8(manifest_cid).ok();
     let target_replicas = u32::from(target_replicas);
-    let issued_at_unix = i64::try_from(issued_at).map_err(|_| {
-        napi::Error::new(
-            napi::Status::GenericFailure,
-            "issued_at exceeds JavaScript integer range",
-        )
-    })?;
-    let deadline_at_unix = i64::try_from(deadline_at).map_err(|_| {
-        napi::Error::new(
-            napi::Status::GenericFailure,
-            "deadline_at exceeds JavaScript integer range",
-        )
-    })?;
+    let assignments = to_js_replication_assignments(assignments)?;
+    let issued_at_unix = u64_to_js_number(issued_at, "issued_at")?;
+    let deadline_at_unix = u64_to_js_number(deadline_at, "deadline_at")?;
 
     let js_sla = JsReplicationSla {
         ingest_deadline_secs: sla.ingest_deadline_secs,
@@ -6054,7 +6178,7 @@ fn to_js_replication_order(order: ReplicationOrderV1) -> napi::Result<JsReplicat
         manifest_digest_hex: hex::encode(manifest_digest),
         chunking_profile,
         target_replicas,
-        assignments: to_js_replication_assignments(assignments),
+        assignments,
         issued_at_unix,
         deadline_at_unix,
         sla: js_sla,
@@ -6075,12 +6199,7 @@ pub fn sorafs_decode_replication_order(bytes: Uint8Array) -> napi::Result<JsRepl
 }
 
 fn parse_sorafs_generated_at_unix(generated_at_unix: i64) -> napi::Result<u64> {
-    u64::try_from(generated_at_unix).map_err(|_| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            "generated_at_unix must be a non-negative UNIX timestamp",
-        )
-    })
+    js_number_to_u64(generated_at_unix, "generated_at_unix")
 }
 
 fn validate_sorafs_reference_label(label: &str, context: &str) -> napi::Result<()> {
@@ -10607,18 +10726,12 @@ fn configure_transaction_builder(
     nonce: Option<u32>,
 ) -> napi::Result<TransactionBuilder> {
     if let Some(ms) = creation_time_ms {
-        let millis = u64::try_from(ms).map_err(|_| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                "creation time must be non-negative",
-            )
-        })?;
+        let millis = js_number_to_u64(ms, "creation_time_ms")?;
         builder.set_creation_time(Duration::from_millis(millis));
     }
 
     if let Some(ms) = ttl_ms {
-        let millis = u64::try_from(ms)
-            .map_err(|_| napi::Error::new(napi::Status::InvalidArg, "ttl must be non-negative"))?;
+        let millis = js_number_to_u64(ms, "ttl_ms")?;
         builder.set_ttl(Duration::from_millis(millis));
     }
 
@@ -13761,15 +13874,14 @@ fn normalize_private_kaigi_creation_time_ms(creation_time_ms: Option<i64>) -> na
                 .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
                 .map_err(norito_to_napi)
         },
-        |ms| {
-            u64::try_from(ms).map_err(|_| {
-                napi::Error::new(
-                    napi::Status::InvalidArg,
-                    "creation_time_ms must be non-negative",
-                )
-            })
-        },
+        |ms| js_number_to_u64(ms, "creation_time_ms"),
     )
+}
+
+fn normalize_private_kaigi_ended_at_ms(ended_at_ms: Option<i64>) -> napi::Result<Option<u64>> {
+    ended_at_ms
+        .map(|value| js_number_to_u64(value, "ended_at_ms"))
+        .transpose()
 }
 
 fn validate_private_kaigi_fee_fixture(
@@ -14589,6 +14701,59 @@ pub fn sign_quoted_transaction_payload(
     })
 }
 
+/// Replace only an unsigned proved-IVM payload's fee limits, reattach its proof, and sign it.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn sign_quoted_ivm_proved_transaction_payload(
+    payload_json: String,
+    attachment_json: String,
+    quoted_fee_payment_json: String,
+    secret: Uint8Array,
+    private_key_algorithm: Option<String>,
+) -> napi::Result<JsSignedTransaction> {
+    let mut payload: TransactionPayload = json::from_json(&payload_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid transaction payload JSON: {err}"),
+        )
+    })?;
+    if !matches!(payload.instructions, Executable::IvmProved(_)) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "quoted proved-IVM signer requires an IvmProved executable",
+        ));
+    }
+    let attachment: ProofAttachment = json::from_json(&attachment_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid ProofAttachment json: {err}"),
+        )
+    })?;
+    let quoted_fee_payment = parse_fee_payment_intent(&quoted_fee_payment_json)?;
+    if !same_fee_payer_selection(&payload.fee_payment, &quoted_fee_payment) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "quoted fee intent changed the selected payer, exact sponsor program revision, or gas bound",
+        ));
+    }
+    payload.fee_payment = quoted_fee_payment;
+    let builder = TransactionBuilder::from_payload(payload)
+        .map_err(norito_to_napi)?
+        .with_attachments(ProofAttachmentList(vec![attachment]));
+    let algorithm = parse_crypto_algorithm(private_key_algorithm.as_deref())?;
+    let private_key = PrivateKey::from_bytes(algorithm, secret.as_ref()).map_err(norito_to_napi)?;
+    let signed = sign_js_transaction(
+        builder,
+        &private_key,
+        "quoted proved-IVM JavaScript payload",
+    )?;
+    let signed_bytes = Encode::encode(&signed);
+    Ok(JsSignedTransaction {
+        signed_transaction: Buffer::from(signed_bytes),
+        hash: Buffer::from(signed.hash().as_ref().to_vec()),
+    })
+}
+
 /// Build and sign a transaction from an array of instruction JSON payloads.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
@@ -14661,6 +14826,66 @@ pub fn build_executable_batch_transaction(
         secret.as_ref(),
         private_key_algorithm,
     )
+}
+
+/// Build, but do not sign, an `Executable::IvmProved` payload and its proof attachment.
+///
+/// The returned payload is the exact payload that must be submitted to the fee-quote endpoint
+/// before applying the quoted limits with [`sign_quoted_ivm_proved_transaction_payload`].
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_ivm_proved_transaction_payload(
+    chain_id: String,
+    authority: String,
+    proved_json: String,
+    attachment_json: String,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayloadDraft> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    let proved: IvmProved = json::from_json(&proved_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid IvmProved json: {err}"),
+        )
+    })?;
+    let attachment: ProofAttachment = json::from_json(&attachment_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid ProofAttachment json: {err}"),
+        )
+    })?;
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+    let builder = configure_transaction_builder(
+        TransactionBuilder::new(chain_id, authority, fee_payment)
+            .with_executable(Executable::IvmProved(proved)),
+        metadata,
+        Some(ProofAttachmentList(vec![attachment])),
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )?;
+    let payload_bytes = builder.encode_payload();
+    if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction payload exceeds 1048576 bytes",
+        ));
+    }
+    let payload_json = json::to_json(builder.payload()).map_err(norito_to_napi)?;
+    Ok(JsTransactionPayloadDraft {
+        payload_json,
+        payload_bytes: Buffer::from(payload_bytes),
+        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+    })
 }
 
 /// Build and sign a transaction carrying an `Executable::IvmProved` payload and its proof attachment.
@@ -14873,16 +15098,7 @@ pub fn build_private_end_kaigi_transaction(
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
     let call_id = parse_kaigi_id_literal(&call_id, "call_id")?;
-    let ended_at_ms = ended_at_ms
-        .map(|value| {
-            u64::try_from(value).map_err(|_| {
-                napi::Error::new(
-                    napi::Status::InvalidArg,
-                    "ended_at_ms must be non-negative when provided",
-                )
-            })
-        })
-        .transpose()?;
+    let ended_at_ms = normalize_private_kaigi_ended_at_ms(ended_at_ms)?;
     let artifacts: PrivateKaigiArtifacts =
         parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
     let fee_spend: PrivateKaigiFeeSpend =
@@ -14914,32 +15130,9 @@ pub fn build_time_trigger_action(
     repeats: Option<u32>,
     metadata_json: Option<String>,
 ) -> napi::Result<String> {
-    let start_timestamp_ms = u64::try_from(start_timestamp_ms).map_err(|_| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            "start_timestamp_ms must be a positive integer",
-        )
-    })?;
-    if start_timestamp_ms == 0 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "start_timestamp_ms must be greater than zero",
-        ));
-    }
+    let start_timestamp_ms = ensure_positive(start_timestamp_ms, "start_timestamp_ms")?;
     let period_ms = if let Some(period) = period_ms {
-        let as_u64 = u64::try_from(period).map_err(|_| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                "period_ms must be a positive integer when provided",
-            )
-        })?;
-        if as_u64 == 0 {
-            return Err(napi::Error::new(
-                napi::Status::InvalidArg,
-                "period_ms must be greater than zero when provided",
-            ));
-        }
-        Some(as_u64)
+        Some(ensure_positive(period, "period_ms")?)
     } else {
         None
     };
@@ -15012,6 +15205,573 @@ pub fn build_precommit_trigger_action(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn validation_fee_hash_accepts_nonzero_even_ending_bytes() {
+        let hash = Uint8Array::from(vec![0x02; 32]);
+        assert_eq!(
+            validation_fee_fixed_hash(&hash, "checkpoint")
+                .expect("Iroha hashes have no parity validity bit"),
+            [0x02; 32]
+        );
+        assert!(validation_fee_fixed_hash(&Uint8Array::from(vec![0; 32]), "checkpoint").is_err());
+    }
+
+    fn replication_order_with_timestamps(issued_at: u64, deadline_at: u64) -> ReplicationOrderV1 {
+        ReplicationOrderV1 {
+            version: 1,
+            order_id: [1; 32],
+            manifest_cid: vec![1],
+            manifest_digest: [1; 32],
+            chunking_profile: String::new(),
+            target_replicas: 0,
+            assignments: Vec::new(),
+            issued_at,
+            deadline_at,
+            sla: sorafs_manifest::capacity::ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 0,
+                min_availability_percent_milli: 0,
+                min_por_success_percent_milli: 0,
+            },
+            metadata: Vec::new(),
+        }
+    }
+
+    fn transaction_builder_for_number_boundary() -> TransactionBuilder {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        TransactionBuilder::new(
+            ChainId::from("js-number-boundary"),
+            AccountId::new(keypair.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+    }
+
+    #[test]
+    fn alias_policy_number_fields_accept_js_max_safe_integer() {
+        let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+            .expect("JavaScript safe integer must fit in i64");
+        let options = JsAliasPolicy {
+            positive_ttl_secs: Some(maximum),
+            refresh_window_secs: Some(maximum),
+            hard_expiry_secs: Some(maximum),
+            negative_ttl_secs: Some(maximum),
+            revocation_ttl_secs: Some(maximum),
+            rotation_max_age_secs: Some(maximum),
+            successor_grace_secs: Some(maximum),
+            governance_grace_secs: Some(maximum),
+        };
+
+        let policy = alias_policy_from_js(Some(&options))
+            .expect("policy fields at JavaScript's safe integer limit must be accepted");
+
+        for duration in [
+            policy.positive_ttl(),
+            policy.refresh_window(),
+            policy.hard_expiry(),
+            policy.negative_ttl(),
+            policy.revocation_ttl(),
+            policy.rotation_max_age(),
+            policy.successor_grace(),
+            policy.governance_grace(),
+        ] {
+            assert_eq!(duration.as_secs(), JS_MAX_SAFE_INTEGER_U64);
+        }
+    }
+
+    #[test]
+    fn alias_policy_number_fields_above_js_max_safe_integer_return_errors() {
+        let over_limit = i64::try_from(JS_MAX_SAFE_INTEGER_U64 + 1)
+            .expect("integer immediately above JavaScript's safe limit must fit in i64");
+        let cases = [
+            (
+                "positiveTtlSecs",
+                JsAliasPolicy {
+                    positive_ttl_secs: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+            (
+                "refreshWindowSecs",
+                JsAliasPolicy {
+                    refresh_window_secs: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+            (
+                "hardExpirySecs",
+                JsAliasPolicy {
+                    hard_expiry_secs: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+            (
+                "negativeTtlSecs",
+                JsAliasPolicy {
+                    negative_ttl_secs: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+            (
+                "revocationTtlSecs",
+                JsAliasPolicy {
+                    revocation_ttl_secs: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+            (
+                "rotationMaxAgeSecs",
+                JsAliasPolicy {
+                    rotation_max_age_secs: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+            (
+                "successorGraceSecs",
+                JsAliasPolicy {
+                    successor_grace_secs: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+            (
+                "governanceGraceSecs",
+                JsAliasPolicy {
+                    governance_grace_secs: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (field, options) in cases {
+            let error = alias_policy_from_js(Some(&options))
+                .err()
+                .expect("policy field above JavaScript's safe integer limit must be rejected");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(error.reason.contains(field));
+            assert!(error.reason.contains("safe integer"));
+        }
+    }
+
+    #[test]
+    fn sorafs_generated_at_input_enforces_js_safe_integer_range() {
+        let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+            .expect("JavaScript safe integer must fit in i64");
+
+        assert_eq!(
+            parse_sorafs_generated_at_unix(maximum)
+                .expect("JavaScript max safe integer must be accepted"),
+            JS_MAX_SAFE_INTEGER_U64
+        );
+
+        let error = parse_sorafs_generated_at_unix(maximum + 1)
+            .err()
+            .expect("timestamp above JavaScript's safe integer limit must be rejected");
+        assert_eq!(error.status, napi::Status::InvalidArg);
+        assert!(error.reason.contains("generated_at_unix"));
+        assert!(error.reason.contains("safe integer"));
+    }
+
+    #[test]
+    fn transaction_timestamp_inputs_enforce_js_safe_integer_range() {
+        let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+            .expect("JavaScript safe integer must fit in i64");
+
+        let _ = configure_transaction_builder(
+            transaction_builder_for_number_boundary(),
+            Metadata::default(),
+            None,
+            Some(maximum),
+            Some(maximum),
+            None,
+        )
+        .expect("transaction timestamps at JavaScript's safe integer limit must be accepted");
+
+        for (field, creation_time_ms, ttl_ms) in [
+            ("creation_time_ms", Some(maximum + 1), None),
+            ("ttl_ms", None, Some(maximum + 1)),
+        ] {
+            let error = configure_transaction_builder(
+                transaction_builder_for_number_boundary(),
+                Metadata::default(),
+                None,
+                creation_time_ms,
+                ttl_ms,
+                None,
+            )
+            .err()
+            .expect("transaction timestamp above the safe integer limit must be rejected");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(error.reason.contains(field));
+            assert!(error.reason.contains("safe integer"));
+        }
+    }
+
+    #[test]
+    fn private_kaigi_timestamp_inputs_enforce_js_safe_integer_range() {
+        let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+            .expect("JavaScript safe integer must fit in i64");
+
+        assert_eq!(
+            normalize_private_kaigi_creation_time_ms(Some(maximum))
+                .expect("creation time at JavaScript's safe integer limit must be accepted"),
+            JS_MAX_SAFE_INTEGER_U64
+        );
+        assert_eq!(
+            normalize_private_kaigi_ended_at_ms(Some(maximum))
+                .expect("end time at JavaScript's safe integer limit must be accepted"),
+            Some(JS_MAX_SAFE_INTEGER_U64)
+        );
+
+        for (field, error) in [
+            (
+                "creation_time_ms",
+                normalize_private_kaigi_creation_time_ms(Some(maximum + 1))
+                    .err()
+                    .expect("creation time above the safe integer limit must be rejected"),
+            ),
+            (
+                "ended_at_ms",
+                normalize_private_kaigi_ended_at_ms(Some(maximum + 1))
+                    .err()
+                    .expect("end time above the safe integer limit must be rejected"),
+            ),
+        ] {
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(error.reason.contains(field));
+            assert!(error.reason.contains("safe integer"));
+        }
+    }
+
+    #[test]
+    fn time_trigger_inputs_enforce_js_safe_integer_range() {
+        let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+            .expect("JavaScript safe integer must fit in i64");
+
+        let accepted_error = build_time_trigger_action(
+            String::new(),
+            Vec::new(),
+            maximum,
+            Some(maximum),
+            None,
+            None,
+        )
+        .err()
+        .expect("invalid authority must fail after accepting safe timestamp inputs");
+        assert!(!accepted_error.reason.contains("safe integer"));
+
+        for (field, start_timestamp_ms, period_ms) in [
+            ("start_timestamp_ms", maximum + 1, None),
+            ("period_ms", 1, Some(maximum + 1)),
+        ] {
+            let error = build_time_trigger_action(
+                String::new(),
+                Vec::new(),
+                start_timestamp_ms,
+                period_ms,
+                None,
+                None,
+            )
+            .err()
+            .expect("trigger timestamp above the safe integer limit must be rejected");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(error.reason.contains(field));
+            assert!(error.reason.contains("safe integer"));
+        }
+    }
+
+    #[test]
+    fn alias_evaluation_dto_accepts_js_max_safe_integer_fields() {
+        let maximum = JS_MAX_SAFE_INTEGER_U64;
+        let expected = i64::try_from(maximum).expect("JavaScript safe integer must fit in i64");
+        let evaluation = AliasProofEvaluation {
+            state: AliasProofState::Fresh,
+            rotation_due: false,
+            age: std::time::Duration::from_secs(maximum),
+            generated_at_unix: maximum,
+            expires_at_unix: maximum,
+            expires_in: Some(std::time::Duration::from_secs(maximum)),
+        };
+
+        let dto = alias_evaluation_to_js(evaluation)
+            .expect("JavaScript max safe integer should be representable by the binding");
+
+        assert_eq!(dto.age_seconds, expected);
+        assert_eq!(dto.generated_at_unix, expected);
+        assert_eq!(dto.expires_at_unix, expected);
+        assert_eq!(dto.expires_in_seconds, Some(expected));
+    }
+
+    #[test]
+    fn alias_evaluation_dto_fields_above_js_max_safe_integer_return_errors() {
+        let over_limit = JS_MAX_SAFE_INTEGER_U64 + 1;
+        let base = AliasProofEvaluation {
+            state: AliasProofState::Fresh,
+            rotation_due: false,
+            age: std::time::Duration::ZERO,
+            generated_at_unix: 1,
+            expires_at_unix: 2,
+            expires_in: Some(std::time::Duration::from_secs(1)),
+        };
+        let cases = [
+            (
+                "age_seconds",
+                AliasProofEvaluation {
+                    age: std::time::Duration::from_secs(over_limit),
+                    ..base
+                },
+            ),
+            (
+                "generated_at_unix",
+                AliasProofEvaluation {
+                    generated_at_unix: over_limit,
+                    ..base
+                },
+            ),
+            (
+                "expires_at_unix",
+                AliasProofEvaluation {
+                    expires_at_unix: over_limit,
+                    ..base
+                },
+            ),
+            (
+                "expires_in_seconds",
+                AliasProofEvaluation {
+                    expires_in: Some(std::time::Duration::from_secs(over_limit)),
+                    ..base
+                },
+            ),
+        ];
+
+        for (field, evaluation) in cases {
+            let error = alias_evaluation_to_js(evaluation)
+                .err()
+                .expect("out-of-range alias evaluation field must return an error");
+            assert_eq!(error.status, napi::Status::GenericFailure);
+            assert!(
+                error.reason.contains(field),
+                "unexpected error for {field}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn alias_evaluation_now_secs_enforces_js_safe_integer_range() {
+        let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+            .expect("JavaScript safe integer must fit in i64");
+
+        let accepted_error = sorafs_evaluate_alias_proof(String::new(), None, Some(maximum))
+            .err()
+            .expect("empty proof must be rejected after accepting the timestamp");
+        assert!(accepted_error.reason.contains("proof must not be empty"));
+
+        let rejected_error = sorafs_evaluate_alias_proof(String::new(), None, Some(maximum + 1))
+            .err()
+            .expect("timestamp above JavaScript's safe integer limit must be rejected");
+        assert_eq!(rejected_error.status, napi::Status::InvalidArg);
+        assert!(rejected_error.reason.contains("now_secs"));
+        assert!(rejected_error.reason.contains("safe integer"));
+    }
+
+    #[test]
+    fn alias_fixture_explicit_timestamps_enforce_js_safe_integer_range() {
+        let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+            .expect("JavaScript safe integer must fit in i64");
+        let over_limit = maximum + 1;
+        let accepted = resolve_fixture_timestamps(
+            &JsAliasProofFixtureOptions {
+                generated_at_unix: Some(maximum - 1),
+                expires_at_unix: Some(maximum),
+                ..Default::default()
+            },
+            0,
+        )
+        .expect("timestamps through JavaScript's safe integer limit must be accepted");
+        assert_eq!(
+            accepted,
+            (JS_MAX_SAFE_INTEGER_U64 - 1, JS_MAX_SAFE_INTEGER_U64)
+        );
+
+        for (field, options) in [
+            (
+                "generatedAtUnix",
+                JsAliasProofFixtureOptions {
+                    generated_at_unix: Some(over_limit),
+                    expires_at_unix: Some(over_limit + 1),
+                    ..Default::default()
+                },
+            ),
+            (
+                "expiresAtUnix",
+                JsAliasProofFixtureOptions {
+                    generated_at_unix: Some(1),
+                    expires_at_unix: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let error = resolve_fixture_timestamps(&options, 0)
+                .err()
+                .expect("timestamp above JavaScript's safe integer limit must be rejected");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(error.reason.contains(field));
+            assert!(error.reason.contains("safe integer"));
+        }
+    }
+
+    #[test]
+    fn alias_fixture_default_manifest_cid_is_canonical() {
+        let cid = resolve_manifest_cid(&JsAliasProofFixtureOptions::default())
+            .expect("default manifest CID should resolve");
+
+        assert_eq!(
+            cid,
+            sorafs_manifest::canonical_manifest_root_cid([0xAA; 32])
+        );
+    }
+
+    #[test]
+    fn alias_fixture_epoch_overrides_enforce_js_safe_integer_range() {
+        let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+            .expect("JavaScript safe integer must fit in i64");
+        let over_limit = maximum + 1;
+        let accepted = resolve_fixture_epochs(&JsAliasProofFixtureOptions {
+            bound_at_epoch: Some(maximum),
+            expiry_epoch: Some(maximum),
+            ..Default::default()
+        })
+        .expect("epoch overrides through JavaScript's safe integer limit must be accepted");
+        assert_eq!(accepted, (JS_MAX_SAFE_INTEGER_U64, JS_MAX_SAFE_INTEGER_U64));
+
+        for (field, options) in [
+            (
+                "boundAtEpoch",
+                JsAliasProofFixtureOptions {
+                    bound_at_epoch: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+            (
+                "expiryEpoch",
+                JsAliasProofFixtureOptions {
+                    expiry_epoch: Some(over_limit),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let error = resolve_fixture_epochs(&options)
+                .err()
+                .expect("epoch above JavaScript's safe integer limit must be rejected");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(error.reason.contains(field));
+            assert!(error.reason.contains("safe integer"));
+        }
+    }
+
+    #[test]
+    fn alias_fixture_default_expiry_accepts_js_max_safe_integer() {
+        let generated_at_unix =
+            i64::try_from(JS_MAX_SAFE_INTEGER_U64 - SORAFS_ALIAS_POSITIVE_TTL_SECS)
+                .expect("JavaScript safe integer must fit in i64");
+        let expected_expiry = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+            .expect("JavaScript safe integer must fit in i64");
+
+        let fixture = sorafs_alias_proof_fixture(Some(JsAliasProofFixtureOptions {
+            generated_at_unix: Some(generated_at_unix),
+            ..Default::default()
+        }))
+        .expect("default expiry at the JavaScript safe integer limit should be representable");
+
+        assert_eq!(fixture.generated_at_unix, generated_at_unix);
+        assert_eq!(fixture.expires_at_unix, expected_expiry);
+    }
+
+    #[test]
+    fn alias_fixture_default_expiry_above_js_max_safe_integer_returns_error() {
+        let generated_at_unix =
+            i64::try_from(JS_MAX_SAFE_INTEGER_U64 - SORAFS_ALIAS_POSITIVE_TTL_SECS + 1)
+                .expect("JavaScript safe integer must fit in i64");
+
+        let error = sorafs_alias_proof_fixture(Some(JsAliasProofFixtureOptions {
+            generated_at_unix: Some(generated_at_unix),
+            ..Default::default()
+        }))
+        .err()
+        .expect("out-of-range default expiry must return an error");
+
+        assert_eq!(error.status, napi::Status::InvalidArg);
+        assert!(error.reason.contains("default expiresAtUnix"));
+    }
+
+    #[test]
+    fn replication_assignment_slice_gib_accepts_js_max_safe_integer() {
+        let assignments = to_js_replication_assignments(vec![
+            sorafs_manifest::capacity::ReplicationAssignmentV1 {
+                provider_id: [1; 32],
+                slice_gib: JS_MAX_SAFE_INTEGER_U64,
+                lane: None,
+            },
+        ])
+        .expect("JavaScript max safe integer should be representable by the binding");
+
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(
+            assignments[0].slice_gib,
+            i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+                .expect("JavaScript safe integer must fit in i64")
+        );
+    }
+
+    #[test]
+    fn replication_assignment_slice_gib_above_js_max_safe_integer_returns_error() {
+        let error = to_js_replication_assignments(vec![
+            sorafs_manifest::capacity::ReplicationAssignmentV1 {
+                provider_id: [1; 32],
+                slice_gib: JS_MAX_SAFE_INTEGER_U64 + 1,
+                lane: None,
+            },
+        ])
+        .err()
+        .expect("slice_gib above JavaScript's safe integer limit must return an error");
+
+        assert_eq!(error.status, napi::Status::GenericFailure);
+        assert!(error.reason.contains("slice_gib"));
+    }
+
+    #[test]
+    fn replication_order_timestamps_accept_js_max_safe_integer() {
+        let order = to_js_replication_order(replication_order_with_timestamps(
+            JS_MAX_SAFE_INTEGER_U64,
+            JS_MAX_SAFE_INTEGER_U64,
+        ))
+        .expect("JavaScript max safe integer should be representable by the binding");
+        let expected = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
+            .expect("JavaScript safe integer must fit in i64");
+
+        assert_eq!(order.issued_at_unix, expected);
+        assert_eq!(order.deadline_at_unix, expected);
+    }
+
+    #[test]
+    fn replication_order_timestamps_above_js_max_safe_integer_return_errors() {
+        let over_limit = JS_MAX_SAFE_INTEGER_U64 + 1;
+        for (field, order) in [
+            (
+                "issued_at",
+                replication_order_with_timestamps(over_limit, 1),
+            ),
+            (
+                "deadline_at",
+                replication_order_with_timestamps(1, over_limit),
+            ),
+        ] {
+            let error = to_js_replication_order(order)
+                .err()
+                .expect("timestamp above JavaScript's safe integer limit must be rejected");
+            assert_eq!(error.status, napi::Status::GenericFailure);
+            assert!(error.reason.contains(field));
+            assert!(error.reason.contains("safe integer"));
+        }
+    }
+
     #[test]
     fn confidential_chain_ids_reject_aliasing_whitespace() {
         assert_eq!(
@@ -22185,13 +22945,15 @@ seiyaku Privacy {
             .verify_signature()
             .expect("quoted signature verifies");
 
-        let gas_error = sign_quoted_transaction_payload(
+        let gas_error = match sign_quoted_transaction_payload(
             draft.payload_json.clone(),
             authority_fee_payment_json_with_gas(1),
             Uint8Array::from(secret.clone()),
             Some("ed25519".to_owned()),
-        )
-        .expect_err("quote must not substitute the signed gas bound");
+        ) {
+            Ok(_) => panic!("quote must not substitute the signed gas bound"),
+            Err(error) => error,
+        };
         assert!(gas_error.reason.contains("gas bound"));
 
         let substituted = FeePaymentIntent::sponsor(
@@ -22203,13 +22965,15 @@ seiyaku Privacy {
             Vec::new(),
             None,
         );
-        let error = sign_quoted_transaction_payload(
+        let error = match sign_quoted_transaction_payload(
             draft.payload_json,
             json::to_json(&substituted).expect("substituted intent JSON"),
             Uint8Array::from(secret),
             Some("ed25519".to_owned()),
-        )
-        .expect_err("quote must not substitute the selected payer");
+        ) {
+            Ok(_) => panic!("quote must not substitute the selected payer"),
+            Err(error) => error,
+        };
         assert!(error.reason.contains("changed the selected payer"));
     }
 
@@ -22883,6 +23647,62 @@ seiyaku Privacy {
         let proved_json = json::to_json(&proved).expect("proved json");
         let attachment_json = json::to_json(&attachment).expect("attachment json");
         let (_, secret_bytes) = keypair.private_key().to_bytes();
+
+        let draft = build_ivm_proved_transaction_payload(
+            chain_id.to_string(),
+            account_json_literal(&authority),
+            proved_json.clone(),
+            attachment_json.clone(),
+            authority_fee_payment_json_with_gas(1_000),
+            None,
+            Some(1_700_000_000_000),
+            Some(5_000),
+            Some(42),
+        )
+        .expect("unsigned transaction built");
+        let draft_payload: TransactionPayload =
+            json::from_json(&draft.payload_json).expect("decode unsigned payload");
+        assert_eq!(draft.payload_bytes.as_ref(), draft_payload.encode());
+        assert_eq!(
+            draft.payload_hash.as_ref(),
+            TransactionBuilder::from_payload(draft_payload.clone())
+                .expect("valid payload")
+                .payload_hash_bytes()
+        );
+        assert_eq!(
+            draft_payload.instructions,
+            Executable::IvmProved(proved.clone())
+        );
+
+        let quoted = FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::PipelineGas,
+                AssetDefinitionId::new(
+                    DomainId::try_new("fees", "universal").expect("fee domain"),
+                    "xor".parse().expect("asset name"),
+                ),
+                "5".parse().expect("fee amount"),
+            )],
+            NonZeroU64::new(1_000),
+        );
+        let quoted_result = sign_quoted_ivm_proved_transaction_payload(
+            draft.payload_json,
+            attachment_json.clone(),
+            json::to_json(&quoted).expect("quote json"),
+            Uint8Array::from(secret_bytes.clone()),
+            None,
+        )
+        .expect("quoted transaction signed");
+        let quoted_tx =
+            decode_signed_transaction(quoted_result.signed_transaction.as_ref()).expect("decode");
+        assert_eq!(quoted_tx.fee_payment_intent(), &quoted);
+        assert_eq!(
+            quoted_tx.attachments(),
+            Some(&ProofAttachmentList(vec![attachment.clone()]))
+        );
+        quoted_tx
+            .verify_signature()
+            .expect("quoted transaction signature verifies");
 
         let result = build_ivm_proved_transaction(
             chain_id.to_string(),

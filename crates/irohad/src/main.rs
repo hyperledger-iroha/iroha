@@ -2282,10 +2282,11 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::LaneBlockCertificate(_)
+                | BlockMessage::LaneHistoricalRecoveryRequest(_)
                 | BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_)
                 | BlockMessage::LaneBlockNewViewVote(_)
                 | BlockMessage::LaneBlockNewViewCertificate(_) => IngressPolicy::critical(),
+                BlockMessage::LaneHistoricalRecoveryResponse(_) => IngressPolicy::bulk(),
                 BlockMessage::V2(message) => {
                     use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
 
@@ -2869,12 +2870,13 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
             BlockMessage::V2(_) => Some(SumeragiRelayClass::V2),
             BlockMessage::LaneBlockProposal(_)
             | BlockMessage::LaneExecutablePayload(_)
-            | BlockMessage::LaneExecutablePayloadHandoff(_)
             | BlockMessage::LaneBlockNewViewVote(_)
             | BlockMessage::LaneBlockNewViewCertificate(_)
             | BlockMessage::LaneBlockVote(_)
             | BlockMessage::LaneBlockQc(_)
-            | BlockMessage::LaneBlockCertificate(_) => Some(SumeragiRelayClass::Lane),
+            | BlockMessage::LaneBlockCertificate(_)
+            | BlockMessage::LaneHistoricalRecoveryRequest(_)
+            | BlockMessage::LaneHistoricalRecoveryResponse(_) => Some(SumeragiRelayClass::Lane),
             _ => None,
         },
         LaneRelay(_)
@@ -4720,11 +4722,6 @@ impl NetworkRelayShared {
                 Some(payload.origin_proposal.descriptor.lane_block_height),
                 Some(payload.origin_proposal.descriptor.lane_block_view),
             ),
-            LaneExecutablePayloadHandoff(handoff) => (
-                "LaneExecutablePayloadHandoff",
-                Some(handoff.origin_proposal.descriptor.lane_block_height),
-                Some(handoff.origin_proposal.descriptor.lane_block_view),
-            ),
             LaneBlockNewViewVote(vote) => (
                 "LaneBlockNewViewVote",
                 Some(vote.body.lane_block_height),
@@ -4764,6 +4761,29 @@ impl NetworkRelayShared {
                 Some(certificate.proposal.descriptor.lane_block_height),
                 Some(certificate.proposal.descriptor.lane_block_view),
             ),
+            LaneHistoricalRecoveryRequest(request) => (
+                "LaneHistoricalRecoveryRequest",
+                Some(request.proposal().descriptor.lane_block_height),
+                Some(request.proposal().descriptor.lane_block_view),
+            ),
+            LaneHistoricalRecoveryResponse(response) => match &response.payload {
+                iroha_core::sumeragi::message::LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
+                    block,
+                    ..
+                } => (
+                    "LaneHistoricalRecoveryResponse",
+                    Some(block.header().height().get()),
+                    Some(block.header().view_change_index()),
+                ),
+                iroha_core::sumeragi::message::LaneHistoricalRecoveryPayloadV1::AutonomousPayload {
+                    payload,
+                    ..
+                } => (
+                    "LaneHistoricalRecoveryResponse",
+                    Some(payload.origin_proposal.descriptor.lane_block_height),
+                    Some(payload.origin_proposal.descriptor.lane_block_view),
+                ),
+            },
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
             V2(message) => match &message.payload {
                 ConsensusMessageV2Payload::Proposal(value) => (
@@ -5018,7 +5038,7 @@ mod network_relay_tests {
         MAX_LANE_DRAIN_VOTE_WIRE_BYTES, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
         lane_consensus::{
             LaneBlockNewViewBodyV1, LaneBlockNewViewCertificateV1, LaneBlockNewViewVoteV1,
-            LaneDrainVoteV1, LaneExecutablePayloadHandoffV1, LaneExecutablePayloadV1,
+            LaneDrainVoteV1, LaneExecutablePayloadV1,
         },
         sumeragi::{
             consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, Phase},
@@ -5620,10 +5640,6 @@ mod network_relay_tests {
                 .requires_blocking_ingress()
         );
         assert!(
-            BlockMessage::LaneExecutablePayloadHandoff(sample_lane_executable_payload_handoff())
-                .requires_blocking_ingress()
-        );
-        assert!(
             BlockMessage::LaneBlockNewViewVote(sample_lane_block_new_view_vote())
                 .requires_blocking_ingress()
         );
@@ -5800,16 +5816,26 @@ mod network_relay_tests {
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: Hash::new(b"irohad-lane-drain-incarnation"),
                 close_global_height: 12,
-                initial_merged_lane_height: 4,
-                initial_merged_descriptor_hash: Some(Hash::new(b"irohad-lane-drain-initial")),
+                initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                    LaneId::new(3),
+                    DataSpaceId::new(7),
+                    Hash::new(b"irohad-lane-drain-incarnation"),
+                    4,
+                    Some(Hash::new(b"irohad-lane-drain-initial")),
+                ),
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash: HashOf::new(&validator_set),
                 validator_set,
                 validator_count: 1,
                 min_quorum: 1,
             },
-            final_lane_block_height: 5,
-            final_lane_block_descriptor_hash: Some(Hash::new(b"irohad-lane-drain-final")),
+            final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                LaneId::new(3),
+                DataSpaceId::new(7),
+                Hash::new(b"irohad-lane-drain-incarnation"),
+                5,
+                Some(Hash::new(b"irohad-lane-drain-final")),
+            ),
         };
         let proof_of_possession = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
             .expect("derive lane-drain fixture proof of possession");
@@ -6005,25 +6031,6 @@ mod network_relay_tests {
             payload_hash: Hash::new(b"irohad-lane-payload"),
             producer,
             producer_signature: vec![0xAA],
-        }
-    }
-
-    fn sample_lane_executable_payload_handoff() -> LaneExecutablePayloadHandoffV1 {
-        let origin_proposal = sample_lane_block_proposal();
-        let proposer = origin_proposal.descriptor.validator_set[0].clone();
-        LaneExecutablePayloadHandoffV1 {
-            version: 2,
-            chain_id_hash: Hash::new(b"irohad-lane-handoff-chain"),
-            epoch: 3,
-            origin_proposal,
-            entrypoint_hashes: Vec::new(),
-            entrypoints: Vec::new(),
-            reservation_keys: Vec::new(),
-            routing_plans: Vec::new(),
-            native_amx_receipts: Vec::new(),
-            payload_hash: Hash::new(b"irohad-lane-handoff"),
-            proposer,
-            proposer_signature: vec![0xBB],
         }
     }
 
@@ -6268,12 +6275,6 @@ mod network_relay_tests {
             ("LaneExecutablePayload", Some(5), Some(7))
         );
         assert_eq!(
-            NetworkRelayShared::block_message_meta(&BlockMessage::LaneExecutablePayloadHandoff(
-                sample_lane_executable_payload_handoff()
-            )),
-            ("LaneExecutablePayloadHandoff", Some(5), Some(7))
-        );
-        assert_eq!(
             NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockNewViewVote(
                 sample_lane_block_new_view_vote()
             )),
@@ -6328,9 +6329,6 @@ mod network_relay_tests {
         let payload = sumeragi_msg(BlockMessage::LaneExecutablePayload(
             sample_lane_executable_payload(),
         ));
-        let handoff = sumeragi_msg(BlockMessage::LaneExecutablePayloadHandoff(
-            sample_lane_executable_payload_handoff(),
-        ));
         let new_view_vote = sumeragi_msg(BlockMessage::LaneBlockNewViewVote(
             sample_lane_block_new_view_vote(),
         ));
@@ -6341,10 +6339,6 @@ mod network_relay_tests {
 
         assert_eq!(
             ConsensusIngressLimiter::ingress_policy(&payload).rate_class,
-            Some(IngressRateClass::Critical)
-        );
-        assert_eq!(
-            ConsensusIngressLimiter::ingress_policy(&handoff).rate_class,
             Some(IngressRateClass::Critical)
         );
         assert_eq!(
@@ -8968,17 +8962,15 @@ impl Iroha {
         let sorafs_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
         let sorafs_runtime_deps =
             if let Some(key_wrapper) = moderation_quarantine_key_wrapper.as_ref() {
-                sorafs_runtime_deps
-                    .with_moderation_quarantine_key_wrapper(Arc::clone(key_wrapper))
+                sorafs_runtime_deps.with_moderation_quarantine_key_wrapper(Arc::clone(key_wrapper))
             } else {
                 sorafs_runtime_deps
             };
-        let sorafs_runtime_deps =
-            if let Some(provider) = privacy_cycle_prf_provider.as_ref() {
-                sorafs_runtime_deps.with_privacy_cycle_prf_provider(Arc::clone(provider))
-            } else {
-                sorafs_runtime_deps
-            };
+        let sorafs_runtime_deps = if let Some(provider) = privacy_cycle_prf_provider.as_ref() {
+            sorafs_runtime_deps.with_privacy_cycle_prf_provider(Arc::clone(provider))
+        } else {
+            sorafs_runtime_deps
+        };
         let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
             sorafs_storage_config,
             sorafs_repair_config,
@@ -13507,6 +13499,7 @@ mod tests {
             BlockMessage::V2(consensus_v2::ConsensusMessageV2::new(
                 consensus_v2::ConsensusMessageV2Payload::Vote(consensus_v2::Vote {
                     round: sample_v2_round(height, 7),
+                    proposal_round: sample_v2_round(height, 7),
                     phase: consensus_v2::GlobalPhase::Prepare,
                     subject: sample_v2_subject(),
                     execution_commitment: consensus_v2::ExecutionCommitment::without_topups(

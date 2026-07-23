@@ -40,7 +40,8 @@ public final class SorafsGatewayClientOkHttpTests {
           GatewayProvider.builder()
               .setName("p1")
               .setProviderIdHex("aa11".repeat(16))
-              .setGatewayPublicKeyHex("bb22".repeat(16))
+              .setGatewayPublicKeyHex(
+                  "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
               .setBaseUrl("https://provider.example")
               .setStreamTokenBase64("c3RyZWFt")
               .build();

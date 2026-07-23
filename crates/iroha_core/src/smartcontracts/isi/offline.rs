@@ -75,14 +75,14 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
     InstructionExecutionError::InvariantViolation(boxed)
 }
 
-/// Key-material-free projection of one authenticated ABI-20 recursive verifier.
+/// Key-material-free projection of one authenticated ABI-21 recursive verifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaRecursiveVerifierReadinessV4 {
     /// Stable logical role identifier exposed by Torii.
     ///
     /// Consensus registry records use release-qualified identifiers derived
     /// from the owner-manifest digest. Readiness intentionally abstracts that
-    /// rotating storage identity into the fixed ABI-20 Eq/Ep role.
+    /// rotating storage identity into the fixed ABI-21 Eq/Ep role.
     pub id: iroha_data_model::proof::VerifyingKeyId,
     /// Governance-managed version of the selected registry record.
     pub version: u32,
@@ -156,7 +156,7 @@ pub struct KagemushaRecursiveReadinessV4 {
     pub proof_backend_error: Option<String>,
 }
 
-/// Exact transaction-selected ABI-20 release authenticated for admission.
+/// Exact transaction-selected ABI-21 release authenticated for admission.
 ///
 /// Unlike readiness selection, this projection does not require the release's
 /// issuance window to be open. That distinction lets already-issued notes use
@@ -446,7 +446,7 @@ fn project_kagemusha_v4_verifier(
     }
 }
 
-/// Resolve the exact active ABI-20 Eq/Ep registry release for Torii readiness.
+/// Resolve the exact active ABI-21 Eq/Ep registry release for Torii readiness.
 ///
 /// This is read-only and does not admit, verify, or redeem a transaction.
 pub fn resolve_kagemusha_recursive_readiness_v4(

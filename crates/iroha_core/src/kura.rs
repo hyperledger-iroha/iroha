@@ -67,8 +67,8 @@ use iroha_data_model::{
     consensus::{Qc, ValidatorSetCheckpoint},
     isi::offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
     merge::{
-        MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_LEDGER_ENTRY_BYTES,
-        MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
+        LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
+        MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
     },
     nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
     offline::{
@@ -78,6 +78,7 @@ use iroha_data_model::{
     },
     peer::PeerId,
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    validation_fee::ValidationFeePolicyWitnessProofV1,
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
@@ -1656,6 +1657,8 @@ pub struct KagemushaActiveReceiverFinalitySidecarV1 {
     pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
     /// Fixed-key sparse-SMT proof and exact encoded receiver commitment.
     pub witness_proof: KagemushaActiveReceiverWitnessProofV1,
+    /// Fixed-key sparse-SMT proof and exact encoded validation-fee commitment.
+    pub validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
 }
 
 impl KagemushaActiveReceiverFinalitySidecarV1 {
@@ -1671,6 +1674,7 @@ struct StagedKagemushaActiveReceiverFinalitySidecarV1 {
     ordinary_writes_root: Hash,
     post_state_root: Hash,
     witness_proof: KagemushaActiveReceiverWitnessProofV1,
+    validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
 }
 
 impl CommitManifest {
@@ -9768,7 +9772,9 @@ impl Kura {
     /// The underlying scan is bounded by the pending-entry count and byte
     /// limits. Malformed autonomous routing bytes, or a matching route without
     /// one unique historical active-lane binding, conservatively count as work,
-    /// so drain certification never treats unverifiable evidence as empty.
+    /// so drain certification never treats unverifiable evidence as empty. A
+    /// certificate-only entry is the closure carrier itself and owns no lane
+    /// work; counting it here would make its own admission impossible.
     pub(crate) fn pending_certified_merge_work_for_lane(
         &self,
         lane_id: LaneId,
@@ -9830,11 +9836,6 @@ impl Kura {
                                         })
                                 })
                     })
-                }) || entry.lane_drain_certificates.iter().any(|certificate| {
-                    let intent = &certificate.body.intent;
-                    intent.lane_id == lane_id
-                        && intent.dataspace_id == dataspace_id
-                        && intent.lane_incarnation == lane_incarnation
                 })
             }))
     }
@@ -11232,7 +11233,6 @@ impl Kura {
     ///
     /// The body must match Kura's durable height/hash metadata. Inline blocks are already local and
     /// are left untouched.
-    #[cfg(test)]
     pub(crate) fn cache_block_body(&self, block: &SignedBlock) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -14326,6 +14326,10 @@ impl Kura {
             .witness_proof
             .commitment()
             .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+        let validation_fee_snapshot = staged
+            .validation_fee_policy_witness
+            .commitment()
+            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
         if staged.version != KagemushaActiveReceiverFinalitySidecarV1::VERSION
             || staged.height != artifact.height
             || staged.block_hash != artifact.block_hash
@@ -14333,6 +14337,10 @@ impl Kura {
             || staged.post_state_root != commitment.post_state_root
             || snapshot.evaluated_height != staged.height
             || !staged.witness_proof.verify(commitment.ordinary_writes_root)
+            || validation_fee_snapshot.evaluated_height != staged.height
+            || !staged
+                .validation_fee_policy_witness
+                .verify(commitment.ordinary_writes_root)
         {
             return Err(Error::KagemushaActiveReceiverFinalitySidecar(
                 "active-receiver witness stage differs from the exact finality artifact".to_owned(),
@@ -14358,6 +14366,7 @@ impl Kura {
                 ordinary_writes_root: sidecar.ordinary_writes_root,
                 post_state_root: sidecar.post_state_root,
                 witness_proof: sidecar.witness_proof.clone(),
+                validation_fee_policy_witness: sidecar.validation_fee_policy_witness.clone(),
             },
             artifact,
         )?;
@@ -14441,8 +14450,13 @@ impl Kura {
         let (witness_proof, ordinary_writes_root) =
             crate::receiver_snapshot::active_receiver_witness_proof_v1(witness)
                 .map_err(Error::KagemushaActiveReceiverFinalitySidecar)?;
+        let (validation_fee_policy_witness, validation_fee_root) =
+            crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(witness)
+                .map_err(Error::KagemushaActiveReceiverFinalitySidecar)?;
         if ordinary_writes_root != expected.ordinary_writes_root
+            || validation_fee_root != ordinary_writes_root
             || !witness_proof.verify(expected.ordinary_writes_root)
+            || !validation_fee_policy_witness.verify(expected.ordinary_writes_root)
         {
             return Err(Error::KagemushaActiveReceiverFinalitySidecar(
                 "witness-derived active-receiver proof differs from the signed ordinary-write root"
@@ -14457,6 +14471,14 @@ impl Kura {
                 "active-receiver snapshot height differs from its block".to_owned(),
             ));
         }
+        let validation_fee_snapshot = validation_fee_policy_witness
+            .commitment()
+            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+        if validation_fee_snapshot.evaluated_height != height {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "validation-fee snapshot height differs from its block".to_owned(),
+            ));
+        }
         let staged = StagedKagemushaActiveReceiverFinalitySidecarV1 {
             version: KagemushaActiveReceiverFinalitySidecarV1::VERSION,
             height,
@@ -14464,6 +14486,7 @@ impl Kura {
             ordinary_writes_root,
             post_state_root: expected.post_state_root,
             witness_proof,
+            validation_fee_policy_witness,
         };
         let bytes = staged.encode();
         if bytes.len() > MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES {
@@ -14605,6 +14628,7 @@ impl Kura {
             post_state_root: staged.post_state_root,
             finality_artifact_hash: receipt.artifact_hash,
             witness_proof: staged.witness_proof,
+            validation_fee_policy_witness: staged.validation_fee_policy_witness,
         };
         Self::validate_kagemusha_active_receiver_finality_sidecar(&final_sidecar, artifact)?;
         let bytes = final_sidecar.encode();
@@ -14673,6 +14697,26 @@ impl Kura {
         };
         Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
         Ok(Some(sidecar.witness_proof))
+    }
+
+    /// Return the finalized fixed-key validation-fee registry witness proof for one block.
+    pub fn validation_fee_policy_witness_proof_v1(
+        &self,
+        height: u64,
+    ) -> Result<Option<ValidationFeePolicyWitnessProofV1>> {
+        let Some(artifact) = self.v2_finality_artifact(height)? else {
+            return Ok(None);
+        };
+        let _guard = self.sidecar_lock.lock();
+        let path = self.kagemusha_active_receiver_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_active_receiver_finality_sidecar(&path)?
+        else {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "finality artifact has no validation-fee witness sidecar".to_owned(),
+            ));
+        };
+        Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
+        Ok(Some(sidecar.validation_fee_policy_witness))
     }
 
     /// Durably stage the bounded top-up leaf/path projection before WSV commit.
@@ -14994,12 +15038,19 @@ impl Kura {
         Ok(Some(proof))
     }
 
-    /// Persist the canonical WSV checkpoint for a committed block height.
+    /// Persist the immutable canonical WSV checkpoint for a durable block.
     ///
-    /// The checkpoint is stored after the block body is durable and after WSV commit succeeds. It
-    /// is mandatory replay-integrity metadata for every durable full-body commit, allowing Kura to
-    /// verify the reconstructed committed state surface byte-for-byte by hash. Authenticated
-    /// hash-only snapshot prefixes are exempt because their block bodies are unavailable locally.
+    /// The checkpoint is staged from the validated `StateBlock` after the block
+    /// body is durable but before live WSV publication, then bound to the
+    /// complete commit manifest after publication succeeds. It is mandatory
+    /// replay-integrity metadata for every durable full-body commit, allowing
+    /// Kura to verify either the replayed overlay or reconstructed committed
+    /// state surface byte-for-byte by hash. Authenticated hash-only snapshot
+    /// prefixes are exempt because their block bodies are unavailable locally.
+    ///
+    /// Once a checkpoint exists, its height, block, and state identity are
+    /// immutable even before manifest binding. This makes a pre-commit crash
+    /// fail closed if deterministic replay produces a different state.
     ///
     /// # Errors
     /// Returns an error if the target block is not durable or the checkpoint cannot be written.
@@ -15031,20 +15082,18 @@ impl Kura {
         create_dir_all_with_context(&dir)?;
         let path = dir.join(format!("{height:020}.norito"));
         let mut checkpoint = WsvCheckpoint::new(height, block_hash, state_hash);
-        if let Some(existing) = Self::decode_wsv_checkpoint_at(&path)?
-            && let Some(published_manifest_hash) = existing.commit_manifest_hash
-        {
+        if let Some(existing) = Self::decode_wsv_checkpoint_at(&path)? {
             if existing.height != height
                 || existing.block_hash != block_hash
                 || existing.state_hash != state_hash
             {
                 return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
-                    "refusing to replace WSV checkpoint #{height} after publishing commit manifest digest"
+                    "refusing to replace immutable WSV checkpoint #{height}"
                 ))));
             }
-            // Re-persisting an identical checkpoint must never erase the durable proof that a
-            // complete manifest was already published.
-            checkpoint.commit_manifest_hash = Some(published_manifest_hash);
+            // Re-persisting an identical checkpoint must never erase the
+            // durable proof that a complete manifest was already published.
+            checkpoint.commit_manifest_hash = existing.commit_manifest_hash;
         }
         let tmp_path = path.with_extension("norito.tmp");
         let bytes = checkpoint.encode();
@@ -22003,6 +22052,18 @@ struct NativeAmxParticipantReceiptLatestIndexV1 {
     receipt_digest: Hash,
 }
 
+/// Startup-only classification for the highest Native AMX participant receipt.
+///
+/// Runtime readers never accept `PendingTipMetadata`: they continue to require
+/// the complete checkpoint/commit-manifest join. Startup may rebuild the
+/// bounded latest pointer for this state solely so the interrupted canonical
+/// tip can reach the runner's local apply-recovery pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeAmxParticipantReceiptStartupEvidence {
+    DurablyApplied,
+    PendingTipMetadata,
+}
+
 impl NativeAmxParticipantReceiptLatestIndexV1 {
     const VERSION: u8 = 1;
 
@@ -27603,7 +27664,6 @@ impl Kura {
         Some(artifact)
     }
 
-    #[cfg(test)]
     pub(crate) fn lane_block_execution_input_available(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -27942,7 +28002,6 @@ impl Kura {
         Some(artifact)
     }
 
-    #[cfg(test)]
     pub(crate) fn lane_block_execution_preflight_has_rejections(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -28002,7 +28061,6 @@ impl Kura {
             && self.lane_block_application_receipt_available(&receipt.proposal)
     }
 
-    #[cfg(test)]
     pub(crate) fn read_preflighted_lane_block_execution_input_for_application(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -28996,6 +29054,87 @@ impl Kura {
             .then_some(artifact)
     }
 
+    /// Revalidate and project the exact durable evidence identity used by a
+    /// Native-derived lane drain frontier.
+    ///
+    /// The projection is available only while the active route's exact receipt,
+    /// manifest proof, finality artifact, canonical application metadata, and
+    /// bounded latest index all agree. Every returned hash is computed from the
+    /// exact canonical bytes read under the publication guards.
+    #[must_use]
+    pub(crate) fn native_amx_participant_application_drain_evidence(
+        &self,
+        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+    ) -> Option<LaneDrainNativeFrontierEvidenceV1> {
+        if Self::validate_native_amx_participant_application_receipt_artifact(receipt).is_err() {
+            return None;
+        }
+        let descriptor = &receipt.participant_proposal.descriptor;
+        let _prune_guard = self.prune_lock.lock();
+        if self.prune_recovery_is_required() {
+            return None;
+        }
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(descriptor.lane_id).ok()?;
+        if entry.dataspace_id != descriptor.dataspace_id {
+            return None;
+        }
+        let (manifest_data_path, manifest_index_path) =
+            Self::native_amx_application_manifest_paths_for_entry(&entry, &self.store_root);
+        let latest_index_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &self.store_root,
+        );
+        let _sidecar_guard = self.sidecar_lock.lock();
+        if self.prune_recovery_is_required() {
+            return None;
+        }
+        let manifest = self.read_native_amx_participant_application_manifest_from_paths_locked(
+            &entry,
+            descriptor.lane_block_height,
+            &manifest_data_path,
+            &manifest_index_path,
+            false,
+        )?;
+        let latest = self
+            .decode_native_amx_participant_receipt_latest_index(&entry, &latest_index_path)
+            .ok()
+            .flatten()?;
+        if manifest.leaf.lane_incarnation != descriptor.lane_incarnation
+            || !latest.matches_receipt(receipt)
+            || !self
+                .native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
+                    receipt,
+                    &manifest,
+                )
+        {
+            return None;
+        }
+        let source_count = u32::try_from(receipt.source_ids.len()).ok()?;
+        let receipt_bytes = norito::to_bytes(receipt).ok()?;
+        let latest_index_bytes = norito::to_bytes(&latest).ok()?;
+        Some(LaneDrainNativeFrontierEvidenceV1 {
+            version: 1,
+            participant_view: descriptor.lane_block_view,
+            predecessor_height: descriptor.previous_lane_block_height,
+            predecessor_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+            participant_proposal_hash: receipt.participant_proposal.proposal_hash,
+            participant_settlement_hash: receipt.participant_settlement_hash,
+            source_count,
+            application_block_height: receipt.application_block_height,
+            application_block_hash: receipt.application_block_hash,
+            executed_block_wire_hash: receipt.executed_block_wire_hash,
+            finality_artifact_hash: receipt.finality_artifact_hash,
+            application_manifest_root: manifest.manifest_root,
+            application_manifest_leaf_count: manifest.manifest_leaf_count,
+            application_manifest_leaf_index: manifest.leaf_index,
+            manifest_artifact_hash: Hash::from(receipt.manifest_artifact_hash),
+            receipt_artifact_hash: Hash::new(receipt_bytes),
+            latest_index_artifact_hash: Hash::new(latest_index_bytes),
+        })
+    }
+
     pub(crate) fn latest_native_amx_participant_application_receipt_matching(
         &self,
         lane_id: LaneId,
@@ -29105,23 +29244,30 @@ impl Kura {
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
 
-    /// Revalidate one structurally decoded receipt against every durable
-    /// application-evidence surface without acquiring another Kura lock.
+    /// Classify one structurally decoded receipt against the startup evidence
+    /// boundary without acquiring another Kura lock.
     ///
     /// The caller holds `prune_lock`, `canonical_chain_lock`,
     /// `lane_geometry_lock`, and `sidecar_lock`, in that order.
-    fn native_amx_latest_receipt_has_exact_evidence_under_startup_guards(
+    fn classify_native_amx_latest_receipt_evidence_under_startup_guards(
         &self,
         entry: &LaneConfigEntry,
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
         manifest_data_path: &Path,
         manifest_index_path: &Path,
-    ) -> bool {
+        exact_durable_tip: u64,
+    ) -> Result<NativeAmxParticipantReceiptStartupEvidence> {
+        let invalid = |message| {
+            Self::invalid_lane_artifact_error(
+                manifest_data_path.to_path_buf(),
+                format!("Native AMX participant startup evidence {message}"),
+            )
+        };
         let descriptor = &receipt.participant_proposal.descriptor;
         if descriptor.lane_id != entry.lane_id || descriptor.dataspace_id != entry.dataspace_id {
-            return false;
+            return Err(invalid("targets another active route"));
         }
-        let Some(manifest) = self
+        let manifest = self
             .read_native_amx_participant_application_manifest_from_paths_locked(
                 entry,
                 descriptor.lane_block_height,
@@ -29129,24 +29275,70 @@ impl Kura {
                 manifest_index_path,
                 false,
             )
-        else {
-            return false;
-        };
-        manifest.leaf.lane_incarnation == descriptor.lane_incarnation
-            && self
-                .native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
-                    receipt,
+            .ok_or_else(|| invalid("is missing its exact manifest leaf and proof"))?;
+        if manifest.leaf.lane_incarnation != descriptor.lane_incarnation
+            || HashOf::new(&manifest) != receipt.manifest_artifact_hash
+            || manifest.finality_artifact_hash != receipt.finality_artifact_hash
+            || !Self::native_amx_participant_receipt_matches_manifest_leaf(
+                receipt,
+                &manifest.leaf,
+            )
+            || !self
+                .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
                     &manifest,
                 )
+        {
+            return Err(invalid(
+                "does not match its active incarnation, QC-authenticated manifest, finality, canonical block, or executed wire",
+            ));
+        }
+
+        let checkpoint =
+            self.wsv_checkpoint_under_sidecar_guard(receipt.application_block_height)?;
+        let commit_manifest =
+            self.commit_manifest_under_sidecar_guard(receipt.application_block_height)?;
+        match (checkpoint, commit_manifest) {
+            (Some(_), Some(_))
+                if self
+                    .native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
+                        receipt,
+                        &manifest,
+                    ) =>
+            {
+                Ok(NativeAmxParticipantReceiptStartupEvidence::DurablyApplied)
+            }
+            (None, None) if receipt.application_block_height == exact_durable_tip => Ok(
+                NativeAmxParticipantReceiptStartupEvidence::PendingTipMetadata,
+            ),
+            (Some(checkpoint), None)
+                if receipt.application_block_height == exact_durable_tip
+                    && checkpoint.block_hash == receipt.application_block_hash
+                    && checkpoint.commit_manifest_hash.is_none() =>
+            {
+                Ok(NativeAmxParticipantReceiptStartupEvidence::PendingTipMetadata)
+            }
+            (None, None) | (Some(_), None) => Err(invalid(
+                "is missing post-apply metadata below the exact durable tip",
+            )),
+            (None, Some(_)) => Err(invalid(
+                "has a commit manifest without its WSV checkpoint",
+            )),
+            (Some(_), Some(_)) => Err(invalid(
+                "has mismatched or partially published post-apply metadata",
+            )),
+        }
     }
 
     /// Reconstruct every active lane's bounded Native AMX latest-receipt index.
     ///
     /// This is an explicit startup operation. Only the highest structurally
-    /// valid receipt whose exact manifest, finality, checkpoint, commit
-    /// manifest, canonical block, and result-bearing wire identities all
-    /// revalidate may become the route/incarnation pointer. Unresolved
-    /// temporaries, malformed or unbacked pointers, and unsafe authoritative
+    /// valid receipt whose exact manifest, finality, canonical block, and
+    /// result-bearing wire identities all revalidate may become the
+    /// route/incarnation pointer. Complete post-apply metadata is normally
+    /// required; the sole exact durable tip may instead have no metadata or
+    /// only an unbound WSV checkpoint while its local apply is recovered.
+    /// Unresolved temporaries, every below-tip metadata gap, partial
+    /// publication, malformed or unbacked pointers, and unsafe authoritative
     /// sidecar paths fail closed.
     pub(crate) fn rebuild_native_amx_participant_receipt_latest_indexes_on_startup(
         &self,
@@ -29163,6 +29355,7 @@ impl Kura {
             .cloned()
             .collect::<Vec<_>>();
         let _sidecar_guard = self.sidecar_lock.lock();
+        let exact_durable_tip = u64::try_from(self.exact_durable_blocks_count()?)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut rebuilt = 0_usize;
 
@@ -29277,18 +29470,14 @@ impl Kura {
                     })
                 })
                 .transpose()?;
-            if let Some(receipt) = expected_receipt.as_ref()
-                && !self.native_amx_latest_receipt_has_exact_evidence_under_startup_guards(
+            if let Some(receipt) = expected_receipt.as_ref() {
+                self.classify_native_amx_latest_receipt_evidence_under_startup_guards(
                     &entry,
                     receipt,
                     &manifest_data_path,
                     &manifest_index_path,
-                )
-            {
-                return Err(Self::invalid_lane_artifact_error(
-                    data_path.clone(),
-                    "Native AMX participant highest receipt lacks exact finality, manifest, checkpoint, or canonical sidecar evidence",
-                ));
+                    exact_durable_tip,
+                )?;
             }
             let expected = expected_receipt
                 .as_ref()
@@ -29314,13 +29503,21 @@ impl Kura {
                                 "Native AMX participant latest index is conflicting or unbacked",
                             )
                         })?;
-                    if current.lane_block_height >= expected.lane_block_height
-                        || !self.native_amx_latest_receipt_has_exact_evidence_under_startup_guards(
+                    if current.lane_block_height >= expected.lane_block_height {
+                        return Err(Self::invalid_lane_artifact_error(
+                            latest_index_path,
+                            "Native AMX participant latest index conflicts with exact durable application evidence",
+                        ));
+                    }
+                    if self
+                        .classify_native_amx_latest_receipt_evidence_under_startup_guards(
                             &entry,
                             &current_receipt,
                             &manifest_data_path,
                             &manifest_index_path,
+                            exact_durable_tip,
                         )
+                        .is_err()
                     {
                         return Err(Self::invalid_lane_artifact_error(
                             latest_index_path,
@@ -30516,33 +30713,14 @@ impl Kura {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn lane_block_payload_availability(
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> LaneBlockPayloadAvailability {
-        let block = match self.lane_block_payload_artifact_and_block(proposal) {
-            Ok((_, block)) => block,
-            Err(err) => return err,
-        };
-        let descriptor = &proposal.descriptor;
-        for (raw_index, expected_hash) in descriptor
-            .accepted_candidate_indices
-            .iter()
-            .copied()
-            .zip(descriptor.accepted_transaction_hashes.iter().copied())
-        {
-            let Ok(index) = usize::try_from(raw_index) else {
-                return LaneBlockPayloadAvailability::MissingEntrypoint;
-            };
-            let Some(actual_hash) = Self::block_entrypoint_hash_at(&block, index) else {
-                return LaneBlockPayloadAvailability::MissingEntrypoint;
-            };
-            if actual_hash != expected_hash {
-                return LaneBlockPayloadAvailability::EntrypointHashMismatch;
-            }
+        match self.recover_lane_block_payload(proposal) {
+            Ok(_) => LaneBlockPayloadAvailability::Available,
+            Err(availability) => availability,
         }
-        LaneBlockPayloadAvailability::Available
     }
 
     /// Recover accepted entrypoints for a certified standalone lane block.
@@ -42106,6 +42284,10 @@ mod tests {
                 b"Kura top-up fixture has no governed receiver policy",
             )
             .expect("valid unavailable receiver snapshot");
+        let validation_fee_snapshot =
+            iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
+                1, None,
+            );
         let witness = ExecWitness {
             reads: Vec::new(),
             writes: vec![
@@ -42118,6 +42300,12 @@ mod tests {
                         .to_vec(),
                     value: norito::to_bytes(&receiver_snapshot.commitment)
                         .expect("encode receiver snapshot commitment"),
+                },
+                ExecKv {
+                    key: iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
+                        .to_vec(),
+                    value: norito::to_bytes(&validation_fee_snapshot)
+                        .expect("encode validation-fee snapshot commitment"),
                 },
             ],
             fastpq_transcripts: Vec::new(),
@@ -42143,13 +42331,26 @@ mod tests {
                 b"Kura fixture has no governed receiver policy",
             )
             .expect("valid unavailable receiver snapshot");
+        let validation_fee_snapshot =
+            iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
+                height, None,
+            );
         let witness = ExecWitness {
             reads: Vec::new(),
-            writes: vec![ExecKv {
-                key: iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1.to_vec(),
-                value: norito::to_bytes(&receiver_snapshot.commitment)
-                    .expect("encode receiver snapshot commitment"),
-            }],
+            writes: vec![
+                ExecKv {
+                    key: iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1
+                        .to_vec(),
+                    value: norito::to_bytes(&receiver_snapshot.commitment)
+                        .expect("encode receiver snapshot commitment"),
+                },
+                ExecKv {
+                    key: iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
+                        .to_vec(),
+                    value: norito::to_bytes(&validation_fee_snapshot)
+                        .expect("encode validation-fee snapshot commitment"),
+                },
+            ],
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };
@@ -63434,8 +63635,140 @@ mod tests {
     }
 
     #[test]
-    fn native_amx_latest_index_rebuild_rejects_missing_exact_evidence() {
-        for missing in ["manifest", "checkpoint", "commit manifest"] {
+    fn native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest_index() {
+        let fixture = || {
+            let temp_dir = TempDir::new().expect("temporary Kura directory");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("primary lane storage entry");
+            let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+            kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+                .expect("publish exact Native AMX latest index");
+            (temp_dir, kura, entry, receipt)
+        };
+
+        let (_temp_dir, kura, entry, receipt) = fixture();
+        let evidence = kura
+            .native_amx_participant_application_drain_evidence(&receipt)
+            .expect("complete exact Native AMX drain evidence");
+        let descriptor = &receipt.participant_proposal.descriptor;
+        assert_eq!(evidence.participant_view, descriptor.lane_block_view);
+        assert_eq!(evidence.predecessor_height, 0);
+        assert_eq!(evidence.application_block_height, 1);
+        assert_eq!(evidence.application_manifest_leaf_count, 1);
+        assert_eq!(evidence.application_manifest_leaf_index, 0);
+
+        let mut tampered_receipt = receipt.clone();
+        tampered_receipt.executed_block_wire_hash =
+            Hash::new(b"tampered Native AMX drain executed wire");
+        assert_eq!(
+            kura.native_amx_participant_application_drain_evidence(&tampered_receipt),
+            None,
+            "a receipt identity not backed by exact durable bytes must fail closed"
+        );
+
+        let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &kura.store_root,
+        );
+        fs::write(&latest_path, [0xA5]).expect("corrupt Native AMX latest index");
+        assert_eq!(
+            kura.native_amx_participant_application_drain_evidence(&receipt),
+            None,
+            "a malformed latest-index artifact must fail drain evidence revalidation"
+        );
+
+        let (_temp_dir, kura, entry, receipt) = fixture();
+        let (manifest_data_path, _) =
+            Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root);
+        fs::remove_file(&manifest_data_path).expect("remove Native AMX manifest data");
+        assert_eq!(
+            kura.native_amx_participant_application_drain_evidence(&receipt),
+            None,
+            "a missing manifest leaf/proof artifact must fail drain evidence revalidation"
+        );
+    }
+
+    #[test]
+    fn native_amx_latest_index_rebuild_accepts_only_narrow_pending_tip_metadata() {
+        for pending_shape in ["metadata absent", "unbound checkpoint"] {
+            let temp_dir = TempDir::new().expect("temporary Kura directory");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("primary lane storage entry");
+            let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+            let descriptor = &receipt.participant_proposal.descriptor;
+            kura.remove_commit_manifest_without_binding_for_tests(1)
+                .expect("remove commit manifest");
+            match pending_shape {
+                "metadata absent" => kura
+                    .remove_wsv_checkpoint_without_binding_for_tests(1)
+                    .expect("remove WSV checkpoint"),
+                "unbound checkpoint" => kura
+                    .overwrite_wsv_checkpoint_without_validation_for_tests(
+                        1,
+                        Hash::new(b"Native AMX latest-index WSV checkpoint"),
+                        None,
+                    )
+                    .expect("clear checkpoint manifest binding"),
+                _ => unreachable!(),
+            }
+
+            assert_eq!(
+                kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+                    .expect("rebuild pending-tip latest index"),
+                1,
+                "{pending_shape} is a recoverable exact-tip crash boundary"
+            );
+            let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+                &entry,
+                &kura.store_root,
+            );
+            let latest = kura
+                .decode_native_amx_participant_receipt_latest_index(&entry, &latest_path)
+                .expect("decode pending-tip latest pointer")
+                .expect("pending-tip latest pointer was rebuilt");
+            assert!(
+                latest.matches_receipt(&receipt),
+                "startup must rebuild the exact pending-tip pointer"
+            );
+            assert_eq!(
+                kura.read_native_amx_participant_application_receipt(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
+                    descriptor.lane_block_height,
+                ),
+                None,
+                "normal runtime reads must remain strict while {pending_shape} is pending"
+            );
+            assert_eq!(
+                kura.latest_native_amx_participant_application_receipt_matching(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
+                    |_| true,
+                ),
+                None,
+                "the rebuilt pointer must not weaken normal latest-evidence reads"
+            );
+        }
+    }
+
+    #[test]
+    fn native_amx_latest_index_rebuild_rejects_partial_or_below_tip_metadata() {
+        for invalid_shape in [
+            "missing manifest evidence",
+            "manifest without checkpoint",
+            "missing published commit manifest",
+            "below-tip metadata gap",
+        ] {
             let temp_dir = TempDir::new().expect("temporary Kura directory");
             let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
             let lane_config = RuntimeLaneConfig::default();
@@ -63444,8 +63777,8 @@ mod tests {
                 .lane_storage_entry(LaneId::SINGLE)
                 .expect("primary lane storage entry");
             let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
-            match missing {
-                "manifest" => {
+            match invalid_shape {
+                "missing manifest evidence" => {
                     let (data_path, index_path) =
                         Kura::native_amx_application_manifest_paths_for_entry(
                             &entry,
@@ -63454,20 +63787,41 @@ mod tests {
                     fs::remove_file(data_path).expect("remove manifest data");
                     fs::remove_file(index_path).expect("remove manifest index");
                 }
-                "checkpoint" => kura
+                "manifest without checkpoint" => kura
                     .remove_wsv_checkpoint_without_binding_for_tests(1)
                     .expect("remove checkpoint"),
-                "commit manifest" => kura
+                "missing published commit manifest" => kura
                     .remove_commit_manifest_without_binding_for_tests(1)
                     .expect("remove commit manifest"),
+                "below-tip metadata gap" => {
+                    kura.remove_commit_manifest_without_binding_for_tests(1)
+                        .expect("remove commit manifest");
+                    kura.remove_wsv_checkpoint_without_binding_for_tests(1)
+                        .expect("remove checkpoint");
+                    let parent = kura
+                        .get_block(nonzero!(1_usize))
+                        .expect("fixture application block");
+                    let mut generator = DummyBlocks {
+                        blocks: vec![parent],
+                    };
+                    let successor = generator.next();
+                    kura.store_block(Arc::clone(&successor))
+                        .expect("append exact child above Native evidence");
+                    assert_eq!(
+                        kura.get_durable_block_hash(nonzero!(2_usize)),
+                        Some(successor.hash())
+                    );
+                }
                 _ => unreachable!(),
             }
             let error = kura
                 .rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
-                .expect_err("unbacked highest receipt must fail closed");
+                .expect_err("partial or below-tip Native evidence must fail closed");
             assert!(
-                error.to_string().contains("lacks exact"),
-                "unexpected {missing} error: {error}"
+                error.to_string().contains("manifest")
+                    || error.to_string().contains("checkpoint")
+                    || error.to_string().contains("below the exact durable tip"),
+                "unexpected {invalid_shape} error: {error}"
             );
         }
     }
@@ -69016,6 +69370,39 @@ mod tests {
             .store_wsv_checkpoint(2, blocks[0].hash(), Hash::new(b"wrong block"))
             .expect_err("checkpoint must match durable block hash");
         assert!(matches!(err, Error::BlockHeightConflict { height: 2, .. }));
+    }
+
+    #[test]
+    fn unbound_wsv_checkpoint_identity_is_immutable() {
+        let kura = Kura::blank_kura_for_testing();
+        let blocks = store_dummy_block_arcs(&kura, 1);
+        let block_hash = blocks[0].hash();
+        let original_state_hash = Hash::new(b"pre-commit staged state");
+
+        kura.store_wsv_checkpoint(1, block_hash, original_state_hash)
+            .expect("store unbound staged checkpoint");
+        kura.store_wsv_checkpoint(1, block_hash, original_state_hash)
+            .expect("an exact replay may confirm the unbound checkpoint");
+
+        let error = kura
+            .store_wsv_checkpoint(1, block_hash, Hash::new(b"divergent replay state"))
+            .expect_err("an unbound checkpoint must already be immutable");
+        assert!(
+            matches!(
+                error,
+                Error::NoritoFrame(norito::core::Error::Message(ref message))
+                    if message.contains("immutable WSV checkpoint #1")
+            ),
+            "unexpected divergent replay rejection: {error:?}"
+        );
+        assert_eq!(
+            kura.wsv_checkpoint(1)
+                .expect("read checkpoint")
+                .expect("checkpoint remains present")
+                .state_hash(),
+            original_state_hash,
+            "a rejected replay must not replace the durable identity"
+        );
     }
 
     #[test]

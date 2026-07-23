@@ -56,6 +56,15 @@ test("verifyLaneRelayEnvelope rejects invalid byte arrays", () => {
   );
 });
 
+test("verifyLaneRelayEnvelope rejects coercible non-byte array entries", () => {
+  for (const entry of ["1", true, null]) {
+    assert.throws(
+      () => verifyLaneRelayEnvelope([entry]),
+      /byte/,
+    );
+  }
+});
+
 test("verifyLaneRelayEnvelope accepts ArrayBuffer inputs", () => {
   const sample = laneRelayEnvelopeSample();
   const buffer = sample.valid;

@@ -4639,8 +4639,8 @@ static TX_QUEUE_SATURATED_BY_AGE: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_OLDEST_QUEUED_AGE_MS: AtomicU64 = AtomicU64::new(0);
 
 const LANE_RELAY_ENVELOPES_CAP: usize = 64;
-const LANE_PAYLOAD_OWNERSHIPS_CAP: usize = 128;
-const COMMITTED_LANE_BLOCKS_CAP: usize = 128;
+pub(crate) const LANE_PAYLOAD_OWNERSHIPS_CAP: usize = 128;
+pub(crate) const COMMITTED_LANE_BLOCKS_CAP: usize = 128;
 
 fn availability_slot() -> &'static Mutex<AvailabilityStats> {
     AVAILABILITY_STATS.get_or_init(|| Mutex::new(AvailabilityStats::default()))
@@ -5321,11 +5321,44 @@ pub struct CommittedLaneBlockSnapshot {
 }
 
 impl CommittedLaneBlockSnapshot {
+    pub(crate) fn from_committed_session_with_execution_status(
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+        execution_status: CommittedLaneBlockExecutionStatus,
+    ) -> Self {
+        let descriptor = &session.proposal.descriptor;
+        Self {
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            descriptor_hash: descriptor.descriptor_hash,
+            proposal_hash: session.proposal.proposal_hash,
+            execution_status,
+            proposal: session.proposal.clone(),
+            prepare_qc: session.prepare_qc.clone(),
+            commit_qc: session.commit_qc.clone(),
+        }
+    }
+
     /// Whether the committed lane block has enough payload material for execution.
     #[must_use]
     pub const fn executable_payload_available(&self) -> bool {
         self.execution_status.executable_payload_available()
     }
+}
+
+/// Bounded lane diagnostics reconstructed from current State and durable Kura evidence.
+///
+/// This snapshot intentionally excludes adapter/session caches so a restarted peer reports
+/// the same durable lane identities as an uninterrupted peer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DurableLaneDiagnosticsSnapshot {
+    /// Latest canonical payload ownership for each active lane route.
+    pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+    /// Certified lane blocks and their durable execution readiness.
+    pub committed_lane_blocks: Vec<CommittedLaneBlockSnapshot>,
+    /// Durable certified-session summaries.
+    pub lane_block_sessions: Vec<SumeragiLaneBlockSessionStatus>,
 }
 
 /// Governance manifest snapshot for a lane.
@@ -6442,12 +6475,13 @@ pub fn push_lane_relay_envelope(envelope: LaneRelayEnvelope) {
     upsert_lane_relay_envelope(&mut guard, envelope);
 }
 
-/// Update the planned lane-local DA ownership identities used by Nexus diagnostics.
+/// Update the legacy process-local lane ownership snapshot.
 ///
 /// Updates are merged by `(lane_id, dataspace_id)` so a proposal for one lane
 /// does not erase the latest ownership evidence for another active lane. Empty
 /// updates are no-ops; use [`clear_lane_payload_ownerships`] for deliberate
-/// test/shutdown cleanup.
+/// test/shutdown cleanup. The public diagnostics endpoint reconstructs
+/// authoritative rows from State and Kura instead of this cache.
 pub fn set_lane_payload_ownerships(mut entries: Vec<SumeragiLanePayloadOwnership>) {
     entries.retain(|entry| match entry.validate_replay_material() {
         Ok(()) => true,
@@ -6542,7 +6576,10 @@ fn validate_committed_lane_block_snapshot(
         .map_err(|err| err.to_string())
 }
 
-/// Replace the committed standalone lane-block snapshot used by Nexus diagnostics.
+/// Replace the legacy process-local committed lane-block snapshot.
+///
+/// The public diagnostics endpoint reconstructs authoritative rows from State
+/// and Kura instead of this cache.
 pub fn set_committed_lane_blocks(mut entries: Vec<CommittedLaneBlockSnapshot>) {
     entries.retain(
         |entry| match validate_committed_lane_block_snapshot(entry) {
@@ -6668,7 +6705,7 @@ pub fn lane_relay_envelopes_snapshot() -> Vec<LaneRelayEnvelope> {
     lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot").clone()
 }
 
-/// Return the cached lane-local DA ownership snapshot used by Nexus diagnostics.
+/// Return the legacy process-local lane-local DA ownership snapshot.
 pub fn lane_payload_ownerships_snapshot() -> Vec<SumeragiLanePayloadOwnership> {
     lock_operator_status_slot(
         lane_payload_ownerships_slot(),
@@ -6677,7 +6714,7 @@ pub fn lane_payload_ownerships_snapshot() -> Vec<SumeragiLanePayloadOwnership> {
     .clone()
 }
 
-/// Return the cached standalone committed lane-block snapshot used by Nexus diagnostics.
+/// Return the legacy process-local standalone committed lane-block snapshot.
 pub fn committed_lane_blocks_snapshot() -> Vec<CommittedLaneBlockSnapshot> {
     lock_operator_status_slot(
         committed_lane_blocks_slot(),
@@ -6686,13 +6723,13 @@ pub fn committed_lane_blocks_snapshot() -> Vec<CommittedLaneBlockSnapshot> {
     .clone()
 }
 
-/// Replace the cached standalone lane-block session snapshot used by Nexus diagnostics.
+/// Replace the legacy process-local standalone lane-block session snapshot.
 pub fn set_lane_block_sessions(entries: Vec<SumeragiLaneBlockSessionStatus>) {
     *lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot") =
         entries;
 }
 
-/// Return the cached standalone lane-block session snapshot used by Nexus diagnostics.
+/// Return the legacy process-local standalone lane-block session snapshot.
 pub fn lane_block_sessions_snapshot() -> Vec<SumeragiLaneBlockSessionStatus> {
     lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot").clone()
 }
@@ -6810,11 +6847,17 @@ pub struct StatusSnapshot {
     pub lane_settlement_commitments: Vec<LaneBlockCommitment>,
     /// Certified lane relay envelopes.
     pub lane_relay_envelopes: Vec<LaneRelayEnvelope>,
-    /// Lane-local payload ownership commitments.
+    /// Legacy process-local lane payload ownership commitments.
+    ///
+    /// Torii ignores this field and publishes State+Kura-derived rows instead.
     pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
-    /// Standalone committed lane-block state.
+    /// Legacy process-local standalone committed lane-block state.
+    ///
+    /// Torii ignores this field and publishes State+Kura-derived rows instead.
     pub committed_lane_blocks: Vec<CommittedLaneBlockSnapshot>,
-    /// Lane-local consensus sessions.
+    /// Legacy process-local lane-local consensus sessions.
+    ///
+    /// Torii ignores this field and publishes State+Kura-derived rows instead.
     pub lane_block_sessions: Vec<SumeragiLaneBlockSessionStatus>,
     /// Count of governance-sealed lanes.
     pub lane_governance_sealed_total: u32,

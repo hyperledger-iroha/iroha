@@ -5729,7 +5729,12 @@ public struct ToriiDomainListPage: Decodable, Sendable, ToriiListPageProtocol {
         case total
     }
 
-    public init(items: [ToriiDomainRecord], total: Int) {
+    public init(items: [ToriiDomainRecord], total: Int) throws {
+        guard total >= items.count else {
+            throw ToriiClientError.invalidPayload(
+                "domain page total must be at least the number of returned items"
+            )
+        }
         self.items = items
         self.total = total
     }
@@ -5737,7 +5742,15 @@ public struct ToriiDomainListPage: Decodable, Sendable, ToriiListPageProtocol {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         items = try container.decodeIfPresent([ToriiDomainRecord].self, forKey: .items) ?? []
-        if let explicitTotal = try container.decodeIfPresent(Int.self, forKey: .total) {
+        if container.contains(.total) {
+            let explicitTotal = try container.decode(Int.self, forKey: .total)
+            guard explicitTotal >= items.count else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .total,
+                    in: container,
+                    debugDescription: "total must be at least the number of returned items"
+                )
+            }
             total = explicitTotal
         } else {
             total = items.count
@@ -5777,7 +5790,12 @@ public struct ToriiRwaListPage: Decodable, Sendable, ToriiListPageProtocol {
         case total
     }
 
-    public init(items: [ToriiRwaListItem], total: Int) {
+    public init(items: [ToriiRwaListItem], total: Int) throws {
+        guard total >= items.count else {
+            throw ToriiClientError.invalidPayload(
+                "RWA page total must be at least the number of returned items"
+            )
+        }
         self.items = items
         self.total = total
     }
@@ -5785,7 +5803,15 @@ public struct ToriiRwaListPage: Decodable, Sendable, ToriiListPageProtocol {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         items = try container.decodeIfPresent([ToriiRwaListItem].self, forKey: .items) ?? []
-        if let explicitTotal = try container.decodeIfPresent(Int.self, forKey: .total) {
+        if container.contains(.total) {
+            let explicitTotal = try container.decode(Int.self, forKey: .total)
+            guard explicitTotal >= items.count else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .total,
+                    in: container,
+                    debugDescription: "total must be at least the number of returned items"
+                )
+            }
             total = explicitTotal
         } else {
             total = items.count
@@ -7236,10 +7262,8 @@ fileprivate enum ToriiConnectJSON {
         case .number(let number):
             guard number.isFinite else { return nil }
             if number.rounded(.towardZero) == number {
-                guard number >= Double(Int.min), number <= Double(Int.max) else {
-                    return nil
-                }
-                return String(Int(number))
+                guard let integer = Int(exactly: number) else { return nil }
+                return String(integer)
             }
             return String(number)
         case .bool(let bool):
@@ -8109,10 +8133,10 @@ extension ToriiJSONValue {
                 return nil
             }
             if number.rounded(.towardZero) == number {
-                guard number >= Double(Int.min), number <= Double(Int.max) else {
+                guard let value = Int(exactly: number) else {
                     return nil
                 }
-                return String(Int(number))
+                return String(value)
             }
             return String(number)
         case .bool(let value):
@@ -8138,17 +8162,10 @@ extension ToriiJSONValue {
     public var normalizedUInt64: UInt64? {
         switch self {
         case .number(let number):
-            guard number.isFinite, number >= 0 else {
+            guard number.isFinite, let value = UInt64(exactly: number) else {
                 return nil
             }
-            let rounded = number.rounded(.towardZero)
-            guard rounded == number else {
-                return nil
-            }
-            guard rounded <= Double(UInt64.max) else {
-                return nil
-            }
-            return UInt64(rounded)
+            return value
         case .string(let string):
             return UInt64(string.trimmingCharacters(in: .whitespacesAndNewlines))
         default:
@@ -8193,17 +8210,10 @@ extension ToriiJSONValue {
     public var normalizedInt64: Int64? {
         switch self {
         case .number(let number):
-            guard number.isFinite else {
+            guard number.isFinite, let value = Int64(exactly: number) else {
                 return nil
             }
-            let rounded = number.rounded(.towardZero)
-            guard rounded == number else {
-                return nil
-            }
-            guard rounded >= Double(Int64.min), rounded <= Double(Int64.max) else {
-                return nil
-            }
-            return Int64(rounded)
+            return value
         case .string(let string):
             return Int64(string.trimmingCharacters(in: .whitespacesAndNewlines))
         default:
@@ -10003,11 +10013,11 @@ extension ToriiRuntimeUpgradeStatus: Decodable {
             let height: UInt64
             switch value {
             case .number(let number):
-                guard number >= 0, number <= Double(UInt64.max), floor(number) == number else {
+                guard let exactHeight = UInt64(exactly: number) else {
                     throw DecodingError.dataCorruptedError(in: container,
                                                            debugDescription: "ActivatedAt height must be a non-negative integer within range")
                 }
-                height = UInt64(number)
+                height = exactHeight
             case .string(let string):
                 guard let parsed = UInt64(string) else {
                     throw DecodingError.dataCorruptedError(in: container,
@@ -17527,6 +17537,10 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
     public var creationTimeMs: UInt64?
     public var feePayment: FeePaymentIntent
     public var memo: String?
+    public var validationFeePolicyVersion: UInt64?
+    public var validationFeePolicyHash: String?
+    public var validationFeeInstructionIndex: UInt64?
+    public var validationFeeTransferEntryIndex: UInt64?
     public var instructions: [ToriiMultisigProposeInstruction]
 
     public init(selector: ToriiMultisigAccountSelector,
@@ -17535,6 +17549,10 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
                 memo: String? = nil,
+                validationFeePolicyVersion: UInt64? = nil,
+                validationFeePolicyHash: String? = nil,
+                validationFeeInstructionIndex: UInt64? = nil,
+                validationFeeTransferEntryIndex: UInt64? = nil,
                 instructions: [ToriiMultisigProposeInstruction],
                 feePayment: FeePaymentIntent) {
         self.selector = selector
@@ -17544,6 +17562,10 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         self.creationTimeMs = creationTimeMs
         self.feePayment = feePayment
         self.memo = memo
+        self.validationFeePolicyVersion = validationFeePolicyVersion
+        self.validationFeePolicyHash = validationFeePolicyHash
+        self.validationFeeInstructionIndex = validationFeeInstructionIndex
+        self.validationFeeTransferEntryIndex = validationFeeTransferEntryIndex
         self.instructions = instructions
     }
 
@@ -17553,6 +17575,10 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
                 memo: String? = nil,
+                validationFeePolicyVersion: UInt64? = nil,
+                validationFeePolicyHash: String? = nil,
+                validationFeeInstructionIndex: UInt64? = nil,
+                validationFeeTransferEntryIndex: UInt64? = nil,
                 noritoInstructionBoxBytes: [Data],
                 feePayment: FeePaymentIntent) throws {
         try self.init(
@@ -17562,6 +17588,10 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
             signatureB64: signatureB64,
             creationTimeMs: creationTimeMs,
             memo: memo,
+            validationFeePolicyVersion: validationFeePolicyVersion,
+            validationFeePolicyHash: validationFeePolicyHash,
+            validationFeeInstructionIndex: validationFeeInstructionIndex,
+            validationFeeTransferEntryIndex: validationFeeTransferEntryIndex,
             instructions: noritoInstructionBoxBytes.map {
                 try ToriiMultisigProposeInstruction(noritoInstructionBoxBytes: $0)
             },
@@ -17578,6 +17608,10 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         case creationTimeMs = "creation_time_ms"
         case feePayment = "fee_payment"
         case memo
+        case validationFeePolicyVersion = "validation_fee_policy_version"
+        case validationFeePolicyHash = "validation_fee_policy_hash"
+        case validationFeeInstructionIndex = "validation_fee_instruction_index"
+        case validationFeeTransferEntryIndex = "validation_fee_transfer_entry_index"
         case instructions
     }
 
@@ -17593,6 +17627,34 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         }
         _ = try feePayment.canonicalJSONData()
         let normalizedMemo = try ToriiRequestValidation.normalizedOptionalNonEmpty(memo, field: "memo")
+        let hasValidationFeePolicyVersion = validationFeePolicyVersion != nil
+        let hasValidationFeePolicyHash = validationFeePolicyHash != nil
+        let hasValidationFeeInstructionIndex = validationFeeInstructionIndex != nil
+        let hasValidationFeeTransferEntryIndex = validationFeeTransferEntryIndex != nil
+        guard hasValidationFeePolicyVersion == hasValidationFeePolicyHash else {
+            throw ToriiClientError.invalidPayload(
+                "validation_fee_policy_version and validation_fee_policy_hash must be provided together."
+            )
+        }
+        guard hasValidationFeePolicyVersion || !hasValidationFeeInstructionIndex else {
+            throw ToriiClientError.invalidPayload(
+                "validation_fee_instruction_index requires validation fee policy metadata."
+            )
+        }
+        guard hasValidationFeePolicyVersion || !hasValidationFeeTransferEntryIndex else {
+            throw ToriiClientError.invalidPayload(
+                "validation_fee_transfer_entry_index requires validation fee policy metadata."
+            )
+        }
+        guard !hasValidationFeeTransferEntryIndex || hasValidationFeeInstructionIndex else {
+            throw ToriiClientError.invalidPayload(
+                "validation_fee_transfer_entry_index requires validation_fee_instruction_index."
+            )
+        }
+        let normalizedValidationFeePolicyHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
+            validationFeePolicyHash,
+            field: "validation_fee_policy_hash"
+        )
         guard !instructions.isEmpty else {
             throw ToriiClientError.invalidPayload("instructions must not be empty.")
         }
@@ -17606,6 +17668,10 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
         try container.encode(feePayment, forKey: .feePayment)
         try container.encodeIfPresent(normalizedMemo, forKey: .memo)
+        try container.encodeIfPresent(validationFeePolicyVersion.map(String.init), forKey: .validationFeePolicyVersion)
+        try container.encodeIfPresent(normalizedValidationFeePolicyHash, forKey: .validationFeePolicyHash)
+        try container.encodeIfPresent(validationFeeInstructionIndex.map(String.init), forKey: .validationFeeInstructionIndex)
+        try container.encodeIfPresent(validationFeeTransferEntryIndex.map(String.init), forKey: .validationFeeTransferEntryIndex)
         try container.encode(instructions, forKey: .instructions)
     }
 }
@@ -25193,7 +25259,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let request = try makeRequest(path: "/v1/rwas", queryItems: queryItems)
         let data = try await data(for: request)
         guard !data.isEmpty else {
-            return ToriiRwaListPage(items: [], total: 0)
+            return try ToriiRwaListPage(items: [], total: 0)
         }
         return try decodeJSON(ToriiRwaListPage.self, from: data)
     }
@@ -25222,7 +25288,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let request = try makeRequest(path: "/v1/domains", queryItems: queryItems)
         let data = try await data(for: request)
         guard !data.isEmpty else {
-            return ToriiDomainListPage(items: [], total: 0)
+            return try ToriiDomainListPage(items: [], total: 0)
         }
         return try decodeJSON(ToriiDomainListPage.self, from: data)
     }
@@ -25469,7 +25535,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             attempts += 1
             if let status = try await getTransactionStatus(hashHex: expectedHash, mode: mode) {
                 let kind = status.status.kind
-                if pollOptions.successStatuses.contains(kind) {
+                if status.status.state == .applied {
                     return status
                 }
                 if pollOptions.failureStatuses.contains(kind) {
@@ -25484,9 +25550,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             }
             let interval = max(pollOptions.pollInterval, 0)
             if interval > 0 {
-                let nanosDouble = interval * 1_000_000_000
-                let clamped = min(max(nanosDouble, 0), Double(UInt64.max))
-                try await Task.sleep(nanoseconds: UInt64(clamped))
+                try await Task.sleep(
+                    nanoseconds: StrictJSONNumber.saturatingNanoseconds(from: interval)
+                )
             } else {
                 await Task.yield()
             }

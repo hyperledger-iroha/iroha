@@ -32,7 +32,9 @@ pub use domain::{
 pub use executor::visit_upgrade;
 /// Re-export governance visitors handled by the default executor.
 pub use governance::{
-    visit_enact_referendum, visit_propose_sccp_route_governance, visit_register_citizen,
+    visit_approve_governance_proposal, visit_cast_parliament_ballot, visit_enact_referendum,
+    visit_finalize_referendum, visit_propose_sccp_route_governance,
+    visit_propose_validation_fee_policy, visit_register_citizen,
 };
 use iroha_smart_contract::data_model::{
     isi::{
@@ -63,7 +65,11 @@ use iroha_smart_contract::data_model::{
         bridge::{ApplySccpRouteGovernance, RecordBridgeReceipt},
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
-        governance::{EnactReferendum, ProposeSccpRouteGovernance, RegisterCitizen},
+        governance::{
+            ApproveGovernanceProposal, CastParliamentBallot, EnactReferendum, FinalizeReferendum,
+            ProposeSccpRouteGovernance, ProposeValidationFeePayoutLifecycle,
+            ProposeValidationFeePolicy, RegisterCitizen,
+        },
         nexus::{
             ActivateFeeSponsorProgramRevision, BeginCloseFeeSponsorProgram, CloseFeeSponsorProgram,
             CreateFeeSponsorProgram, EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
@@ -1136,6 +1142,26 @@ impl InstructionDispatch for InstructionBox {
             governance::visit_propose_sccp_route_governance(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ProposeValidationFeePolicy>() {
+            governance::visit_propose_validation_fee_policy(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ProposeValidationFeePayoutLifecycle>() {
+            governance::visit_propose_validation_fee_payout_lifecycle(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ApproveGovernanceProposal>() {
+            governance::visit_approve_governance_proposal(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<CastParliamentBallot>() {
+            governance::visit_cast_parliament_ballot(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<FinalizeReferendum>() {
+            governance::visit_finalize_referendum(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<EnactReferendum>() {
             governance::visit_enact_referendum(executor, isi);
             return;
@@ -1630,8 +1656,47 @@ pub mod governance {
         execute!(executor, isi)
     }
 
-    /// Dispatch referendum enactment to Core, which enforces the typed enactment permission and
-    /// idempotent proposal lifecycle.
+    /// Dispatch a bonded-citizen validation-fee proposal to the Parliament lifecycle in Core.
+    pub fn visit_propose_validation_fee_policy<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ProposeValidationFeePolicy,
+    ) {
+        execute!(executor, isi)
+    }
+
+    /// Dispatch a bonded-citizen payout-lifecycle proposal to the Parliament lifecycle in Core.
+    pub fn visit_propose_validation_fee_payout_lifecycle<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ProposeValidationFeePayoutLifecycle,
+    ) {
+        execute!(executor, isi)
+    }
+
+    /// Dispatch a body-specific Parliament approval to Core.
+    pub fn visit_approve_governance_proposal<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ApproveGovernanceProposal,
+    ) {
+        execute!(executor, isi)
+    }
+
+    /// Dispatch a body-specific Parliament ballot to Core.
+    pub fn visit_cast_parliament_ballot<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &CastParliamentBallot,
+    ) {
+        execute!(executor, isi)
+    }
+
+    /// Dispatch permissionless referendum finalization to Core.
+    pub fn visit_finalize_referendum<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &FinalizeReferendum,
+    ) {
+        execute!(executor, isi)
+    }
+
+    /// Dispatch permissionless referendum enactment to Core.
     pub fn visit_enact_referendum<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &EnactReferendum,
@@ -4451,12 +4516,28 @@ pub mod parameter {
         )
     }
 
+    fn updates_validation_fee_governance(isi: &SetParameter) -> bool {
+        matches!(
+            isi.inner(),
+            Parameter::Custom(parameter)
+                if iroha_data_model::validation_fee::is_reserved_validation_fee_parameter_id(
+                    parameter.id()
+                )
+        )
+    }
+
     /// Applies a network parameter change when genesis or a parameter manager invokes it.
     pub fn visit_set_parameter<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &SetParameter) {
         if updates_sccp_governance(isi) {
             deny!(
                 executor,
                 "The reserved SCCP registry cannot be changed through SetParameter; use ApplySccpRouteGovernance"
+            );
+        }
+        if updates_validation_fee_governance(isi) {
+            deny!(
+                executor,
+                "Validation-fee governance parameters can only be changed by an enacted SORA Parliament proposal"
             );
         }
         if executor.context().curr_block.is_genesis() {
@@ -6190,6 +6271,29 @@ mod sorafs_permission_tests {
             PermissionObject::from(CanSetParameters),
             parameter::visit_set_parameter,
         );
+    }
+
+    #[test]
+    fn validation_fee_parameters_are_reserved_from_generic_set_parameter() {
+        for id in [
+            iroha_data_model::validation_fee::RETIRED_VALIDATION_FEE_GOVERNANCE_KEYSET_PARAMETER_ID,
+            iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1::PARAMETER_ID_STR,
+            iroha_data_model::validation_fee::RETIRED_VALIDATION_FEE_POLICY_PARAMETER_ID,
+        ] {
+            let instruction = custom_parameter(id);
+            assert_denied_with_permission(
+                instruction.clone(),
+                PermissionObject::from(CanSetParameters),
+                parameter::visit_set_parameter,
+            );
+
+            let mut genesis = MockExecutor::new(true);
+            parameter::visit_set_parameter(&mut genesis, &instruction);
+            assert!(
+                genesis.verdict().is_err(),
+                "{id} must remain reserved during genesis"
+            );
+        }
     }
 
     #[test]

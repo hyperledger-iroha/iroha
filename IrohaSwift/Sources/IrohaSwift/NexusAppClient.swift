@@ -479,13 +479,23 @@ public final class NexusAppClient {
         }
         let status: String?
         if options.waitForFinalStatus {
+            let observedStatus: String
             do {
-                status = try await toriiSubmitter.waitForNexusTransactionStatus(hashHex: envelope.hashHex,
-                                                                                options: options.pipelineStatusPollOptions)
+                observedStatus = try await toriiSubmitter.waitForNexusTransactionStatus(
+                    hashHex: envelope.hashHex,
+                    options: options.pipelineStatusPollOptions
+                )
             } catch {
                 throw NexusAppError(code: "status_wait_failed",
                                     message: "Failed while waiting for Torii pipeline status: \(error.localizedDescription)")
             }
+            guard observedStatus == PipelineTransactionState.applied.kind else {
+                throw NexusAppError(
+                    code: "status_wait_non_applied",
+                    message: "Torii status waiter returned \(observedStatus); canonical Applied status is required."
+                )
+            }
+            status = observedStatus
         } else {
             status = nil
         }

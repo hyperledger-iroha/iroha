@@ -19,20 +19,20 @@ Options:
   --target-dir <path>    Cargo target directory override.
   --version <string>     Release version label (default: git describe or commit hash).
   --manifest-signing-key <path>
-                         Development-only owner-private PEM Ed25519 key used for
+                         Development-only owner-private raw 32-byte Ed25519 seed used for
                          local packager tests with --development-local-signing.
   --development-local-signing
-                         Explicitly enable the development-only local PEM signer.
+                         Explicitly enable the development-only local raw-seed signer.
                          Reference-production signing must use the HSM input path.
   --manifest-signature-in <path>
                          Optional 64-byte raw Ed25519 signature produced by an
                          external PKCS#11/HSM signer for this exact manifest.
                          Mutually exclusive with --manifest-signing-key.
   --manifest-public-key <path>
-                         PEM Ed25519 public key required for signed manifests.
+                         Raw 32-byte Ed25519 public key required for signed manifests.
   --manifest-public-key-fingerprint <hex>
                          Required reviewed lowercase SHA256 fingerprint of the
-                         public key's canonical DER SubjectPublicKeyInfo.
+                         exact 32 raw public-key bytes.
   --manifest-signature-out <path>
                          Signature path (default: <manifest>.sig).
   --skip-smoke           Skip committed-fixture smoke checks.
@@ -126,7 +126,7 @@ validate_existing_executable_file_path() {
   fi
 }
 
-validate_private_key_permissions() {
+validate_signing_seed_permissions() {
   local label="$1"
   local target="$2"
   python3 - "$label" "$target" <<'PY'
@@ -175,7 +175,11 @@ label = sys.argv[1]
 source_path = Path(sys.argv[2])
 snapshot_path = Path(sys.argv[3])
 input_kind = sys.argv[4]
-maximum_bytes = 64 * 1024
+expected_bytes_by_kind = {
+    "seed": 32,
+    "public": 32,
+    "signature": 64,
+}
 
 def fail(message):
     print(f"error: {message}", file=sys.stderr)
@@ -228,8 +232,9 @@ def open_anchored_regular(path):
             os.close(directory_fd)
         raise
 
-if input_kind not in {"private", "public", "signature"}:
+if input_kind not in expected_bytes_by_kind:
     fail("internal release signing input kind is invalid")
+expected_bytes = expected_bytes_by_kind[input_kind]
 
 source_fd = -1
 snapshot_fd = -1
@@ -245,22 +250,22 @@ try:
         fail(f"{label} must have exactly one hard link")
     if before.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         fail(f"{label} must not be group- or world-writable")
-    if input_kind == "private":
+    if input_kind == "seed":
         if before.st_uid != os.geteuid():
             fail(f"{label} must be owned by the current effective user")
         mode = stat.S_IMODE(before.st_mode)
         if mode not in {0o400, 0o600}:
             fail(f"{label} permissions must be owner-only 0400 or 0600")
-    if before.st_size <= 0 or before.st_size > maximum_bytes:
-        fail(f"{label} size is outside the supported range")
+    if before.st_size != expected_bytes:
+        fail(f"{label} must contain exactly {expected_bytes} raw bytes")
     payload = bytearray()
-    while len(payload) <= maximum_bytes:
-        chunk = os.read(source_fd, min(8192, maximum_bytes + 1 - len(payload)))
+    while len(payload) <= expected_bytes:
+        chunk = os.read(source_fd, min(8192, expected_bytes + 1 - len(payload)))
         if not chunk:
             break
         payload.extend(chunk)
-    if not payload or len(payload) > maximum_bytes:
-        fail(f"{label} size is outside the supported range")
+    if len(payload) != expected_bytes:
+        fail(f"{label} must contain exactly {expected_bytes} raw bytes")
     after = os.fstat(source_fd)
     stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
     if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
@@ -287,82 +292,6 @@ finally:
         os.close(snapshot_fd)
     for directory_fd in reversed(directory_fds):
         os.close(directory_fd)
-PY
-}
-
-inspect_ed25519_key() {
-  local openssl_executable="$1"
-  local key_kind="$2"
-  local label="$3"
-  local target="$4"
-  python3 - "$openssl_executable" "$key_kind" "$label" "$target" <<'PY'
-import hashlib
-from pathlib import Path
-import subprocess
-import sys
-
-openssl_executable = sys.argv[1]
-key_kind = sys.argv[2]
-label = sys.argv[3]
-path = Path(sys.argv[4])
-
-def fail(message):
-    print(f"error: {message}", file=sys.stderr)
-    raise SystemExit(1)
-
-if key_kind == "private":
-    command = [
-        openssl_executable,
-        "pkey",
-        "-in",
-        str(path),
-        "-passin",
-        "pass:",
-        "-pubout",
-        "-outform",
-        "DER",
-    ]
-elif key_kind == "public":
-    command = [
-        openssl_executable,
-        "pkey",
-        "-pubin",
-        "-in",
-        str(path),
-        "-pubout",
-        "-outform",
-        "DER",
-    ]
-else:
-    fail("internal key inspection kind is invalid")
-
-try:
-    result = subprocess.run(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-except OSError:
-    fail(f"failed to inspect {label}")
-
-if result.returncode != 0:
-    fail(f"{label} must contain exactly an Ed25519 {key_kind} key")
-
-# RFC 8410 Ed25519 SubjectPublicKeyInfo:
-# SEQUENCE { SEQUENCE { OID 1.3.101.112 }, BIT STRING <32-byte key> }.
-ed25519_spki_prefix = bytes.fromhex("302a300506032b6570032100")
-der = result.stdout
-if len(der) != len(ed25519_spki_prefix) + 32 or not der.startswith(
-    ed25519_spki_prefix
-):
-    fail(f"{label} must contain exactly an Ed25519 {key_kind} key")
-public_key = der[len(ed25519_spki_prefix) :]
-if not any(public_key):
-    fail(f"{label} contains invalid all-zero Ed25519 public key material")
-
-print(hashlib.sha256(der).hexdigest(), der.hex())
 PY
 }
 
@@ -439,9 +368,11 @@ cleanup_release_signing_snapshot() {
     return
   fi
   rm -f -- \
-    "${release_signing_snapshot_dir}/private.pem" \
-    "${release_signing_snapshot_dir}/public.pem" \
-    "${release_signing_snapshot_dir}/external.sig"
+    "${release_signing_snapshot_dir}/private.seed" \
+    "${release_signing_snapshot_dir}/public.key" \
+    "${release_signing_snapshot_dir}/external.sig" \
+    "${release_signing_snapshot_dir}/preflight.sig" \
+    "${release_signing_snapshot_dir}/generated.sig"
   rmdir -- "$release_signing_snapshot_dir" 2>/dev/null || true
 }
 trap cleanup_release_signing_snapshot EXIT
@@ -530,7 +461,7 @@ done
 
 if [[ -n "$manifest_signing_key" ]]; then
   validate_existing_file_path "manifest signing key" "$manifest_signing_key"
-  validate_private_key_permissions "manifest signing key" "$manifest_signing_key"
+  validate_signing_seed_permissions "manifest signing key" "$manifest_signing_key"
 fi
 if [[ -n "$manifest_signature_input" ]]; then
   validate_existing_file_path "external manifest signature" "$manifest_signature_input"
@@ -580,14 +511,7 @@ if [[ "$manifest_signature_requested" -eq 1 && -z "$manifest_public_key_fingerpr
   exit 1
 fi
 
-openssl_path=""
 manifest_public_key_sha256=""
-if [[ "$manifest_signature_requested" -eq 1 ]]; then
-  if ! openssl_path="$(command -v openssl)"; then
-    echo "error: openssl is required for Ed25519 manifest verification" >&2
-    exit 1
-  fi
-fi
 
 workspace="$(abs_path "$workspace")"
 [[ -z "$out_dir" ]] && out_dir="${workspace}/dist/sorafs-validate-release"
@@ -738,15 +662,18 @@ if [[ "$manifest_signature_requested" -eq 1 ]]; then
     mktemp -d "${TMPDIR:-/tmp}/sorafs-release-signing.XXXXXXXX"
   )"
   chmod 0700 "$release_signing_snapshot_dir"
+  release_signing_snapshot_dir="$(
+    cd "$release_signing_snapshot_dir" && pwd -P
+  )"
   snapshot_release_signing_input \
     "manifest public key" "$manifest_public_key_source" \
-    "${release_signing_snapshot_dir}/public.pem" "public"
-  manifest_public_key="${release_signing_snapshot_dir}/public.pem"
+    "${release_signing_snapshot_dir}/public.key" "public"
+  manifest_public_key="${release_signing_snapshot_dir}/public.key"
   if [[ -n "$manifest_signing_key_source" ]]; then
     snapshot_release_signing_input \
       "manifest signing key" "$manifest_signing_key_source" \
-      "${release_signing_snapshot_dir}/private.pem" "private"
-    manifest_signing_key="${release_signing_snapshot_dir}/private.pem"
+      "${release_signing_snapshot_dir}/private.seed" "seed"
+    manifest_signing_key="${release_signing_snapshot_dir}/private.seed"
   else
     snapshot_release_signing_input \
       "external manifest signature" "$manifest_signature_input_source" \
@@ -754,31 +681,25 @@ if [[ "$manifest_signature_requested" -eq 1 ]]; then
     manifest_signature_input="${release_signing_snapshot_dir}/external.sig"
   fi
 
-  private_key_inspection=""
-  if [[ -n "$manifest_signing_key" ]]; then
-    private_key_inspection="$(
-      inspect_ed25519_key \
-        "$openssl_path" "private" "manifest signing key" "$manifest_signing_key"
-    )"
-    read -r _private_key_sha256 private_key_public_der <<< "$private_key_inspection"
-  fi
-  public_key_inspection="$(
-    inspect_ed25519_key \
-      "$openssl_path" "public" "manifest public key" "$manifest_public_key"
-  )"
-  read -r manifest_public_key_sha256 public_key_der <<< "$public_key_inspection"
+  manifest_public_key_sha256="$(sha256_file "$manifest_public_key")"
   if [[ "$manifest_public_key_fingerprint" != "$manifest_public_key_sha256" ]]; then
     echo "error: pinned manifest public key does not match the reviewed fingerprint" >&2
     exit 1
   fi
   if [[ -n "$manifest_signing_key" ]]; then
-    if [[ "$private_key_public_der" != "$public_key_der" ]]; then
-      echo "error: pinned manifest public key does not match manifest signing key" >&2
+    preflight_signature="${release_signing_snapshot_dir}/preflight.sig"
+    if ! "$binary_path" release-manifest \
+      --manifest "$header_path" \
+      --public-key "$manifest_public_key" \
+      --public-key-fingerprint "$manifest_public_key_fingerprint" \
+      --signing-seed "$manifest_signing_key" \
+      --signature-out "$preflight_signature" \
+      --development-local-signing >/dev/null; then
+      echo "error: native development-only Ed25519 signing-key preflight failed" >&2
       exit 1
     fi
-    unset private_key_inspection private_key_public_der
+    rm -f -- "$preflight_signature"
   fi
-  unset public_key_inspection public_key_der
 fi
 
 prepare_output_directory_path "release output directory" "$out_dir"
@@ -1273,89 +1194,39 @@ sync_output_parent(target_path)
 PY
 }
 
-validate_ed25519_signature_file() {
-  local label="$1"
-  local target="$2"
-  python3 - "$label" "$target" <<'PY'
-import os
-from pathlib import Path
-import stat
-import sys
-
-label = sys.argv[1]
-path = Path(sys.argv[2])
-
-def fail(message):
-    print(f"error: {message}", file=sys.stderr)
-    raise SystemExit(1)
-
-flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-nofollow = getattr(os, "O_NOFOLLOW", 0)
-if nofollow:
-    flags |= nofollow
-
-fd = -1
-try:
-    if path.is_symlink():
-        fail(f"{label} `{path}` must not be a symlink")
-    fd = os.open(path, flags)
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
-        fail(f"{label} `{path}` must be a regular file")
-    signature = os.read(fd, 65)
-    if len(signature) != 64:
-        fail(f"{label} must be exactly 64 bytes")
-    if not any(signature):
-        fail(f"{label} must not be all zero")
-    if os.read(fd, 1):
-        fail(f"{label} must be exactly 64 bytes")
-except FileNotFoundError:
-    fail(f"{label} `{path}` is missing")
-except OSError as error:
-    fail(f"failed to inspect {label} `{path}`: {error}")
-finally:
-    if fd >= 0:
-        os.close(fd)
-PY
-}
-
 if [[ "$manifest_signature_requested" -eq 1 ]]; then
   signature_source_path="$manifest_signature_input"
-  signature_tmp_path=""
+  signature_tmp_path="${release_signing_snapshot_dir}/generated.sig"
   if [[ -n "$manifest_signing_key" ]]; then
-    signature_tmp_path="$(mktemp "${out_dir}/.sorafs-manifest-signature.XXXXXX")"
     signature_source_path="$signature_tmp_path"
-    if ! "$openssl_path" pkeyutl -sign -rawin \
-      -inkey "$manifest_signing_key" -passin pass: \
-      -in "$manifest_path" -out "$signature_tmp_path" 2>/dev/null; then
-      echo "error: raw Ed25519 manifest signing failed" >&2
-      rm -f "$signature_tmp_path"
+    if ! "${stage_dir}/${packaged_binary_name}" release-manifest \
+      --manifest "$manifest_path" \
+      --public-key "$manifest_public_key" \
+      --public-key-fingerprint "$manifest_public_key_fingerprint" \
+      --signing-seed "$manifest_signing_key" \
+      --signature-out "$signature_tmp_path" \
+      --development-local-signing >/dev/null; then
+      echo "error: native development-only Ed25519 manifest signing failed" >&2
       exit 1
     fi
-  fi
-  if ! validate_ed25519_signature_file \
-    "release manifest Ed25519 signature" "$signature_source_path"; then
-    [[ -z "$signature_tmp_path" ]] || rm -f "$signature_tmp_path"
-    exit 1
-  fi
-  if ! "$openssl_path" pkeyutl -verify -rawin -pubin \
-    -inkey "$manifest_public_key" -in "$manifest_path" \
-    -sigfile "$signature_source_path" >/dev/null 2>&1; then
-    echo "error: raw Ed25519 manifest signature verification failed" >&2
-    [[ -z "$signature_tmp_path" ]] || rm -f "$signature_tmp_path"
+  elif ! "${stage_dir}/${packaged_binary_name}" release-manifest \
+    --manifest "$manifest_path" \
+    --public-key "$manifest_public_key" \
+    --public-key-fingerprint "$manifest_public_key_fingerprint" \
+    --signature "$signature_source_path" >/dev/null; then
+    echo "error: native external Ed25519 manifest signature verification failed" >&2
     exit 1
   fi
   if ! install_manifest_signature \
     "$signature_source_path" "$manifest_signature_path" "$manifest_path"; then
-    [[ -z "$signature_tmp_path" ]] || rm -f "$signature_tmp_path"
     exit 1
   fi
-  [[ -z "$signature_tmp_path" ]] || rm -f "$signature_tmp_path"
-  validate_ed25519_signature_file \
-    "release manifest Ed25519 signature" "$manifest_signature_path"
-  if ! "$openssl_path" pkeyutl -verify -rawin -pubin \
-    -inkey "$manifest_public_key" -in "$manifest_path" \
-    -sigfile "$manifest_signature_path" >/dev/null 2>&1; then
-    echo "error: installed raw Ed25519 manifest signature verification failed" >&2
+  if ! "${stage_dir}/${packaged_binary_name}" release-manifest \
+    --manifest "$manifest_path" \
+    --public-key "$manifest_public_key" \
+    --public-key-fingerprint "$manifest_public_key_fingerprint" \
+    --signature "$manifest_signature_path" >/dev/null; then
+    echo "error: installed native Ed25519 manifest signature verification failed" >&2
     exit 1
   fi
 fi

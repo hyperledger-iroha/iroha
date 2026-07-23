@@ -43,6 +43,8 @@ done
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SAMPLE_JSON="${ROOT_DIR}/docs/source/sorafs_gateway_denylist_sample.json"
 
+python3 "${ROOT_DIR}/scripts/check_sorafs_gateway_tls_runtime_contract.py"
+
 run_xtask() {
   cargo run -p xtask --bin xtask --quiet -- "$@"
 }

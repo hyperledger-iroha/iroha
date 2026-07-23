@@ -612,13 +612,14 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                     }
                 }
                 BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_) => T::ConsensusPayload,
+                | BlockMessage::LaneHistoricalRecoveryResponse(_) => T::ConsensusPayload,
                 BlockMessage::LaneBlockProposal(_)
                 | BlockMessage::LaneBlockNewViewVote(_)
                 | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
-                | BlockMessage::LaneBlockCertificate(_) => T::Consensus,
+                | BlockMessage::LaneBlockCertificate(_)
+                | BlockMessage::LaneHistoricalRecoveryRequest(_) => T::Consensus,
                 // Every remaining `BlockMessage` variant belongs to the retired
                 // global v1 protocol.  Keep those variants decodable for archive
                 // tooling, but never schedule them on correctness-critical live
@@ -1298,16 +1299,26 @@ mod tests {
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: Hash::new(b"lane-drain-network-incarnation"),
                 close_global_height: 12,
-                initial_merged_lane_height: 4,
-                initial_merged_descriptor_hash: Some(Hash::new(b"lane-drain-network-initial")),
+                initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                    LaneId::new(3),
+                    DataSpaceId::new(7),
+                    Hash::new(b"lane-drain-network-incarnation"),
+                    4,
+                    Some(Hash::new(b"lane-drain-network-initial")),
+                ),
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash: HashOf::new(&validator_set),
                 validator_set,
                 validator_count: 1,
                 min_quorum: 1,
             },
-            final_lane_block_height: 5,
-            final_lane_block_descriptor_hash: Some(Hash::new(b"lane-drain-network-final")),
+            final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                LaneId::new(3),
+                DataSpaceId::new(7),
+                Hash::new(b"lane-drain-network-incarnation"),
+                5,
+                Some(Hash::new(b"lane-drain-network-final")),
+            ),
         };
         let vote =
             crate::lane_consensus::LaneDrainVoteV1::new_signed(body, signer, keypair.private_key())
@@ -1368,18 +1379,26 @@ mod tests {
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: Hash::new(b"maximum-lane-drain-network-incarnation"),
                 close_global_height: 12,
-                initial_merged_lane_height: 4,
-                initial_merged_descriptor_hash: Some(Hash::new(
-                    b"maximum-lane-drain-network-initial",
-                )),
+                initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                    LaneId::new(3),
+                    DataSpaceId::new(7),
+                    Hash::new(b"maximum-lane-drain-network-incarnation"),
+                    4,
+                    Some(Hash::new(b"maximum-lane-drain-network-initial")),
+                ),
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash: HashOf::new(&validator_set),
                 validator_set,
                 validator_count,
                 min_quorum,
             },
-            final_lane_block_height: 5,
-            final_lane_block_descriptor_hash: Some(Hash::new(b"maximum-lane-drain-network-final")),
+            final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                LaneId::new(3),
+                DataSpaceId::new(7),
+                Hash::new(b"maximum-lane-drain-network-incarnation"),
+                5,
+                Some(Hash::new(b"maximum-lane-drain-network-final")),
+            ),
         };
         let vote = crate::lane_consensus::LaneDrainVoteV1::new_signed(
             body,
@@ -1442,20 +1461,26 @@ mod tests {
                     dataspace_id: DataSpaceId::new(7),
                     lane_incarnation: Hash::new(b"excess-lane-drain-network-incarnation"),
                     close_global_height: 12,
-                    initial_merged_lane_height: 4,
-                    initial_merged_descriptor_hash: Some(Hash::new(
-                        b"excess-lane-drain-network-initial",
-                    )),
+                    initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                        LaneId::new(3),
+                        DataSpaceId::new(7),
+                        Hash::new(b"excess-lane-drain-network-incarnation"),
+                        4,
+                        Some(Hash::new(b"excess-lane-drain-network-initial")),
+                    ),
                     validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                     validator_set_hash: HashOf::new(&validator_set),
                     validator_set,
                     validator_count,
                     min_quorum: 1,
                 },
-                final_lane_block_height: 5,
-                final_lane_block_descriptor_hash: Some(Hash::new(
-                    b"excess-lane-drain-network-final",
-                )),
+                final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                    LaneId::new(3),
+                    DataSpaceId::new(7),
+                    Hash::new(b"excess-lane-drain-network-incarnation"),
+                    5,
+                    Some(Hash::new(b"excess-lane-drain-network-final")),
+                ),
             },
             signer,
             proof_of_possession: vec![0; crate::lane_consensus::LANE_BLS_PROOF_BYTES],
@@ -1528,20 +1553,26 @@ mod tests {
                     dataspace_id: DataSpaceId::new(7),
                     lane_incarnation: Hash::new(b"oversized-lane-drain-network-incarnation"),
                     close_global_height: 12,
-                    initial_merged_lane_height: 4,
-                    initial_merged_descriptor_hash: Some(Hash::new(
-                        b"oversized-lane-drain-network-initial",
-                    )),
+                    initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                        LaneId::new(3),
+                        DataSpaceId::new(7),
+                        Hash::new(b"oversized-lane-drain-network-incarnation"),
+                        4,
+                        Some(Hash::new(b"oversized-lane-drain-network-initial")),
+                    ),
                     validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                     validator_set_hash: HashOf::new(&validator_set),
                     validator_set,
                     validator_count: 1,
                     min_quorum: 1,
                 },
-                final_lane_block_height: 5,
-                final_lane_block_descriptor_hash: Some(Hash::new(
-                    b"oversized-lane-drain-network-final",
-                )),
+                final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                    LaneId::new(3),
+                    DataSpaceId::new(7),
+                    Hash::new(b"oversized-lane-drain-network-incarnation"),
+                    5,
+                    Some(Hash::new(b"oversized-lane-drain-network-final")),
+                ),
             },
             signer,
             proof_of_possession: vec![0; MAX_LANE_DRAIN_VOTE_WIRE_BYTES],

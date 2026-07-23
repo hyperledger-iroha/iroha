@@ -893,7 +893,9 @@ final class SccpV1Tests: XCTestCase {
             ("sender_codec", 2),
             ("recipient_codec", 5),
             ("asset_home_domain", 4),
+            ("amount", ""),
             ("amount", "340282366920938463463374607431768211456"),
+            ("amount", "١"),
         ]
         for (field, invalid) in invalidTransferFields {
             var malformed = try jsonObject(bundle)
@@ -1005,6 +1007,9 @@ final class SccpV1Tests: XCTestCase {
         projection["Transfer"] = projectedTransfer
         wrongProjectionDomain["payload_projection"] = projection
         XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [wrongProjectionDomain]])))
+        var unicodeBindingHash = first
+        unicodeBindingHash["destination_binding_hash"] = "0x" + String(repeating: "١", count: 64)
+        XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [unicodeBindingHash]])))
         var wrongProjectionRoute = first
         projection = wrongProjectionRoute["payload_projection"] as! [String: Any]
         projectedTransfer = projection["Transfer"] as! [String: Any]

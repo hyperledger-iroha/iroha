@@ -26,6 +26,7 @@ extern "C" {
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SCAFFOLD -501
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SIGNATURE -502
 #define CONNECT_NORITO_ERR_CANONICAL_JSON -503
+#define CONNECT_NORITO_ERR_VALIDATION_FEE_POLICY_PROOF -504
 
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL 2
@@ -129,6 +130,36 @@ int32_t connect_norito_canonical_json_blake3_v1(
     unsigned long* out_canonical_json_len,
     uint8_t* out_hash,
     unsigned long out_hash_len);
+
+// Encodes the canonical Norito V1 request body for
+// POST /v1/validation-fee/policy/current/proof. The context id is validated
+// for symmetry with the verifier but is not serialized by the frozen request.
+int32_t connect_norito_validation_fee_current_policy_proof_request_v1(
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id,
+    unsigned long trusted_checkpoint_context_id_len,
+    uint8_t** out_request,
+    unsigned long* out_request_len);
+
+// Verifies one canonical Norito proof page against finality, its synthetic
+// ordinary-write witness, the complete registry, and all immutable deployment
+// bindings. On success it returns canonical JSON using schema
+// iroha.validation_fee.verified_policy_projection.v1. The output is cleared on
+// failure and must be released with connect_norito_free on success.
+int32_t connect_norito_validation_fee_current_policy_proof_verify_v1(
+    const uint8_t* proof_norito,
+    unsigned long proof_norito_len,
+    const uint8_t* chain_id,
+    unsigned long chain_id_len,
+    const uint8_t* bound_genesis_hash,
+    unsigned long bound_genesis_hash_len,
+    const uint8_t* policy_chain_genesis_hash,
+    unsigned long policy_chain_genesis_hash_len,
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id,
+    unsigned long trusted_checkpoint_context_id_len,
+    uint8_t** out_projection_json,
+    unsigned long* out_projection_json_len);
 
 // ---------------- Chain discriminant helpers ----------------
 uint16_t connect_norito_get_chain_discriminant(void);

@@ -68,12 +68,26 @@ const NODE_CAPABILITIES = {
 function pipelineTransactionStatus(hashBytes, kind, content = null) {
   const hashPrefix = Buffer.from(hashBytes).toString("hex");
   assert.ok(hashPrefix.length > 0 && hashPrefix.length <= 64);
+  const hash = hashPrefix.padEnd(64, "0");
+  const status =
+    kind === "Applied"
+      ? { kind, block_height: 7 }
+      : { kind };
   return {
     kind: "Transaction",
-    content: {
-      hash: hashPrefix.padEnd(64, "0"),
-      status: { kind, content },
+    hash,
+    status: {
+      ...status,
+      ...(content === null ? {} : { content }),
     },
+    summary: kind,
+    scope: "global",
+    resolved_from:
+      kind === "Applied" || kind === "Rejected" || kind === "Expired"
+        ? "state"
+        : kind === "Queued"
+          ? "queue"
+          : "cache",
   };
 }
 
@@ -204,7 +218,7 @@ test("hashInstructionBatch serializes instructions and delegates to native", () 
 test("submitSignedTransaction submits payload and polls status until terminal", async () => {
   const txBytes = Buffer.from([0xaa]);
   const signedBytes = Buffer.from([0xbb]);
-  const hashBytes = Buffer.from([0x10, 0x11, 0x12, 0x13]);
+  const hashBytes = Buffer.alloc(32, 0x10);
   const submissionResponse = createResponse({
     status: 202,
     jsonData: { status: "Accepted" },
@@ -213,17 +227,17 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   const statusQueue = [
     createResponse({
       status: 202,
-      jsonData: pipelineTransactionStatus(hashBytes, "Accepted"),
-      headers: { "content-type": "application/json" },
-    }),
-    createResponse({
-      status: 200,
-      jsonData: pipelineTransactionStatus(hashBytes, "Pending"),
+      jsonData: pipelineTransactionStatus(hashBytes, "Queued"),
       headers: { "content-type": "application/json" },
     }),
     createResponse({
       status: 200,
       jsonData: pipelineTransactionStatus(hashBytes, "Committed"),
+      headers: { "content-type": "application/json" },
+    }),
+    createResponse({
+      status: 200,
+      jsonData: pipelineTransactionStatus(hashBytes, "Applied"),
       headers: { "content-type": "application/json" },
     }),
   ];
@@ -262,7 +276,7 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   );
 
   assert.equal(result.hash, hashBytes.toString("hex"));
-  assert.equal(result.status.content.status.kind, "Committed");
+  assert.equal(result.status.content.status.kind, "Applied");
   assert.equal(calls.length >= 3, true);
   const statusCalls = calls.filter((call) =>
     String(call.url).includes("/v1/pipeline/transactions/status"),
@@ -274,204 +288,60 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   );
 });
 
-test("submitSignedTransaction forwards explicit transaction status scope", async () => {
+test("submitSignedTransaction rejects removed scope before signing or submission", async () => {
   const txBytes = Buffer.from([0xcc]);
-  const signedBytes = Buffer.from([0xdd]);
+  let nativeCalls = 0;
   const binding = {
-    hashSignedTransaction: () => Buffer.alloc(32, 0x66),
-    signTransaction: () => signedBytes,
+    hashSignedTransaction: () => {
+      nativeCalls += 1;
+      return Buffer.alloc(32, 0x66);
+    },
+    signTransaction: () => {
+      nativeCalls += 1;
+      return Buffer.from([0xdd]);
+    },
   };
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (url.endsWith("/v1/pipeline/transactions")) {
-      return createResponse({
-        status: 202,
-        jsonData: { status: "Accepted" },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return createResponse({
-      status: 200,
-      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x66), "Committed"),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-
-  await withNativeBinding(binding, () =>
-    submitSignedTransaction(client, txBytes, {
-      waitForCommit: true,
-      pollIntervalMs: 0,
-      privateKey: Buffer.alloc(32, 0x01),
-      scope: "local",
-    }),
-  );
-
-  const statusCall = calls.find((call) =>
-    String(call.url).includes("/v1/pipeline/transactions/status"),
-  );
-  assert.ok(statusCall);
-  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "local");
-});
-
-test("submitSignedTransaction explicit status scope overrides client configuration", async () => {
-  const txBytes = Buffer.from([0xd0]);
-  const signedBytes = Buffer.from([0xd1]);
-  const binding = {
-    hashSignedTransaction: () => Buffer.alloc(32, 0x68),
-    signTransaction: () => signedBytes,
-  };
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (url.endsWith("/v1/pipeline/transactions")) {
-      return createResponse({
-        status: 202,
-        jsonData: { status: "Accepted" },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return createResponse({
-      status: 200,
-      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x68), "Committed"),
-      headers: { "content-type": "application/json" },
-    });
-  };
+  let fetchCalls = 0;
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    transactionStatusScope: "local",
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("removed scope must fail before fetch");
+    },
   });
 
-  await withNativeBinding(binding, () =>
-    submitSignedTransaction(client, txBytes, {
-      waitForCommit: true,
-      pollIntervalMs: 0,
-      privateKey: Buffer.alloc(32, 0x01),
-      scope: "global",
-    }),
+  await assert.rejects(
+    withNativeBinding(binding, () =>
+      submitSignedTransaction(client, txBytes, {
+        waitForCommit: true,
+        privateKey: Buffer.alloc(32, 0x01),
+        scope: "global",
+      }),
+    ),
+    /scope is unsupported; finality waits always use global scope/u,
   );
-
-  const statusCall = calls.find((call) =>
-    String(call.url).includes("/v1/pipeline/transactions/status"),
-  );
-  assert.ok(statusCall);
-  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "global");
+  assert.equal(nativeCalls, 0);
+  assert.equal(fetchCalls, 0);
 });
 
-test("submitSignedTransaction inherits client transaction status scope", async () => {
-  const txBytes = Buffer.from([0xce]);
-  const signedBytes = Buffer.from([0xcf]);
+test("submitSignedTransaction rejects even null removed scope", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("removed scope must fail before fetch");
+    },
+  });
   const binding = {
     hashSignedTransaction: () => Buffer.alloc(32, 0x67),
-    signTransaction: () => signedBytes,
+    signTransaction: () => Buffer.from([0xdd]),
   };
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (url.endsWith("/v1/pipeline/transactions")) {
-      return createResponse({
-        status: 202,
-        jsonData: { status: "Accepted" },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return createResponse({
-      status: 200,
-      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x67), "Committed"),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    transactionStatusScope: "local",
-  });
 
-  await withNativeBinding(binding, () =>
-    submitSignedTransaction(client, txBytes, {
-      waitForCommit: true,
-      pollIntervalMs: 0,
-      privateKey: Buffer.alloc(32, 0x01),
-    }),
+  await assert.rejects(
+    withNativeBinding(binding, () =>
+      submitSignedTransaction(client, Buffer.from([0xce]), {
+        scope: null,
+      }),
+    ),
+    /scope is unsupported/u,
   );
-
-  const statusCall = calls.find((call) =>
-    String(call.url).includes("/v1/pipeline/transactions/status"),
-  );
-  assert.ok(statusCall);
-  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "local");
-});
-
-test("submitSignedTransaction null status scope inherits client configuration", async () => {
-  const txBytes = Buffer.from([0xd2]);
-  const signedBytes = Buffer.from([0xd3]);
-  const binding = {
-    hashSignedTransaction: () => Buffer.alloc(32, 0x69),
-    signTransaction: () => signedBytes,
-  };
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (url.endsWith("/v1/pipeline/transactions")) {
-      return createResponse({
-        status: 202,
-        jsonData: { status: "Accepted" },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return createResponse({
-      status: 200,
-      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x69), "Committed"),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    transactionStatusScope: "auto",
-  });
-
-  await withNativeBinding(binding, () =>
-    submitSignedTransaction(client, txBytes, {
-      waitForCommit: true,
-      pollIntervalMs: 0,
-      privateKey: Buffer.alloc(32, 0x01),
-      scope: null,
-    }),
-  );
-
-  const statusCall = calls.find((call) =>
-    String(call.url).includes("/v1/pipeline/transactions/status"),
-  );
-  assert.ok(statusCall);
-  assert.equal(new URL(statusCall.url).searchParams.get("scope"), "auto");
 });
 
 test("submitSignedTransaction times out when no terminal status", async () => {
@@ -497,7 +367,7 @@ test("submitSignedTransaction times out when no terminal status", async () => {
     }
     return createResponse({
       status: 202,
-      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x42), "Accepted"),
+      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x42), "Queued"),
       headers: { "content-type": "application/json" },
     });
   };
@@ -512,12 +382,12 @@ test("submitSignedTransaction times out when no terminal status", async () => {
           pollIntervalMs: 0,
           privateKey: Buffer.alloc(32, 0x02),
         }),
-      /timed out/i,
+      /did not reach a terminal status within/i,
     );
   });
 });
 
-test("submitSignedTransaction ignores state-only and deceptive terminal labels", async () => {
+test("submitSignedTransaction rejects a deceptive non-canonical status envelope", async () => {
   const txBytes = Buffer.from([0x44]);
   const signedBytes = Buffer.from([0x55]);
   const binding = {
@@ -562,7 +432,7 @@ test("submitSignedTransaction ignores state-only and deceptive terminal labels",
           pollIntervalMs: 0,
           privateKey: Buffer.alloc(32, 0x03),
         }),
-      /timed out/i,
+      /missing or unsupported/i,
     );
   });
 });

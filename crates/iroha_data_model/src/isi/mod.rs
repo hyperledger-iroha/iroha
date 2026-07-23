@@ -1500,6 +1500,18 @@ impl From<crate::isi::governance::ProposeSccpRouteGovernance> for InstructionBox
     }
 }
 #[cfg(feature = "governance")]
+impl From<crate::isi::governance::ProposeValidationFeePolicy> for InstructionBox {
+    fn from(i: crate::isi::governance::ProposeValidationFeePolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+#[cfg(feature = "governance")]
+impl From<crate::isi::governance::ProposeValidationFeePayoutLifecycle> for InstructionBox {
+    fn from(i: crate::isi::governance::ProposeValidationFeePayoutLifecycle) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+#[cfg(feature = "governance")]
 impl From<crate::isi::governance::CastZkBallot> for InstructionBox {
     fn from(i: crate::isi::governance::CastZkBallot) -> Self {
         InstructionBox(Box::new(i))

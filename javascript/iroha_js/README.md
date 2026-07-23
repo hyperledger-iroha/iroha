@@ -726,7 +726,7 @@ const spec = new MultisigSpecBuilder()
   .setQuorum(3)
   .setTransactionTtlMs(86_400_000)
   .addSignatory("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", 2)
-  .addSignatory("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", 1)
+  .addSignatory("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", 1)
   .build();
 
 // Preview the effective TTL (clamped to the policy cap) and expiry time
@@ -775,7 +775,7 @@ const args = buildMultisigTriggerArgs("lifecycle", {
   action: "create",
   requestId: "mr1",
   fiId: "banka",
-  toAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+  toAccountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
   amountI64: 10,
   createdAtMs: Date.now(),
   expiresAtMs: Date.now() + 60_000,
@@ -850,7 +850,7 @@ import {
 
 const { publicKey, privateKey } = generateKeyPair();
 const authorityInput =
-  "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+  "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 const newAccountIdInput =
   "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄocﾆﾁヰJaｱbg6sｾgｲﾖPfX7WAWRY";
 const authority = normalizeAccountId(authorityInput);
@@ -934,18 +934,25 @@ const receipt = await torii.submitTransaction(encoded);
 const sampleHashHex =
   receipt?.payload?.tx_hash ?? "ab".repeat(32); // 32-byte transaction hash as lowercase hex
 const status = await torii.getTransactionStatus(sampleHashHex);
-console.log(status?.content.status.kind); // e.g. "Committed"
+console.log(status?.content.status.kind); // e.g. "Applied"
 
 // Normalised helper exposes canonical fields (`kind`, `hashHex`, `status.kind`, etc.)
 const typedStatus = await torii.getTransactionStatusTyped(sampleHashHex);
-console.log(typedStatus?.status?.kind); // e.g. "Committed"
+console.log(typedStatus?.status?.kind); // e.g. "Applied"
 
 // The wait helpers also ship normalised variants if you prefer structured DTOs
 await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
 await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
-// Note: `getTransactionStatus` options support only { allowShortHash, signal }.
+// Note: raw `getTransactionStatus` options support only
+// { allowShortHash, signal, scope }, where scope is the explicit diagnostic
+// choice "local" or "global" and defaults to "global". The pre-release "auto"
+// mode and cross-endpoint status fallback list are not part of the API.
 // Polling helper options support only { signal, intervalMs, timeoutMs, maxAttempts,
-// successStatuses, failureStatuses, onStatus }.
+// failureStatuses, onStatus }. Success is fixed to exact canonical `Applied`;
+// every finality wait is global-only. State-resolved Applied succeeds,
+// state-resolved Rejected or Expired always fails, and `failureStatuses` can
+// add other state-resolved failure labels. Cache-resolved terminal hints remain
+// progress observations and are retried.
 // intervalMs/timeoutMs must be non-negative integers (use timeoutMs: null to disable
 // the deadline), maxAttempts must be a positive integer when provided, and onStatus
 // must be a function.
@@ -1058,7 +1065,7 @@ const registerAccount = buildRegisterAccountInstruction({
 });
 const transfer = buildTransferAssetInstruction({
   sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+  destinationAccountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
   quantity: "5",
 });
 
@@ -1863,7 +1870,7 @@ const pinResult = await torii.pinSorafsManifest({
 console.log(`manifest=${pinResult.manifest_id_hex} digest=${pinResult.payload_digest_hex}`);
 
 const registerRequest = {
-  authority: process.env.SORAFS_OPERATOR_ID ?? "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: process.env.SORAFS_OPERATOR_ID ?? "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   private_key: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
   manifest_payload: fs.readFileSync("./manifest.norito").toString("base64"),
   submitted_epoch: Date.now(),
@@ -2675,115 +2682,66 @@ times out, aborts, or fails, the convenience path best-effort cancels the remote
 job without masking the original error; `ToriiClient.cancelIvmProveJob(jobId)`
 is also available for explicit lifecycle control.
 
-For a DS-fee-bearing call, use
-`submitValidationFeeIvmProvedContractCall`. The strict helper requires the
-signed active policy as `validationFeePolicy` and a `ToriiClient` provisioned
-with the governance keyset, contiguous policy registry, and ledger binding;
-omitting either is an error. It independently
-reproduces the canonical Norito policy hash and ledger signature payload,
-verifies the weighted governance threshold, network, genesis, active height,
-active registry tip, and version chain, then derives the fee from the proved
-overlay. Active-policy verification cannot be disabled. Under policy v1 the fee
-is exactly 10 minor units at scale 2 (`0.10`) per qualifying DS transfer.
+Validation-fee authority is ledger-native. Applications obtain bounded policy
+proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored to an
+immutable chain/genesis/policy-chain binding and a durable checkpoint. The ABI
+21 native bridge verifies the Norito proof and returns an immutable projection;
+JavaScript never substitutes application-supplied signatures or keysets for
+that trusted boundary. Persist every promoted checkpoint before requesting the
+next page. `catchUpValidationFeeCurrentPolicyProof` is available when in-memory
+promotion is sufficient.
 
 ```js
-import {
-  computeIvmArtifactHashes,
-  ToriiClient,
-  submitValidationFeeIvmProvedContractCall,
-} from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
-  authToken: process.env.IROHA_TORII_AUTH_TOKEN,
-  // Provisioned by the application from independently trusted ledger state.
-  validationFeeVerificationContext: {
-    networkId: "production-chain",
-    genesisHash,
-    currentHeight,
-    governanceKeyset,
-    policyRegistry, // full contiguous registry ending at the active policy
-  },
-});
-const {
-  codeHashHex: ROUTER_CODE_HASH_HEX,
-  artifactSha256Hex: ROUTER_ARTIFACT_SHA256_HEX,
-} = computeIvmArtifactHashes(trustedRouterArtifactBytes);
-const result = await submitValidationFeeIvmProvedContractCall(torii, {
+const binding = {
+  schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
   chainId: "production-chain",
-  authority: AUTHORITY_ACCOUNT_ID,
-  privateKey,
-  vkRef: { backend: "halo2/ipa", name: "ivm-execution-v1" },
-  // Resolve this from an independently trusted deployment manifest/checkpoint,
-  // not from the Torii instance processing this request.
-  expectedCodeHashHex: ROUTER_CODE_HASH_HEX,
-  expectedArtifactSha256Hex: ROUTER_ARTIFACT_SHA256_HEX,
-  contractAlias: "router::dex.universal",
-  entrypoint: "route_swap",
-  payload: { pool: POOL_CONTRACT_ADDRESS, amount_in: "100" },
-  gasLimit: 50_000,
-  validationFeePolicy: {
-    signedPolicy, // SignedValidationFeePolicyV1 read from ledger state
-    qualifyingTransferCount: 1, // optional assertion; the overlay is authoritative
-    feeInstructionIndex: 2, // exact fee coordinate in the derived overlay
-  },
-});
+  genesisHash: TRUSTED_GENESIS_HASH,
+  policyChainGenesisHash: TRUSTED_POLICY_CHAIN_GENESIS_HASH,
+  checkpoint: await loadDurableValidationFeeCheckpoint(),
+};
 
-console.log("submitted proved call:", result.hash);
+let checkpoint = binding.checkpoint;
+let page;
+do {
+  page = await torii.getValidationFeeCurrentPolicyProofPage(
+    binding,
+    checkpoint,
+  );
+  await storeDurableValidationFeeCheckpoint(page.promotedCheckpoint);
+  checkpoint = page.promotedCheckpoint;
+} while (page.projection.more_available);
+
+console.log("verified Parliament policy:", page.projection.current_policy);
 ```
 
-The helper reserves `validation_fee_policy_version`,
-`validation_fee_policy_hash`, `validation_fee_instruction_index`, and
-`validation_fee_transfer_entry_index`; callers cannot override them. It binds
-the verified active version/hash and exact fee coordinate before derivation.
-It decodes each real base64 Norito `InstructionBox`, resolves direct and
-`TransferAssetBatch` coordinates, derives the qualifying-transfer count from
-the decoded overlay, and treats a caller count only as an optional assertion.
-Equivalent fixed-scale values such as `0.1` and `0.10` are compared as 10 minor
-units. Ambiguous coordinates and unsupported fee-bearing nested multisig
-contexts fail before proving or signing. The client deliberately accepts only
-explicit asset transfers, transfer batches, and recursive multisig proposals
-in a fee-bearing overlay; every other or newly introduced instruction family
-fails closed until its DS effects are audited.
+Callers cannot provide validation-fee policy signatures, governance keysets, or
+reserved policy metadata. Validator admission derives the active policy from
+the Parliament registry and remains authoritative. An enabled first-release
+policy requires the typed enacted lifecycle and immutable payout binding, and
+charges exactly 10 minor units at scale 2 (`0.10`).
 
-This local check is not a replacement for stateful validator admission. In
-particular, the client has no independently trusted account-existence snapshot,
-so it cannot predict the validator's implicit account-admission fee check for a
-transfer destination. Applications that need preflight equivalence must supply
-and enforce their own trusted, height-bound state evidence before calling this
-helper; the ledger may still reject a proof as state advances.
-
-The trust anchor belongs to the `ToriiClient`, not to an individual submission.
-The constructor snapshots its registry, keysets, hashes, and byte arrays, so a
-request producer cannot swap them after the client is provisioned. A strict
-submission without `validationFeeVerificationContext` is rejected, and any
-per-call `verificationContext` (including an internally self-consistent fake
-registry/keyset) is rejected as an override. Create a newly provisioned client
-when the independently trusted height, registry, or governance keyset advances.
-
-The generic `submitIvmProvedContractCall` remains available for non-policy,
-asset-neutral proved calls. It does not imply validation-fee enforcement when
-`validationFeePolicy` is omitted. Alias pairs are mutually exclusive on both
-helpers; supplying both camel-case and snake-case forms is rejected.
-
-Both helpers require exactly one of `expectedCodeHashHex` or
-`expected_code_hash_hex` and exactly one of `expectedArtifactSha256Hex` or
-`expected_artifact_sha256_hex`. Treat both as trust anchors: copying them from
-the same Torii simulation or code endpoint defeats substitution protection.
-Use `computeIvmArtifactHashes(trustedArtifactBytes)` (also available from the
+`submitIvmProvedContractCall` quotes the exact unsigned `IvmProved` payload,
+rebuilds its signature-bound fee intent from the quote, reattaches the proof,
+and signs only the rebuilt transaction. The helper requires exactly one of
+`expectedCodeHashHex` or `expected_code_hash_hex` and exactly one of
+`expectedArtifactSha256Hex` or `expected_artifact_sha256_hex`. Treat both as
+trust anchors: copying them from the same Torii simulation or code endpoint
+defeats substitution protection. Use
+`computeIvmArtifactHashes(trustedArtifactBytes)` (also available from the
 browser-safe `@iroha/iroha-js/ivm-artifact` export) to compute both values from
 independently obtained bytes. That subpath ships standalone DOM declarations
 and does not require ambient Node types. Complete artifacts are capped at 4 MiB
 (`IVM_ARTIFACT_MAX_BYTES`) before copying or hashing. ArrayBuffer inputs from
 other JavaScript realms are supported, but SharedArrayBuffer-backed inputs are
 rejected so concurrently mutable bytes cannot cross the identity boundary.
-Torii code-byte, simulation, derivation, and proof-job JSON responses are read
-through endpoint-specific byte caps before UTF-8 decoding or JSON parsing;
-missing or dishonest `Content-Length` headers cannot bypass the streamed limit.
+Torii code-byte, simulation, derivation, proof-job, quote, and submission
+responses are read through endpoint-specific byte caps before UTF-8 decoding or
+JSON parsing; missing or dishonest `Content-Length` headers cannot bypass the
+streamed limit.
 
-The optional legacy `requiredOverlayTransfer` assertion may be supplied too,
-but it must equal the policy-derived transfer and cannot redirect or change the
-fee. It never appends an instruction: the deployed contract (including any
-nested pool call) must emit the transfer inside the proved overlay.
+The optional `requiredOverlayTransfer` value is only a caller assertion. It
+never appends or redirects an instruction: the deployed contract must emit that
+transfer exactly once inside the proved overlay.
 
 The deployed artifact must be compiled in ZK mode with `koto build --zk`; its
 manifest and bytecode must already be registered, and the
@@ -3921,7 +3879,7 @@ const deriveResponse = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+      accountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
       variant: "Normal",
       pk: validatorPublicKeyBytes,
       proof: validatorProofBytes,

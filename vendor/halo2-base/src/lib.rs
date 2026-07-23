@@ -276,8 +276,13 @@ impl<F: ScalarField> Context<F> {
     /// Returns the [AssignedValue] of the last cell in the `advice` column of [Context] or [None] if `advice` is empty
     pub fn last(&self) -> Option<AssignedValue<F>> {
         self.advice.last().map(|v| {
-            let cell = (!self.witness_gen_only).then_some(self.latest_cell());
-            AssignedValue { value: *v, cell }
+            // Keep the virtual location during witness generation as well.
+            // Composite circuits may need to copy-constrain a raw Halo2 chip
+            // to a cell assigned by this virtual region after both regions
+            // have been materialized. Constraint collection remains guarded
+            // by `witness_gen_only`; retaining the pointer does not add any
+            // virtual equality work.
+            AssignedValue { value: *v, cell: Some(self.latest_cell()) }
         })
     }
 
@@ -293,12 +298,8 @@ impl<F: ScalarField> Context<F> {
             offset as usize
         };
         assert!(offset < self.advice.len());
-        let cell = (!self.witness_gen_only).then_some(ContextCell::new(
-            self.type_id,
-            self.context_id,
-            offset,
-        ));
-        AssignedValue { value: self.advice[offset], cell }
+        let cell = ContextCell::new(self.type_id, self.context_id, offset);
+        AssignedValue { value: self.advice[offset], cell: Some(cell) }
     }
 
     /// Creates an equality constraint between two `advice` cells.
@@ -430,12 +431,8 @@ impl<F: ScalarField> Context<F> {
             .iter()
             .enumerate()
             .map(|(i, v)| {
-                let cell = (!self.witness_gen_only).then_some(ContextCell::new(
-                    self.type_id,
-                    self.context_id,
-                    row_offset + i,
-                ));
-                AssignedValue { value: *v, cell }
+                let cell = ContextCell::new(self.type_id, self.context_id, row_offset + i);
+                AssignedValue { value: *v, cell: Some(cell) }
             })
             .collect()
     }

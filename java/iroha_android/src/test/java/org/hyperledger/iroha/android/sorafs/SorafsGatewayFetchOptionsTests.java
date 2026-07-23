@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.sorafs;
 
 import java.util.Base64;
 import java.util.Map;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 
 public final class SorafsGatewayFetchOptionsTests {
 
@@ -9,8 +10,8 @@ public final class SorafsGatewayFetchOptionsTests {
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
   private static final String PROVIDER_ID_HEX =
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-  private static final String GATEWAY_PUBLIC_KEY_HEX =
-      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  private static final String GATEWAY_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x2B);
+  private static final String ED25519_IDENTITY_KEY_HEX = "01" + "00".repeat(31);
   private static final String MANIFEST_CID_HEX =
       "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
   private static final String CHUNKER_HANDLE = "sorafs.sf1@1.0.0";
@@ -28,6 +29,7 @@ public final class SorafsGatewayFetchOptionsTests {
     rejectsInvalidProviderIdHex();
     rejectsShortProviderIdHex();
     rejectsInvalidGatewayPublicKeyHex();
+    rejectsSmallOrderGatewayPublicKey();
     rejectsInvalidStreamTokenBase64();
     rejectsInvalidManifestIdHex();
     rejectsShortManifestIdHex();
@@ -177,6 +179,15 @@ public final class SorafsGatewayFetchOptionsTests {
     assertThrows(
         () -> GatewayProvider.builder().setName("primary").setGatewayPublicKeyHex("aa".repeat(16)),
         "expected short gatewayPublicKeyHex to throw");
+  }
+
+  private static void rejectsSmallOrderGatewayPublicKey() {
+    assertThrows(
+        () ->
+            GatewayProvider.builder()
+                .setName("primary")
+                .setGatewayPublicKeyHex(ED25519_IDENTITY_KEY_HEX),
+        "expected small-order gatewayPublicKeyHex to throw");
   }
 
   private static void rejectsInvalidStreamTokenBase64() {

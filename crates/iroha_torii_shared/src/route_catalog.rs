@@ -2706,6 +2706,36 @@ pub mod runtime_governance {
         "governance.proposal.sccp_route_governance",
         "/v1/gov/proposals/sccp-route-governance",
     );
+    /// Finality-bound current validation-fee policy proof path.
+    pub const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: &str =
+        "/v1/validation-fee/policy/current/proof";
+    /// Typed validation-fee proposal list path.
+    pub const VALIDATION_FEE_PROPOSALS_PATH: &str = "/v1/validation-fee/proposals";
+    /// Typed validation-fee proposal detail path.
+    pub const VALIDATION_FEE_PROPOSAL_DETAIL_PATH: &str =
+        "/v1/validation-fee/proposals/{proposal_id}";
+    /// Strict native validation-fee proposal draft path.
+    pub const VALIDATION_FEE_PROPOSAL_DRAFT_PATH: &str = "/v1/validation-fee/proposals/draft";
+    /// Fetch a finality-bound current validation-fee registry.
+    pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: RouteDescriptor = app_post(
+        "validation_fee.policy.current_proof",
+        VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
+    );
+    /// List typed validation-fee Parliament proposals.
+    pub const VALIDATION_FEE_PROPOSALS: RouteDescriptor = app_get(
+        "validation_fee.proposal.list",
+        VALIDATION_FEE_PROPOSALS_PATH,
+    );
+    /// Read one typed validation-fee Parliament proposal.
+    pub const VALIDATION_FEE_PROPOSAL_DETAIL: RouteDescriptor = app_get(
+        "validation_fee.proposal.read",
+        VALIDATION_FEE_PROPOSAL_DETAIL_PATH,
+    );
+    /// Draft one strict native validation-fee Parliament proposal.
+    pub const VALIDATION_FEE_PROPOSAL_DRAFT: RouteDescriptor = app_post(
+        "validation_fee.proposal.draft",
+        VALIDATION_FEE_PROPOSAL_DRAFT_PATH,
+    );
     /// Read one governance proposal.
     pub const GOV_PROPOSAL_GET: RouteDescriptor =
         app_get("governance.proposal.read", "/v1/gov/proposals/{id}");
@@ -2829,6 +2859,10 @@ pub mod runtime_governance {
         MINISTRY_AGENDA_GET,
         GOV_PROPOSE_DEPLOY,
         GOV_PROPOSE_SCCP,
+        VALIDATION_FEE_CURRENT_POLICY_PROOF,
+        VALIDATION_FEE_PROPOSALS,
+        VALIDATION_FEE_PROPOSAL_DETAIL,
+        VALIDATION_FEE_PROPOSAL_DRAFT,
         GOV_PROPOSAL_GET,
         GOV_LOCKS_GET,
         GOV_REFERENDUM_GET,
@@ -4422,6 +4456,10 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::MINISTRY_AGENDA_GET,
     runtime_governance::GOV_PROPOSE_DEPLOY,
     runtime_governance::GOV_PROPOSE_SCCP,
+    runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+    runtime_governance::VALIDATION_FEE_PROPOSALS,
+    runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL,
+    runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT,
     runtime_governance::GOV_PROPOSAL_GET,
     runtime_governance::GOV_LOCKS_GET,
     runtime_governance::GOV_REFERENDUM_GET,

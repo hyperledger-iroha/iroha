@@ -59,9 +59,11 @@ public final class RamLfeProgramPolicySummary {
     this.programId = Objects.requireNonNull(programId, "programId");
     this.owner = Objects.requireNonNull(owner, "owner");
     this.active = active;
-    this.resolverPublicKey = Objects.requireNonNull(resolverPublicKey, "resolverPublicKey");
+    this.resolverPublicKey =
+        PublicKeyLiteralAdmission.requireValid(resolverPublicKey, "resolverPublicKey");
     this.outputOpeningPublicKey =
-        Objects.requireNonNull(outputOpeningPublicKey, "outputOpeningPublicKey");
+        PublicKeyLiteralAdmission.requireValid(
+            outputOpeningPublicKey, "outputOpeningPublicKey");
     this.backend = Objects.requireNonNull(backend, "backend");
     this.verificationMode = Objects.requireNonNull(verificationMode, "verificationMode");
     this.inputEncryption = inputEncryption;

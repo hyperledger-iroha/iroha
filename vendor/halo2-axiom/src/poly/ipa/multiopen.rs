@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::{
-    poly::query::{exists_query_collision, Query},
+    poly::query::{Query, exists_query_collision},
     transcript::ChallengeScalar,
 };
 use ff::Field;

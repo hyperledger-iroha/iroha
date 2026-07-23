@@ -1,6 +1,10 @@
 //! Authoritative SoraFS moderation commit/reveal ledger handlers.
 
-use std::{str::FromStr, sync::OnceLock};
+use std::{
+    collections::BTreeMap,
+    str::FromStr,
+    sync::OnceLock,
+};
 
 use iroha_data_model::{
     account::AccountId,
@@ -24,8 +28,10 @@ use iroha_data_model::{
         sorafs::prelude::{
             FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
             FindSorafsModerationCommit, FindSorafsModerationJurorEligibility,
-            FindSorafsModerationNoShow, FindSorafsModerationOutcome, FindSorafsModerationPolicy,
-            FindSorafsModerationReveal, FindSorafsModerationStatus,
+            FindSorafsModerationEvents, FindSorafsModerationNoShow,
+            FindSorafsModerationOutcome, FindSorafsModerationPolicy,
+            FindSorafsModerationReveal, FindSorafsModerationSnapshot,
+            FindSorafsModerationStatus,
         },
     },
     sorafs::{
@@ -35,11 +41,18 @@ use iroha_data_model::{
             SoraFsModerationVoteChoice,
         },
         moderation_ledger::{
+            MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
             MODERATION_LEDGER_MAX_NONCE_BYTES_V1, MODERATION_LEDGER_MAX_PANEL_SIZE_V1,
             MODERATION_LEDGER_MAX_REASON_BYTES_V1, MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1,
-            ModerationAppealRecordV1, ModerationAppealStatusV1, ModerationCaseRecordV1,
-            ModerationCaseSpecV1, ModerationCaseStatusV1, ModerationChallengeDecisionV1,
-            ModerationChallengeRecordV1, ModerationCommitRecordV1,
+            MODERATION_QUERY_MAX_CASES_V1, MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+            MODERATION_QUERY_MAX_EVENTS_V1, MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
+            ModerationAppealRecordV1, ModerationAppealStatusV1,
+            ModerationCaseRecordV1, ModerationCaseSpecV1, ModerationCaseStatusV1,
+            ModerationChallengeDecisionV1, ModerationChallengeRecordV1,
+            ModerationCommitRecordV1, ModerationFinalizedAppealViewV1,
+            ModerationFinalizedCaseViewV1, ModerationFinalizedCursorV1,
+            ModerationFinalizedEventCursorV1, ModerationFinalizedEventPageV1,
+            ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1,
             ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
             ModerationJurorReplacementV1, ModerationLedgerPolicyRecord, ModerationLedgerStatusV1,
             ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
@@ -81,6 +94,8 @@ const REVEAL_STATE_KEY_PREFIX: &str = "sorafs_moderation_reveal_v1_";
 const CHALLENGE_STATE_KEY_PREFIX: &str = "sorafs_moderation_challenge_v1_";
 const OUTCOME_STATE_KEY_PREFIX: &str = "sorafs_moderation_outcome_v1_";
 const NO_SHOW_STATE_KEY_PREFIX: &str = "sorafs_moderation_no_show_v1_";
+const EVENT_STATE_KEY_PREFIX: &str = "sorafs_moderation_event_v1_";
+const EVENT_JOURNAL_HEAD_STATE_KEY: &str = "sorafs_moderation_event_head_v1";
 const CASE_KEY_DOMAIN_V1: &[u8] = b"sorafs.moderation.case-state-key.v1";
 const JUROR_KEY_DOMAIN_V1: &[u8] = b"sorafs.moderation.juror-state-key.v1";
 const CHALLENGE_KEY_DOMAIN_V1: &[u8] = b"sorafs.moderation.challenge-state-key.v1";
@@ -103,6 +118,7 @@ const PROOF_LIMITS: DecodeLimits = DecodeLimits::new(
     64,
 );
 const MANAGE_PERMISSION: &str = "CanManageSorafsModeration";
+const MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1: usize = 65_536;
 
 #[derive(Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealDepositBindingStateV1 {
@@ -118,6 +134,25 @@ struct AppealProofTokenBindingStateV1 {
     case_id: String,
     round_id: String,
     intake_digest: [u8; 32],
+}
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize,
+)]
+struct ModerationPersistedEventV1 {
+    sequence: u64,
+    target_block_height: u64,
+    event_index: u32,
+    event: SorafsModerationLedgerEvent,
+}
+
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize,
+)]
+struct ModerationEventJournalHeadV1 {
+    last_sequence: u64,
+    last_target_block_height: u64,
+    last_event_index: u32,
 }
 
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
@@ -269,6 +304,18 @@ fn policy_key() -> &'static Name {
 fn status_key() -> &'static Name {
     static KEY: OnceLock<Name> = OnceLock::new();
     KEY.get_or_init(|| Name::from_str(STATUS_STATE_KEY).expect("static state key is valid"))
+}
+
+fn event_journal_head_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| {
+        Name::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
+    })
+}
+
+fn event_key(sequence: u64) -> Name {
+    Name::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
+        .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
 
 fn digest_key(prefix: &str, digest: [u8; 32]) -> Name {
@@ -469,6 +516,111 @@ where
         )));
     }
     Ok(value)
+}
+
+fn validate_persisted_event(
+    record: &ModerationPersistedEventV1,
+    expected_sequence: u64,
+) -> Result<(), InstructionExecutionError> {
+    if record.sequence == 0
+        || record.sequence != expected_sequence
+        || record.target_block_height == 0
+        || record.event.occurred_at_unix_ms == 0
+    {
+        return Err(corrupt_state(
+            "stored moderation event journal metadata is inconsistent",
+        ));
+    }
+    let identifiers_valid = match record.event.kind {
+        SorafsModerationLedgerEventKind::PolicyActivated => {
+            record.event.case_id.is_none() && record.event.round_id.is_none()
+        }
+        _ => record
+            .event
+            .case_id
+            .as_deref()
+            .zip(record.event.round_id.as_deref())
+            .is_some_and(|(case_id, round_id)| {
+                is_canonical_moderation_identifier_v1(case_id)
+                    && is_canonical_moderation_identifier_v1(round_id)
+            }),
+    };
+    if !identifiers_valid {
+        return Err(corrupt_state(
+            "stored moderation event journal identifiers are inconsistent",
+        ));
+    }
+    Ok(())
+}
+
+fn read_persisted_event(
+    world: &impl WorldReadOnly,
+    sequence: u64,
+) -> Result<Option<ModerationPersistedEventV1>, InstructionExecutionError> {
+    if sequence == 0 {
+        return Err(corrupt_state(
+            "moderation event journal sequence zero is invalid",
+        ));
+    }
+    let key = event_key(sequence);
+    let Some(bytes) = world.smart_contract_state().get(&key) else {
+        return Ok(None);
+    };
+    let record: ModerationPersistedEventV1 =
+        decode_state(bytes, "moderation committed event")?;
+    validate_persisted_event(&record, sequence)?;
+    Ok(Some(record))
+}
+
+fn read_event_journal_head(
+    world: &impl WorldReadOnly,
+) -> Result<Option<ModerationEventJournalHeadV1>, InstructionExecutionError> {
+    let Some(bytes) = world
+        .smart_contract_state()
+        .get(event_journal_head_key())
+    else {
+        return Ok(None);
+    };
+    let head: ModerationEventJournalHeadV1 =
+        decode_state(bytes, "moderation event journal head")?;
+    if head.last_sequence == 0 || head.last_target_block_height == 0 {
+        return Err(corrupt_state(
+            "stored moderation event journal head is invalid",
+        ));
+    }
+    let last = read_persisted_event(world, head.last_sequence)?
+        .ok_or_else(|| corrupt_state("moderation event journal head has no terminal record"))?;
+    if last.target_block_height != head.last_target_block_height
+        || last.event_index != head.last_event_index
+    {
+        return Err(corrupt_state(
+            "stored moderation event journal head disagrees with its terminal record",
+        ));
+    }
+    Ok(Some(head))
+}
+
+fn ensure_no_event_after_head(
+    world: &impl WorldReadOnly,
+    head: Option<ModerationEventJournalHeadV1>,
+) -> Result<(), InstructionExecutionError> {
+    let start = head.map_or_else(
+        || Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid"),
+        |head| event_key(head.last_sequence),
+    );
+    for (key, _) in world.smart_contract_state().range(start..) {
+        let rendered = key.to_string();
+        if !rendered.starts_with(EVENT_STATE_KEY_PREFIX) {
+            break;
+        }
+        if head.is_some_and(|head| *key == event_key(head.last_sequence)) {
+            continue;
+        }
+        return Err(corrupt_state(
+            "moderation event journal contains a record beyond its head",
+        ));
+    }
+    Ok(())
 }
 
 fn decode_membership_proof(
@@ -1356,18 +1508,120 @@ fn emit_moderation_ledger_event(
     round_id: Option<&str>,
     authority: &AccountId,
     now: u64,
-) {
+) -> Result<(), InstructionExecutionError> {
+    let committed_parent_height =
+        u64::try_from(state_transaction.block_hashes().len()).map_err(|_| {
+            corrupt_state("committed moderation parent height does not fit into u64")
+        })?;
+    let target_block_height = committed_parent_height
+        .checked_add(1)
+        .ok_or_else(|| corrupt_state("moderation event target block height overflow"))?;
+    let executing_block_height = state_transaction._curr_block.height().get();
+    if target_block_height != executing_block_height {
+        return Err(corrupt_state(format!(
+            "moderation event target height {target_block_height} does not match executing block height {executing_block_height}"
+        )));
+    }
+
+    let event = SorafsModerationLedgerEvent {
+        kind,
+        case_id: case_id.map(str::to_owned),
+        round_id: round_id.map(str::to_owned),
+        authority: authority.clone(),
+        occurred_at_unix_ms: now,
+    };
+    let head = read_event_journal_head(state_transaction.world())?;
+    ensure_no_event_after_head(state_transaction.world(), head)?;
+    let (sequence, event_index) = match head {
+        Some(head) => {
+            let sequence = head
+                .last_sequence
+                .checked_add(1)
+                .ok_or_else(|| corrupt_state("moderation event sequence overflow"))?;
+            let event_index = match head.last_target_block_height.cmp(&target_block_height) {
+                core::cmp::Ordering::Less => 0,
+                core::cmp::Ordering::Equal => head
+                    .last_event_index
+                    .checked_add(1)
+                    .ok_or_else(|| corrupt_state("moderation event block index overflow"))?,
+                core::cmp::Ordering::Greater => {
+                    return Err(corrupt_state(
+                        "moderation event target height regressed behind the journal head",
+                    ));
+                }
+            };
+            (sequence, event_index)
+        }
+        None => {
+            let policy = read_policy(state_transaction.world())?
+                .ok_or_else(|| corrupt_state("first moderation event has no active policy"))?;
+            let status = read_status(state_transaction.world())?
+                .ok_or_else(|| corrupt_state("first moderation event has no ledger status"))?;
+            let counters_empty = status.appeal_intakes == 0
+                && status.eligibility_proofs == 0
+                && status.panel_selections == 0
+                && status.assignment_acceptances == 0
+                && status.failover_replacements == 0
+                && status.failed_panel_formations == 0
+                && status.open_cases == 0
+                && status.finalized_cases == 0
+                && status.commitments == 0
+                && status.reveals == 0
+                && status.challenges == 0
+                && status.outcomes == 0
+                && status.no_shows == 0;
+            if kind != SorafsModerationLedgerEventKind::PolicyActivated
+                || case_id.is_some()
+                || round_id.is_some()
+                || policy.policy.revision != 1
+                || !counters_empty
+            {
+                return Err(corrupt_state(
+                    "moderation event journal must begin with the initial policy activation",
+                ));
+            }
+            (1, 0)
+        }
+    };
+    let key = event_key(sequence);
+    if state_transaction
+        .world
+        .smart_contract_state
+        .get(&key)
+        .is_some()
+    {
+        return Err(corrupt_state(
+            "moderation event journal sequence already exists",
+        ));
+    }
+    let record = ModerationPersistedEventV1 {
+        sequence,
+        target_block_height,
+        event_index,
+        event: event.clone(),
+    };
+    validate_persisted_event(&record, sequence)?;
+    let next_head = ModerationEventJournalHeadV1 {
+        last_sequence: sequence,
+        last_target_block_height: target_block_height,
+        last_event_index: event_index,
+    };
+    let encoded_record = encode_state(&record, "moderation committed event")?;
+    let encoded_head = encode_state(&next_head, "moderation event journal head")?;
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(key, encoded_record);
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(event_journal_head_key().clone(), encoded_head);
     state_transaction
         .world
         .emit_events(Some(SorafsGatewayEvent::ModerationLedger(
-            SorafsModerationLedgerEvent {
-                kind,
-                case_id: case_id.map(str::to_owned),
-                round_id: round_id.map(str::to_owned),
-                authority: authority.clone(),
-                occurred_at_unix_ms: now,
-            },
+            event,
         )));
+    Ok(())
 }
 
 impl Execute for SetSorafsModerationPolicy {
@@ -1449,7 +1703,7 @@ impl Execute for SetSorafsModerationPolicy {
             None,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1622,7 +1876,7 @@ impl Execute for SubmitSorafsModerationAppeal {
             Some(&record.intake.round_id),
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1765,7 +2019,7 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
             Some(&record.round_id),
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1878,7 +2132,7 @@ impl Execute for FinalizeSorafsModerationSortition {
                     Some(&self.round_id),
                     authority,
                     now,
-                );
+                )?;
                 return Ok(());
             }
             Err(error) => {
@@ -1930,7 +2184,7 @@ impl Execute for FinalizeSorafsModerationSortition {
             Some(&self.round_id),
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -2003,7 +2257,7 @@ impl Execute for AcceptSorafsModerationJurorAssignment {
             Some(&self.round_id),
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -2081,7 +2335,7 @@ impl Execute for ActivateSorafsModerationCase {
                     Some(&self.round_id),
                     authority,
                     now,
-                );
+                )?;
                 return Ok(());
             };
             jurors.push(replacement.clone());
@@ -2170,7 +2424,7 @@ impl Execute for ActivateSorafsModerationCase {
             Some(&self.round_id),
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -2277,7 +2531,7 @@ impl Execute for SubmitSorafsModerationCommit {
             Some(&record.round_id),
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -2407,7 +2661,7 @@ impl Execute for RaiseSorafsModerationChallenge {
             Some(&record.round_id),
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -2503,7 +2757,7 @@ impl Execute for ResolveSorafsModerationChallenge {
             Some(&self.round_id),
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -2631,7 +2885,7 @@ impl Execute for SubmitSorafsModerationReveal {
             Some(&record.round_id),
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -2873,9 +3127,410 @@ impl Execute for FinalizeSorafsModerationCase {
             Some(&self.round_id),
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
+}
+
+#[derive(Default)]
+struct ModerationSnapshotReadBudget {
+    records: usize,
+    encoded_bytes: usize,
+}
+
+impl ModerationSnapshotReadBudget {
+    fn charge(&mut self, key: &Name, payload: &[u8]) -> Result<(), InstructionExecutionError> {
+        self.records = self
+            .records
+            .checked_add(1)
+            .ok_or_else(|| corrupt_state("moderation snapshot record counter overflow"))?;
+        if self.records > MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1 {
+            return Err(corrupt_state(format!(
+                "moderation snapshot exceeds {MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1} stored records"
+            )));
+        }
+        self.encoded_bytes = self
+            .encoded_bytes
+            .checked_add(key.to_string().len())
+            .and_then(|total| total.checked_add(payload.len()))
+            .ok_or_else(|| corrupt_state("moderation snapshot byte counter overflow"))?;
+        if self.encoded_bytes > MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1 {
+            return Err(corrupt_state(format!(
+                "moderation snapshot source state exceeds {MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1} bytes"
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn charge_existing_snapshot_state(
+    world: &impl WorldReadOnly,
+    key: &Name,
+    budget: &mut ModerationSnapshotReadBudget,
+) -> Result<(), InstructionExecutionError> {
+    if let Some(payload) = world.smart_contract_state().get(key) {
+        budget.charge(key, payload)?;
+    }
+    Ok(())
+}
+
+fn scan_moderation_state_prefix<T>(
+    world: &impl WorldReadOnly,
+    prefix: &'static str,
+    label: &'static str,
+    budget: &mut ModerationSnapshotReadBudget,
+    mut validate: impl FnMut(&Name, T) -> Result<T, InstructionExecutionError>,
+) -> Result<Vec<T>, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    let start = Name::from_str(prefix).expect("static moderation state prefix is valid");
+    let mut records = Vec::new();
+    for (key, payload) in world.smart_contract_state().range(start..) {
+        if !key.to_string().starts_with(prefix) {
+            break;
+        }
+        budget.charge(key, payload)?;
+        let candidate = decode_state(payload, label)?;
+        records.push(validate(key, candidate)?);
+    }
+    Ok(records)
+}
+
+fn resolve_finalized_cursor(
+    state_ro: &impl crate::state::StateReadOnly,
+) -> Result<ModerationFinalizedCursorV1, QueryExecutionFail> {
+    let height = u64::try_from(state_ro.block_hashes().len()).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "finalized moderation height does not fit into u64".to_owned(),
+        )
+    })?;
+    let hash = state_ro
+        .block_hashes()
+        .last()
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "finalized moderation queries require at least one committed block".to_owned(),
+            )
+        })?;
+    if height == 0 || hash == [0; 32] {
+        return Err(QueryExecutionFail::Conversion(
+            "finalized moderation query anchor is invalid".to_owned(),
+        ));
+    }
+    Ok(ModerationFinalizedCursorV1 {
+        height,
+        block_hash: hash,
+    })
+}
+
+fn resolve_committed_event(
+    state_ro: &impl crate::state::StateReadOnly,
+    record: &ModerationPersistedEventV1,
+) -> Result<ModerationFinalizedEventV1, QueryExecutionFail> {
+    let hash_index = record
+        .target_block_height
+        .checked_sub(1)
+        .and_then(|height| usize::try_from(height).ok())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "moderation event target height cannot index finalized block hashes".to_owned(),
+            )
+        })?;
+    let block_hash = state_ro
+        .block_hashes()
+        .get(hash_index)
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(format!(
+                "moderation event sequence {} targets non-finalized block height {}",
+                record.sequence, record.target_block_height
+            ))
+        })?;
+    if block_hash == [0; 32] {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "moderation event sequence {} resolved a zero block hash",
+            record.sequence
+        )));
+    }
+    Ok(ModerationFinalizedEventV1 {
+        sequence: record.sequence,
+        block_height: record.target_block_height,
+        block_hash,
+        event_index: record.event_index,
+        event: record.event.clone(),
+    })
+}
+
+fn validate_event_successor(
+    previous: Option<&ModerationPersistedEventV1>,
+    current: &ModerationPersistedEventV1,
+) -> Result<(), InstructionExecutionError> {
+    let Some(previous) = previous else {
+        if current.sequence != 1 || current.event_index != 0 {
+            return Err(corrupt_state(
+                "moderation event journal does not begin at sequence one and block index zero",
+            ));
+        }
+        return Ok(());
+    };
+    if previous
+        .sequence
+        .checked_add(1)
+        .is_none_or(|next| current.sequence != next)
+    {
+        return Err(corrupt_state(
+            "moderation event journal sequence is not contiguous",
+        ));
+    }
+    match current
+        .target_block_height
+        .cmp(&previous.target_block_height)
+    {
+        core::cmp::Ordering::Less => Err(corrupt_state(
+            "moderation event journal block height regressed",
+        )),
+        core::cmp::Ordering::Equal => {
+            if previous
+                .event_index
+                .checked_add(1)
+                .is_some_and(|next| current.event_index == next)
+            {
+                Ok(())
+            } else {
+                Err(corrupt_state(
+                    "moderation event journal block index is not contiguous",
+                ))
+            }
+        }
+        core::cmp::Ordering::Greater => {
+            if current.event_index == 0 {
+                Ok(())
+            } else {
+                Err(corrupt_state(
+                    "moderation event journal did not reset its block index",
+                ))
+            }
+        }
+    }
+}
+
+fn checked_snapshot_limits(
+    query: &FindSorafsModerationSnapshot,
+) -> Result<(usize, usize), QueryExecutionFail> {
+    if !(1..=MODERATION_QUERY_MAX_CASES_V1).contains(&query.max_cases) {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "SoraFS moderation snapshot max_cases {} is outside 1..={MODERATION_QUERY_MAX_CASES_V1}",
+            query.max_cases
+        )));
+    }
+    if !(1..=MODERATION_QUERY_MAX_EVENTS_V1).contains(&query.max_events) {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "SoraFS moderation snapshot max_events {} is outside 1..={MODERATION_QUERY_MAX_EVENTS_V1}",
+            query.max_events
+        )));
+    }
+    let max_cases = usize::try_from(query.max_cases).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "SoraFS moderation max_cases conversion failed".to_owned(),
+        )
+    })?;
+    let max_events = usize::try_from(query.max_events).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "SoraFS moderation max_events conversion failed".to_owned(),
+        )
+    })?;
+    Ok((max_cases, max_events))
+}
+
+fn checked_event_page_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
+    if !(1..=MODERATION_QUERY_MAX_EVENTS_V1).contains(&limit) {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "SoraFS moderation event limit {limit} is outside 1..={MODERATION_QUERY_MAX_EVENTS_V1}"
+        )));
+    }
+    usize::try_from(limit).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "SoraFS moderation event limit conversion failed".to_owned(),
+        )
+    })
+}
+
+fn read_event_sequence(
+    state_ro: &impl crate::state::StateReadOnly,
+    sequence: u64,
+    previous: Option<&ModerationPersistedEventV1>,
+) -> Result<(ModerationPersistedEventV1, ModerationFinalizedEventV1), QueryExecutionFail> {
+    let record = read_persisted_event(state_ro.world(), sequence)
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(format!(
+                "moderation event journal is missing sequence {sequence}"
+            ))
+        })?;
+    validate_event_successor(previous, &record).map_err(query_failure)?;
+    let resolved = resolve_committed_event(state_ro, &record)?;
+    Ok((record, resolved))
+}
+
+fn latest_committed_events(
+    state_ro: &impl crate::state::StateReadOnly,
+    head: Option<ModerationEventJournalHeadV1>,
+    limit: usize,
+    budget: &mut ModerationSnapshotReadBudget,
+) -> Result<Vec<ModerationFinalizedEventV1>, QueryExecutionFail> {
+    let Some(head) = head else {
+        return Ok(Vec::new());
+    };
+    let limit_u64 = u64::try_from(limit).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "moderation snapshot event limit does not fit into u64".to_owned(),
+        )
+    })?;
+    let start = head
+        .last_sequence
+        .saturating_sub(limit_u64.saturating_sub(1))
+        .max(1);
+    let mut previous = if start > 1 {
+        let predecessor_sequence = start - 1;
+        charge_existing_snapshot_state(
+            state_ro.world(),
+            &event_key(predecessor_sequence),
+            budget,
+        )
+        .map_err(query_failure)?;
+        Some(
+            read_persisted_event(state_ro.world(), predecessor_sequence)
+                .map_err(query_failure)?
+                .ok_or_else(|| {
+                    QueryExecutionFail::Conversion(format!(
+                        "moderation event journal is missing predecessor sequence {predecessor_sequence}"
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
+    let capacity = usize::try_from(head.last_sequence - start + 1).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "moderation snapshot event count does not fit into usize".to_owned(),
+        )
+    })?;
+    let mut events = Vec::with_capacity(capacity);
+    for sequence in start..=head.last_sequence {
+        charge_existing_snapshot_state(state_ro.world(), &event_key(sequence), budget)
+            .map_err(query_failure)?;
+        let (record, resolved) = read_event_sequence(state_ro, sequence, previous.as_ref())?;
+        previous = Some(record);
+        events.push(resolved);
+    }
+    Ok(events)
+}
+
+fn query_moderation_event_page(
+    query: &FindSorafsModerationEvents,
+    state_ro: &impl crate::state::StateReadOnly,
+) -> Result<ModerationFinalizedEventPageV1, QueryExecutionFail> {
+    let limit = checked_event_page_limit(query.limit)?;
+    let finalized_cursor = resolve_finalized_cursor(state_ro)?;
+    if query.expected_finalized_cursor != finalized_cursor {
+        return Err(QueryExecutionFail::Expired);
+    }
+    let head = read_event_journal_head(state_ro.world()).map_err(query_failure)?;
+    ensure_no_event_after_head(state_ro.world(), head).map_err(query_failure)?;
+    let mut previous = match query.after {
+        Some(after) => {
+            let head = head.ok_or(QueryExecutionFail::Expired)?;
+            if after.sequence == 0 || after.sequence > head.last_sequence {
+                return Err(QueryExecutionFail::Expired);
+            }
+            let record = read_persisted_event(state_ro.world(), after.sequence)
+                .map_err(query_failure)?
+                .ok_or(QueryExecutionFail::Expired)?;
+            let resolved = resolve_committed_event(state_ro, &record)?;
+            if resolved.cursor() != after {
+                return Err(QueryExecutionFail::Expired);
+            }
+            Some(record)
+        }
+        None => None,
+    };
+    let start = query
+        .after
+        .map_or(Ok(1), |after| {
+            after.sequence.checked_add(1).ok_or_else(|| {
+                if head.is_some_and(|head| head.last_sequence == after.sequence) {
+                    QueryExecutionFail::Expired
+                } else {
+                    QueryExecutionFail::Conversion(
+                        "moderation event continuation sequence overflow".to_owned(),
+                    )
+                }
+            })
+        })?;
+    let last_sequence = head.map_or(0, |head| head.last_sequence);
+    let mut events = Vec::with_capacity(limit);
+    let mut encoded_event_bytes = 0usize;
+    let mut sequence = start;
+    while sequence <= last_sequence && events.len() < limit {
+        let (record, resolved) = read_event_sequence(state_ro, sequence, previous.as_ref())?;
+        encoded_event_bytes = encoded_event_bytes
+            .checked_add(
+                norito::to_bytes(&resolved)
+                    .map_err(|error| {
+                        QueryExecutionFail::Conversion(format!(
+                            "failed to encode committed moderation event: {error}"
+                        ))
+                    })?
+                    .len(),
+            )
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "committed moderation event page byte counter overflow".to_owned(),
+                )
+            })?;
+        if encoded_event_bytes > MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+            return Err(QueryExecutionFail::Conversion(format!(
+                "committed moderation event page exceeds {MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1} bytes"
+            )));
+        }
+        previous = Some(record);
+        events.push(resolved);
+        sequence = sequence.checked_add(1).ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "moderation event sequence overflow while paging".to_owned(),
+            )
+        })?;
+    }
+    let has_more = events
+        .last()
+        .is_some_and(|event| event.sequence < last_sequence);
+    let next_after = has_more.then(|| {
+        events
+            .last()
+            .expect("has_more requires a non-empty moderation event page")
+            .cursor()
+    });
+    let page = ModerationFinalizedEventPageV1 {
+        finalized_cursor,
+        events,
+        has_more,
+        next_after,
+    };
+    let encoded_len = norito::to_bytes(&page)
+        .map_err(|error| {
+            QueryExecutionFail::Conversion(format!(
+                "failed to encode committed moderation event page: {error}"
+            ))
+        })?
+        .len();
+    if encoded_len > MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "committed moderation event page encodes to {encoded_len} bytes, above {MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+        )));
+    }
+    Ok(page)
 }
 
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {

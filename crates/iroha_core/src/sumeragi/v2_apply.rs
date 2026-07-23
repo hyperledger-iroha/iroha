@@ -794,6 +794,8 @@ pub(crate) struct V2ApplyService {
     validator_set_pops: Vec<Vec<u8>>,
     #[cfg(test)]
     fail_after_kura_store: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    fail_after_wsv_checkpoint: std::sync::atomic::AtomicBool,
 }
 
 impl V2ApplyService {
@@ -925,6 +927,8 @@ impl V2ApplyService {
             validator_set_pops,
             #[cfg(test)]
             fail_after_kura_store: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            fail_after_wsv_checkpoint: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1353,6 +1357,33 @@ impl V2ApplyService {
             .collect();
         let state_events = state_block
             .apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology);
+
+        // Stage the exact would-be committed WSV hash while the validated
+        // `StateBlock` overlay is still available. Kura is already durable at
+        // this point, so the checkpoint must cross its own fsync boundary
+        // before live State can advance. This closes the otherwise
+        // unrecoverable crash window where restart observes State at the Kura
+        // tip but has no authenticated hash with which to distinguish the
+        // exact committed overlay from stale or corrupted memory.
+        //
+        // The checkpoint deliberately remains unbound until
+        // `persist_post_apply_metadata` publishes the complete commit
+        // manifest. A crash before State commit replays the overlay and must
+        // reproduce this byte-identical hash; a crash after State commit can
+        // authenticate the already-applied tip directly.
+        let staged_checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
+        self.kura
+            .store_wsv_checkpoint(context.height, block_hash, staged_checkpoint)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("pre-WSV recovery checkpoint", &error)
+            })?;
+        #[cfg(test)]
+        if self
+            .fail_after_wsv_checkpoint
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(V2ApplyError::InjectedCrashAfterWsvCheckpoint);
+        }
         state_block.commit().map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;
@@ -1398,6 +1429,12 @@ impl V2ApplyService {
     #[cfg(test)]
     fn fail_after_kura_store_for_test(&self) {
         self.fail_after_kura_store
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn fail_after_wsv_checkpoint_for_test(&self) {
+        self.fail_after_wsv_checkpoint
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -1488,6 +1525,11 @@ pub(crate) enum V2ApplyError {
     #[cfg(test)]
     #[error("injected crash after Kura store and before WSV commit")]
     InjectedCrashAfterKuraStore,
+    /// Test-only crash boundary after the staged WSV checkpoint and before
+    /// live State publication.
+    #[cfg(test)]
+    #[error("injected crash after staged WSV checkpoint and before WSV commit")]
+    InjectedCrashAfterWsvCheckpoint,
 }
 
 impl V2ApplyError {
@@ -1505,7 +1547,7 @@ impl V2ApplyError {
             Self::Kura(error) => error.requires_restart_recovery(),
             Self::CommittedRecoveryRequired { .. } => true,
             #[cfg(test)]
-            Self::InjectedCrashAfterKuraStore => true,
+            Self::InjectedCrashAfterKuraStore | Self::InjectedCrashAfterWsvCheckpoint => true,
             _ => false,
         }
     }
@@ -3389,24 +3431,28 @@ mod tests {
     );
 
     v2_apply_test!(
-        restart_recovers_wsv_before_checkpoint_manifest_and_finality,
+        checkpoint_write_failure_keeps_wsv_behind_durable_kura_tip,
         {
             let fixture = ApplyFixture::new();
             let mut store = fixture.reopen_body_store();
             fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
             let error = fixture
                 .execute(&mut store)
-                .expect_err("checkpoint failure follows the irreversible commit boundary");
+                .expect_err("checkpoint failure follows the durable Kura boundary");
             assert!(
                 matches!(
                     &error,
                     V2ApplyError::CommittedRecoveryRequired { stage, .. }
-                        if *stage == "post-apply metadata"
+                        if *stage == "pre-WSV recovery checkpoint"
                 ),
                 "unexpected committed recovery classification: {error:?}"
             );
             assert!(error.requires_restart_recovery());
-            assert_eq!(fixture.state.committed_height(), 1);
+            assert_eq!(
+                fixture.state.committed_height(),
+                0,
+                "live WSV must not advance without its durable recovery checkpoint"
+            );
             assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
             fixture.assert_no_post_apply_sidecars();
 
@@ -3420,32 +3466,49 @@ mod tests {
             );
             fixture
                 .execute(&mut reopened)
-                .expect("complete metadata without reapplying WSV");
+                .expect("replay the exact durable tip and publish WSV once");
             fixture.assert_complete();
         }
     );
 
     v2_apply_test!(
-        crash_after_wsv_restarts_from_last_finalized_snapshot_and_replays_exact_tip,
+        crash_after_staged_checkpoint_replays_exact_tip_without_double_apply,
         {
             let fixture = ApplyFixture::new();
             let mut first_process_store = fixture.reopen_body_store();
-            fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
+            fixture.service.fail_after_wsv_checkpoint_for_test();
             let first_error = fixture
                 .service
                 .execute(&fixture.context, &mut first_process_store, &fixture.task)
-                .expect_err("inject crash after WSV commit and before checkpoint publication");
+                .expect_err("inject crash after checkpoint fsync and before WSV publication");
+            assert!(matches!(
+                &first_error,
+                V2ApplyError::InjectedCrashAfterWsvCheckpoint
+            ));
             assert!(first_error.requires_restart_recovery());
-            assert_eq!(fixture.state.committed_height(), 1);
+            assert_eq!(fixture.state.committed_height(), 0);
             assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
-            fixture.assert_no_post_apply_sidecars();
-            let interrupted_state_hash =
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            let staged_checkpoint = fixture
+                .kura
+                .wsv_checkpoint(1)
+                .expect("read staged checkpoint")
+                .expect("checkpoint must be durable before WSV publication");
+            assert!(
+                fixture
+                    .kura
+                    .commit_manifest(1)
+                    .expect("read absent manifest")
+                    .is_none(),
+                "the pre-WSV checkpoint must remain unbound until State commits"
+            );
+            let staged_state_hash = staged_checkpoint.state_hash();
             drop(first_process_store);
 
-            // Snapshot publication is gated on the complete checkpoint/manifest/finality tuple,
-            // so a process crash reloads the last finalized snapshot (height zero here), not the
-            // transient WSV that crossed only the in-memory commit boundary.
+            // Snapshot publication is gated on the complete
+            // checkpoint/manifest/finality tuple, so a process crash reloads
+            // the last finalized snapshot (height zero here). The exact
+            // durable checkpoint authenticates the overlay replay before live
+            // State can cross its commit boundary.
             let (restarted_service, restarted_state) =
                 fixture.restart_service_from_last_finalized_snapshot();
             assert_eq!(restarted_state.committed_height(), 0);
@@ -3462,8 +3525,8 @@ mod tests {
             assert_eq!(first_artifact.block_hash, fixture.body.hash());
             assert_eq!(
                 crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref()),
-                interrupted_state_hash,
-                "recovery from the finalized snapshot must reproduce the exact interrupted WSV"
+                staged_state_hash,
+                "recovery must reproduce the exact pre-commit checkpointed WSV"
             );
 
             let durable_state_hash =

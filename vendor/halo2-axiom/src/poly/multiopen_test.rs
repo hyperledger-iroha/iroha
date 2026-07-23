@@ -5,10 +5,10 @@ mod test {
     use crate::poly::commitment::Blind;
     use crate::poly::commitment::ParamsProver;
     use crate::poly::{
+        EvaluationDomain,
         commitment::{CommitmentScheme, Params, Prover, Verifier},
         query::{ProverQuery, VerifierQuery},
         strategy::VerificationStrategy,
-        EvaluationDomain,
     };
     use crate::transcript::{
         Blake2bRead, Blake2bWrite, Challenge255, EncodedChallenge, Keccak256Read, Keccak256Write,

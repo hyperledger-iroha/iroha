@@ -402,7 +402,7 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 60
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32

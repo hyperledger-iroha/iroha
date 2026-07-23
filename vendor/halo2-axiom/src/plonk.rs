@@ -8,14 +8,14 @@
 use blake2b_simd::Params as Blake2bParams;
 use group::ff::{Field, FromUniformBytes, PrimeField};
 
+use crate::SerdeFormat;
 use crate::arithmetic::CurveAffine;
 use crate::helpers::{
-    polynomial_slice_byte_length, read_polynomial_vec, write_polynomial_slice, SerdeCurveAffine,
-    SerdePrimeField,
+    SerdeCurveAffine, SerdePrimeField, polynomial_slice_byte_length, read_polynomial_vec,
+    write_polynomial_slice,
 };
 use crate::poly::{Coeff, EvaluationDomain, LagrangeCoeff, PinnedEvaluationDomain, Polynomial};
 use crate::transcript::{ChallengeScalar, EncodedChallenge, Transcript};
-use crate::SerdeFormat;
 
 mod assigned;
 mod circuit;
@@ -382,6 +382,44 @@ where
         Ok(())
     }
 
+    /// Writes this proving key while dropping each owned field immediately
+    /// after it is serialized.
+    ///
+    /// The byte order is exactly the same as [`Self::write`] and
+    /// [`Self::into_bytes`]. This is intended for bounded file-backed writers
+    /// that retain their first real I/O error while presenting an infallible
+    /// [`io::Write`] surface: the polynomial serializers used by this crate
+    /// historically unwrap nested writes. The caller must check its writer's
+    /// retained error after this method returns.
+    pub fn write_consuming<W: io::Write>(
+        self,
+        writer: &mut W,
+        format: SerdeFormat,
+    ) -> io::Result<()> {
+        let Self {
+            vk,
+            l0,
+            l_last,
+            l_active_row,
+            fixed_values,
+            fixed_polys,
+            permutation,
+            ev: _,
+        } = self;
+        vk.write(writer, format)?;
+        drop(vk);
+        l0.write(writer, format);
+        drop(l0);
+        l_last.write(writer, format);
+        drop(l_last);
+        l_active_row.write(writer, format);
+        drop(l_active_row);
+        write_polynomial_vec_consuming(fixed_values, writer, format);
+        write_polynomial_vec_consuming(fixed_polys, writer, format);
+        permutation.write_consuming(writer, format);
+        Ok(())
+    }
+
     /// Reads a proving key from a buffer.
     /// Does so by reading verification key first, and then deserializing the rest of the file into the remaining proving key data.
     ///
@@ -433,24 +471,8 @@ where
     /// Writes a proving key to a vector of bytes while dropping fields as they are serialized.
     pub fn into_bytes(self, format: SerdeFormat) -> Vec<u8> {
         let mut bytes = Vec::<u8>::with_capacity(self.bytes_length());
-        let Self {
-            vk,
-            l0,
-            l_last,
-            l_active_row,
-            fixed_values,
-            fixed_polys,
-            permutation,
-            ev: _,
-        } = self;
-        vk.write(&mut bytes, format)
+        self.write_consuming(&mut bytes, format)
             .expect("Writing to vector should not fail");
-        l0.write(&mut bytes, format);
-        l_last.write(&mut bytes, format);
-        l_active_row.write(&mut bytes, format);
-        write_polynomial_vec_consuming(fixed_values, &mut bytes, format);
-        write_polynomial_vec_consuming(fixed_polys, &mut bytes, format);
-        permutation.write_consuming(&mut bytes, format);
         bytes
     }
 

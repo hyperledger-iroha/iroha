@@ -36,5 +36,5 @@ test("Nexus App transfer recipe executes the canonical browser codec end to end"
     result.stdout,
     /signed transaction hash: 2d22bf944c58886de938e4094bf9887a43e66d598162bd2205f0812b64e180bb/u,
   );
-  assert.match(result.stdout, /final status: Committed/u);
+  assert.match(result.stdout, /final status: Applied/u);
 });

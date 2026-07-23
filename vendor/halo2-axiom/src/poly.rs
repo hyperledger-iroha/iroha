@@ -7,10 +7,10 @@ use std::io;
 use std::marker::PhantomData;
 use std::ops::{Add, Deref, DerefMut, Index, IndexMut, Mul, Range, RangeFrom, RangeFull, Sub};
 
+use crate::SerdeFormat;
 use crate::arithmetic::parallelize;
 use crate::helpers::SerdePrimeField;
 use crate::plonk::Assigned;
-use crate::SerdeFormat;
 
 #[cfg(feature = "multicore")]
 use crate::multicore::{

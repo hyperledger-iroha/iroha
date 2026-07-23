@@ -17477,7 +17477,7 @@ impl Sorafs {
             self.gc.parse(),
             self.quota.parse(),
             self.alias_cache.parse(),
-            self.gateway.parse(),
+            self.gateway.parse(emitter),
             self.por.parse(),
             self.appeal_finance_settlement.parse(),
         )
@@ -20110,6 +20110,9 @@ pub struct SorafsGateway {
     /// ACME automation configuration.
     #[config(nested)]
     pub acme: SorafsGatewayAcme,
+    /// Governed signed compliance controller configuration.
+    #[config(nested)]
+    pub compliance: SorafsGatewayCompliance,
     /// High-level rollout phase controlling the default anonymity policy.
     #[config(default = "defaults::sorafs::gateway::rollout_phase()")]
     pub rollout_phase: String,
@@ -20133,6 +20136,7 @@ impl Default for SorafsGateway {
             rate_limit: SorafsGatewayRateLimit::default(),
             denylist: SorafsGatewayDenylist::default(),
             acme: SorafsGatewayAcme::default(),
+            compliance: SorafsGatewayCompliance::default(),
             rollout_phase: defaults::sorafs::gateway::rollout_phase(),
             anonymity_policy: defaults::sorafs::gateway::anonymity_policy(),
             untrusted_hosting: SorafsGatewayUntrustedHosting::default(),
@@ -20142,7 +20146,7 @@ impl Default for SorafsGateway {
 }
 
 impl SorafsGateway {
-    fn parse(self) -> actual::SorafsGateway {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsGateway {
         let Self {
             require_manifest_envelope,
             enforce_admission,
@@ -20152,6 +20156,7 @@ impl SorafsGateway {
             rate_limit,
             denylist,
             acme,
+            compliance,
             rollout_phase,
             anonymity_policy,
             untrusted_hosting,
@@ -20183,6 +20188,7 @@ impl SorafsGateway {
             denylist: denylist.parse(),
             untrusted_hosting: untrusted_hosting.parse(),
             acme: acme.parse(),
+            compliance: compliance.parse(emitter),
             rollout_phase,
             anonymity_policy: Some(
                 explicit_stage.unwrap_or_else(|| rollout_phase.default_anonymity_policy()),
@@ -20486,6 +20492,477 @@ impl SorafsGatewayAcme {
             challenges: self.challenges.parse(),
             ech_enabled: self.ech_enabled,
         }
+    }
+}
+
+/// One governed Ed25519 identity in the gateway compliance policy.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGatewayComplianceSigner {
+    /// Stable payload-free signer identifier.
+    pub signer_id: String,
+    /// Raw Ed25519 public key as 64 lowercase hexadecimal characters.
+    pub public_key_hex: String,
+}
+
+/// One exact HTTPS host and its admitted TLS identities.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGatewayComplianceFeedHost {
+    /// Canonical lowercase DNS hostname.
+    pub hostname: String,
+    /// SHA-256 SPKI digests as 64 lowercase hexadecimal characters.
+    #[config(default)]
+    pub accepted_spki_sha256_hex: Vec<String>,
+}
+
+/// One authenticated external gateway compliance feed.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGatewayComplianceFeed {
+    /// Stable feed identifier.
+    pub feed_id: String,
+    /// Exact credential-free HTTPS URL.
+    pub url: String,
+    /// Require this feed in every promoted catalog.
+    #[config(default = "true")]
+    pub required: bool,
+    /// Exact initial/redirect host allowlist.
+    #[config(default)]
+    pub hosts: Vec<SorafsGatewayComplianceFeedHost>,
+}
+
+/// Governed gateway compliance controller configuration.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGatewayCompliance {
+    /// Enable the signed durable controller.
+    #[config(default = "defaults::sorafs::gateway::compliance::ENABLED")]
+    pub enabled: bool,
+    /// Absolute durable checkpoint file path.
+    pub checkpoint_path: Option<PathBuf>,
+    /// Non-zero governance policy identity as lowercase hexadecimal.
+    pub policy_id_hex: Option<String>,
+    /// Required distinct catalog approvals.
+    #[config(default)]
+    pub catalog_threshold: u16,
+    /// Canonically signer-id-ordered catalog signers.
+    #[config(default)]
+    pub catalog_signers: Vec<SorafsGatewayComplianceSigner>,
+    /// Canonically ordered revoked catalog signer identifiers.
+    #[config(default)]
+    pub revoked_catalog_signer_ids: Vec<String>,
+    /// Required distinct regional-gateway acknowledgements.
+    #[config(default)]
+    pub gateway_ack_threshold: u16,
+    /// Canonically signer-id-ordered regional-gateway identities.
+    #[config(default)]
+    pub gateway_signers: Vec<SorafsGatewayComplianceSigner>,
+    /// Canonically ordered revoked regional-gateway signer identifiers.
+    #[config(default)]
+    pub revoked_gateway_signer_ids: Vec<String>,
+    /// Canonically feed-id-ordered authenticated feeds.
+    #[config(default)]
+    pub feeds: Vec<SorafsGatewayComplianceFeed>,
+    /// Maximum encoded feed response.
+    #[config(default = "defaults::sorafs::gateway::compliance::MAX_ENCODED_BYTES")]
+    pub max_encoded_bytes: Bytes<u64>,
+    /// Maximum normalized/decompressed feed response.
+    #[config(default = "defaults::sorafs::gateway::compliance::MAX_DECODED_BYTES")]
+    pub max_decoded_bytes: Bytes<u64>,
+    /// Maximum redirect count.
+    #[config(default = "defaults::sorafs::gateway::compliance::MAX_REDIRECTS")]
+    pub max_redirects: u8,
+    /// Maximum distinct public DNS answers.
+    #[config(default = "defaults::sorafs::gateway::compliance::MAX_DNS_ADDRESSES")]
+    pub max_dns_addresses: usize,
+    /// Per-connection feed timeout.
+    #[config(default = "defaults::sorafs::gateway::compliance::CONNECT_TIMEOUT")]
+    pub connect_timeout: Duration,
+    /// Total feed operation timeout.
+    #[config(default = "defaults::sorafs::gateway::compliance::TOTAL_TIMEOUT")]
+    pub total_timeout: Duration,
+    /// Maximum accepted timestamp skew.
+    #[config(default = "defaults::sorafs::gateway::compliance::MAX_CLOCK_SKEW")]
+    pub max_clock_skew: Duration,
+    /// Maximum age of one source feed at catalog construction.
+    #[config(default = "defaults::sorafs::gateway::compliance::MAX_FEED_AGE")]
+    pub max_feed_age: Duration,
+    /// Maximum signed catalog validity interval.
+    #[config(default = "defaults::sorafs::gateway::compliance::MAX_CATALOG_VALIDITY")]
+    pub max_catalog_validity: Duration,
+    /// Maximum durable promotion/rollback history.
+    #[config(default = "defaults::sorafs::gateway::compliance::MAX_HISTORY_ENTRIES")]
+    pub max_history_entries: usize,
+}
+
+impl Default for SorafsGatewayCompliance {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::gateway::compliance::ENABLED,
+            checkpoint_path: None,
+            policy_id_hex: None,
+            catalog_threshold: 0,
+            catalog_signers: Vec::new(),
+            revoked_catalog_signer_ids: Vec::new(),
+            gateway_ack_threshold: 0,
+            gateway_signers: Vec::new(),
+            revoked_gateway_signer_ids: Vec::new(),
+            feeds: Vec::new(),
+            max_encoded_bytes: defaults::sorafs::gateway::compliance::MAX_ENCODED_BYTES,
+            max_decoded_bytes: defaults::sorafs::gateway::compliance::MAX_DECODED_BYTES,
+            max_redirects: defaults::sorafs::gateway::compliance::MAX_REDIRECTS,
+            max_dns_addresses: defaults::sorafs::gateway::compliance::MAX_DNS_ADDRESSES,
+            connect_timeout: defaults::sorafs::gateway::compliance::CONNECT_TIMEOUT,
+            total_timeout: defaults::sorafs::gateway::compliance::TOTAL_TIMEOUT,
+            max_clock_skew: defaults::sorafs::gateway::compliance::MAX_CLOCK_SKEW,
+            max_feed_age: defaults::sorafs::gateway::compliance::MAX_FEED_AGE,
+            max_catalog_validity: defaults::sorafs::gateway::compliance::MAX_CATALOG_VALIDITY,
+            max_history_entries: defaults::sorafs::gateway::compliance::MAX_HISTORY_ENTRIES,
+        }
+    }
+}
+
+impl SorafsGatewayCompliance {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SorafsGatewayCompliance> {
+        fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+        }
+
+        fn canonical_token(value: &str) -> bool {
+            !value.is_empty()
+                && value.len() <= 128
+                && value.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'.' | b'-' | b'_' | b':')
+                })
+        }
+
+        fn parse_digest(
+            emitter: &mut Emitter<ParseError>,
+            path: &str,
+            value: Option<&str>,
+        ) -> Option<[u8; 32]> {
+            let Some(value) = value else {
+                emit(emitter, format!("{path} is required when enabled"));
+                return None;
+            };
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                emit(
+                    emitter,
+                    format!("{path} must be exactly 64 lowercase hexadecimal characters"),
+                );
+                return None;
+            }
+            let mut digest = [0_u8; 32];
+            hex::decode_to_slice(value, &mut digest)
+                .expect("validated lowercase 32-byte hexadecimal");
+            if digest == [0; 32] {
+                emit(emitter, format!("{path} must be nonzero"));
+                return None;
+            }
+            Some(digest)
+        }
+
+        fn parse_signers(
+            emitter: &mut Emitter<ParseError>,
+            path: &str,
+            signers: &[SorafsGatewayComplianceSigner],
+        ) -> Vec<actual::SorafsGatewayComplianceSigner> {
+            let mut parsed = Vec::with_capacity(signers.len());
+            let mut previous: Option<&str> = None;
+            let mut keys = BTreeSet::new();
+            for (index, signer) in signers.iter().enumerate() {
+                if !canonical_token(&signer.signer_id)
+                    || previous.is_some_and(|value| value >= signer.signer_id.as_str())
+                {
+                    emit(
+                        emitter,
+                        format!("{path}[{index}].signer_id must be canonical and strictly ordered"),
+                    );
+                }
+                let public_key = parse_digest(
+                    emitter,
+                    &format!("{path}[{index}].public_key_hex"),
+                    Some(&signer.public_key_hex),
+                );
+                if let Some(public_key) = public_key {
+                    if PublicKey::from_bytes(Algorithm::Ed25519, &public_key).is_err() {
+                        emit(
+                            emitter,
+                            format!("{path}[{index}].public_key_hex is not a valid Ed25519 key"),
+                        );
+                    }
+                    if !keys.insert(public_key) {
+                        emit(emitter, format!("{path} public keys must be distinct"));
+                    }
+                    parsed.push(actual::SorafsGatewayComplianceSigner {
+                        signer_id: signer.signer_id.clone(),
+                        public_key,
+                    });
+                }
+                previous = Some(&signer.signer_id);
+            }
+            parsed
+        }
+
+        fn validate_revocations(
+            emitter: &mut Emitter<ParseError>,
+            path: &str,
+            revoked: &[String],
+            signers: &[actual::SorafsGatewayComplianceSigner],
+        ) {
+            let mut previous: Option<&str> = None;
+            for (index, signer_id) in revoked.iter().enumerate() {
+                if !canonical_token(signer_id)
+                    || previous.is_some_and(|value| value >= signer_id.as_str())
+                    || !signers.iter().any(|signer| signer.signer_id == *signer_id)
+                {
+                    emit(
+                        emitter,
+                        format!(
+                            "{path}[{index}] must be canonical, strictly ordered, and name a configured signer"
+                        ),
+                    );
+                }
+                previous = Some(signer_id);
+            }
+        }
+
+        if !self.enabled {
+            if self.checkpoint_path.is_some()
+                || self.policy_id_hex.is_some()
+                || self.catalog_threshold != 0
+                || !self.catalog_signers.is_empty()
+                || !self.revoked_catalog_signer_ids.is_empty()
+                || self.gateway_ack_threshold != 0
+                || !self.gateway_signers.is_empty()
+                || !self.revoked_gateway_signer_ids.is_empty()
+                || !self.feeds.is_empty()
+            {
+                emit(
+                    emitter,
+                    "torii.sorafs.gateway.compliance authority, feed, and checkpoint fields must be absent when disabled",
+                );
+            }
+            return None;
+        }
+
+        let checkpoint_path = match self.checkpoint_path {
+            Some(path)
+                if path.is_absolute()
+                    && path.file_name().is_some()
+                    && !path.components().any(|component| {
+                        matches!(
+                            component,
+                            std::path::Component::CurDir | std::path::Component::ParentDir
+                        )
+                    }) =>
+            {
+                Some(path)
+            }
+            _ => {
+                emit(
+                    emitter,
+                    "torii.sorafs.gateway.compliance.checkpoint_path must be an absolute file path without dot components",
+                );
+                None
+            }
+        };
+        let policy_id = parse_digest(
+            emitter,
+            "torii.sorafs.gateway.compliance.policy_id_hex",
+            self.policy_id_hex.as_deref(),
+        );
+        let catalog_signers = parse_signers(
+            emitter,
+            "torii.sorafs.gateway.compliance.catalog_signers",
+            &self.catalog_signers,
+        );
+        let gateway_signers = parse_signers(
+            emitter,
+            "torii.sorafs.gateway.compliance.gateway_signers",
+            &self.gateway_signers,
+        );
+        validate_revocations(
+            emitter,
+            "torii.sorafs.gateway.compliance.revoked_catalog_signer_ids",
+            &self.revoked_catalog_signer_ids,
+            &catalog_signers,
+        );
+        validate_revocations(
+            emitter,
+            "torii.sorafs.gateway.compliance.revoked_gateway_signer_ids",
+            &self.revoked_gateway_signer_ids,
+            &gateway_signers,
+        );
+        for (path, threshold, signers, revoked) in [
+            (
+                "catalog_threshold",
+                self.catalog_threshold,
+                &catalog_signers,
+                &self.revoked_catalog_signer_ids,
+            ),
+            (
+                "gateway_ack_threshold",
+                self.gateway_ack_threshold,
+                &gateway_signers,
+                &self.revoked_gateway_signer_ids,
+            ),
+        ] {
+            let active = signers.len().saturating_sub(revoked.len());
+            if threshold == 0 || usize::from(threshold) > active {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.gateway.compliance.{path} must be nonzero and not exceed active signer count"
+                    ),
+                );
+            }
+        }
+
+        let mut feeds = Vec::with_capacity(self.feeds.len());
+        let mut previous_feed: Option<&str> = None;
+        for (feed_index, feed) in self.feeds.iter().enumerate() {
+            if !canonical_token(&feed.feed_id)
+                || previous_feed.is_some_and(|value| value >= feed.feed_id.as_str())
+            {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.gateway.compliance.feeds[{feed_index}].feed_id must be canonical and strictly ordered"
+                    ),
+                );
+            }
+            let mut hosts = Vec::with_capacity(feed.hosts.len());
+            let mut previous_host: Option<&str> = None;
+            for (host_index, host) in feed.hosts.iter().enumerate() {
+                if host.hostname.is_empty()
+                    || host.hostname != host.hostname.to_ascii_lowercase()
+                    || previous_host.is_some_and(|value| value >= host.hostname.as_str())
+                {
+                    emit(
+                        emitter,
+                        format!(
+                            "torii.sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}].hostname must be lowercase and strictly ordered"
+                        ),
+                    );
+                }
+                let mut pins = Vec::with_capacity(host.accepted_spki_sha256_hex.len());
+                for (pin_index, pin) in host.accepted_spki_sha256_hex.iter().enumerate() {
+                    if let Some(pin) = parse_digest(
+                        emitter,
+                        &format!(
+                            "torii.sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}].accepted_spki_sha256_hex[{pin_index}]"
+                        ),
+                        Some(pin),
+                    ) {
+                        pins.push(pin);
+                    }
+                }
+                if pins.is_empty() {
+                    emit(
+                        emitter,
+                        format!(
+                            "torii.sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}] requires at least one SPKI pin"
+                        ),
+                    );
+                }
+                if !pins.windows(2).all(|pair| pair[0] < pair[1]) {
+                    emit(
+                        emitter,
+                        format!(
+                            "torii.sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}] SPKI pins must be strictly ordered"
+                        ),
+                    );
+                }
+                hosts.push(actual::SorafsGatewayComplianceFeedHost {
+                    hostname: host.hostname.clone(),
+                    accepted_spki_sha256: pins,
+                });
+                previous_host = Some(&host.hostname);
+            }
+            if hosts.is_empty() {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.gateway.compliance.feeds[{feed_index}] requires at least one HTTPS host"
+                    ),
+                );
+            }
+            feeds.push(actual::SorafsGatewayComplianceFeed {
+                feed_id: feed.feed_id.clone(),
+                url: feed.url.clone(),
+                required: feed.required,
+                hosts,
+            });
+            previous_feed = Some(&feed.feed_id);
+        }
+        if feeds.is_empty() {
+            emit(
+                emitter,
+                "torii.sorafs.gateway.compliance.feeds must not be empty when enabled",
+            );
+        }
+
+        if self.max_encoded_bytes.0 == 0
+            || self.max_encoded_bytes.0 > 16 * 1024 * 1024
+            || self.max_decoded_bytes.0 == 0
+            || self.max_decoded_bytes.0 > 16 * 1024 * 1024
+            || self.max_redirects > 8
+            || !(1..=32).contains(&self.max_dns_addresses)
+            || self.connect_timeout.is_zero()
+            || self.connect_timeout > Duration::from_secs(30)
+            || self.total_timeout < self.connect_timeout
+            || self.total_timeout > Duration::from_secs(120)
+        {
+            emit(
+                emitter,
+                "torii.sorafs.gateway.compliance feed fetch bounds are invalid",
+            );
+        }
+        if self.max_clock_skew > Duration::from_secs(3_600)
+            || self.max_feed_age.is_zero()
+            || self.max_feed_age > Duration::from_secs(30 * 24 * 60 * 60)
+            || self.max_catalog_validity.is_zero()
+            || self.max_catalog_validity > Duration::from_secs(30 * 24 * 60 * 60)
+            || !(1..=4_096).contains(&self.max_history_entries)
+            || [
+                self.max_clock_skew,
+                self.max_feed_age,
+                self.max_catalog_validity,
+            ]
+            .iter()
+            .any(|duration| duration.subsec_nanos() != 0)
+        {
+            emit(
+                emitter,
+                "torii.sorafs.gateway.compliance freshness/history bounds are invalid",
+            );
+        }
+
+        Some(actual::SorafsGatewayCompliance {
+            checkpoint_path: checkpoint_path?,
+            policy_id: policy_id?,
+            catalog_threshold: self.catalog_threshold,
+            catalog_signers,
+            revoked_catalog_signer_ids: self.revoked_catalog_signer_ids,
+            gateway_ack_threshold: self.gateway_ack_threshold,
+            gateway_signers,
+            revoked_gateway_signer_ids: self.revoked_gateway_signer_ids,
+            feeds,
+            max_encoded_bytes: self.max_encoded_bytes,
+            max_decoded_bytes: self.max_decoded_bytes,
+            max_redirects: self.max_redirects,
+            max_dns_addresses: self.max_dns_addresses,
+            connect_timeout: self.connect_timeout,
+            total_timeout: self.total_timeout,
+            max_clock_skew: self.max_clock_skew,
+            max_feed_age: self.max_feed_age,
+            max_catalog_validity: self.max_catalog_validity,
+            max_history_entries: self.max_history_entries,
+        })
     }
 }
 

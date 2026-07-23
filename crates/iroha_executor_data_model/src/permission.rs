@@ -494,7 +494,7 @@ pub mod offline {
     }
 
     permission! {
-        /// Permission to activate an authenticated Kagemusha ABI-20/V4 recursive release.
+        /// Permission to activate an authenticated Kagemusha ABI-21/V4 recursive release.
         #[derive(Copy)]
         pub struct CanActivateKagemushaRecursiveReleaseV4;
     }

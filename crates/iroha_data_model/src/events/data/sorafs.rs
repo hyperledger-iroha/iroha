@@ -328,6 +328,11 @@ mod model {
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
     pub enum SorafsModerationLedgerEventKind {
         /// A policy revision was activated.
         PolicyActivated,
@@ -369,6 +374,10 @@ mod model {
         Decode,
         Encode,
         iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[getset(get = "pub")]
     pub struct SorafsModerationLedgerEvent {

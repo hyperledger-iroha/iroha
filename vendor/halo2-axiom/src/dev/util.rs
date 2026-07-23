@@ -1,7 +1,7 @@
 use group::ff::Field;
 use std::collections::BTreeMap;
 
-use super::{metadata, CellValue, InstanceValue, Value};
+use super::{CellValue, InstanceValue, Value, metadata};
 use crate::{
     plonk::{
         Advice, AdviceQuery, Any, Column, ColumnType, Expression, FixedQuery, Gate, InstanceQuery,

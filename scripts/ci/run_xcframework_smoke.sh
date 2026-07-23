@@ -256,11 +256,28 @@ is_boot_failure() {
   return 1
 }
 
-declare -A LANE_STATUS LANE_KIND LANE_DURATION LANE_FAILURE_TIME LANE_MESSAGE
-declare -A LANE_TAG
+LANE_STATUS=()
+LANE_KIND=()
+LANE_DURATION=()
+LANE_FAILURE_TIME=()
+LANE_MESSAGE=()
+LANE_TAG=()
 fallback_required=false
 fallback_executed=false
 open_incidents=()
+
+lane_index_for() {
+  case "$1" in
+    iphone-sim) printf '%s\n' 0 ;;
+    ipad-sim) printf '%s\n' 1 ;;
+    strongbox) printf '%s\n' 2 ;;
+    macos-fallback) printf '%s\n' 3 ;;
+    *)
+      log "error: unknown XCFramework smoke lane '$1'"
+      return 1
+      ;;
+  esac
+}
 
 lane_tag_for() {
   case "$1" in
@@ -275,7 +292,9 @@ lane_tag_for() {
 set_lane_tag() {
   local lane="$1"
   local tag="$2"
-  LANE_TAG["$lane"]="$tag"
+  local lane_index
+  lane_index="$(lane_index_for "$lane")"
+  LANE_TAG[$lane_index]="$tag"
   if [[ -n "${BUILDKITE:-}" ]] && command -v buildkite-agent >/dev/null 2>&1; then
     if ! buildkite-agent meta-data set "ci/xcframework-smoke:${lane}:device_tag" "$tag" >/dev/null 2>&1; then
       log "warning: failed to record Buildkite metadata for lane '${lane}'"
@@ -287,6 +306,8 @@ run_lane() {
   local lane="$1"
   local dest="$2"
   local kind="$3"
+  local lane_index
+  lane_index="$(lane_index_for "$lane")"
   local derived="$DERIVED_DATA_ROOT/$lane"
   local start status=pass
   local message=""
@@ -319,11 +340,11 @@ run_lane() {
 
   if [[ "$status" == "skip" ]]; then
     log "[xcframework] lane '$lane' skipped: $message"
-    LANE_STATUS["$lane"]="skip"
-    LANE_KIND["$lane"]="$kind"
-    LANE_DURATION["$lane"]=0
-    LANE_MESSAGE["$lane"]="$message"
-    LANE_FAILURE_TIME["$lane"]=""
+    LANE_STATUS[$lane_index]="skip"
+    LANE_KIND[$lane_index]="$kind"
+    LANE_DURATION[$lane_index]=0
+    LANE_MESSAGE[$lane_index]="$message"
+    LANE_FAILURE_TIME[$lane_index]=""
     return
   fi
 
@@ -366,17 +387,17 @@ run_lane() {
     else
       status=fail
       message="xcodebuild failed (build_rc=$build_rc test_rc=$test_rc)"
-      LANE_FAILURE_TIME["$lane"]="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+      LANE_FAILURE_TIME[$lane_index]="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     fi
   fi
 
   if [[ "$status" == "skip" ]]; then
     log "[xcframework] lane '$lane' marked for fallback: $message"
-    LANE_STATUS["$lane"]="skip"
-    LANE_KIND["$lane"]="$kind"
-    LANE_DURATION["$lane"]=0
-    LANE_MESSAGE["$lane"]="$message"
-    LANE_FAILURE_TIME["$lane"]=""
+    LANE_STATUS[$lane_index]="skip"
+    LANE_KIND[$lane_index]="$kind"
+    LANE_DURATION[$lane_index]=0
+    LANE_MESSAGE[$lane_index]="$message"
+    LANE_FAILURE_TIME[$lane_index]=""
     return
   fi
 
@@ -384,12 +405,12 @@ run_lane() {
     log "[xcframework] lane '$lane' failed: $message"
   fi
 
-  LANE_STATUS["$lane"]="$status"
-  LANE_KIND["$lane"]="$kind"
-  LANE_DURATION["$lane"]=$duration
-  LANE_MESSAGE["$lane"]="$message"
+  LANE_STATUS[$lane_index]="$status"
+  LANE_KIND[$lane_index]="$kind"
+  LANE_DURATION[$lane_index]=$duration
+  LANE_MESSAGE[$lane_index]="$message"
   if [[ "$status" != "fail" ]]; then
-    LANE_FAILURE_TIME["$lane"]=""
+    LANE_FAILURE_TIME[$lane_index]=""
   fi
 
   if [[ "$kind" == "mac" && "$status" != "skip" ]]; then
@@ -411,19 +432,30 @@ if $fallback_required; then
   LANE_ORDER+=("macos-fallback")
   run_lane "macos-fallback" "$IOS6_SMOKE_DEST_MAC_FALLBACK" "mac"
 else
-  LANE_STATUS["macos-fallback"]="skip"
-  LANE_KIND["macos-fallback"]="mac"
-  LANE_DURATION["macos-fallback"]=0
-  LANE_MESSAGE["macos-fallback"]="not required"
+  fallback_lane_index="$(lane_index_for "macos-fallback")"
+  LANE_STATUS[$fallback_lane_index]="skip"
+  LANE_KIND[$fallback_lane_index]="mac"
+  LANE_DURATION[$fallback_lane_index]=0
+  LANE_MESSAGE[$fallback_lane_index]="not required"
   set_lane_tag "macos-fallback" "$(lane_tag_for "macos-fallback")"
 fi
 
 lane_rows=""
 for lane in "${LANE_ORDER[@]}"; do
-  lane_rows+="${lane}\t${LANE_STATUS[$lane]}\t${LANE_KIND[$lane]}\t${LANE_DURATION[$lane]}\t${LANE_FAILURE_TIME[$lane]:-}\t${LANE_MESSAGE[$lane]}\t${LANE_TAG[$lane]:-}\n"
+  lane_index="$(lane_index_for "$lane")"
+  printf -v lane_row '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$lane" \
+    "${LANE_STATUS[$lane_index]}" \
+    "${LANE_KIND[$lane_index]}" \
+    "${LANE_DURATION[$lane_index]}" \
+    "${LANE_FAILURE_TIME[$lane_index]:-}" \
+    "${LANE_MESSAGE[$lane_index]}" \
+    "${LANE_TAG[$lane_index]:-}"
+  lane_rows+="$lane_row"
 done
 
-if [[ "${LANE_STATUS[strongbox]}" == "skip" ]]; then
+strongbox_lane_index="$(lane_index_for "strongbox")"
+if [[ "${LANE_STATUS[$strongbox_lane_index]}" == "skip" ]]; then
   open_incidents+=("xcframework_smoke_strongbox_unavailable")
 fi
 
@@ -434,8 +466,10 @@ fi
 OPEN_INCIDENTS_JSON="$(printf '%s\n' "${open_incidents[@]:-}" | python3 -c 'import json,sys; data=[line.strip() for line in sys.stdin if line.strip()]; print(json.dumps(data))')"
 export OPEN_INCIDENTS_JSON
 
-python3 <<'PY' <<<"$lane_rows" >"$RESULT_PATH"
-import json, sys, datetime, os
+python3 3<<<"$lane_rows" <<'PY' >"$RESULT_PATH"
+import datetime
+import json
+import os
 
 open_incidents = json.loads(os.environ.get("OPEN_INCIDENTS_JSON", "[]"))
 
@@ -443,35 +477,36 @@ lanes = []
 sim_pass = sim_fail = 0
 sb_pass = sb_fail = 0
 durations = []
-for line in sys.stdin:
-    if not line.strip():
-        continue
-    name, status, kind, duration_s, failure_time, message, device_tag = line.rstrip("\n").split("\t")
-    duration = int(duration_s)
-    success = status == "pass"
-    if duration:
-        durations.append(duration)
-    if kind == "sim":
-        if success:
-            sim_pass += 1
-        else:
-            sim_fail += 1
-    if kind == "strongbox":
-        if success:
-            sb_pass += 1
-        else:
-            sb_fail += 1
-    lane_entry = {
-        "name": f"ci/xcframework-smoke:{name}",
-        "status": status,
-        "success_rate_14_runs": 1.0 if success else 0.0,
-        "last_failure": failure_time or None,
-        "flake_count": 0,
-        "mttr_hours": 0.0 if success else 1.0,
-        "notes": message or None,
-        "device_tag": device_tag or None,
-    }
-    lanes.append(lane_entry)
+with os.fdopen(3, "r", encoding="utf-8") as lane_stream:
+    for line in lane_stream:
+        if not line.strip():
+            continue
+        name, status, kind, duration_s, failure_time, message, device_tag = line.rstrip("\n").split("\t")
+        duration = int(duration_s)
+        success = status == "pass"
+        if duration:
+            durations.append(duration)
+        if kind == "sim":
+            if success:
+                sim_pass += 1
+            else:
+                sim_fail += 1
+        if kind == "strongbox":
+            if success:
+                sb_pass += 1
+            else:
+                sb_fail += 1
+        lane_entry = {
+            "name": f"ci/xcframework-smoke:{name}",
+            "status": status,
+            "success_rate_14_runs": 1.0 if success else 0.0,
+            "last_failure": failure_time or None,
+            "flake_count": 0,
+            "mttr_hours": 0.0 if success else 1.0,
+            "notes": message or None,
+            "device_tag": device_tag or None,
+        }
+        lanes.append(lane_entry)
 
 queue_depth = 0
 avg_runtime = (sum(durations) / len(durations) / 60.0) if durations else 0.0

@@ -78,6 +78,8 @@ async fn gov_proposal_get_router_mapping() {
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
         pipeline: iroha_core::state::GovernancePipeline::default(),
         parliament_snapshot: None,
+        finalization_evidence: None,
+        enacted_at_height: None,
     };
     iroha_core::query::insert_gov_proposal_for_test(&mut raw_state, id_bytes, rec);
 

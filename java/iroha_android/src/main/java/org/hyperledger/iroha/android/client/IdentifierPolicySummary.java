@@ -92,9 +92,11 @@ public final class IdentifierPolicySummary {
     this.owner = Objects.requireNonNull(owner, "owner");
     this.active = active;
     this.normalization = Objects.requireNonNull(normalization, "normalization");
-    this.resolverPublicKey = Objects.requireNonNull(resolverPublicKey, "resolverPublicKey");
+    this.resolverPublicKey =
+        PublicKeyLiteralAdmission.requireValid(resolverPublicKey, "resolverPublicKey");
     this.outputOpeningPublicKey =
-        Objects.requireNonNull(outputOpeningPublicKey, "outputOpeningPublicKey");
+        PublicKeyLiteralAdmission.requireValid(
+            outputOpeningPublicKey, "outputOpeningPublicKey");
     this.backend = Objects.requireNonNull(backend, "backend");
     this.inputEncryption = inputEncryption;
     this.inputEncryptionPublicParameters = inputEncryptionPublicParameters;

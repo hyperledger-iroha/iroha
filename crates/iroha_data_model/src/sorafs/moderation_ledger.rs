@@ -12,6 +12,7 @@ use thiserror::Error;
 
 use crate::{
     account::AccountId,
+    events::data::sorafs::SorafsModerationLedgerEvent,
     sorafs::moderation::{SoraFsModerationBallotContextV1, SoraFsModerationVoteChoice},
 };
 
@@ -43,6 +44,16 @@ pub const MODERATION_LEDGER_MAX_REASON_BYTES_V1: usize = 512;
 pub const MODERATION_LEDGER_MAX_EVIDENCE_URI_BYTES_V1: usize = 2_048;
 /// Maximum configured penalty points for one no-show.
 pub const MODERATION_LEDGER_MAX_PENALTY_POINTS_V1: u32 = 1_000_000;
+/// First-release finalized moderation snapshot schema version.
+pub const MODERATION_FINALIZED_SNAPSHOT_VERSION_V1: u16 = 1;
+/// Hard upper bound for appeals and activated cases in one finalized snapshot.
+pub const MODERATION_QUERY_MAX_CASES_V1: u32 = 1_024;
+/// Hard upper bound for committed events returned by one moderation query.
+pub const MODERATION_QUERY_MAX_EVENTS_V1: u32 = 4_096;
+/// Hard upper bound for one encoded finalized moderation snapshot.
+pub const MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1: usize = 32 * 1024 * 1024;
+/// Hard upper bound for one encoded committed moderation-event page.
+pub const MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1: usize = 8 * 1024 * 1024;
 /// Domain separator for moderation policy digests.
 pub const MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.ledger-policy.v1";
 /// Roster hash domain shared with the local first-release ballot lifecycle.
@@ -1517,6 +1528,193 @@ pub struct ModerationLedgerStatusV1 {
     pub updated_at_unix_ms: u64,
 }
 
+/// Finalized block anchor for one coherent moderation query result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedCursorV1 {
+    /// Finalized block height observed by the immutable state view.
+    pub height: u64,
+    /// Finalized block hash resolved from that same state view.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+}
+
+/// Exclusive cursor for one committed moderation event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedEventCursorV1 {
+    /// Monotonic moderation-event sequence beginning at one.
+    pub sequence: u64,
+    /// Finalized block height containing the event.
+    pub block_height: u64,
+    /// Finalized block hash resolved only after the block commits.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Moderation-event index within the committing block.
+    pub event_index: u32,
+}
+
+/// Typed moderation event with an unambiguous finalized-chain cursor.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedEventV1 {
+    /// Monotonic moderation-event sequence beginning at one.
+    pub sequence: u64,
+    /// Committing block height.
+    pub block_height: u64,
+    /// Committing block hash resolved from finalized state.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Moderation-event index within the committing block.
+    pub event_index: u32,
+    /// Existing typed, payload-free native moderation event.
+    pub event: SorafsModerationLedgerEvent,
+}
+
+impl ModerationFinalizedEventV1 {
+    /// Return the exclusive cursor identifying this event.
+    #[must_use]
+    pub const fn cursor(&self) -> ModerationFinalizedEventCursorV1 {
+        ModerationFinalizedEventCursorV1 {
+            sequence: self.sequence,
+            block_height: self.block_height,
+            block_hash: self.block_hash,
+            event_index: self.event_index,
+        }
+    }
+}
+
+/// Cursor-bounded page of typed committed moderation events.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedEventPageV1 {
+    /// Finalized state anchor shared by every event in the page.
+    pub finalized_cursor: ModerationFinalizedCursorV1,
+    /// Events in strictly increasing sequence and block/index order.
+    pub events: Vec<ModerationFinalizedEventV1>,
+    /// Whether at least one later committed event exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive continuation cursor, present only when `has_more` is true.
+    pub next_after: Option<ModerationFinalizedEventCursorV1>,
+}
+
+/// One appeal and every payload-free eligibility record from one finalized view.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedAppealViewV1 {
+    /// Authoritative appeal, sortition, and activation record.
+    pub appeal: ModerationAppealRecordV1,
+    /// Eligibility records sorted by canonical juror identity.
+    pub eligibility: Vec<ModerationJurorEligibilityRecordV1>,
+}
+
+/// One case and every authoritative ballot subrecord from one finalized view.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedCaseViewV1 {
+    /// Authoritative case header.
+    pub case: ModerationCaseRecordV1,
+    /// Commitments sorted by canonical juror identity.
+    pub commits: Vec<ModerationCommitRecordV1>,
+    /// Reveals sorted by canonical juror identity.
+    pub reveals: Vec<ModerationRevealRecordV1>,
+    /// Challenges sorted by challenge identifier.
+    pub challenges: Vec<ModerationChallengeRecordV1>,
+    /// Terminal outcome, when the case is finalized.
+    pub outcome: Option<ModerationOutcomeRecordV1>,
+    /// No-show records sorted by canonical juror identity.
+    pub no_shows: Vec<ModerationNoShowRecordV1>,
+}
+
+/// Complete bounded moderation projection read from one finalized state view.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedLedgerSnapshotV1 {
+    /// Schema version; must equal [`MODERATION_FINALIZED_SNAPSHOT_VERSION_V1`].
+    pub version: u16,
+    /// Finalized block height.
+    pub finalized_height: u64,
+    /// Finalized block hash resolved from the same immutable state view.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub finalized_block_hash: [u8; 32],
+    /// Active moderation policy, absent only before ledger initialization.
+    pub policy: Option<ModerationLedgerPolicyRecord>,
+    /// Constant-time ledger counters, absent only before initialization.
+    pub status: Option<ModerationLedgerStatusV1>,
+    /// Every retained appeal sorted by `(case_id, round_id)`.
+    pub appeals: Vec<ModerationFinalizedAppealViewV1>,
+    /// Every retained activated case sorted by `(case_id, round_id)`.
+    pub cases: Vec<ModerationFinalizedCaseViewV1>,
+    /// Latest bounded committed-event suffix in increasing cursor order.
+    pub events: Vec<ModerationFinalizedEventV1>,
+}
+
+impl ModerationFinalizedLedgerSnapshotV1 {
+    /// Return the finalized anchor shared by the complete snapshot.
+    #[must_use]
+    pub const fn anchor(&self) -> ModerationFinalizedCursorV1 {
+        ModerationFinalizedCursorV1 {
+            height: self.finalized_height,
+            block_hash: self.finalized_block_hash,
+        }
+    }
+
+    /// Return one appeal by exact case and round identifier.
+    #[must_use]
+    pub fn appeal(
+        &self,
+        case_id: &str,
+        round_id: &str,
+    ) -> Option<&ModerationFinalizedAppealViewV1> {
+        self.appeals
+            .binary_search_by(|entry| {
+                (
+                    entry.appeal.intake.case_id.as_str(),
+                    entry.appeal.intake.round_id.as_str(),
+                )
+                    .cmp(&(case_id, round_id))
+            })
+            .ok()
+            .map(|index| &self.appeals[index])
+    }
+
+    /// Return one activated case by exact case and round identifier.
+    #[must_use]
+    pub fn case(&self, case_id: &str, round_id: &str) -> Option<&ModerationFinalizedCaseViewV1> {
+        self.cases
+            .binary_search_by(|entry| {
+                (
+                    entry.case.spec.context.case_id.as_str(),
+                    entry.case.spec.round_id.as_str(),
+                )
+                    .cmp(&(case_id, round_id))
+            })
+            .ok()
+            .map(|index| &self.cases[index])
+    }
+}
+
 /// First-release chain-authoritative repair-task record version.
 pub const REPAIR_LEDGER_TASK_VERSION_V1: u16 = 1;
 /// Shortest lease accepted by the chain-authoritative repair ledger.
@@ -1920,6 +2118,56 @@ mod tests {
         let encoded = norito::to_bytes(&case).unwrap();
         let decoded: ModerationCaseSpecV1 = norito::decode_from_bytes(&encoded).unwrap();
         assert_eq!(decoded, case);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn finalized_event_page_json_roundtrip_preserves_typed_event() {
+        let event = ModerationFinalizedEventV1 {
+            sequence: 7,
+            block_height: 11,
+            block_hash: [0xAB; 32],
+            event_index: 2,
+            event: SorafsModerationLedgerEvent {
+                kind: crate::events::data::sorafs::SorafsModerationLedgerEventKind::CaseFinalized,
+                case_id: Some("case-1".to_owned()),
+                round_id: Some("round-1".to_owned()),
+                authority: account(7),
+                occurred_at_unix_ms: 4_321,
+            },
+        };
+        let page = ModerationFinalizedEventPageV1 {
+            finalized_cursor: ModerationFinalizedCursorV1 {
+                height: event.block_height,
+                block_hash: event.block_hash,
+            },
+            events: vec![event.clone()],
+            has_more: true,
+            next_after: Some(event.cursor()),
+        };
+
+        let json = norito::json::to_json(&page).expect("serialize finalized moderation event page");
+        let decoded: ModerationFinalizedEventPageV1 =
+            norito::json::from_json(&json).expect("deserialize finalized moderation event page");
+        let value = norito::json::to_value(&page).expect("serialize event page as JSON value");
+        let norito::json::Value::Object(root) = value else {
+            panic!("finalized moderation event page must be a JSON object");
+        };
+        let Some(norito::json::Value::Array(events)) = root.get("events") else {
+            panic!("finalized moderation event page must contain an events array");
+        };
+        let Some(norito::json::Value::Object(committed_event)) = events.first() else {
+            panic!("finalized moderation event must be a JSON object");
+        };
+        let Some(norito::json::Value::Object(ledger_event)) = committed_event.get("event") else {
+            panic!("committed event must contain a typed ledger event");
+        };
+
+        assert_eq!(decoded, page);
+        assert_eq!(
+            ledger_event.get("kind"),
+            Some(&norito::json!({"kind": "case_finalized"}))
+        );
     }
 
     #[test]

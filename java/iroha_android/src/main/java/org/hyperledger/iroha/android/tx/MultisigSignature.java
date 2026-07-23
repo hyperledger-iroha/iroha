@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.tx;
 import java.util.Arrays;
 import java.util.Objects;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
+import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 
 /** Signature produced by a multisig member. */
 public final class MultisigSignature {
@@ -27,6 +28,10 @@ public final class MultisigSignature {
         Arrays.copyOf(Objects.requireNonNull(signature, "signature"), signature.length);
     if (this.publicKey.length == 0) {
       throw new IllegalArgumentException("publicKey must not be empty");
+    }
+    if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(this.publicKey)) {
+      throw new IllegalArgumentException(
+          "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup");
     }
     if (this.signature.length == 0) {
       throw new IllegalArgumentException("signature must not be empty");
@@ -85,10 +90,7 @@ public final class MultisigSignature {
 
   /** Norito public key payload (algorithm tag + raw key). */
   public byte[] publicKeyNoritoPayload() {
-    final byte[] payload = new byte[publicKey.length + 1];
-    payload[0] = (byte) algorithmTag;
-    System.arraycopy(publicKey, 0, payload, 1, publicKey.length);
-    return payload;
+    return PublicKeyCodec.compactPublicKeyPayload(curveId, publicKey);
   }
 
   private static int algorithmTagForCurveId(final int curveId) {

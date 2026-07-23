@@ -1,9 +1,13 @@
 //! Contains message structures for p2p communication during consensus.
-use std::{io::Write, sync::Arc};
+use std::{collections::BTreeMap, io::Write, sync::Arc};
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
-    block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2::ConsensusMessageV2},
+    block::{
+        BlockHeader, BlockSignature, SignedBlock,
+        consensus::{LaneBlockCertificateV1, LaneBlockProposalV1, LaneBlockQcV1},
+        consensus_v2::{ConsensusMessageV2, finality::V2FinalityArtifact},
+    },
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -62,10 +66,6 @@ pub enum BlockMessage {
     LaneBlockProposal(#[skip_try_from] super::consensus::LaneBlockProposalV1),
     /// Producer-authenticated executable payload for a standalone lane block.
     LaneExecutablePayload(#[skip_try_from] crate::lane_consensus::LaneExecutablePayloadV1),
-    /// Global-proposer handoff of exact payload bytes to the selected lane committee.
-    LaneExecutablePayloadHandoff(
-        #[skip_try_from] crate::lane_consensus::LaneExecutablePayloadHandoffV1,
-    ),
     /// Individual lane-committee vote authorizing the next lane-local view.
     LaneBlockNewViewVote(#[skip_try_from] crate::lane_consensus::LaneBlockNewViewVoteV1),
     /// Aggregate lane-committee certificate authorizing the next lane-local view.
@@ -82,6 +82,10 @@ pub enum BlockMessage {
     LaneBlockQc(#[skip_try_from] super::consensus::LaneBlockQcV1),
     /// Complete Kura-backed lane certificate returned for exact proposal recovery.
     LaneBlockCertificate(#[skip_try_from] Box<super::consensus::LaneBlockCertificateV1>),
+    /// Exact authenticated request for a missing historical canonical body or autonomous payload.
+    LaneHistoricalRecoveryRequest(#[skip_try_from] Box<LaneHistoricalRecoveryRequestV1>),
+    /// Bounded proof-carrying response to an outstanding historical recovery request.
+    LaneHistoricalRecoveryResponse(#[skip_try_from] Box<LaneHistoricalRecoveryResponseV1>),
     /// Explicitly versioned global Sumeragi v2 message.
     V2(#[skip_try_from] ConsensusMessageV2),
 }
@@ -104,12 +108,13 @@ impl BlockMessage {
             self,
             Self::LaneBlockProposal(_)
                 | Self::LaneExecutablePayload(_)
-                | Self::LaneExecutablePayloadHandoff(_)
                 | Self::LaneBlockNewViewVote(_)
                 | Self::LaneBlockNewViewCertificate(_)
                 | Self::LaneBlockVote(_)
                 | Self::LaneBlockQc(_)
                 | Self::LaneBlockCertificate(_)
+                | Self::LaneHistoricalRecoveryRequest(_)
+                | Self::LaneHistoricalRecoveryResponse(_)
         )
     }
 
@@ -637,6 +642,98 @@ pub struct BlockSyncUpdate {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
+}
+
+/// Current clean-break layout for lane historical recovery transport.
+pub const LANE_HISTORICAL_RECOVERY_VERSION_V1: u16 = 1;
+
+/// Exact durable dependency named by a historical lane recovery request.
+///
+/// Both variants bind the immutable lane certificate carried by
+/// [`LaneHistoricalRecoveryRequestV1`]. The additional hashes prevent a
+/// response for another canonical body or READY payload from being correlated
+/// merely because it names the same lane-local height.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+pub enum LaneHistoricalRecoveryKindV1 {
+    /// Rehydrate the result-bearing canonical block selected by global finality.
+    #[codec(index = 1)]
+    CanonicalBlock {
+        /// Hash of the immutable V2 finality artifact expected by the requester.
+        finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    },
+    /// Rehydrate the producer-authenticated payload and origin READY sidecar.
+    #[codec(index = 2)]
+    AutonomousPayload {
+        /// View-neutral digest of the exact executable payload.
+        executable_payload_hash: Hash,
+        /// Hash of the origin PrepareQC carrying the READY aggregate.
+        prepare_qc_hash: HashOf<LaneBlockQcV1>,
+        /// Hash of the matching CommitQC.
+        commit_qc_hash: HashOf<LaneBlockQcV1>,
+    },
+}
+
+/// Versioned request for one exact historical lane recovery dependency.
+///
+/// The outer P2P envelope authenticates `requester`; ingress rejects any
+/// mismatch. The complete certificate and exact signer PoPs make the request
+/// independent of mutable State and proposer-local journals, and bind route,
+/// incarnation, predecessor, proposal, Prepare, Commit, and READY identities
+/// in one canonical hash.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+pub struct LaneHistoricalRecoveryRequestV1 {
+    /// Current-only layout version.
+    pub version: u16,
+    /// Authenticated peer requesting the exact durable evidence.
+    pub requester: PeerId,
+    /// Complete historical lane certificate which owns this dependency.
+    pub certificate: LaneBlockCertificateV1,
+    /// Exact historical PoPs for the union of Prepare/Commit QC signers.
+    pub signer_pops: BTreeMap<PublicKey, Vec<u8>>,
+    /// Exact missing durable dependency.
+    pub kind: LaneHistoricalRecoveryKindV1,
+}
+
+impl LaneHistoricalRecoveryRequestV1 {
+    /// Immutable lane proposal which owns this request.
+    #[must_use]
+    pub const fn proposal(&self) -> &LaneBlockProposalV1 {
+        &self.certificate.proposal
+    }
+}
+
+/// Proof-carrying payload returned for one outstanding historical request.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+pub enum LaneHistoricalRecoveryPayloadV1 {
+    /// Result-bearing canonical block plus its complete frozen finality proof.
+    #[codec(index = 1)]
+    CanonicalBlock {
+        /// Exact canonical signed block bytes.
+        block: SignedBlock,
+        /// Frozen context, CommitQC, ordered roster, and aligned PoPs.
+        finality_artifact: V2FinalityArtifact,
+    },
+    /// Producer payload plus exact origin Prepare/Commit proof material.
+    #[codec(index = 2)]
+    AutonomousPayload {
+        /// Exact producer-authenticated executable payload.
+        payload: crate::lane_consensus::LaneExecutablePayloadV1,
+        /// Origin PrepareQC carrying the READY aggregate.
+        prepare_qc: LaneBlockQcV1,
+        /// Matching origin CommitQC.
+        commit_qc: LaneBlockQcV1,
+    },
+}
+
+/// Versioned response to one exact outstanding historical recovery request.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+pub struct LaneHistoricalRecoveryResponseV1 {
+    /// Current-only layout version.
+    pub version: u16,
+    /// Hash of the exact request retained by the receiver.
+    pub request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
+    /// Bounded independently verifiable recovery evidence.
+    pub payload: LaneHistoricalRecoveryPayloadV1,
 }
 
 /// Direct certified block fetch message family.
@@ -2345,6 +2442,23 @@ mod tests {
             prepare_qc: qc.clone(),
             commit_qc: qc.clone(),
         };
+        let historical_signer = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::BlsNormal)
+            .expect("derive historical request signer");
+        let historical_request = LaneHistoricalRecoveryRequestV1 {
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
+            requester: certificate.commit_qc.validator_set[0].clone(),
+            certificate: certificate.clone(),
+            signer_pops: BTreeMap::from([(
+                historical_signer.public_key().clone(),
+                iroha_crypto::bls_normal_pop_prove(historical_signer.private_key())
+                    .expect("derive historical request signer PoP"),
+            )]),
+            kind: LaneHistoricalRecoveryKindV1::CanonicalBlock {
+                finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"message historical recovery finality",
+                )),
+            },
+        };
         let cases = vec![
             ("lane proposal", BlockMessage::LaneBlockProposal(proposal)),
             ("lane vote", BlockMessage::LaneBlockVote(vote)),
@@ -2352,6 +2466,10 @@ mod tests {
             (
                 "lane certificate",
                 BlockMessage::LaneBlockCertificate(Box::new(certificate)),
+            ),
+            (
+                "historical recovery request",
+                BlockMessage::LaneHistoricalRecoveryRequest(Box::new(historical_request)),
             ),
         ];
 
@@ -2370,7 +2488,11 @@ mod tests {
                         ("lane proposal", BlockMessage::LaneBlockProposal(_))
                         | ("lane vote", BlockMessage::LaneBlockVote(_))
                         | ("lane QC", BlockMessage::LaneBlockQc(_))
-                        | ("lane certificate", BlockMessage::LaneBlockCertificate(_)) => true,
+                        | ("lane certificate", BlockMessage::LaneBlockCertificate(_))
+                        | (
+                            "historical recovery request",
+                            BlockMessage::LaneHistoricalRecoveryRequest(_),
+                        ) => true,
                         _ => false,
                     };
                     assert!(matches_variant, "{label} roundtrip changed variant");

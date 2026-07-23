@@ -78,11 +78,11 @@ impl TryFrom<&Telemetry> for FuturePollTelemetry {
         for field in fields {
             match field {
                 (ID, Value::Number(id_value)) if id.is_none() => {
-                    id = Some(id_value.as_u64().unwrap())
+                    id = Some(id_value.as_u64().ok_or(TelemetryConversionError)?)
                 }
                 (NAME, Value::String(name_value)) if name.is_none() => name = Some(name_value),
                 (DURATION, Value::Number(duration_value)) if duration.is_none() => {
-                    duration = Some(duration_value.as_u64().unwrap())
+                    duration = Some(duration_value.as_u64().ok_or(TelemetryConversionError)?)
                 }
                 _ => {}
             }
@@ -114,11 +114,11 @@ impl TryFrom<Telemetry> for FuturePollTelemetry {
         for field in fields {
             match field {
                 (ID, Value::Number(id_value)) if id.is_none() => {
-                    id = Some(id_value.as_u64().unwrap())
+                    id = Some(id_value.as_u64().ok_or(TelemetryConversionError)?)
                 }
                 (NAME, Value::String(name_value)) if name.is_none() => name = Some(name_value),
                 (DURATION, Value::Number(duration_value)) if duration.is_none() => {
-                    duration = Some(duration_value.as_u64().unwrap())
+                    duration = Some(duration_value.as_u64().ok_or(TelemetryConversionError)?)
                 }
                 _ => {}
             }
@@ -161,6 +161,18 @@ mod tests {
     use norito::json::Value;
 
     use super::*;
+
+    fn telemetry_event(id: Value, duration: Value) -> Telemetry {
+        Telemetry {
+            target: "iroha_futures",
+            fields: TelemetryFields(vec![
+                ("id", id),
+                ("name", Value::from("basic::sleep")),
+                ("duration", duration),
+            ]),
+        }
+    }
+
     #[test]
     fn future_poll_telemetry_json_roundtrip() {
         let sample = FuturePollTelemetry {
@@ -205,5 +217,31 @@ mod tests {
         assert_eq!(telemetry.id, 42);
         assert_eq!(telemetry.name, "basic::sleep");
         assert_eq!(telemetry.duration, 123);
+    }
+
+    #[test]
+    fn borrowed_future_poll_telemetry_rejects_non_u64_numbers() {
+        for event in [
+            telemetry_event(Value::from(-1_i64), Value::from(123_u64)),
+            telemetry_event(Value::from(42_u64), Value::from(0.5_f64)),
+        ] {
+            assert!(
+                FuturePollTelemetry::try_from(&event).is_err(),
+                "negative or fractional numbers must return a conversion error"
+            );
+        }
+    }
+
+    #[test]
+    fn owned_future_poll_telemetry_rejects_non_u64_numbers() {
+        for event in [
+            telemetry_event(Value::from(-1_i64), Value::from(123_u64)),
+            telemetry_event(Value::from(42_u64), Value::from(0.5_f64)),
+        ] {
+            assert!(
+                FuturePollTelemetry::try_from(event).is_err(),
+                "negative or fractional numbers must return a conversion error"
+            );
+        }
     }
 }

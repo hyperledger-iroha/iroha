@@ -65,8 +65,9 @@ use super::{
     },
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
-        MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
-        V2LaneWorkError, V2LaneWorkLimits, require_validator_storage_platform,
+        HistoricalRecoveryServiceOutcome, MergeSidecarDeferralDisposition, V2LaneIngressOutcome,
+        V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError, V2LaneWorkLimits,
+        require_validator_storage_platform,
     },
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
@@ -789,7 +790,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let runtime_construction = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2RunnerError::RestartRequired)?;
-        let (runtime, startup_effects) = SerializedV2Runtime::new(
+        let (runtime, mut startup_effects) = SerializedV2Runtime::new(
             adapter,
             startup_effects,
             Instant::now(),
@@ -815,7 +816,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         // exact durable payload before any fresh candidate work is admitted.
         let replayed_proposal_tag = replayed_proposal_sign_tag(&startup_effects);
         let recovering_interrupted_tip = pending_kura_apply.is_some();
-        let recovered_applied_height = pending_kura_apply.filter(|pending| {
+        let pending_recovery_identity = pending_kura_apply;
+        let initially_recovered_applied_height = pending_kura_apply.filter(|pending| {
             usize::try_from(pending.height()).is_ok_and(|height| state.committed_height() == height)
         });
         let mut authenticated_genesis_nexus_amx_context =
@@ -827,7 +829,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             let replayed_genesis_nexus_amx_context =
                 executor.verify_pending_kura_apply_replay(pending, &startup_effects)?;
             pending_replay_verification.complete();
-            if recovered_applied_height.is_none()
+            if initially_recovered_applied_height.is_none()
                 && let Some(replayed) = replayed_genesis_nexus_amx_context
                 && authenticated_genesis_nexus_amx_context
                     .replace(AuthenticatedGenesisNexusAmxContext::ReplayedPending(
@@ -860,27 +862,77 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&output_guard),
         )
         .map_err(V2RunnerError::Service)?;
-        let mut lane_work = V2LaneWorkAdapter::new_with_output_guard(
-            context.clone(),
-            local_peer.clone(),
-            common_config.key_pair.clone(),
-            local_validator.is_some(),
-            Arc::clone(&state),
-            Arc::clone(&kura),
-            lane_work_limits,
-            authenticated_genesis_nexus_amx_context,
-            recovered_applied_height,
-            Arc::clone(&output_guard),
+
+        // A Native receipt at the durable tip may have crossed its
+        // finality/manifest/receipt boundary before WSV checkpoint and commit
+        // metadata were published. Finish the exact local replay first.
+        // `DurableApplyCompletion` is emitted only after post-apply metadata
+        // and strict Native evidence repair both succeed, so no lane-work
+        // constructor can observe or reject the recoverable intermediate
+        // shape.
+        if recovering_interrupted_tip {
+            let _ = reconcile_executor_locked_body(&mut executor, &mut services)?;
+            executor.consume_pending_tip_recovery_effects(
+                std::mem::take(&mut startup_effects),
+                &mut services,
+            )?;
+            while executor.durable_finality().is_none() {
+                if output_guard.restart_required() {
+                    return Err(V2RunnerError::RestartRequired);
+                }
+                if shutdown_signal.is_sent() {
+                    services.allow_clean_shutdown();
+                    return Ok(());
+                }
+                let completions = services.drain_completions(&mut executor)?;
+                let advanced = advance_pending_tip_recovery_executor(
+                    &mut executor,
+                    &mut services,
+                    control_queue_capacity,
+                )?;
+                if executor.durable_finality().is_none() && completions == 0 && advanced == 0 {
+                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                }
+            }
+        }
+        let recovered_applied_height = pending_recovery_identity.filter(|pending| {
+            usize::try_from(pending.height()).is_ok_and(|height| {
+                state.committed_height() == height
+                    && state.latest_block_hash_fast() == Some(pending.block_hash())
+            })
+        });
+        if recovering_interrupted_tip {
+            // A replayed genesis projection is a pre-apply capability. The
+            // completed State tip is now authoritative and the lane adapter
+            // must enter through its exact post-apply recovery path.
+            authenticated_genesis_nexus_amx_context = None;
+        }
+        let mut lane_work = construct_after_pending_tip_application_recovery(
+            recovering_interrupted_tip,
+            executor.durable_finality().is_some() && recovered_applied_height.is_some(),
+            || {
+                V2LaneWorkAdapter::new_with_output_guard(
+                    context.clone(),
+                    local_peer.clone(),
+                    common_config.key_pair.clone(),
+                    local_validator.is_some(),
+                    Arc::clone(&state),
+                    Arc::clone(&kura),
+                    lane_work_limits,
+                    authenticated_genesis_nexus_amx_context,
+                    recovered_applied_height,
+                    Arc::clone(&output_guard),
+                )
+                .map_err(V2RunnerError::from)
+            },
         )?;
         lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
         // Seed executor lock ownership from replay before consuming startup
         // effects. Otherwise a recovered lock would look like a live first-lock
         // transition and could retire safe work reconstructed from the same WAL.
         let _ = reconcile_executor_locked_body(&mut executor, &mut services)?;
-        if recovering_interrupted_tip {
-            executor.consume_pending_tip_recovery_effects(startup_effects, &mut services)?;
-        } else {
-            executor.consume_effects(startup_effects, &mut services)?;
+        if !recovering_interrupted_tip {
+            executor.consume_effects(std::mem::take(&mut startup_effects), &mut services)?;
         }
         let startup_directive = executor.local_proposal_directive()?;
         // Adapter construction is deliberately carrier-silent. Only the exact
@@ -1157,9 +1209,17 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &services,
                     control_queue_capacity,
                 )?;
-                let _ = lane_work.service_next_historical_recovery()?;
+                let historical_recovery = lane_work.service_next_historical_recovery()?;
                 if lane_work.has_pending_historical_recovery() {
-                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+                    let retry_delay = match historical_recovery {
+                        HistoricalRecoveryServiceOutcome::Waiting(wait) => {
+                            wait.retry_delay(IDLE_POLL, retransmit_interval)
+                        }
+                        HistoricalRecoveryServiceOutcome::Idle
+                        | HistoricalRecoveryServiceOutcome::Complete(_) => IDLE_POLL,
+                    };
+                    let _ = wake_rx.recv_timeout(retry_delay);
                     continue;
                 }
                 let (durable_receipt, durable_artifact) = executor
@@ -2281,18 +2341,39 @@ fn reconcile_executor_locked_body(
     Ok(directive)
 }
 
+/// Keep lane-work construction behind the completed interrupted-tip
+/// application boundary.
+///
+/// The recovery worker reports completion only after canonical State,
+/// post-apply metadata, and strict Native AMX evidence repair are durable.
+/// Keeping the constructor in this continuation makes that ordering explicit
+/// and independently testable.
+fn construct_after_pending_tip_application_recovery<T>(
+    recovering_interrupted_tip: bool,
+    recovery_complete: bool,
+    construct: impl FnOnce() -> Result<T, V2RunnerError>,
+) -> Result<T, V2RunnerError> {
+    if recovering_interrupted_tip && !recovery_complete {
+        return Err(V2RunnerError::PendingTipRecoveryIncomplete);
+    }
+    construct()
+}
+
 fn advance_pending_tip_recovery_executor(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     limit: usize,
-) -> Result<(), V2RunnerError> {
+) -> Result<usize, V2RunnerError> {
+    let mut advanced = 0_usize;
     for _ in 0..limit.max(1) {
         match executor.step_pending_tip_recovery(Instant::now(), services)? {
             EffectExecutorStep::Idle => break,
-            EffectExecutorStep::Advanced { .. } => {}
+            EffectExecutorStep::Advanced { effects } => {
+                advanced = advanced.saturating_add(effects);
+            }
         }
     }
-    Ok(())
+    Ok(advanced)
 }
 
 fn local_validator_index(
@@ -2843,17 +2924,21 @@ fn drain_lane_relay_ingress(
     active_view: wire::View,
     limit: usize,
 ) -> std::result::Result<(), V2LaneWorkError> {
+    let mut drained_any = false;
     for _ in 0..limit.max(1) {
         let mut drained = false;
         if let Ok(message) = lane_relay_rx.try_recv() {
             let _ = lane_work.accept_relay_message(message, active_view);
             drained = true;
+            drained_any = true;
         }
         if !drained {
             break;
         }
     }
-    let _ = lane_work.service_next_historical_recovery()?;
+    if drained_any {
+        let _ = lane_work.service_next_historical_recovery()?;
+    }
     Ok(())
 }
 
@@ -2921,6 +3006,11 @@ pub(super) enum V2RunnerError {
     /// Staged and pending-replay height-one capabilities were both present.
     #[error("Sumeragi v2 startup produced conflicting authenticated genesis Nexus/AMX contexts")]
     ConflictingGenesisNexusContext,
+    /// Interrupted-tip application did not reach its strict durable repair boundary.
+    #[error(
+        "Sumeragi v2 interrupted-tip recovery did not complete post-apply metadata and Native AMX evidence repair before lane-work construction"
+    )]
+    PendingTipRecoveryIncomplete,
     /// Durable parent body is unavailable in Kura.
     #[error("Sumeragi v2 successor is missing its canonical parent block")]
     MissingParent,
@@ -3033,6 +3123,29 @@ mod tests {
             CertifiedMergeSidecarMessage,
         },
     };
+
+    #[test]
+    fn pending_tip_recovery_gate_precedes_lane_work_construction() {
+        let constructed = Cell::new(false);
+        let error = construct_after_pending_tip_application_recovery(true, false, || {
+            constructed.set(true);
+            Ok(())
+        })
+        .expect_err("incomplete pending-tip recovery must block construction");
+        assert!(matches!(error, V2RunnerError::PendingTipRecoveryIncomplete));
+        assert!(
+            !constructed.get(),
+            "the lane-work constructor must not run before strict tip repair completes"
+        );
+
+        let value = construct_after_pending_tip_application_recovery(true, true, || {
+            constructed.set(true);
+            Ok(7_u8)
+        })
+        .expect("completed pending-tip recovery may construct lane work");
+        assert_eq!(value, 7);
+        assert!(constructed.get());
+    }
 
     #[test]
     fn bounded_sidecar_admission_turn_applies_only_its_budget() {

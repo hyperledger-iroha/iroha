@@ -6,6 +6,7 @@ import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
@@ -92,13 +93,17 @@ object AccountOnboardingReceiptVerifier {
     }
 
     private fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean =
-        try {
-            val verifier = Ed25519Signer()
-            verifier.init(false, Ed25519PublicKeyParameters(publicKey, 0))
-            verifier.update(message, 0, message.size)
-            verifier.verifySignature(signature)
-        } catch (_: RuntimeException) {
+        if (!Ed25519PublicKeyAdmission.isValid(publicKey)) {
             false
+        } else {
+            try {
+                val verifier = Ed25519Signer()
+                verifier.init(false, Ed25519PublicKeyParameters(publicKey, 0))
+                verifier.update(message, 0, message.size)
+                verifier.verifySignature(signature)
+            } catch (_: RuntimeException) {
+                false
+            }
         }
 
     private fun verifyNative(

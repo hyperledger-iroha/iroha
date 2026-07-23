@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/sorafs_gateway_compliance_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d03869cf83c31306757ad89e195ce2459386a4e66cf7cf3a5ff9123e5b3dc802
+source_hash: 7756874e86e6abf301e92d26cd7c7afc2e5cbd1b97cd706ec2af01cc68c2e936
 source_last_modified: "2026-07-06T19:08:48.772896+00:00"
-translation_last_reviewed: 2026-07-06
+translation_last_reviewed: 2026-07-23
 source_mtime: 2026-07-06T19:08:48.772896+00:00
 ---
 
@@ -16,19 +16,44 @@ source_mtime: 2026-07-06T19:08:48.772896+00:00
 
 SFM-4 is partially implemented. The gateway enforcement path, denylist helpers,
 GAR policy payloads, proof-token utilities, honey-audit probing, operator bundle
-tooling, and payload-free rollout evidence gate exist. The repository does not
-yet ship an always-on central compliance controller daemon, deployed moderation
-toggle service, deployed public receipt explorer, or full appeal-driven override
-workflow. The local SFM-4c transparency ledger builder and readback surface are
-shipped, but promotion evidence now has to prove controller runtime,
-moderation-toggle, deployed-publication, and multi-gateway boundaries before
-gateway compliance can be marked ready.
+tooling, payload-free rollout evidence gate, and gateway-scoped governed
+compliance controller core exist. The core admits bounded threshold-signed,
+predecessor-bound catalogs; persists candidate, acknowledgement, promotion,
+last-known-good, rollback, toggle, appeal-override, and history state; and
+evaluates legal/safety holds before accepted appeals and baseline policy. It
+also defines an address-pinned runtime feed-transport boundary with HTTPS
+allowlists, public-address validation, DNS revalidation, SPKI pins, redirect,
+size, time, and decompression limits.
+
+The repository does not yet wire that controller through `iroha_config`, Torii
+runtime dependencies, authenticated control routes, a real feed transport, or
+the live gateway policy. The startup bootstrap catalog remains active until
+that cutover is completed. There is also no deployed public receipt explorer.
+Accordingly the lane remains open: source-complete controller primitives and
+synthetic tests are not deployment evidence and cannot mark gateway compliance
+ready.
 
 ## Shipped Foundations
 
 - `GatewayDenylist` supports provider, manifest digest, CID, URL, account id,
   account alias, and perceptual-family entries with TTL pruning, policy tiers,
   governance provenance, and active-pack metadata.
+- `GatewayComplianceController` provides canonical Norito feed/catalog,
+  signature, acknowledgement, rollback, and checkpoint contracts; deterministic
+  normalization and merging; strict Ed25519 threshold/revocation checks;
+  predecessor/sequence enforcement; durable idempotent staging; two-gateway
+  acknowledgement quorum; atomic promotion; last-known-good rollback without
+  rewriting the predecessor-chain head; bounded history; and
+  legal/safety-hold > accepted-appeal > baseline precedence.
+- `GatewayComplianceFeedTransport` is runtime-injected and must connect only to
+  controller-pinned public DNS answers. The core revalidates DNS after each
+  response, verifies the connected address and configured SPKI digest, validates
+  every redirect against the exact HTTPS host allowlist, and bounds encoded,
+  decoded, redirect, DNS-answer, and elapsed-time inputs.
+- `FileGatewayComplianceStore` uses bounded canonical checkpoints, no-follow
+  opens, regular-file checks, fsync, and atomic rename. Catalog signing keys,
+  feed credentials, bearer tokens, and DNS-provider credentials are not owned by
+  the controller.
 - `GatewayPolicy` evaluates manifest-envelope requirements, provider admission,
   denylist hits, rate limits, GAR CDN policy, TTL overrides, purge tags,
   moderation slugs, rate ceilings, geofences, and legal holds.
@@ -284,21 +309,20 @@ parsing response strings.
 
 ## Remaining Production Gates
 
-- Ship the always-on compliance controller daemon that fetches external feeds,
-  normalizes updates, signs them, distributes them to gateways, and tracks
-  acknowledgements. The rollout gate now requires controller-runtime evidence
-  for this boundary, but the daemon itself still needs production deployment.
-- Persist denylist/catalog state and update history through the configured
-  production storage path instead of relying only on local bundle ingestion.
-- Implement moderation toggle APIs, approval workflows, expiry handling, and
-  operator audit trails. The rollout gate now requires moderation-toggle
-  evidence for `iroha_config` binding, approved-toggle count equality, operator
-  role enforcement, approval workflow, expiry, cache invalidation, audit trail,
-  rollback, and payload-free reporting, but the service itself still needs
-  production deployment.
-- Connect appeal outcomes to gateway policy overrides and cache invalidation.
-  The existing appeal-override canary remains required for promotion evidence,
-  but the full workflow is still production work.
+- Resolve `V1-BLOCK-GATEWAY-CONTROLLER-RUNTIME-01`: add the controller policy,
+  feed allowlists/pins, bounds, checkpoint path, and required gateway identities
+  to `iroha_config`; inject the authenticated feed transport at runtime; expose
+  authenticated stage/acknowledge/promote/rollback/status APIs; and make live
+  gateway policy consume the serving controller snapshot.
+- Remove the startup-only unsigned local catalog/bootstrap path after the
+  controller cutover so it cannot compete with the signed durable catalog.
+- Connect finalized accepted-appeal outcomes and legal/safety-hold producers to
+  signed catalog construction and cache invalidation. The core models and
+  enforces these records, but no finalized-chain producer currently submits
+  them.
+- Supply independently audited runtime adapters for the required external feeds
+  and threshold signing. The controller deliberately holds no signing key or
+  feed credential and cannot invent those production dependencies.
 - Wire deployed GAR receipts, proof-token indexes, and moderation events through
   the shipped local SFM-4c transparency source-entry and publication paths, then
   capture deployed publication evidence.
@@ -312,12 +336,19 @@ Focused local checks for the shipped surface are:
 ```sh
 ci/check_sorafs_gateway_denylist.sh
 python3 -m pytest -q \
+  scripts/tests/check_sorafs_gateway_tls_runtime_contract_test.py \
   scripts/tests/build_sorafs_gateway_compliance_canary_test.py \
   scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py \
   scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py
 cargo test -p iroha_torii sorafs::gateway
 cargo test -p sorafs_car policy
 cargo test -p sorafs_orchestrator moderation
+```
+
+The source-only ACME boundary guard is:
+
+```sh
+python3 scripts/check_sorafs_gateway_tls_runtime_contract.py
 ```
 
 Run the broader gateway conformance suite before changing response bodies,

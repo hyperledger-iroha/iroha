@@ -1,6 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+output_filename_for_module() {
+  case "$1" in
+    java/iroha_android/jvm) printf '%s\n' "iroha-android-jvm.cyclonedx.json" ;;
+    java/iroha_android/android) printf '%s\n' "iroha-android.cyclonedx.json" ;;
+    examples/android/operator-console) printf '%s\n' "operator-console.cyclonedx.json" ;;
+    examples/android/retail-wallet) printf '%s\n' "retail-wallet.cyclonedx.json" ;;
+    *) basename "$2" ;;
+  esac
+}
+
+collect_sbom_reports() {
+  local repo_root="$1"
+  local dest="$2"
+  local bom module_root rel_root filename
+
+  while IFS= read -r -d '' bom; do
+    module_root=${bom%%/build/reports/bom/*}
+    if [[ "${module_root}" == "${bom}" ]]; then
+      echo "error: unexpected CycloneDX report path: ${bom}" >&2
+      return 1
+    fi
+    rel_root=${module_root#"${repo_root}/"}
+    filename=$(output_filename_for_module "${rel_root}" "${bom}")
+    cp "${bom}" "${dest}/${filename}"
+  done < <(find "${repo_root}/java/iroha_android/jvm" "${repo_root}/java/iroha_android/android" "${repo_root}/examples/android" \
+              -path '*/build/reports/bom/*.json' -print0)
+}
+
+# Keep the collection primitive sourceable for focused regression tests.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
 usage() {
   cat <<'USAGE'
 Usage: scripts/android_sbom_provenance.sh <sdk-version>
@@ -71,21 +104,8 @@ echo "==> Generating CycloneDX SBOMs"
 
 mkdir -p "${DEST}"
 
-declare -A OUTPUT_MAP=(
-  ["java/iroha_android/jvm"]="iroha-android-jvm.cyclonedx.json"
-  ["java/iroha_android/android"]="iroha-android.cyclonedx.json"
-  ["examples/android/operator-console"]="operator-console.cyclonedx.json"
-  ["examples/android/retail-wallet"]="retail-wallet.cyclonedx.json"
-)
-
 echo "==> Collecting SBOM reports"
-while IFS= read -r -d '' bom; do
-  module_root=$(dirname "$(dirname "$(dirname "${bom}")")")
-  rel_root=${module_root#"${REPO_ROOT}/"}
-  filename=${OUTPUT_MAP[${rel_root}]:-$(basename "${bom}")}
-  cp "${bom}" "${DEST}/${filename}"
-done < <(find "${REPO_ROOT}/java/iroha_android/jvm" "${REPO_ROOT}/java/iroha_android/android" "${REPO_ROOT}/examples/android" \
-            -path '*/build/reports/bom/*.json' -print0)
+collect_sbom_reports "${REPO_ROOT}" "${DEST}"
 
 CHECKSUM_FILE="${DEST}/checksums.txt"
 : > "${CHECKSUM_FILE}"

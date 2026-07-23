@@ -46,8 +46,9 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         consensus::{
             EvidenceRecord, LaneBlockCommitment, NexusFeeReceipt,
-            SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX, SumeragiLanePayloadOwnership,
-            SumeragiNativeAmxParticipantApplication, SumeragiNativeAmxParticipantApplicationState,
+            SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX, SumeragiLaneBlockSessionStatus,
+            SumeragiLanePayloadOwnership, SumeragiNativeAmxParticipantApplication,
+            SumeragiNativeAmxParticipantApplicationState,
         },
         proofs::{BlockProofs, BlockReceiptProof, ExecutionReceiptProof},
     },
@@ -93,7 +94,7 @@ use iroha_data_model::{
     },
     merge::{
         LaneDrainCertificateBodyV1, LaneDrainCertificateV1, LaneDrainCommitmentV1,
-        LaneDrainIntentV1, LaneDrainStateV1, MAX_MERGE_EXECUTION_BATCH_BYTES,
+        LaneDrainFrontierV1, LaneDrainIntentV1, LaneDrainStateV1, MAX_MERGE_EXECUTION_BATCH_BYTES,
         MAX_MERGE_EXECUTION_ENTRYPOINTS, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
         MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution,
         MergeLaneSignerProof, MergeLaneSnapshot, MergeLedgerEntry,
@@ -7889,6 +7890,13 @@ pub struct GovernanceProposalRecord {
     /// Proposal-time parliament draw snapshot used for JIT sortition approvals.
     #[norito(default)]
     pub parliament_snapshot: Option<GovernanceParliamentSnapshot>,
+    /// Deterministic referendum result retained for caller-independent enactment.
+    #[norito(default)]
+    pub finalization_evidence:
+        Option<iroha_data_model::governance::types::GovernanceFinalizationEvidence>,
+    /// Height at which the approved proposal payload was enacted.
+    #[norito(default)]
+    pub enacted_at_height: Option<u64>,
 }
 
 /// Proposal-time parliament draw snapshot.
@@ -7914,7 +7922,11 @@ impl GovernanceProposalRecord {
                 Some(payload)
             }
             iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
-            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                None
+            }
         }
     }
 
@@ -7927,7 +7939,11 @@ impl GovernanceProposalRecord {
                 Some(payload)
             }
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
-            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                None
+            }
         }
     }
 
@@ -7940,7 +7956,43 @@ impl GovernanceProposalRecord {
                 Some(payload)
             }
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
-            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                None
+            }
+        }
+    }
+
+    /// Access the validation-fee policy payload when present.
+    pub fn as_validation_fee_policy(
+        &self,
+    ) -> Option<&iroha_data_model::governance::types::ValidationFeePolicyProposal> {
+        match &self.kind {
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) => {
+                Some(payload)
+            }
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_)
+            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                None
+            }
+        }
+    }
+
+    /// Access the validation-fee payout lifecycle payload when present.
+    pub fn as_validation_fee_payout_lifecycle(
+        &self,
+    ) -> Option<&iroha_data_model::governance::types::ValidationFeePayoutLifecycleProposal> {
+        match &self.kind {
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
+                payload,
+            ) => Some(payload),
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_)
+            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_) => None,
         }
     }
 
@@ -7964,6 +8016,8 @@ pub enum GovernanceProposalStatus {
     Rejected,
     /// Proposal has been enacted and applied.
     Enacted,
+    /// Proposal was approved but its validation-fee predecessor was no longer current.
+    Superseded,
 }
 
 impl json::FastJsonWrite for GovernanceProposalStatus {
@@ -7973,6 +8027,7 @@ impl json::FastJsonWrite for GovernanceProposalStatus {
             GovernanceProposalStatus::Approved => "Approved",
             GovernanceProposalStatus::Rejected => "Rejected",
             GovernanceProposalStatus::Enacted => "Enacted",
+            GovernanceProposalStatus::Superseded => "Superseded",
         };
         json::write_json_string(label, out);
     }
@@ -7986,6 +8041,7 @@ impl json::JsonDeserialize for GovernanceProposalStatus {
             "Approved" => Ok(GovernanceProposalStatus::Approved),
             "Rejected" => Ok(GovernanceProposalStatus::Rejected),
             "Enacted" => Ok(GovernanceProposalStatus::Enacted),
+            "Superseded" => Ok(GovernanceProposalStatus::Superseded),
             other => Err(json::Error::UnknownField {
                 field: other.to_owned(),
             }),
@@ -8246,6 +8302,7 @@ fn handle_jury_stage(
                 GovernanceProposalStatus::Approved
                     | GovernanceProposalStatus::Rejected
                     | GovernanceProposalStatus::Enacted
+                    | GovernanceProposalStatus::Superseded
             ) {
                 if ctx.approvals.jury_ready() {
                     changed |= stage.mark_completed(ctx.now_h);
@@ -8276,7 +8333,10 @@ fn handle_enact_stage(
     let mut reject = false;
     if let Some(stage) = rec.pipeline.stage_mut(GovernanceStage::Enact) {
         if jury_ok && ctx.now_h >= stage.started_at && stage.is_pending() {
-            if matches!(rec.status, GovernanceProposalStatus::Enacted) {
+            if matches!(
+                rec.status,
+                GovernanceProposalStatus::Enacted | GovernanceProposalStatus::Superseded
+            ) {
                 let deadline_breached = stage.deadline.is_some_and(|deadline| ctx.now_h > deadline);
                 if deadline_breached {
                     changed |=
@@ -9906,7 +9966,7 @@ pub struct State {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration (repo defaults, collateral policies).
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable startup-authenticated ABI-20 recursive release catalog.
+    /// Immutable startup-authenticated ABI-21 recursive release catalog.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Unified settlement engine for XOR quoting.
@@ -10149,7 +10209,7 @@ pub struct StateBlock<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this block.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable ABI-20 recursive release catalog snapshot for this block.
+    /// Immutable ABI-21 recursive release catalog snapshot for this block.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this block.
@@ -10729,7 +10789,7 @@ pub struct StateTransaction<'block, 'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this transaction.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable ABI-20 recursive release catalog snapshot for this transaction.
+    /// Immutable ABI-21 recursive release catalog snapshot for this transaction.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this transaction.
@@ -11045,7 +11105,7 @@ pub struct StateView<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this view.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable ABI-20 recursive release catalog snapshot for this view.
+    /// Immutable ABI-21 recursive release catalog snapshot for this view.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this view.
@@ -17144,6 +17204,20 @@ impl World {
         Self::default()
     }
 
+    /// Insert a synthetic domain for tests and benchmark fixtures while keeping
+    /// the owner index consistent.
+    ///
+    /// Production registration must continue through the instruction executor.
+    pub fn insert_domain_for_testing(
+        &mut self,
+        domain_id: DomainId,
+        domain: Domain,
+    ) -> Option<Domain> {
+        let previous = self.domains.insert(domain_id, domain);
+        self.rebuild_domain_owner_index();
+        previous
+    }
+
     fn validate_numeric_asset_invariants(&self) -> Result<(), String> {
         let definitions = self.asset_definitions.view();
         for (definition_id, definition) in definitions.iter() {
@@ -22529,6 +22603,13 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> &mut StorageTransaction<'block, 'world, [u8; 32], GovernanceProposalRecord> {
         &mut self.governance_proposals
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to on-chain parameters for direct test-state seeding.
+    pub fn parameters_mut_for_testing(
+        &mut self,
+    ) -> &mut CellTransaction<'block, 'world, Parameters> {
+        &mut self.parameters
+    }
     /// Test helper: get mutable access to citizenship storage for direct seeding.
     pub fn citizens_mut(
         &mut self,
@@ -27377,7 +27458,9 @@ impl State {
                                             ParliamentBody::OversightCommittee,
                                         ],
                                         iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
-                                        | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_) => &[
+                                        | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+                                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+                                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => &[
                                             ParliamentBody::RulesCommittee,
                                             ParliamentBody::AgendaCouncil,
                                             ParliamentBody::InterestPanel,
@@ -27456,6 +27539,7 @@ impl State {
                 // Automatic decision at h_end: compute tally and emit Approved/Rejected.
                 let mut approve: u128 = 0;
                 let mut reject: u128 = 0;
+                let mut abstain: u128 = 0;
                 let mut decision_ready = true;
                 match mode {
                     super::state::GovernanceReferendumMode::Plain => {
@@ -27493,6 +27577,7 @@ impl State {
                                 match rec.direction {
                                     0 => approve = approve.saturating_add(w),
                                     1 => reject = reject.saturating_add(w),
+                                    2 => abstain = abstain.saturating_add(w),
                                     _ => {}
                                 }
                             }
@@ -27503,6 +27588,7 @@ impl State {
                             if e.finalized && e.tally.len() >= 2 {
                                 approve = u128::from(e.tally[0]);
                                 reject = u128::from(e.tally[1]);
+                                abstain = e.tally.get(2).copied().map_or(0, u128::from);
                             } else {
                                 decision_ready = false;
                             }
@@ -27530,25 +27616,46 @@ impl State {
                                 super::state::GovernanceProposalStatus::Approved
                                     | super::state::GovernanceProposalStatus::Rejected
                                     | super::state::GovernanceProposalStatus::Enacted
+                                    | super::state::GovernanceProposalStatus::Superseded
                             )
                         })
                     {
                         continue;
                     }
                     // Threshold checks: turnout and approval ratio
-                    let turnout = approve.saturating_add(reject);
+                    let turnout = approve.saturating_add(reject).saturating_add(abstain);
+                    let threshold_numerator = sb.gov.approval_threshold_q_num;
+                    let threshold_denominator = sb.gov.approval_threshold_q_den.max(1);
                     let decision_approve = if turnout >= sb.gov.min_turnout {
-                        let num = sb.gov.approval_threshold_q_num;
-                        let den = sb.gov.approval_threshold_q_den.max(1);
-                        // approve/(approve+reject) >= num/den  => approve*den >= (approve+reject)*num
-                        let lhs = approve.saturating_mul(u128::from(den));
-                        let rhs = approve
-                            .saturating_add(reject)
-                            .saturating_mul(u128::from(num));
+                        // approve/turnout >= num/den, with abstentions contributing to turnout.
+                        let lhs = approve.saturating_mul(u128::from(threshold_denominator));
+                        let rhs = turnout.saturating_mul(u128::from(threshold_numerator));
                         lhs >= rhs
                     } else {
                         false
                     };
+                    let finalization_evidence = prop_id_opt.map(|proposal_id| {
+                        iroha_data_model::governance::types::GovernanceFinalizationEvidence {
+                            proposal_id,
+                            referendum_id: proposal_id,
+                            finalized_at_height: at_h,
+                            mode: match mode {
+                                super::state::GovernanceReferendumMode::Zk => {
+                                    iroha_data_model::isi::governance::VotingMode::Zk
+                                }
+                                super::state::GovernanceReferendumMode::Plain => {
+                                    iroha_data_model::isi::governance::VotingMode::Plain
+                                }
+                            },
+                            approve,
+                            reject,
+                            abstain,
+                            min_turnout: sb.gov.min_turnout,
+                            approval_threshold_numerator: threshold_numerator,
+                            approval_threshold_denominator: threshold_denominator,
+                            approved: decision_approve,
+                        }
+                    });
                     if decision_approve {
                         wtx.emit_events(Some(
                             governance_events::GovernanceEvent::ProposalApproved(
@@ -27560,6 +27667,7 @@ impl State {
                         if let Some(pid) = prop_id_opt {
                             if let Some(mut rec) = wtx.governance_proposals.get(&pid).cloned() {
                                 rec.status = super::state::GovernanceProposalStatus::Approved;
+                                rec.finalization_evidence = finalization_evidence;
                                 wtx.governance_proposals.insert(pid, rec);
                             }
                         }
@@ -27574,6 +27682,7 @@ impl State {
                         if let Some(pid) = prop_id_opt {
                             if let Some(mut rec) = wtx.governance_proposals.get(&pid).cloned() {
                                 rec.status = super::state::GovernanceProposalStatus::Rejected;
+                                rec.finalization_evidence = finalization_evidence;
                                 wtx.governance_proposals.insert(pid, rec);
                             }
                         }
@@ -29119,11 +29228,11 @@ impl State {
             return Ok(false);
         };
         let expected = LaneDrainCommitmentV1 {
+            version: 1,
             certificate_hash: certificate.canonical_hash(),
             merge_entry_hash: entry.canonical_hash(),
             carrier_height: entry.merge_qc.carrier_height,
-            final_lane_block_height: certificate.body.final_lane_block_height,
-            final_lane_block_descriptor_hash: certificate.body.final_lane_block_descriptor_hash,
+            frontier: certificate.body.final_frontier,
         };
         Ok(&state.intent == intent && state.commitment == Some(expected))
     }
@@ -32231,19 +32340,18 @@ impl State {
         {
             return None;
         }
-        let (final_lane_block_height, final_lane_block_descriptor_hash) =
-            Self::canonical_merged_lane_frontier_from_world(
-                &self.world.view(),
-                lane.id,
-                lane.dataspace_id,
-                incarnation,
-            )
-            .ok()?;
+        let final_frontier = Self::evidence_aware_lane_drain_frontier_from_world(
+            &self.world.view(),
+            &self.kura,
+            lane.id,
+            lane.dataspace_id,
+            incarnation,
+        )
+        .ok()?;
         let body = LaneDrainCertificateBodyV1 {
             version: 1,
             intent: state.intent,
-            final_lane_block_height,
-            final_lane_block_descriptor_hash,
+            final_frontier,
         };
         crate::lane_consensus::validate_lane_drain_certificate_body(&body)
             .ok()
@@ -32536,21 +32644,26 @@ impl State {
                 "lane drain certificate does not name an exact active lane binding".to_owned(),
             ));
         }
-        let frontier = Self::canonical_merged_lane_frontier_from_world(
+        let frontier = Self::evidence_aware_lane_drain_frontier_from_world(
             &self.world.view(),
+            &self.kura,
             intent.lane_id,
             intent.dataspace_id,
             intent.lane_incarnation,
         )?;
-        if frontier
-            != (
-                certificate.body.final_lane_block_height,
-                certificate.body.final_lane_block_descriptor_hash,
-            )
-        {
+        if frontier != certificate.body.final_frontier {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "lane drain certificate does not bind the exact globally applied frontier"
                     .to_owned(),
+            ));
+        }
+        if self.lane_has_drain_blocking_evidence(
+            intent.lane_id,
+            intent.dataspace_id,
+            intent.lane_incarnation,
+        ) {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "lane drain certificate still has unresolved durable evidence".to_owned(),
             ));
         }
         if require_live_intent {
@@ -33859,6 +33972,245 @@ impl State {
             .collect()
     }
 
+    fn durable_lane_diagnostic_execution_status(
+        &self,
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+        current_state_height: u64,
+        current_state_hash: HashOf<BlockHeader>,
+    ) -> Option<crate::sumeragi::status::CommittedLaneBlockExecutionStatus> {
+        use crate::sumeragi::status::CommittedLaneBlockExecutionStatus as ExecutionStatus;
+
+        let proposal = &session.proposal;
+        if self.kura.lane_block_application_receipt_available(proposal) {
+            let descriptor = &proposal.descriptor;
+            let receipt = self.kura.read_lane_block_application_receipt(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+            )?;
+            return Some(
+                if receipt.format
+                    == crate::kura::LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+                {
+                    ExecutionStatus::StateAppliedByDirectExecution
+                } else {
+                    ExecutionStatus::StateAppliedByCanonicalBlock
+                },
+            );
+        }
+        if self.certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session) {
+            // Hash-only snapshot evidence cannot prove which execution path produced the
+            // application. Keep diagnostics fail-closed until an exact receipt is recovered.
+            return None;
+        }
+        if self
+            .kura
+            .lane_block_application_receipt_conflicts_with_preflight(proposal)
+        {
+            return Some(ExecutionStatus::ApplicationReceiptConflictsWithPreflight);
+        }
+        if !self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(proposal) {
+            return Some(ExecutionStatus::AwaitingPredecessorApplication);
+        }
+        if self
+            .kura
+            .read_preflighted_lane_block_execution_input_for_application(
+                proposal,
+                current_state_height,
+                Some(current_state_hash),
+            )
+            .is_some()
+        {
+            return Some(ExecutionStatus::PayloadPreflightedAwaitingStateApplication);
+        }
+        if self.kura.lane_block_execution_preflight_has_rejections(
+            proposal,
+            current_state_height,
+            Some(current_state_hash),
+        ) == Some(true)
+        {
+            return Some(ExecutionStatus::PayloadPreflightRejectedAwaitingStateApplication);
+        }
+        if self.kura.lane_block_execution_input_available(proposal) {
+            return Some(ExecutionStatus::PayloadRecoveredAwaitingStateApplication);
+        }
+        if matches!(
+            self.kura.lane_block_payload_availability(proposal),
+            crate::kura::LaneBlockPayloadAvailability::Available
+        ) {
+            return Some(ExecutionStatus::PayloadAvailableAwaitingExecutor);
+        }
+        Some(ExecutionStatus::AwaitingExecutablePayload)
+    }
+
+    /// Derive bounded lane diagnostics exclusively from current lifecycle State and Kura.
+    ///
+    /// The result contains one newest canonical ownership per active route and a fair,
+    /// bounded suffix of certified artifacts per route. It is independent of Sumeragi
+    /// adapter caches, deterministically ordered, and therefore reconstructible after restart.
+    #[must_use]
+    pub fn durable_lane_diagnostics(
+        &self,
+    ) -> crate::sumeragi::status::DurableLaneDiagnosticsSnapshot {
+        use crate::sumeragi::status::{
+            COMMITTED_LANE_BLOCKS_CAP, CommittedLaneBlockSnapshot, DurableLaneDiagnosticsSnapshot,
+            LANE_PAYLOAD_OWNERSHIPS_CAP,
+        };
+
+        let lifecycle = self.lane_consensus_lifecycle_snapshot();
+        let mut routes = Self::lane_block_artifact_routes(&lifecycle.nexus)
+            .into_iter()
+            .filter_map(|(lane_id, dataspace_id)| {
+                lifecycle
+                    .incarnations
+                    .get(&lane_id)
+                    .copied()
+                    .map(|incarnation| (lane_id, dataspace_id, incarnation))
+            })
+            .collect::<Vec<_>>();
+        routes.sort();
+        routes.dedup();
+        let route_limit = LANE_PAYLOAD_OWNERSHIPS_CAP.min(COMMITTED_LANE_BLOCKS_CAP);
+        if route_limit == 0 {
+            return DurableLaneDiagnosticsSnapshot::default();
+        }
+        routes.truncate(route_limit);
+        if routes.is_empty() {
+            return DurableLaneDiagnosticsSnapshot::default();
+        }
+
+        let mut lane_payload_ownerships = routes
+            .iter()
+            .filter_map(|(lane_id, dataspace_id, incarnation)| {
+                self.kura
+                    .latest_lane_block_artifact_matching(*lane_id, |artifact| {
+                        let ownership = &artifact.ownership;
+                        ownership.dataspace_id == *dataspace_id
+                            && ownership.lane_incarnation == *incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                *lane_id,
+                                *dataspace_id,
+                                ownership.proposal_height,
+                                ownership.lane_incarnation,
+                            )
+                    })
+                    .map(|artifact| artifact.ownership)
+            })
+            .collect::<Vec<_>>();
+        lane_payload_ownerships.sort_by_key(|ownership| {
+            (
+                ownership.lane_id,
+                ownership.dataspace_id,
+                ownership.lane_incarnation,
+                ownership.lane_block_height,
+                ownership.lane_block_view,
+                ownership.proposal_height,
+                ownership.proposal_view,
+                ownership.payload_ownership_hash,
+            )
+        });
+
+        let per_route_limit = (COMMITTED_LANE_BLOCKS_CAP / routes.len()).max(1);
+        let current_state_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
+        let current_state_hash = self.lane_execution_state_hash();
+        let mut committed_lane_blocks = Vec::new();
+        let mut lane_block_sessions = Vec::new();
+        for (lane_id, dataspace_id, incarnation) in routes {
+            let artifacts = self.kura.latest_certified_lane_block_artifacts_matching(
+                lane_id,
+                per_route_limit,
+                |artifact| {
+                    let descriptor = &artifact.proposal.descriptor;
+                    descriptor.dataspace_id == dataspace_id
+                        && descriptor.lane_incarnation == incarnation
+                        && lifecycle.lane_route_and_incarnation_matches(
+                            lane_id,
+                            dataspace_id,
+                            descriptor.proposal_height,
+                            descriptor.lane_incarnation,
+                        )
+                },
+            );
+            for artifact in artifacts {
+                let session = crate::lane_consensus::CommittedLaneBlockSession {
+                    proposal: artifact.proposal,
+                    prepare_qc: artifact.prepare_qc,
+                    commit_qc: artifact.commit_qc,
+                };
+                let prepare_vote_count = session
+                    .prepare_qc
+                    .signers_bitmap
+                    .iter()
+                    .map(|byte| byte.count_ones())
+                    .sum();
+                let commit_vote_count = session
+                    .commit_qc
+                    .signers_bitmap
+                    .iter()
+                    .map(|byte| byte.count_ones())
+                    .sum();
+                let descriptor = &session.proposal.descriptor;
+                lane_block_sessions.push(SumeragiLaneBlockSessionStatus {
+                    lane_id: descriptor.lane_id,
+                    dataspace_id: descriptor.dataspace_id,
+                    lane_incarnation: descriptor.lane_incarnation,
+                    lane_block_height: descriptor.lane_block_height,
+                    lane_block_view: descriptor.lane_block_view,
+                    proposal_hash: session.proposal.proposal_hash,
+                    has_proposal: true,
+                    prepare_vote_count,
+                    commit_vote_count,
+                    has_prepare_qc: true,
+                    has_commit_qc: true,
+                    pending_commit_vote_request: false,
+                    pending_committed_session_drain: false,
+                    committed_session_drained: true,
+                    validator_count: descriptor.validator_count,
+                    min_quorum: descriptor.min_quorum,
+                });
+                if let Some(execution_status) = self.durable_lane_diagnostic_execution_status(
+                    &session,
+                    current_state_height,
+                    current_state_hash,
+                ) {
+                    committed_lane_blocks.push(
+                        CommittedLaneBlockSnapshot::from_committed_session_with_execution_status(
+                            &session,
+                            execution_status,
+                        ),
+                    );
+                }
+            }
+        }
+
+        committed_lane_blocks.sort_by_key(|snapshot| {
+            (
+                snapshot.lane_id,
+                snapshot.dataspace_id,
+                snapshot.proposal.descriptor.lane_incarnation,
+                snapshot.lane_block_height,
+                snapshot.lane_block_view,
+                snapshot.descriptor_hash,
+                snapshot.proposal_hash,
+            )
+        });
+        lane_block_sessions.sort_by_key(|session| {
+            (
+                session.lane_id,
+                session.dataspace_id,
+                session.lane_incarnation,
+                session.lane_block_height,
+                session.lane_block_view,
+                session.proposal_hash,
+            )
+        });
+
+        DurableLaneDiagnosticsSnapshot {
+            lane_payload_ownerships,
+            committed_lane_blocks,
+            lane_block_sessions,
+        }
+    }
+
     /// Snapshot certified standalone lane-local sessions for active catalog lanes.
     ///
     /// The result is bounded by the active lane catalog and `limit_per_lane`:
@@ -34652,6 +35004,103 @@ impl State {
                 Some(marker.lane_block_descriptor_hash),
             )
         })
+    }
+
+    /// Derive the one exact evidence-aware frontier admitted by every drain phase.
+    ///
+    /// A Native marker at the current replicated merge frontier must have its
+    /// exact latest receipt, manifest proof, finality, application metadata,
+    /// and bounded route index revalidated by Kura. An older Native marker is
+    /// not the source of the current frontier; a newer or same-height
+    /// conflicting marker is a fail-closed replicated-state conflict.
+    fn evidence_aware_lane_drain_frontier_from_world(
+        world: &impl WorldReadOnly,
+        kura: &Kura,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<LaneDrainFrontierV1, MergeLedgerCommitError> {
+        let (lane_block_height, lane_block_descriptor_hash) =
+            Self::canonical_merged_lane_frontier_from_world(
+                world,
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            )?;
+        let mut frontier = LaneDrainFrontierV1::ordinary(
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            lane_block_height,
+            lane_block_descriptor_hash,
+        );
+        let Some(marker) = Self::canonical_native_amx_participant_frontier_from_world(
+            world,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )?
+        else {
+            return Ok(frontier);
+        };
+        if marker.lane_block_height > lane_block_height
+            || (marker.lane_block_height == lane_block_height
+                && Some(marker.lane_block_descriptor_hash) != lane_block_descriptor_hash)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "Native AMX drain frontier for lane {} conflicts with replicated merge frontier",
+                lane_id.as_u32(),
+            )));
+        }
+        if marker.lane_block_height < lane_block_height {
+            return Ok(frontier);
+        }
+        let receipt = kura
+            .read_native_amx_participant_application_receipt(
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+                lane_block_height,
+            )
+            .filter(|receipt| {
+                Self::native_amx_participant_receipt_matches_frontier(receipt, marker)
+            })
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "Native AMX drain frontier for lane {} lacks exact durable application evidence",
+                    lane_id.as_u32(),
+                ))
+            })?;
+        let evidence = kura
+            .native_amx_participant_application_drain_evidence(&receipt)
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "Native AMX drain frontier for lane {} lacks an exact durable manifest, finality, application, receipt, or latest-index identity",
+                    lane_id.as_u32(),
+                ))
+            })?;
+        if evidence.participant_view != marker.participant_view
+            || evidence.predecessor_height != marker.previous_lane_block_height
+            || evidence.predecessor_descriptor_hash != marker.previous_lane_block_descriptor_hash
+            || evidence.participant_proposal_hash != marker.participant_proposal_hash
+            || evidence.participant_settlement_hash != marker.participant_settlement_hash
+            || u64::from(evidence.source_count) != marker.source_count
+            || evidence.application_block_height != marker.application_block_height
+            || evidence.application_block_hash != marker.application_block_hash
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "Native AMX drain frontier evidence for lane {} differs from replicated WSV",
+                lane_id.as_u32(),
+            )));
+        }
+        frontier.native_application = Some(evidence);
+        crate::lane_consensus::validate_lane_drain_frontier(&frontier).map_err(|error| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "Native AMX drain frontier for lane {} is malformed: {error}",
+                lane_id.as_u32(),
+            ))
+        })?;
+        Ok(frontier)
     }
 
     fn validate_merge_execution_predecessor_against_frontier(
@@ -38137,7 +38586,7 @@ impl State {
         replaced_lane_ids: &BTreeSet<LaneId>,
         transition_height: u64,
     ) -> Result<(), LaneLifecycleError> {
-        self.apply_lane_geometry_updates_with_certified_retirements(
+        self.apply_lane_geometry_updates_with_certified_drain_frontiers(
             previous,
             current,
             previous_incarnations,
@@ -38147,12 +38596,12 @@ impl State {
             previous_lineage,
             current_lineage,
             replaced_lane_ids,
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             transition_height,
         )
     }
 
-    fn apply_lane_geometry_updates_with_certified_retirements(
+    fn apply_lane_geometry_updates_with_certified_drain_frontiers(
         &self,
         previous: &iroha_config::parameters::actual::LaneConfig,
         current: &iroha_config::parameters::actual::LaneConfig,
@@ -38163,14 +38612,14 @@ impl State {
         previous_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
         current_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
         replaced_lane_ids: &BTreeSet<LaneId>,
-        certified_retirements: &BTreeSet<(LaneId, DataSpaceId, Hash)>,
+        certified_frontiers: &BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
         transition_height: u64,
     ) -> Result<(), LaneLifecycleError> {
         let diff = lane_topology_diff(previous, current, replaced_lane_ids);
         self.preflight_lane_geometry_updates(previous, current, &diff)?;
 
         self.kura
-            .apply_lane_geometry_transition_at_height_with_lineage_roots_and_certified_retirements(
+            .apply_lane_geometry_transition_at_height_with_lineage_roots_and_certified_drain_frontiers(
                 previous,
                 current,
                 previous_incarnations,
@@ -38180,7 +38629,7 @@ impl State {
                 lane_incarnation_lineage_root(&self.chain_id, previous_lineage),
                 lane_incarnation_lineage_root(&self.chain_id, current_lineage),
                 replaced_lane_ids,
-                certified_retirements,
+                certified_frontiers,
                 transition_height,
             )
             .map_err(|err| LaneLifecycleError::Storage(format!("kura journal: {err:?}")))?;
@@ -38422,7 +38871,7 @@ impl State {
         if !pending.transition.requires_geometry() {
             return Ok(());
         }
-        let certified_retirements = match &pending.transition {
+        let certified_frontiers = match &pending.transition {
             PendingAutoscaleTransition::ScaleIn { lane, .. } => {
                 let previous_lane = update
                     .previous_catalog
@@ -38439,11 +38888,24 @@ impl State {
                         reason: "certified retirement lane has no previous incarnation",
                     },
                 )?;
-                BTreeSet::from([(*lane, previous_lane.dataspace_id, incarnation)])
+                let commitment = decode_autoscale_lane_drain_state(previous_lane)
+                    .map_err(|reason| LaneLifecycleError::InvalidAutoscaleManagedLane {
+                        lane: *lane,
+                        reason,
+                    })?
+                    .and_then(|state| state.commitment)
+                    .ok_or(LaneLifecycleError::UnsafeRetirement {
+                        lane: *lane,
+                        reason: "certified retirement has no committed drain frontier",
+                    })?;
+                BTreeMap::from([(
+                    (*lane, previous_lane.dataspace_id, incarnation),
+                    commitment.frontier,
+                )])
             }
-            _ => BTreeSet::new(),
+            _ => BTreeMap::new(),
         };
-        self.apply_lane_geometry_updates_with_certified_retirements(
+        self.apply_lane_geometry_updates_with_certified_drain_frontiers(
             &update.previous_lane_config,
             &update.updated_lane_config,
             &update.previous_lane_incarnations,
@@ -38453,7 +38915,7 @@ impl State {
             &update.previous_lane_incarnation_lineage,
             &update.updated_lane_incarnation_lineage,
             &update.replaced_lane_ids,
-            &certified_retirements,
+            &certified_frontiers,
             block_height,
         )?;
         if let Err(failure) = self.mark_lane_geometry_catalog_published(
@@ -38678,22 +39140,24 @@ impl State {
                     reason: "its drain commitment is stale or not from an earlier carrier",
                 });
             }
-            let frontier = Self::canonical_merged_lane_frontier_from_world(
+            let frontier = Self::evidence_aware_lane_drain_frontier_from_world(
                 &self.world.view(),
+                &self.kura,
                 *lane,
                 previous_lane.dataspace_id,
                 incarnation,
             )
             .map_err(|err| LaneLifecycleError::Storage(err.to_string()))?;
-            if frontier
-                != (
-                    commitment.final_lane_block_height,
-                    commitment.final_lane_block_descriptor_hash,
+            if frontier != commitment.frontier
+                || self.lane_has_drain_blocking_evidence(
+                    *lane,
+                    previous_lane.dataspace_id,
+                    incarnation,
                 )
             {
                 return Err(LaneLifecycleError::UnsafeRetirement {
                     lane: *lane,
-                    reason: "its committed drain frontier differs from replicated WSV",
+                    reason: "its committed drain frontier or durable evidence differs from replicated state",
                 });
             }
         }
@@ -38856,19 +39320,15 @@ impl State {
                         reason: "drain commitment is repeated or has an invalid carrier height",
                     });
                 }
-                let frontier = Self::canonical_merged_lane_frontier_from_world(
+                let frontier = Self::evidence_aware_lane_drain_frontier_from_world(
                     &self.world.view(),
+                    &self.kura,
                     previous.intent.lane_id,
                     previous.intent.dataspace_id,
                     previous.intent.lane_incarnation,
                 )
                 .map_err(|err| LaneLifecycleError::Storage(err.to_string()))?;
-                if frontier
-                    != (
-                        commitment.final_lane_block_height,
-                        commitment.final_lane_block_descriptor_hash,
-                    )
-                {
+                if frontier != commitment.frontier {
                     return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
                         lane: *lane,
                         reason: "drain commitment does not match the replicated final frontier",
@@ -40206,7 +40666,7 @@ impl PendingAutoscaleTransition {
                     height,
                     lane = lane.as_u32(),
                     close_global_height = intent.close_global_height,
-                    initial_merged_lane_height = intent.initial_merged_lane_height,
+                    initial_merged_lane_height = intent.initial_frontier.lane_block_height,
                     active_lanes,
                     autoscale_capacity_lanes,
                     in_latency_ratio_permille,
@@ -40219,7 +40679,7 @@ impl PendingAutoscaleTransition {
                     height,
                     lane = lane.as_u32(),
                     carrier_height = commitment.carrier_height,
-                    final_lane_block_height = commitment.final_lane_block_height,
+                    final_lane_block_height = commitment.frontier.lane_block_height,
                     "committed globally certified lane autoscale drain frontier"
                 );
             }
@@ -40492,11 +40952,16 @@ fn decode_autoscale_lane_drain_state(
         return Err("autoscale.drain_state intent does not match its lane");
     }
     if let Some(commitment) = state.commitment {
-        let descriptor_shape_valid = (commitment.final_lane_block_height == 0)
-            == commitment.final_lane_block_descriptor_hash.is_none();
-        if commitment.carrier_height <= state.intent.close_global_height
-            || commitment.final_lane_block_height < state.intent.initial_merged_lane_height
-            || !descriptor_shape_valid
+        if commitment.version != 1
+            || commitment.carrier_height <= state.intent.close_global_height
+            || commitment.frontier.lane_block_height
+                < state.intent.initial_frontier.lane_block_height
+            || !commitment.frontier.matches_route(
+                state.intent.lane_id,
+                state.intent.dataspace_id,
+                state.intent.lane_incarnation,
+            )
+            || crate::lane_consensus::validate_lane_drain_frontier(&commitment.frontier).is_err()
             || commitment
                 .certificate_hash
                 .as_ref()
@@ -44982,6 +45447,34 @@ impl<'state> StateBlock<'state> {
                 key: receiver_key.to_vec(),
                 value: receiver_value,
             });
+
+            // Commit the complete protected validation-fee registry selection
+            // at every height. A finality proof for this fixed synthetic write
+            // therefore proves both the current policy and that no later
+            // Parliament enactment was omitted.
+            let validation_fee_parameter_id =
+                iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1::parameter_id();
+            let validation_fee_custom = self
+                .world
+                .parameters()
+                .custom()
+                .get(&validation_fee_parameter_id);
+            let validation_fee_commitment =
+                iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_custom_parameter_state(
+                    receiver_height,
+                    validation_fee_custom,
+                );
+            let validation_fee_value = norito::to_bytes(&validation_fee_commitment)
+                .expect("validation-fee policy snapshot commitment must encode");
+            let validation_fee_key =
+                iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1;
+            witness
+                .writes
+                .retain(|entry| entry.key.as_slice() != validation_fee_key);
+            witness.writes.push(crate::sumeragi::consensus::ExecKv {
+                key: validation_fee_key.to_vec(),
+                value: validation_fee_value,
+            });
             witness
                 .writes
                 .sort_by(|left, right| left.key.cmp(&right.key));
@@ -46965,14 +47458,14 @@ impl<'state> StateBlock<'state> {
             });
         }
         let close_global_height = self._curr_block.height().get();
-        let (initial_merged_lane_height, initial_merged_descriptor_hash) =
-            State::canonical_merged_lane_frontier_from_world(
-                &self.world,
-                lane.id,
-                lane.dataspace_id,
-                lane_incarnation,
-            )
-            .map_err(|err| LaneLifecycleError::Storage(err.to_string()))?;
+        let initial_frontier = State::evidence_aware_lane_drain_frontier_from_world(
+            &self.world,
+            self.kura,
+            lane.id,
+            lane.dataspace_id,
+            lane_incarnation,
+        )
+        .map_err(|err| LaneLifecycleError::Storage(err.to_string()))?;
         // The drain authority is the same committee pinned before this lane
         // incarnation was derived. It therefore intersects every lane QC for
         // the incarnation, including delayed or withheld QCs created before a
@@ -46993,8 +47486,7 @@ impl<'state> StateBlock<'state> {
             dataspace_id: lane.dataspace_id,
             lane_incarnation,
             close_global_height,
-            initial_merged_lane_height,
-            initial_merged_descriptor_hash,
+            initial_frontier,
             validator_set_hash_version: pinned.validator_set_hash_version,
             validator_set_hash: pinned.validator_set_hash,
             validator_set: pinned.validator_set,
@@ -47200,12 +47692,35 @@ impl<'state> StateBlock<'state> {
                 reason: "drain commitment carrier height is invalid",
             });
         }
+        let current_frontier = State::evidence_aware_lane_drain_frontier_from_world(
+            &self.world,
+            self.kura,
+            previous.intent.lane_id,
+            previous.intent.dataspace_id,
+            previous.intent.lane_incarnation,
+        )
+        .map_err(|_| LaneLifecycleError::InvalidAutoscaleManagedLane {
+            lane: lane_id,
+            reason: "drain commitment frontier evidence cannot be revalidated",
+        })?;
+        if current_frontier != certificate.body.final_frontier
+            || self.state_ref.lane_has_drain_blocking_evidence(
+                lane_id,
+                previous.intent.dataspace_id,
+                previous.intent.lane_incarnation,
+            )
+        {
+            return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
+                lane: lane_id,
+                reason: "drain commitment does not bind an empty exact durable frontier",
+            });
+        }
         let commitment = LaneDrainCommitmentV1 {
+            version: 1,
             certificate_hash: certificate.canonical_hash(),
             merge_entry_hash: entry.canonical_hash(),
             carrier_height,
-            final_lane_block_height: certificate.body.final_lane_block_height,
-            final_lane_block_descriptor_hash: certificate.body.final_lane_block_descriptor_hash,
+            frontier: certificate.body.final_frontier,
         };
         self.stage_autoscale_lane_drain_state_transition(
             LaneDrainStateV1 {
@@ -47315,8 +47830,9 @@ impl<'state> StateBlock<'state> {
                     reason: "scale-in lane has no active incarnation",
                 },
             )?;
-            let frontier = State::canonical_merged_lane_frontier_from_world(
+            let frontier = State::evidence_aware_lane_drain_frontier_from_world(
                 &self.world,
+                self.kura,
                 *lane,
                 lane_config.dataspace_id,
                 incarnation,
@@ -47328,11 +47844,12 @@ impl<'state> StateBlock<'state> {
                 &self.chain_id,
                 incarnation,
             ) || commitment.carrier_height >= block_height
-                || frontier
-                    != (
-                        commitment.final_lane_block_height,
-                        commitment.final_lane_block_descriptor_hash,
-                    )
+                || frontier != commitment.frontier
+                || self.state_ref.lane_has_drain_blocking_evidence(
+                    *lane,
+                    lane_config.dataspace_id,
+                    incarnation,
+                )
             {
                 return Err(LaneLifecycleError::UnsafeRetirement {
                     lane: *lane,
@@ -47792,17 +48309,19 @@ impl<'state> StateBlock<'state> {
         if commitment.carrier_height >= block_height {
             return None;
         }
-        let frontier = State::canonical_merged_lane_frontier_from_world(
+        let frontier = State::evidence_aware_lane_drain_frontier_from_world(
             &self.world,
+            self.kura,
             candidate,
             lane.dataspace_id,
             incarnation,
         )
         .ok()?;
-        if frontier
-            != (
-                commitment.final_lane_block_height,
-                commitment.final_lane_block_descriptor_hash,
+        if frontier != commitment.frontier
+            || self.state_ref.lane_has_drain_blocking_evidence(
+                candidate,
+                lane.dataspace_id,
+                incarnation,
             )
         {
             return None;
@@ -59086,6 +59605,7 @@ impl StateTransaction<'_, '_> {
         let artifacts = artifacts?;
         crate::validation_fee::enforce_opaque_deferred_instruction_groups(
             &artifacts.queued_instructions_by_authority(),
+            &artifacts.queued_instructions_with_authority(),
             self,
             None,
         )
@@ -59192,6 +59712,11 @@ impl StateTransaction<'_, '_> {
                 )]);
                 crate::validation_fee::enforce_opaque_deferred_instruction_groups(
                     &instruction_groups,
+                    &instructions
+                        .iter()
+                        .cloned()
+                        .map(|instruction| (authority.clone(), instruction))
+                        .collect::<Vec<_>>(),
                     self,
                     None,
                 )?;
@@ -59227,6 +59752,11 @@ impl StateTransaction<'_, '_> {
                 )]);
                 crate::validation_fee::enforce_opaque_deferred_instruction_groups(
                     &instruction_groups,
+                    &explicit_instructions
+                        .iter()
+                        .cloned()
+                        .map(|instruction| (authority.clone(), instruction))
+                        .collect::<Vec<_>>(),
                     self,
                     None,
                 )?;
@@ -59507,15 +60037,27 @@ impl StateTransaction<'_, '_> {
                         summary.prepared_contract().artifact(),
                     )
                 });
-                crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-                    &artifacts.queued_instructions_by_authority(),
-                    self,
-                    runtime_origin,
-                )?;
-                let queued_instructions = artifacts.queued_instructions();
+                let validation_outcome =
+                    crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                        &artifacts.queued_instructions_by_authority(),
+                        &artifacts.queued_instructions_with_authority(),
+                        self,
+                        runtime_origin,
+                    )?;
+                let no_op = validation_outcome
+                    == crate::validation_fee::OpaqueDeferredValidationOutcome::NoOp;
+                let queued_instructions = if no_op {
+                    Vec::new()
+                } else {
+                    artifacts.queued_instructions()
+                };
                 let step = ExecutionStep(ConstVec::from(queued_instructions));
                 self.seed_time_trigger_call_hash(id, authority, &event, &step);
-                let queued = artifacts.apply_to_transaction(self, authority)?;
+                let queued = if no_op {
+                    Vec::new()
+                } else {
+                    artifacts.apply_to_transaction(self, authority)?
+                };
                 let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                 (Ok(cvs.into()), None)
             }
@@ -59750,15 +60292,27 @@ impl StateTransaction<'_, '_> {
                                     prepared_contract.artifact(),
                                 )
                             });
-                            crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-                                &artifacts.queued_instructions_by_authority(),
-                                self,
-                                runtime_origin,
-                            )?;
-                            let queued_instructions = artifacts.queued_instructions();
+                            let validation_outcome =
+                                crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                                    &artifacts.queued_instructions_by_authority(),
+                                    &artifacts.queued_instructions_with_authority(),
+                                    self,
+                                    runtime_origin,
+                                )?;
+                            let no_op = validation_outcome
+                                == crate::validation_fee::OpaqueDeferredValidationOutcome::NoOp;
+                            let queued_instructions = if no_op {
+                                Vec::new()
+                            } else {
+                                artifacts.queued_instructions()
+                            };
                             let step = ExecutionStep(ConstVec::from(queued_instructions));
                             self.seed_time_trigger_call_hash(id, authority, &event, &step);
-                            let queued = artifacts.apply_to_transaction(self, authority)?;
+                            let queued = if no_op {
+                                Vec::new()
+                            } else {
+                                artifacts.apply_to_transaction(self, authority)?
+                            };
                             let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                             (Ok(cvs.into()), None)
                         }
@@ -62713,6 +63267,38 @@ mod tests {
     use crate::smartcontracts::ValidQuery;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
+
+    #[test]
+    fn insert_domain_for_testing_replaces_owner_index_without_empty_bucket() {
+        let domain_id = DomainId::try_new("fixture", "universal").expect("valid domain id");
+        let mut world = World::new();
+
+        assert!(
+            world
+                .insert_domain_for_testing(
+                    domain_id.clone(),
+                    Domain::new(domain_id.clone()).build(&ALICE_ID),
+                )
+                .is_none()
+        );
+        assert_eq!(
+            world.domains_by_owner.view().get(&ALICE_ID),
+            Some(&BTreeSet::from([domain_id.clone()]))
+        );
+
+        let previous = world
+            .insert_domain_for_testing(
+                domain_id.clone(),
+                Domain::new(domain_id.clone()).build(&BOB_ID),
+            )
+            .expect("existing fixture domain is replaced");
+        assert_eq!(previous.owned_by(), &*ALICE_ID);
+        assert!(world.domains_by_owner.view().get(&ALICE_ID).is_none());
+        assert_eq!(
+            world.domains_by_owner.view().get(&BOB_ID),
+            Some(&BTreeSet::from([domain_id]))
+        );
+    }
 
     #[test]
     fn trigger_batch_gas_budget_is_shared_across_items() {
@@ -69143,6 +69729,67 @@ seiyaku SequentialNfts {
     }
 
     #[test]
+    fn native_derived_drain_frontier_rejects_missing_durable_application_evidence() {
+        let lane_id = LaneId::new(7);
+        let dataspace_id = DataSpaceId::new(9);
+        let lane_incarnation = Hash::new(b"drain-native-missing-evidence-incarnation");
+        let descriptor_hash = Hash::new(b"drain-native-missing-evidence-descriptor");
+        let marker = AppliedNativeAmxParticipantFrontierMarker {
+            version: 2,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            lane_block_height: 1,
+            participant_view: 0,
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: descriptor_hash,
+            participant_proposal_hash: Hash::new(b"drain-native-missing-evidence-proposal"),
+            participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"drain-native-missing-evidence-settlement",
+            )),
+            application_block_height: 3,
+            application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"drain-native-missing-evidence-application",
+            )),
+            source_count: 1,
+        };
+        let (native_key, native_payload) =
+            State::encode_native_amx_participant_frontier_marker(marker)
+                .expect("encode Native frontier marker");
+        let (merge_key, merge_payload) =
+            State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker {
+                version: 1,
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+                lane_block_height: 1,
+                lane_block_descriptor_hash: descriptor_hash,
+            })
+            .expect("encode replicated merge frontier marker");
+        let mut world = World::default();
+        world
+            .smart_contract_state
+            .insert(native_key, native_payload);
+        world.smart_contract_state.insert(merge_key, merge_payload);
+        let kura = Kura::blank_kura_for_testing();
+
+        let error = State::evidence_aware_lane_drain_frontier_from_world(
+            &world.view(),
+            &kura,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+        .expect_err("Native-derived drain frontier without sidecars must fail closed");
+        assert!(matches!(
+            error,
+            MergeLedgerCommitError::ExecutionMarkerConflict(reason)
+                if reason.contains("lacks exact durable application evidence")
+        ));
+    }
+
+    #[test]
     fn merge_routing_plan_boundary_requires_exact_framed_norito() {
         let plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
             LaneId::new(7),
@@ -69295,6 +69942,7 @@ seiyaku SequentialNfts {
                 .expect("intent merge catalog");
         let mut committed_state = intent_state.clone();
         committed_state.commitment = Some(LaneDrainCommitmentV1 {
+            version: 1,
             certificate_hash: HashOf::from_untyped_unchecked(Hash::new(
                 b"stable-drain-certificate",
             )),
@@ -69302,8 +69950,7 @@ seiyaku SequentialNfts {
                 b"stable-drain-merge-entry",
             )),
             carrier_height: 3,
-            final_lane_block_height: 0,
-            final_lane_block_descriptor_hash: None,
+            frontier: intent_state.intent.initial_frontier,
         });
         lane.metadata.insert(
             AUTOSCALE_META_DRAIN_STATE.to_owned(),
@@ -69520,13 +70167,23 @@ seiyaku SequentialNfts {
             validator_set.clone(),
             None,
         );
-        drain_state.intent.initial_merged_lane_height = 2;
-        drain_state.intent.initial_merged_descriptor_hash = Some(descriptor_hash);
+        drain_state.intent.initial_frontier = LaneDrainFrontierV1::ordinary(
+            lane_id,
+            dataspace_id,
+            incarnation,
+            2,
+            Some(descriptor_hash),
+        );
         let body = LaneDrainCertificateBodyV1 {
             version: 1,
             intent: drain_state.intent,
-            final_lane_block_height: 2,
-            final_lane_block_descriptor_hash: Some(descriptor_hash),
+            final_frontier: LaneDrainFrontierV1::ordinary(
+                lane_id,
+                dataspace_id,
+                incarnation,
+                2,
+                Some(descriptor_hash),
+            ),
         };
         let votes = keypairs
             .iter()
@@ -69579,6 +70236,45 @@ seiyaku SequentialNfts {
                 false,
             )
             .expect("historical recovery accepts the exact frontier before retirement");
+
+        let mut mismatched_body = certificate.body.clone();
+        mismatched_body.final_frontier = LaneDrainFrontierV1::ordinary(
+            lane_id,
+            dataspace_id,
+            incarnation,
+            3,
+            Some(Hash::new(b"mismatched-drain-final-frontier")),
+        );
+        let mismatched_votes = keypairs
+            .iter()
+            .map(|keypair| {
+                crate::lane_consensus::LaneDrainVoteV1::new_signed(
+                    mismatched_body.clone(),
+                    PeerId::new(keypair.public_key().clone()),
+                    keypair.private_key(),
+                )
+                .expect("structurally valid mismatched drain vote")
+            })
+            .collect::<Vec<_>>();
+        let mismatched_certificate = crate::lane_consensus::aggregate_lane_drain_votes(
+            mismatched_body,
+            certificate.validator_set.clone(),
+            &mismatched_votes,
+        )
+        .expect("aggregate mismatched drain certificate");
+        let error = state
+            .validate_merge_lane_drain_certificate_payload(
+                std::slice::from_ref(&mismatched_certificate),
+                3,
+                &active_lanes,
+                false,
+            )
+            .expect_err("global admission must reject a signed frontier drift");
+        assert!(matches!(
+            error,
+            MergeLedgerCommitError::ExecutionBatchInvalid(reason)
+                if reason.contains("exact globally applied frontier")
+        ));
 
         {
             let mut world = state.world.block();
@@ -70614,8 +71310,8 @@ seiyaku SequentialNfts {
             .expect("embedded close committee survives current-roster drift");
         assert_eq!(recovered_committee, embedded_committee);
         assert_eq!(&body.intent.validator_set, &recovered_committee);
-        assert_eq!(body.final_lane_block_height, 0);
-        assert!(body.final_lane_block_descriptor_hash.is_none());
+        assert_eq!(body.final_frontier.lane_block_height, 0);
+        assert!(body.final_frontier.lane_block_descriptor_hash.is_none());
 
         let certificate = autoscale_drain_certificate_for_test(body, &keypairs);
         let candidate = state
@@ -70875,8 +71571,7 @@ seiyaku SequentialNfts {
         let body = LaneDrainCertificateBodyV1 {
             version: 1,
             intent: intent.clone(),
-            final_lane_block_height: 0,
-            final_lane_block_descriptor_hash: None,
+            final_frontier: intent.initial_frontier,
         };
         for keypair in &new_keypairs {
             assert!(
@@ -70981,6 +71676,7 @@ seiyaku SequentialNfts {
                 .map(|keypair| PeerId::new(keypair.public_key().clone()))
                 .collect::<Vec<_>>();
             let commitment = certified.then(|| LaneDrainCommitmentV1 {
+                version: 1,
                 certificate_hash: HashOf::from_untyped_unchecked(Hash::new(
                     b"load-flip-drain-certificate",
                 )),
@@ -70988,8 +71684,13 @@ seiyaku SequentialNfts {
                     b"load-flip-drain-merge-entry",
                 )),
                 carrier_height: 3,
-                final_lane_block_height: 0,
-                final_lane_block_descriptor_hash: None,
+                frontier: LaneDrainFrontierV1::ordinary(
+                    lane_id,
+                    DataSpaceId::UNIVERSAL,
+                    incarnation,
+                    0,
+                    None,
+                ),
             });
             let drain_state = autoscale_drain_state_for_test(
                 lane_id,
@@ -72166,8 +72867,13 @@ seiyaku SequentialNfts {
                 dataspace_id,
                 lane_incarnation,
                 close_global_height,
-                initial_merged_lane_height: 0,
-                initial_merged_descriptor_hash: None,
+                initial_frontier: LaneDrainFrontierV1::ordinary(
+                    lane_id,
+                    dataspace_id,
+                    lane_incarnation,
+                    0,
+                    None,
+                ),
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash: HashOf::new(&validator_set),
                 validator_set,
@@ -72228,6 +72934,7 @@ seiyaku SequentialNfts {
             close_height,
             validator_set,
             Some(LaneDrainCommitmentV1 {
+                version: 1,
                 certificate_hash: HashOf::from_untyped_unchecked(Hash::new(
                     b"certified-autoscale-test-drain-certificate",
                 )),
@@ -72235,8 +72942,13 @@ seiyaku SequentialNfts {
                     b"certified-autoscale-test-drain-entry",
                 )),
                 carrier_height,
-                final_lane_block_height: 0,
-                final_lane_block_descriptor_hash: None,
+                frontier: LaneDrainFrontierV1::ordinary(
+                    lane_id,
+                    DataSpaceId::UNIVERSAL,
+                    incarnation,
+                    0,
+                    None,
+                ),
             }),
         );
         let mut nexus = state.nexus_snapshot();
@@ -92526,6 +93238,143 @@ seiyaku SequentialNfts {
     }
 
     #[test]
+    fn durable_lane_diagnostics_ignore_stale_process_status_caches() {
+        struct StatusCacheCleanup;
+        impl Drop for StatusCacheCleanup {
+            fn drop(&mut self) {
+                status::clear_lane_payload_ownerships();
+                status::set_committed_lane_blocks(Vec::new());
+                status::set_lane_block_sessions(Vec::new());
+            }
+        }
+        let _status_guard = status::rbc_status_test_guard();
+        let _status_cache_cleanup = StatusCacheCleanup;
+        status::clear_lane_payload_ownerships();
+        status::set_committed_lane_blocks(Vec::new());
+        status::set_lane_block_sessions(Vec::new());
+
+        let lane_config = RuntimeLaneConfig::from_catalog(&LaneCatalog::default());
+        let source_temp_dir = tempfile::tempdir().expect("source temp dir");
+        let source_kura =
+            strict_kura_for_testing(source_temp_dir.path().join("source-kura"), &lane_config);
+        let source_state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&source_kura),
+            LiveQueryStore::start_test(),
+        );
+        let incarnation = source_state
+            .lane_incarnation(LaneId::SINGLE)
+            .expect("implicit default lane has an active incarnation");
+        let (block, session, signer_pops) = lane_artifact_block_and_session_for_state_test(
+            None,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            incarnation,
+            1,
+        );
+        source_kura
+            .store_block(Arc::new(block))
+            .expect("store durable diagnostic source block");
+        source_kura
+            .persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist durable diagnostic source certificate");
+        source_kura
+            .persist_lane_block_application_receipt(&session.proposal)
+            .expect("persist durable diagnostic source receipt");
+        let stale_cache = source_state.durable_lane_diagnostics();
+        assert_eq!(stale_cache.lane_payload_ownerships.len(), 1);
+        assert_eq!(stale_cache.committed_lane_blocks.len(), 1);
+        assert_eq!(stale_cache.lane_block_sessions.len(), 1);
+
+        status::set_lane_payload_ownerships(stale_cache.lane_payload_ownerships.clone());
+        status::set_committed_lane_blocks(stale_cache.committed_lane_blocks.clone());
+        status::set_lane_block_sessions(stale_cache.lane_block_sessions.clone());
+        let process_snapshot = status::snapshot();
+        assert_eq!(
+            process_snapshot.lane_payload_ownerships,
+            stale_cache.lane_payload_ownerships
+        );
+        assert_eq!(
+            process_snapshot.committed_lane_blocks,
+            stale_cache.committed_lane_blocks
+        );
+        assert_eq!(
+            process_snapshot.lane_block_sessions,
+            stale_cache.lane_block_sessions
+        );
+
+        let empty_temp_dir = tempfile::tempdir().expect("empty temp dir");
+        let empty_kura =
+            strict_kura_for_testing(empty_temp_dir.path().join("empty-kura"), &lane_config);
+        let empty_state =
+            State::new_for_testing(World::default(), empty_kura, LiveQueryStore::start_test());
+        assert_eq!(
+            empty_state.durable_lane_diagnostics(),
+            crate::sumeragi::status::DurableLaneDiagnosticsSnapshot::default(),
+            "durable diagnostics must ignore stale process-static status rows"
+        );
+    }
+
+    #[test]
+    fn durable_lane_diagnostics_reconstruct_after_kura_restart() {
+        use crate::sumeragi::status::CommittedLaneBlockExecutionStatus;
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let kura_config =
+            strict_kura_config_for_testing(temp_dir.path().join("restart-diagnostics-kura"));
+        let lane_config = RuntimeLaneConfig::from_catalog(&LaneCatalog::default());
+
+        let expected = {
+            let (kura, _) = Kura::new(&kura_config, &lane_config).expect("initialize Kura");
+            let state = State::new_for_testing(
+                World::default(),
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+            );
+            let incarnation = state
+                .lane_incarnation(LaneId::SINGLE)
+                .expect("implicit default lane has an active incarnation");
+            let (block, session, signer_pops) = lane_artifact_block_and_session_for_state_test(
+                None,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                incarnation,
+                1,
+            );
+            kura.store_block(Arc::new(block))
+                .expect("store restart diagnostic block");
+            kura.persist_committed_lane_block_session(&session, &signer_pops)
+                .expect("persist restart diagnostic certificate");
+            kura.persist_lane_block_application_receipt(&session.proposal)
+                .expect("persist restart diagnostic receipt");
+
+            let snapshot = state.durable_lane_diagnostics();
+            assert_eq!(snapshot.lane_payload_ownerships.len(), 1);
+            assert_eq!(snapshot.committed_lane_blocks.len(), 1);
+            assert_eq!(snapshot.lane_block_sessions.len(), 1);
+            assert_eq!(
+                snapshot.committed_lane_blocks[0].execution_status,
+                CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
+            );
+            assert!(snapshot.lane_block_sessions[0].committed_session_drained);
+            snapshot
+        };
+
+        let (reopened_kura, _) =
+            Kura::new(&kura_config, &lane_config).expect("reopen persistent Kura");
+        let restarted_state = State::new_for_testing(
+            World::default(),
+            reopened_kura,
+            LiveQueryStore::start_test(),
+        );
+        assert_eq!(
+            restarted_state.durable_lane_diagnostics(),
+            expected,
+            "a restarted peer must reconstruct the same diagnostic rows from durable evidence"
+        );
+    }
+
+    #[test]
     fn lane_lifecycle_same_lane_policy_change_rejects_unapplied_certified_lane_block() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let recreated_lane_id = LaneId::new(1);
@@ -111910,10 +112759,14 @@ seiyaku SequentialNfts {
 
         state_block.capture_exec_witness();
         let witness = state_block.take_exec_witness().expect("witness captured");
-        assert_eq!(witness.writes.len(), 2);
+        assert_eq!(witness.writes.len(), 3);
         assert!(witness.writes.iter().any(|write| {
             write.key.as_slice()
                 == iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1
+        }));
+        assert!(witness.writes.iter().any(|write| {
+            write.key.as_slice()
+                == iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
         }));
         assert!(state_block.take_exec_witness().is_none());
     }

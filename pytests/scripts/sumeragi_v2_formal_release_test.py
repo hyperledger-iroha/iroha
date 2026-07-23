@@ -81,6 +81,11 @@ case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
       >target/formal/sumeragi_v2/verus_evidence.json
     printf '%s\n' 'fixture production Verus verification passed' \
       >target/formal/sumeragi_v2/verus.log
+    printf '%s\n' \
+      $'schema_version\t1' \
+      $'backend\tapalache' \
+      $'result_count\t3' \
+      >target/formal/sumeragi_v2/multilane_apalache_evidence.tsv
     if [[ "${{FORMAL_EMIT_CROSS_TOOL:-0}}" == 1 ]]; then
       printf '%s\n' '{{"backend_verification":true,"canonical":true}}' \
         >target/formal/sumeragi_v2/cross_tool_evidence.json
@@ -236,6 +241,9 @@ def test_formal_launcher_publishes_complete_source_bound_archive(
         invocation / "verus_evidence.json"
     )
     assert fields["verus_log_sha256"] == _sha256(invocation / "verus.log")
+    assert fields["multilane_apalache_evidence_sha256"] == _sha256(
+        invocation / "multilane_apalache_evidence.tsv"
+    )
     assert "cross_tool_evidence_sha256" not in fields
     assert not (invocation / "cross_tool_evidence.json").exists()
     assert fields["harness_cargo_lock_sha256"] == _sha256(

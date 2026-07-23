@@ -2017,65 +2017,6 @@ pub enum NativeAmxPhase {
     Commit,
 }
 
-/// Canonical native AMX attestation payload signed by participant committees.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct NativeAmxAttestationBodyV1 {
-    /// Hash of the chain identifier that owns this attestation.
-    pub chain_id_hash: Hash,
-    /// Source transaction hash/id.
-    pub source_id: [u8; 32],
-    /// Hash of the canonical transaction entrypoint.
-    pub tx_entrypoint_hash: HashOf<crate::transaction::TransactionEntrypoint>,
-    /// Deterministic digest of the full coordinator/participant routing plan.
-    pub plan_digest: Hash,
-    /// Native AMX phase certified by this body.
-    pub phase: NativeAmxPhase,
-    /// Coordinator lane selected by the routing plan.
-    pub coordinator_lane_id: LaneId,
-    /// Coordinator dataspace selected by the routing plan.
-    pub coordinator_dataspace_id: DataSpaceId,
-    /// Exact active coordinator-lane incarnation at the authority context.
-    pub coordinator_lane_incarnation: Hash,
-    /// Participant lane certified by the committee.
-    pub participant_lane_id: LaneId,
-    /// Participant dataspace certified by the committee.
-    pub participant_dataspace_id: DataSpaceId,
-    /// Exact active participant-lane incarnation at the authority context.
-    pub participant_lane_incarnation: Hash,
-    /// Hash of the exact canonical participant committee that may attest this leg.
-    pub participant_validator_set_hash: HashOf<Vec<PeerId>>,
-    /// Number of validators in the exact participant committee.
-    pub participant_validator_count: u32,
-    /// Minimum number of participant signatures required by the lane quorum policy.
-    pub participant_min_quorum: u32,
-    /// Global/catalog height used to resolve routes, incarnations, committee,
-    /// key activation, and proofs of possession.
-    pub authority_context_height: u64,
-    /// Coordinator lane-local block height that owns the transaction.
-    pub coordinator_lane_block_height: u64,
-    /// Coordinator lane-local consensus view for this exact attestation.
-    pub coordinator_lane_block_view: u64,
-    /// Exact coordinator lane-block proposal authenticated by the request.
-    pub coordinator_proposal_hash: Hash,
-}
-
-impl NativeAmxAttestationBodyV1 {
-    /// Build the domain-separated signature preimage for this attestation body.
-    #[must_use]
-    pub fn signature_preimage(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(32 + 256);
-        out.extend_from_slice(b"iroha:native-amx:v1");
-        out.extend_from_slice(
-            &norito::to_bytes(self).expect("native AMX attestation body must encode"),
-        );
-        out
-    }
-}
-
 /// Canonical Sumeragi v2 native AMX attestation payload.
 ///
 /// The exact frozen round and election epoch are part of the signed payload,
@@ -2190,33 +2131,6 @@ impl NativeAmxAttestationBodyV2 {
     }
 }
 
-/// Validator-set proof for a native AMX attestation body.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct NativeAmxAttestationQcV1 {
-    /// Body certified by the aggregate signature.
-    pub body: NativeAmxAttestationBodyV1,
-    /// Version of the validator-set hashing scheme.
-    pub validator_set_hash_version: u16,
-    /// Stable hash of the validator set that produced the certificate.
-    pub validator_set_hash: HashOf<Vec<PeerId>>,
-    /// Ordered validator set used when assembling the certificate.
-    pub validator_set: Vec<PeerId>,
-    /// Historical BLS proofs-of-possession aligned exactly with `validator_set`.
-    ///
-    /// Keeping the full aligned vector makes the certificate independently
-    /// verifiable after consensus-key rotation or lane retirement. The signed
-    /// attestation body binds the validator-set hash, count, and quorum.
-    pub validator_set_pops: Vec<Vec<u8>>,
-    /// Compact signer bitmap (LSB-first).
-    pub signers_bitmap: Vec<u8>,
-    /// BLS12-381 aggregate signature bytes (compressed).
-    pub bls_aggregate_signature: Vec<u8>,
-}
-
 /// Validator-set proof for a context-bound native AMX v2 attestation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2241,25 +2155,6 @@ pub struct NativeAmxAttestationQcV2 {
     pub signers_bitmap: Vec<u8>,
     /// BLS12-381 aggregate signature bytes (compressed).
     pub bls_aggregate_signature: Vec<u8>,
-}
-
-/// Per-dataspace native AMX leg committed by the routing-plan coordinator.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct NativeAmxLegRecord {
-    /// Participant lane certified by both phase QCs.
-    pub lane_id: LaneId,
-    /// Dataspace participating in the native AMX group.
-    pub dataspace_id: DataSpaceId,
-    /// Exact participant-lane incarnation certified by both phase QCs.
-    pub lane_incarnation: Hash,
-    /// Participant prepare QC.
-    pub prepare_qc: NativeAmxAttestationQcV1,
-    /// Participant commit QC.
-    pub commit_qc: NativeAmxAttestationQcV1,
 }
 
 /// Per-dataspace native AMX v2 leg committed by the routing-plan coordinator.
@@ -4848,9 +4743,6 @@ impl_decode_from_slice_via_codec!(LaneBlockCertificateV1);
 impl_decode_from_slice_via_codec!(SumeragiRuntimeUpgradeHook);
 impl_decode_from_slice_via_codec!(SumeragiLaneGovernance);
 impl_decode_from_slice_via_codec!(NativeAmxPhase);
-impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV1);
-impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV1);
-impl_decode_from_slice_via_codec!(NativeAmxLegRecord);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV2);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV2);
 impl_decode_from_slice_via_codec!(NativeAmxLegRecordV2);
@@ -5767,33 +5659,6 @@ mod tests {
         let decoded = norito::decode_from_bytes::<LaneBlockCommitment>(&encoded)
             .expect("decode participant settlement");
         assert_eq!(decoded, settlement);
-    }
-
-    #[test]
-    fn native_amx_attestation_preimage_is_domain_separated() {
-        let body = NativeAmxAttestationBodyV1 {
-            chain_id_hash: Hash::new(b"native-amx-model-chain"),
-            source_id: [0x11; 32],
-            tx_entrypoint_hash: sample_entrypoint_hash(0x12),
-            plan_digest: Hash::new(b"plan"),
-            phase: NativeAmxPhase::Prepare,
-            coordinator_lane_id: LaneId::new(1),
-            coordinator_dataspace_id: DataSpaceId::UNIVERSAL,
-            coordinator_lane_incarnation: Hash::new(b"native-amx-model-coordinator"),
-            participant_lane_id: LaneId::new(2),
-            participant_dataspace_id: DataSpaceId::new(2),
-            participant_lane_incarnation: Hash::new(b"native-amx-model-participant"),
-            participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
-            participant_validator_count: 1,
-            participant_min_quorum: 1,
-            authority_context_height: 7,
-            coordinator_lane_block_height: 3,
-            coordinator_lane_block_view: 1,
-            coordinator_proposal_hash: Hash::new(b"native-amx-model-proposal"),
-        };
-        let preimage = body.signature_preimage();
-        assert!(preimage.starts_with(b"iroha:native-amx:v1"));
-        assert!(preimage.len() > b"iroha:native-amx:v1".len());
     }
 
     #[test]

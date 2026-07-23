@@ -23818,9 +23818,7 @@ mod tests {
         file.write_all(
             &norito::json::to_vec(&norito::json!({
                 "now_unix": 1_800_000_800_u64,
-                "aggregate_id_prefix": "moderation",
-                "privacy_mode": "suppression",
-                "suppression_threshold": 4_u64,
+                "previous_block_hash_hex": ("d4".repeat(32)),
             }))
             .expect("serialize privacy aggregate publish-due JSON"),
         )
@@ -23833,13 +23831,10 @@ mod tests {
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
             assert_eq!(
-                value.get("aggregate_id_prefix").and_then(Value::as_str),
-                Some("moderation")
+                value.get("previous_block_hash_hex").and_then(Value::as_str),
+                Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4")
             );
-            assert_eq!(
-                value.get("privacy_mode").and_then(Value::as_str),
-                Some("suppression")
-            );
+            assert!(value.get("cycle_prf_output_hex").is_none());
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -23883,16 +23878,15 @@ mod tests {
             "event_id": "privacy-event-1",
             "occurred_at_unix": 1_800_000_500_u64,
             "population_label": "moderation.global",
+            "subject_digest_hex": ("b2".repeat(32)),
             "metrics": [
-                { "key": "quarantined", "value": 3_u64 }
+                { "key": "quarantined", "value": 3_u64, "unit": "count" }
             ],
             "policy_digest_hex": ("a1".repeat(32)),
         }));
         let publish_file = write_json_file(&norito::json!({
             "now_unix": 1_800_000_800_u64,
-            "aggregate_id_prefix": "moderation",
-            "privacy_mode": "suppression",
-            "suppression_threshold": 4_u64,
+            "previous_block_hash_hex": ("d4".repeat(32)),
         }));
         let out_dir = TempDir::new().expect("privacy aggregate canary evidence dir");
         let out = out_dir.path().join("nested/evidence.json");
@@ -23927,9 +23921,10 @@ mod tests {
                 submitted_publish += 1;
                 let value: Value = norito::json::from_slice(payload).expect("publish payload JSON");
                 assert_eq!(
-                    value.get("aggregate_id_prefix").and_then(Value::as_str),
-                    Some("moderation")
+                    value.get("previous_block_hash_hex").and_then(Value::as_str),
+                    Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4")
                 );
+                assert!(value.get("cycle_prf_output_hex").is_none());
                 Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header("Content-Type", "application/json")

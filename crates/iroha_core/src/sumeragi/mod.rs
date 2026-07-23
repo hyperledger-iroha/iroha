@@ -991,12 +991,13 @@ enum FairV2IngressMessageKind {
     V2CommitCertificateResponse,
     LaneBlockProposal,
     LaneExecutablePayload,
-    LaneExecutablePayloadHandoff,
     LaneBlockNewViewVote,
     LaneBlockNewViewCertificate,
     LaneBlockVote,
     LaneBlockQc,
     LaneBlockCertificate,
+    LaneHistoricalRecoveryRequest,
+    LaneHistoricalRecoveryResponse,
 }
 
 impl FairV2IngressMessageKind {
@@ -1025,14 +1026,17 @@ impl FairV2IngressMessageKind {
             }),
             BlockMessage::LaneBlockProposal(_) => Some(Self::LaneBlockProposal),
             BlockMessage::LaneExecutablePayload(_) => Some(Self::LaneExecutablePayload),
-            BlockMessage::LaneExecutablePayloadHandoff(_) => {
-                Some(Self::LaneExecutablePayloadHandoff)
-            }
             BlockMessage::LaneBlockNewViewVote(_) => Some(Self::LaneBlockNewViewVote),
             BlockMessage::LaneBlockNewViewCertificate(_) => Some(Self::LaneBlockNewViewCertificate),
             BlockMessage::LaneBlockVote(_) => Some(Self::LaneBlockVote),
             BlockMessage::LaneBlockQc(_) => Some(Self::LaneBlockQc),
             BlockMessage::LaneBlockCertificate(_) => Some(Self::LaneBlockCertificate),
+            BlockMessage::LaneHistoricalRecoveryRequest(_) => {
+                Some(Self::LaneHistoricalRecoveryRequest)
+            }
+            BlockMessage::LaneHistoricalRecoveryResponse(_) => {
+                Some(Self::LaneHistoricalRecoveryResponse)
+            }
             _ => None,
         }
     }
@@ -1746,7 +1750,7 @@ impl FairV2IngressClass {
         let BlockMessage::V2(message) = message else {
             return match message {
                 BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_) => Self::TransportCompletion,
+                | BlockMessage::LaneHistoricalRecoveryResponse(_) => Self::TransportCompletion,
                 message if message.is_lane_local() => Self::Progress,
                 _ => Self::Auxiliary,
             };
@@ -2581,8 +2585,8 @@ enum FairV2IngressPushDisposition {
 /// and anonymous partitions likewise separate ordinary and completion bytes.
 /// Lane-local control
 /// and atomic certificate recovery share the progress reservation; exact
-/// executable-payload and proposer-handoff bytes share the completion
-/// reservation. Roster
+/// executable-payload and proof-carrying historical-recovery response bytes
+/// share the completion reservation. Roster
 /// installation succeeds only when the configured authenticated-source
 /// geometry plus the anonymous lane own isolated byte partitions.
 /// `CommitCertificateResponse` remains
@@ -5207,16 +5211,26 @@ mod authoritative_runtime_gate_tests {
                     dataspace_id: DataSpaceId::new(9),
                     lane_incarnation: Hash::new(b"live-drain-ingress-incarnation"),
                     close_global_height: 3,
-                    initial_merged_lane_height: 0,
-                    initial_merged_descriptor_hash: None,
+                    initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                        LaneId::new(7),
+                        DataSpaceId::new(9),
+                        Hash::new(b"live-drain-ingress-incarnation"),
+                        0,
+                        None,
+                    ),
                     validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                     validator_set_hash: HashOf::new(&validator_set),
                     validator_set,
                     validator_count: 1,
                     min_quorum: 1,
                 },
-                final_lane_block_height: 0,
-                final_lane_block_descriptor_hash: None,
+                final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                    LaneId::new(7),
+                    DataSpaceId::new(9),
+                    Hash::new(b"live-drain-ingress-incarnation"),
+                    0,
+                    None,
+                ),
             },
             signer.clone(),
             keypair.private_key(),

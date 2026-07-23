@@ -17,6 +17,7 @@ use crate::{
             LaneBlockCommitment, LaneBlockProposalV1, LaneBlockQcV1, NativeAmxReceipt,
             ValidatorIndex,
         },
+        consensus_v2::finality::V2FinalityArtifact,
     },
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
@@ -28,6 +29,8 @@ const LANE_DRAIN_INTENT_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-intent:v1\
 const LANE_DRAIN_CERTIFICATE_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-certificate:v1\0";
 const LANE_DRAIN_CERTIFICATE_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:nexus:lane-drain-certificate-signature:v1\0";
+const LANE_DRAIN_EMPTY_UNRESOLVED_EVIDENCE_ROOT_DOMAIN: &[u8] =
+    b"iroha:nexus:lane-drain:unresolved-evidence:empty:v1\0";
 
 /// Current-only first-release merge-ledger entry layout.
 pub const MERGE_LEDGER_ENTRY_VERSION_V1: u8 = 1;
@@ -108,6 +111,139 @@ pub struct MergeSignerProof {
     pub proof_of_possession: Vec<u8>,
 }
 
+/// Exact durable Native AMX application identity required by a drain frontier.
+///
+/// The hashes bind the independently persisted finality, manifest, receipt,
+/// and bounded latest-index artifacts. Runtime admission must re-read and
+/// fully revalidate those artifacts before treating this evidence as applied.
+/// This is control evidence only; economic effects were executed by the named
+/// canonical global application block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct LaneDrainNativeFrontierEvidenceV1 {
+    /// Exact evidence layout version. Only version one is valid.
+    pub version: u16,
+    /// Participant-local consensus view.
+    pub participant_view: u64,
+    /// Exact predecessor participant-local height.
+    pub predecessor_height: u64,
+    /// Exact predecessor descriptor, absent only at incarnation genesis.
+    pub predecessor_descriptor_hash: Option<Hash>,
+    /// Exact participant proposal identity.
+    pub participant_proposal_hash: Hash,
+    /// Exact zero-effect participant settlement identity.
+    pub participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    /// Number of unique grouped source transactions applied by the carrier.
+    pub source_count: u32,
+    /// Canonical global application height.
+    pub application_block_height: u64,
+    /// Canonical global application block identity.
+    pub application_block_hash: HashOf<BlockHeader>,
+    /// Hash of the canonical result-bearing global block wire.
+    pub executed_block_wire_hash: Hash,
+    /// Hash of the independently persisted and verified finality artifact.
+    pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    /// Native application-manifest root authenticated by finality.
+    pub application_manifest_root: Hash,
+    /// Number of canonical route leaves authenticated by the manifest root.
+    pub application_manifest_leaf_count: u32,
+    /// Position of this route's leaf in canonical route order.
+    pub application_manifest_leaf_index: u32,
+    /// Hash of the exact durable per-route manifest leaf/proof artifact.
+    pub manifest_artifact_hash: Hash,
+    /// Hash of the exact durable participant application receipt artifact.
+    pub receipt_artifact_hash: Hash,
+    /// Hash of the exact bounded route/incarnation latest-index artifact.
+    pub latest_index_artifact_hash: Hash,
+}
+
+impl LaneDrainNativeFrontierEvidenceV1 {
+    /// Current exact first-release evidence layout version.
+    pub const VERSION: u16 = 1;
+}
+
+/// One evidence-aware lane frontier shared by every drain phase.
+///
+/// `native_application` is present only when the replicated WSV frontier was
+/// advanced by a separate Native AMX participant control. Same-route
+/// coordinator legs never create this evidence. `unresolved_evidence_root`
+/// must be the canonical empty root at every signing and retirement boundary;
+/// local blocker predicates still decide which work contributes to the root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct LaneDrainFrontierV1 {
+    /// Exact frontier layout version. Only version one is valid.
+    pub version: u8,
+    /// Lane whose contiguous frontier is bound.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane.
+    pub dataspace_id: DataSpaceId,
+    /// Exact lane incarnation.
+    pub lane_incarnation: Hash,
+    /// Contiguous lane-local height.
+    pub lane_block_height: u64,
+    /// Descriptor at `lane_block_height`, absent only for height zero.
+    pub lane_block_descriptor_hash: Option<Hash>,
+    /// Fully durable Native evidence when the frontier is Native-derived.
+    pub native_application: Option<LaneDrainNativeFrontierEvidenceV1>,
+    /// Canonical root of unresolved work/evidence. Drain admission requires the
+    /// protocol empty root.
+    pub unresolved_evidence_root: Hash,
+}
+
+impl LaneDrainFrontierV1 {
+    /// Current exact first-release layout version.
+    pub const VERSION: u8 = 1;
+
+    /// Build an ordinary (non-Native-derived) frontier.
+    #[must_use]
+    pub fn ordinary(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        lane_block_height: u64,
+        lane_block_descriptor_hash: Option<Hash>,
+    ) -> Self {
+        Self {
+            version: Self::VERSION,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            lane_block_height,
+            lane_block_descriptor_hash,
+            native_application: None,
+            unresolved_evidence_root: lane_drain_empty_unresolved_evidence_root(),
+        }
+    }
+
+    /// Return whether this frontier binds the supplied active route.
+    #[must_use]
+    pub fn matches_route(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> bool {
+        self.lane_id == lane_id
+            && self.dataspace_id == dataspace_id
+            && self.lane_incarnation == lane_incarnation
+    }
+}
+
+/// Canonical root proving that no unresolved drain evidence was selected.
+#[must_use]
+pub fn lane_drain_empty_unresolved_evidence_root() -> Hash {
+    Hash::new(LANE_DRAIN_EMPTY_UNRESOLVED_EVIDENCE_ROOT_DOMAIN)
+}
+
 /// Canonical first phase of an automatic lane retirement.
 ///
 /// Committing an intent closes the named lane to new work after
@@ -133,10 +269,8 @@ pub struct LaneDrainIntentV1 {
     pub lane_incarnation: Hash,
     /// Global height after which new lane work is inadmissible.
     pub close_global_height: u64,
-    /// Last globally applied contiguous lane height when draining began.
-    pub initial_merged_lane_height: u64,
-    /// Descriptor hash at `initial_merged_lane_height`, or `None` for height zero.
-    pub initial_merged_descriptor_hash: Option<Hash>,
+    /// Evidence-aware globally applied frontier when draining began.
+    pub initial_frontier: LaneDrainFrontierV1,
     /// Version of the canonical lane-committee hashing scheme.
     pub validator_set_hash_version: u16,
     /// Hash of the exact authoritative lane committee at the close boundary.
@@ -183,10 +317,8 @@ pub struct LaneDrainCertificateBodyV1 {
     pub version: u8,
     /// Exact committed drain intent authorized by this certificate.
     pub intent: LaneDrainIntentV1,
-    /// Final contiguous lane-local height certified by the committee.
-    pub final_lane_block_height: u64,
-    /// Descriptor hash at `final_lane_block_height`, or `None` for height zero.
-    pub final_lane_block_descriptor_hash: Option<Hash>,
+    /// Final evidence-aware contiguous frontier certified by the committee.
+    pub final_frontier: LaneDrainFrontierV1,
 }
 
 impl LaneDrainCertificateBodyV1 {
@@ -245,16 +377,21 @@ impl LaneDrainCertificateV1 {
 )]
 #[norito(deny_unknown_fields)]
 pub struct LaneDrainCommitmentV1 {
+    /// Exact commitment layout version. Only version one is valid.
+    pub version: u8,
     /// Exact certificate accepted by the merge committee.
     pub certificate_hash: HashOf<LaneDrainCertificateV1>,
     /// Full merge entry that globally ordered the certificate.
     pub merge_entry_hash: HashOf<MergeLedgerEntry>,
     /// Canonical global block height that carried the merge entry.
     pub carrier_height: u64,
-    /// Final contiguous lane-local height certified by the lane committee.
-    pub final_lane_block_height: u64,
-    /// Descriptor hash at `final_lane_block_height`, or `None` for height zero.
-    pub final_lane_block_descriptor_hash: Option<Hash>,
+    /// Exact signed evidence-aware frontier carried by the certificate.
+    pub frontier: LaneDrainFrontierV1,
+}
+
+impl LaneDrainCommitmentV1 {
+    /// Current exact first-release commitment layout version.
+    pub const VERSION: u8 = 1;
 }
 
 /// Consensus-persisted two-phase drain state embedded in an autoscale-managed
@@ -724,8 +861,13 @@ mod tests {
             dataspace_id: DataSpaceId::new(11),
             lane_incarnation: sample_hash(b"drain-incarnation"),
             close_global_height: 42,
-            initial_merged_lane_height: 9,
-            initial_merged_descriptor_hash: Some(sample_hash(b"initial-drain-tip")),
+            initial_frontier: LaneDrainFrontierV1::ordinary(
+                LaneId::new(7),
+                DataSpaceId::new(11),
+                sample_hash(b"drain-incarnation"),
+                9,
+                Some(sample_hash(b"initial-drain-tip")),
+            ),
             validator_set_hash_version: 1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set,
@@ -741,8 +883,13 @@ mod tests {
             body: LaneDrainCertificateBodyV1 {
                 version: 1,
                 intent,
-                final_lane_block_height: 12,
-                final_lane_block_descriptor_hash: Some(sample_hash(b"final-drain-tip")),
+                final_frontier: LaneDrainFrontierV1::ordinary(
+                    LaneId::new(7),
+                    DataSpaceId::new(11),
+                    sample_hash(b"drain-incarnation"),
+                    12,
+                    Some(sample_hash(b"final-drain-tip")),
+                ),
             },
             validator_set,
             signers_bitmap: Vec::new(),
@@ -753,13 +900,19 @@ mod tests {
 
     fn sample_lane_drain_commitment() -> LaneDrainCommitmentV1 {
         LaneDrainCommitmentV1 {
+            version: 1,
             certificate_hash: sample_lane_drain_certificate().canonical_hash(),
             merge_entry_hash: HashOf::from_untyped_unchecked(sample_hash(
                 b"drain-carrier-merge-entry",
             )),
             carrier_height: 57,
-            final_lane_block_height: 12,
-            final_lane_block_descriptor_hash: Some(sample_hash(b"final-drain-tip")),
+            frontier: LaneDrainFrontierV1::ordinary(
+                LaneId::new(7),
+                DataSpaceId::new(11),
+                sample_hash(b"drain-incarnation"),
+                12,
+                Some(sample_hash(b"final-drain-tip")),
+            ),
         }
     }
 
@@ -1151,6 +1304,7 @@ mod tests {
             lane_incarnation: Hash,
             close_global_height: u64,
             initial_merged_lane_height: u64,
+            initial_merged_descriptor_hash: Option<Hash>,
             validator_set_hash_version: u16,
             validator_set_hash: HashOf<Vec<PeerId>>,
             validator_set: Vec<PeerId>,
@@ -1163,6 +1317,7 @@ mod tests {
             version: u8,
             intent: LaneDrainIntentV1,
             final_lane_block_height: u64,
+            final_lane_block_descriptor_hash: Option<Hash>,
         }
 
         #[derive(Encode)]
@@ -1171,6 +1326,7 @@ mod tests {
             merge_entry_hash: HashOf<MergeLedgerEntry>,
             carrier_height: u64,
             final_lane_block_height: u64,
+            final_lane_block_descriptor_hash: Option<Hash>,
         }
 
         #[derive(Encode)]
@@ -1201,7 +1357,8 @@ mod tests {
             dataspace_id: intent.dataspace_id,
             lane_incarnation: intent.lane_incarnation,
             close_global_height: intent.close_global_height,
-            initial_merged_lane_height: intent.initial_merged_lane_height,
+            initial_merged_lane_height: intent.initial_frontier.lane_block_height,
+            initial_merged_descriptor_hash: intent.initial_frontier.lane_block_descriptor_hash,
             validator_set_hash_version: intent.validator_set_hash_version,
             validator_set_hash: intent.validator_set_hash,
             validator_set: intent.validator_set.clone(),
@@ -1215,6 +1372,7 @@ mod tests {
             version: 1,
             intent: intent.clone(),
             final_lane_block_height: 9,
+            final_lane_block_descriptor_hash: Some(sample_hash(b"legacy-final-frontier")),
         }
         .encode();
         assert!(LaneDrainCertificateBodyV1::decode(&mut legacy_body.as_slice()).is_err());
@@ -1224,6 +1382,7 @@ mod tests {
             merge_entry_hash: HashOf::from_untyped_unchecked(sample_hash(b"legacy-merge-entry")),
             carrier_height: 12,
             final_lane_block_height: 9,
+            final_lane_block_descriptor_hash: Some(sample_hash(b"legacy-final-frontier")),
         }
         .encode();
         assert!(LaneDrainCommitmentV1::decode(&mut legacy_commitment.as_slice()).is_err());
@@ -1299,11 +1458,12 @@ mod tests {
         changed.close_global_height = changed.close_global_height.saturating_add(1);
         assert_ne!(changed.canonical_hash(), intent_hash);
         assert_intent_field_bound!(
-            |changed: &mut LaneDrainIntentV1| changed.initial_merged_lane_height += 1,
-            "initial_merged_lane_height"
+            |changed: &mut LaneDrainIntentV1| changed.initial_frontier.lane_block_height += 1,
+            "initial_frontier.lane_block_height"
         );
         changed = intent.clone();
-        changed.initial_merged_descriptor_hash = Some(sample_hash(b"different-initial-tip"));
+        changed.initial_frontier.lane_block_descriptor_hash =
+            Some(sample_hash(b"different-initial-tip"));
         assert_ne!(changed.canonical_hash(), intent_hash);
         assert_intent_field_bound!(
             |changed: &mut LaneDrainIntentV1| changed.validator_set_hash_version += 1,
@@ -1338,8 +1498,11 @@ mod tests {
         assert_eq!(decoded, certificate);
 
         let mut changed = certificate.clone();
-        changed.body.final_lane_block_height =
-            changed.body.final_lane_block_height.saturating_add(1);
+        changed.body.final_frontier.lane_block_height = changed
+            .body
+            .final_frontier
+            .lane_block_height
+            .saturating_add(1);
         assert_ne!(changed.body.signature_preimage(), signature_preimage);
         assert_ne!(changed.canonical_hash(), certificate_hash);
         changed = certificate.clone();
@@ -1354,6 +1517,11 @@ mod tests {
     #[test]
     fn lane_drain_commitment_canonical_wire_roundtrip_and_field_binding() {
         let commitment = sample_lane_drain_commitment();
+        assert_eq!(
+            commitment.frontier,
+            sample_lane_drain_certificate().body.final_frontier,
+            "global commitment must carry the exact committee-signed frontier unchanged"
+        );
         let canonical =
             norito::to_bytes(&commitment).expect("drain commitment has canonical bytes");
         let decoded: LaneDrainCommitmentV1 = norito::decode_from_bytes(&canonical)
@@ -1370,6 +1538,10 @@ mod tests {
         );
 
         let mut changed = commitment;
+        changed.version = changed.version.saturating_add(1);
+        assert_commitment_canonical_wire_changes(&commitment, &changed, "version");
+
+        changed = commitment;
         changed.certificate_hash =
             HashOf::from_untyped_unchecked(sample_hash(b"different-drain-certificate"));
         assert_commitment_canonical_wire_changes(&commitment, &changed, "certificate_hash");
@@ -1384,23 +1556,28 @@ mod tests {
         assert_commitment_canonical_wire_changes(&commitment, &changed, "carrier_height");
 
         changed = commitment;
-        changed.final_lane_block_height = changed.final_lane_block_height.saturating_add(1);
-        assert_commitment_canonical_wire_changes(&commitment, &changed, "final_lane_block_height");
-
-        changed = commitment;
-        changed.final_lane_block_descriptor_hash = Some(sample_hash(b"different-final-drain-tip"));
+        changed.frontier.lane_block_height = changed.frontier.lane_block_height.saturating_add(1);
         assert_commitment_canonical_wire_changes(
             &commitment,
             &changed,
-            "final_lane_block_descriptor_hash value",
+            "frontier.lane_block_height",
         );
 
         changed = commitment;
-        changed.final_lane_block_descriptor_hash = None;
+        changed.frontier.lane_block_descriptor_hash =
+            Some(sample_hash(b"different-final-drain-tip"));
         assert_commitment_canonical_wire_changes(
             &commitment,
             &changed,
-            "final_lane_block_descriptor_hash presence",
+            "frontier.lane_block_descriptor_hash value",
+        );
+
+        changed = commitment;
+        changed.frontier.lane_block_descriptor_hash = None;
+        assert_commitment_canonical_wire_changes(
+            &commitment,
+            &changed,
+            "frontier.lane_block_descriptor_hash presence",
         );
     }
 

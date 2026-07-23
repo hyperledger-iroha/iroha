@@ -1383,37 +1383,37 @@ if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
 fi
-production_unit_list="$(cargo test --locked -p iroha_core --lib -- --list)"
+production_unit_list="$(cargo test --locked --offline -p iroha_core --lib -- --list)"
 production_ignored_unit_list="$(
-  cargo test --locked -p iroha_core --lib -- --list --ignored
+  cargo test --locked --offline -p iroha_core --lib -- --list --ignored
 )"
 production_integration_unit_list="$(
-  cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated -- --list
+  cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated -- --list
 )"
 production_integration_ignored_unit_list="$(
-  cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated -- --list --ignored
+  cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated -- --list --ignored
 )"
-production_data_model_unit_list="$(cargo test --locked -p iroha_data_model --lib -- --list)"
+production_data_model_unit_list="$(cargo test --locked --offline -p iroha_data_model --lib -- --list)"
 production_data_model_ignored_unit_list="$(
-  cargo test --locked -p iroha_data_model --lib -- --list --ignored
+  cargo test --locked --offline -p iroha_data_model --lib -- --list --ignored
 )"
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
 # thirty-eight-module pre-network inventory.
-production_p2p_unit_list="$(cargo test --locked -p iroha_p2p --lib -- --list)"
+production_p2p_unit_list="$(cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
-  cargo test --locked -p iroha_p2p --lib -- --list --ignored
+  cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
 )"
 production_irohad_unit_list="$(
-  cargo test --locked -p irohad --bin irohad --features test-network-message-control -- --list
+  cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control -- --list
 )"
 production_irohad_ignored_unit_list="$(
-  cargo test --locked -p irohad --bin irohad --features test-network-message-control -- --list --ignored
+  cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control -- --list --ignored
 )"
-production_config_unit_list="$(cargo test --locked -p iroha_config --lib -- --list)"
+production_config_unit_list="$(cargo test --locked --offline -p iroha_config --lib -- --list)"
 production_config_ignored_unit_list="$(
-  cargo test --locked -p iroha_config --lib -- --list --ignored
+  cargo test --locked --offline -p iroha_config --lib -- --list --ignored
 )"
 production_data_model_modules=(
   block::consensus_v2::finality::tests
@@ -1462,6 +1462,78 @@ for required_test in "${required_production_liveness_tests[@]}"; do
     exit 1
   fi
 done
+
+# Keep the multilane closure-critical negative tests explicit even when they do
+# not belong to the historic 515-test liveness inventory above. The later
+# source-sealed workspace leg executes these non-ignored tests; this preflight
+# prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
+# Cargo's successful zero-test filtering.
+required_multilane_core_focus_tests=(
+  native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation
+  native_amx::tests::signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation
+  kura::tests::native_amx_manifest_artifact_rejects_leaf_or_proof_tampering
+  kura::tests::native_amx_latest_index_rebuilds_idempotently_after_receipt_append_crash
+  queue::reservation_journal::tests::crash_at_every_operation_frame_write_boundary_is_prefix_atomic
+  queue::tests::concurrent_lane_reserve_attempts_cannot_duplicate_one_transaction
+  state::tests::merge_execution_predecessor_rejects_wrong_frontier_hash
+  sumeragi::v2_lane_work::tests::autonomous_local_author_reserves_fifo_before_durable_hint_free_publication
+  sumeragi::v2_lane_work::tests::autonomous_restart_hydrates_durable_hint_free_payload_and_queue_owner
+)
+required_multilane_data_model_focus_tests=(
+  block::consensus::tests::native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift
+  block::consensus::tests::native_amx_mixed_role_marker_defers_only_separate_participant_anchor
+  block::consensus_v2::tests::execution_commitment_enforces_native_amx_manifest_shape_and_bound
+)
+required_multilane_integration_lib_focus_tests=(
+  sandbox::tests::sandboxed_network_start_helper_preserves_optional_developer_skip
+  sandbox::tests::sandboxed_network_start_helper_fails_required_release_scenario
+)
+readonly expected_multilane_focus_test_count=14
+if (( ${#required_multilane_core_focus_tests[@]}
+    + ${#required_multilane_data_model_focus_tests[@]}
+    + ${#required_multilane_integration_lib_focus_tests[@]}
+    != expected_multilane_focus_test_count )); then
+  echo "expected exactly ${expected_multilane_focus_test_count} multilane focus tests" >&2
+  exit 1
+fi
+for required_test in "${required_multilane_core_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$production_unit_list"; then
+    echo "missing required multilane iroha_core focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$production_ignored_unit_list"; then
+    echo "required multilane iroha_core focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+for required_test in "${required_multilane_data_model_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$production_data_model_unit_list"; then
+    echo "missing required multilane iroha_data_model focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$production_data_model_ignored_unit_list"; then
+    echo "required multilane iroha_data_model focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+multilane_integration_lib_unit_list="$(
+  cargo test --locked --offline -p integration_tests --lib -- --list
+)"
+multilane_integration_lib_ignored_unit_list="$(
+  cargo test --locked --offline -p integration_tests --lib -- --list --ignored
+)"
+for required_test in "${required_multilane_integration_lib_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$multilane_integration_lib_unit_list"; then
+    echo "missing required multilane integration helper test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" \
+    <<<"$multilane_integration_lib_ignored_unit_list"; then
+    echo "required multilane integration helper test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+
 production_liveness_modules=(
   kura::tests
   kura::lane_geometry::tests
@@ -1567,44 +1639,44 @@ for module_index in "${!production_liveness_modules[@]}"; do
     [[ "$required_test" == "${module}::"* ]] && ((module_required_count += 1))
   done
   if [[ "$module" == sumeragi_v2_runner ]]; then
-    module_command="cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated sumeragi_v2_runner::prepare_qc_split_tests -- --test-threads=1"
+    module_command="cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated sumeragi_v2_runner::prepare_qc_split_tests -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated \
+      cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated \
         sumeragi_v2_runner::prepare_qc_split_tests -- --test-threads=1
   elif [[ "$module" == peer::run::tests \
     || "$module" == peer::shared_byte_budget_tests \
     || "$module" == network::tests \
     || "$module" == network::inbound_source_memory_bound_tests \
     || "$module" == network::handle_update_tests ]]; then
-    module_command="cargo test --locked -p iroha_p2p --lib ${module} -- --test-threads=1"
+    module_command="cargo test --locked --offline -p iroha_p2p --lib ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked -p iroha_p2p --lib "$module" -- --test-threads=1
+      cargo test --locked --offline -p iroha_p2p --lib "$module" -- --test-threads=1
   elif [[ "$module" == consensus_message_control::tests \
     || "$module" == network_relay_tests \
     || "$module" == tests::relay_fairness \
     || "$module" == genesis_bootstrap::tests ]]; then
-    module_command="cargo test --locked -p irohad --bin irohad --features test-network-message-control ${module} -- --test-threads=1"
+    module_command="cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked -p irohad --bin irohad --features test-network-message-control \
+      cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control \
         "$module" -- --test-threads=1
   elif [[ "$module" == parameters::* ]]; then
-    module_command="cargo test --locked -p iroha_config --lib ${module} -- --test-threads=1"
+    module_command="cargo test --locked --offline -p iroha_config --lib ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked -p iroha_config --lib "$module" -- --test-threads=1
+      cargo test --locked --offline -p iroha_config --lib "$module" -- --test-threads=1
   elif is_production_data_model_module "$module"; then
-    module_command="cargo test --locked -p iroha_data_model --lib ${module} -- --test-threads=1"
+    module_command="cargo test --locked --offline -p iroha_data_model --lib ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked -p iroha_data_model --lib "$module" -- --test-threads=1
+      cargo test --locked --offline -p iroha_data_model --lib "$module" -- --test-threads=1
   else
-    module_command="cargo test --locked -p iroha_core --lib ${module} -- --test-threads=1"
+    module_command="cargo test --locked --offline -p iroha_core --lib ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked -p iroha_core --lib "$module" -- --test-threads=1
+      cargo test --locked --offline -p iroha_core --lib "$module" -- --test-threads=1
   fi
   if ((corridor_enabled)); then
     for required_test in "${required_production_liveness_tests[@]}"; do
@@ -1639,25 +1711,37 @@ if grep -Fqx -- "${required_data_model_lane_certificate_test}: test" <<<"$data_m
 fi
 run_corridor_leg \
   status-rust cargo-exact 1 \
-  "cargo test --locked -p iroha_data_model --lib ${required_data_model_status_test} -- --test-threads=1" \
-  cargo test --locked -p iroha_data_model --lib "$required_data_model_status_test" -- --test-threads=1
+  "cargo test --locked --offline -p iroha_data_model --lib ${required_data_model_status_test} -- --test-threads=1" \
+  cargo test --locked --offline -p iroha_data_model --lib "$required_data_model_status_test" -- --test-threads=1
 run_corridor_leg \
   lane-certificate-rust cargo-exact 1 \
-  "cargo test --locked -p iroha_data_model --lib ${required_data_model_lane_certificate_test} -- --exact --test-threads=1" \
-  cargo test --locked -p iroha_data_model --lib "$required_data_model_lane_certificate_test" -- --exact --test-threads=1
+  "cargo test --locked --offline -p iroha_data_model --lib ${required_data_model_lane_certificate_test} -- --exact --test-threads=1" \
+  cargo test --locked --offline -p iroha_data_model --lib "$required_data_model_lane_certificate_test" -- --exact --test-threads=1
 verify_release_identity "before source-sealed full workspace verification"
 run_corridor_leg \
+  source-sealed-workspace-format command 0 \
+  "cargo fmt --all -- --check" \
+  cargo fmt --all -- --check
+run_corridor_leg \
+  source-sealed-legacy-codec-guard command 0 \
+  "bash scripts/check_no_legacy_codec.sh" \
+  bash scripts/check_no_legacy_codec.sh
+run_corridor_leg \
+  source-sealed-workspace-build command 0 \
+  "cargo build --locked --offline --workspace" \
+  cargo build --locked --offline --workspace
+run_corridor_leg \
   source-sealed-workspace-clippy command 0 \
-  "cargo clippy --workspace --all-targets -- -D warnings" \
-  cargo clippy --workspace --all-targets -- -D warnings
+  "cargo clippy --locked --offline --workspace --all-targets -- -D warnings" \
+  cargo clippy --locked --offline --workspace --all-targets -- -D warnings
 run_corridor_leg \
   source-sealed-workspace-tests command 0 \
-  "cargo test --locked --workspace" \
-  cargo test --locked --workspace
+  "cargo test --locked --offline --workspace" \
+  cargo test --locked --offline --workspace
 run_corridor_leg \
   source-sealed-irohad-tests command 0 \
-  "cargo test --locked -p irohad --bin irohad --features test-network-message-control" \
-  cargo test --locked -p irohad --bin irohad --features test-network-message-control
+  "cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control" \
+  cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control
 verify_release_identity "after source-sealed full workspace verification"
 
 # Pin the production-soak execution profile and its serialized evidence schema
@@ -1672,10 +1756,10 @@ required_taira_release_contract_tests=(
 )
 taira_release_contract_target="consensus_and_da"
 taira_release_contract_list="$(
-  cargo test --locked -p integration_tests --test "$taira_release_contract_target" -- --list
+  cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" -- --list
 )"
 taira_release_ignored_contract_list="$(
-  cargo test --locked -p integration_tests --test "$taira_release_contract_target" -- --list --ignored
+  cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" -- --list --ignored
 )"
 for taira_contract_index in "${!required_taira_release_contract_tests[@]}"; do
   required_test="${required_taira_release_contract_tests[$taira_contract_index]}"
@@ -1689,8 +1773,8 @@ for taira_contract_index in "${!required_taira_release_contract_tests[@]}"; do
   fi
   run_corridor_leg \
     "taira-contract-${taira_contract_index}" cargo-exact 1 \
-    "cargo test --locked -p integration_tests --test ${taira_release_contract_target} ${required_test} -- --exact --test-threads=1" \
-    cargo test --locked -p integration_tests --test "$taira_release_contract_target" \
+    "cargo test --locked --offline -p integration_tests --test ${taira_release_contract_target} ${required_test} -- --exact --test-threads=1" \
+    cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" \
       "$required_test" -- --exact --test-threads=1
 done
 
@@ -1704,10 +1788,10 @@ required_cross_sdk_fixture_tests=(
 )
 cross_sdk_fixture_target="iroha_data_model_group_02"
 cross_sdk_fixture_list="$(
-  cargo test --locked -p iroha_data_model --test "$cross_sdk_fixture_target" -- --list
+  cargo test --locked --offline -p iroha_data_model --test "$cross_sdk_fixture_target" -- --list
 )"
 cross_sdk_ignored_fixture_list="$(
-  cargo test --locked -p iroha_data_model --test "$cross_sdk_fixture_target" -- --list --ignored
+  cargo test --locked --offline -p iroha_data_model --test "$cross_sdk_fixture_target" -- --list --ignored
 )"
 for required_test in "${required_cross_sdk_fixture_tests[@]}"; do
   if ! grep -Fqx -- "${required_test}: test" <<<"$cross_sdk_fixture_list"; then
@@ -1721,8 +1805,8 @@ for required_test in "${required_cross_sdk_fixture_tests[@]}"; do
 done
 run_corridor_leg \
   cross-sdk-rust cargo-exact 2 \
-  "cargo test --locked -p iroha_data_model --test ${cross_sdk_fixture_target} sumeragi_v2_cross_sdk_fixtures:: -- --test-threads=1" \
-  cargo test --locked -p iroha_data_model --test "$cross_sdk_fixture_target" \
+  "cargo test --locked --offline -p iroha_data_model --test ${cross_sdk_fixture_target} sumeragi_v2_cross_sdk_fixtures:: -- --test-threads=1" \
+  cargo test --locked --offline -p iroha_data_model --test "$cross_sdk_fixture_target" \
     sumeragi_v2_cross_sdk_fixtures:: -- --test-threads=1
 
 js_status_contract_file="javascript/iroha_js/test/toriiClient.test.js"
@@ -2045,7 +2129,7 @@ record_corridor_log \
   "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$taira_soak_contract_log"
 if ((corridor_enabled)); then
-  readonly expected_corridor_leg_count=61
+  readonly expected_corridor_leg_count=64
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -2126,6 +2210,77 @@ if [[ "$profile" == "--release" && ! -s "$seed_completion_path_file" ]]; then
 fi
 verify_release_identity "after deterministic seed matrix"
 
+# G-12P is a distinct real-network gate from the reducer seed matrix above.
+# Its launcher starts ten fresh 12-peer networks, uses one canonical seed per
+# process, forbids retries, and validates each Cargo transcript as exactly one
+# scheduled/passing test before publishing completion accounting.
+nexus_cross_completion_path_file="${IROHA_RELEASE_HOST_ROOT:-${repo_root}/target}/nexus-cross-dataspace-completion-path"
+rm -f -- "$nexus_cross_completion_path_file"
+nexus_cross_args=(--capture --no-skip-build --test-threads 1)
+if [[ "$profile" == "--release" ]]; then
+  nexus_cross_args+=(--release)
+fi
+IROHA_NEXUS_CROSS_COMPLETION_PATH_FILE="$nexus_cross_completion_path_file" \
+  bash scripts/run_nexus_cross_dataspace_atomic_swap.sh "${nexus_cross_args[@]}"
+if [[ ! -s "$nexus_cross_completion_path_file" ]]; then
+  echo "G-12P seed matrix did not publish its completion path" >&2
+  exit 1
+fi
+nexus_cross_completion_path="$(<"$nexus_cross_completion_path_file")"
+if [[ ! -f "$nexus_cross_completion_path" || -L "$nexus_cross_completion_path" ]]; then
+  echo "G-12P seed-matrix completion must be a regular non-symlink file" >&2
+  exit 1
+fi
+for required_line in \
+  $'mode\tdeterministic-seed-matrix' \
+  $'expected_runs\t10' \
+  $'passed_runs\t10' \
+  $'failed_runs\t0' \
+  $'process_retry_runs\t0'; do
+  if ! grep -Fqx -- "$required_line" "$nexus_cross_completion_path"; then
+    echo "G-12P seed-matrix completion is missing exact accounting: ${required_line}" >&2
+    exit 1
+  fi
+done
+verify_release_identity "after strict G-12P deterministic seed matrix"
+
+if [[ "$profile" == "--release" ]]; then
+  nexus_cross_soak_completion_path_file="${IROHA_RELEASE_HOST_ROOT}/nexus-cross-dataspace-soak-completion-path"
+  rm -f -- "$nexus_cross_soak_completion_path_file"
+  IROHA_NEXUS_CROSS_COMPLETION_PATH_FILE="$nexus_cross_soak_completion_path_file" \
+    bash scripts/run_nexus_cross_dataspace_atomic_swap.sh \
+      --release \
+      --capture \
+      --no-skip-build \
+      --test-threads 1 \
+      --cross-dataspace-fault-soak \
+      --cross-dataspace-seed nexus-cross-dataspace-v1-seed-00 \
+      --cross-dataspace-soak-duration-secs 7200
+  if [[ ! -s "$nexus_cross_soak_completion_path_file" ]]; then
+    echo "G-12P two-hour fault soak did not publish its completion path" >&2
+    exit 1
+  fi
+  nexus_cross_soak_completion_path="$(<"$nexus_cross_soak_completion_path_file")"
+  if [[ ! -f "$nexus_cross_soak_completion_path" \
+    || -L "$nexus_cross_soak_completion_path" ]]; then
+    echo "G-12P fault-soak completion must be a regular non-symlink file" >&2
+    exit 1
+  fi
+  for required_line in \
+    $'mode\ttwo-hour-fault-soak' \
+    $'duration_seconds\t7200' \
+    $'expected_runs\t1' \
+    $'passed_runs\t1' \
+    $'failed_runs\t0' \
+    $'process_retry_runs\t0'; do
+    if ! grep -Fqx -- "$required_line" "$nexus_cross_soak_completion_path"; then
+      echo "G-12P fault-soak completion is missing exact accounting: ${required_line}" >&2
+      exit 1
+    fi
+  done
+  verify_release_identity "after G-12P two-hour rotating-validator fault soak"
+fi
+
 if [[ "$profile" == "--pr" ]]; then
   python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py
   bash scripts/formal/run_sumeragi_v2_harness.sh --unit
@@ -2142,7 +2297,7 @@ if [[ "$profile" == "--pr" ]]; then
     echo "workspace sources changed during the PR release corridor" >&2
     exit 1
   fi
-  echo "Sumeragi v2 PR gate passed: cross-SDK fixture/status parity, 4 seeds × 5 scenarios (20 runs), reducer invariants, adversarial simulations, and trace replay" >&2
+  echo "Sumeragi v2 PR gate passed: cross-SDK fixture/status parity, 4 seeds × 5 reducer scenarios (20 runs), strict 10/10 fresh-network G-12P, adversarial simulations, and trace replay" >&2
   exit 0
 fi
 
@@ -2255,4 +2410,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-echo "Sumeragi v2 production release gates passed, including 100,000 heights and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+echo "Sumeragi v2 production release gates passed, including strict 10/10 G-12P, the two-hour G-12P fault soak, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

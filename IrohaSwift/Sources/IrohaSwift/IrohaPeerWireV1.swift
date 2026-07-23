@@ -34,6 +34,22 @@ public extension IrohaPeerWireProfileV1 {
     }
 }
 
+public extension IrohaPeerWireKindV1 {
+    /// Exact native archive schema admitted for this Kagemusha IPM1 kind.
+    /// In particular, RECEIVE_REQUEST commits to the complete portable offer,
+    /// not only its nested signed payment request.
+    var requiredKagemushaCanonicalSchema: String {
+        switch self {
+        case .receiveRequest:
+            return KagemushaRecursiveSpend.recipientReceiveOfferWireName
+        case .payment:
+            return KagemushaRecursiveSpend.peerPaymentWireNameV4
+        case .acknowledgement:
+            return KagemushaRecursiveSpend.acknowledgementWireName
+        }
+    }
+}
+
 public enum IrohaPeerWireEncodingV1: UInt8, Sendable {
     case none = 0
     case zlib = 1
@@ -417,15 +433,6 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         canonicalPayload: Data
     ) throws {
         guard profile == .kagemusha else { return }
-        let schema: String
-        switch kind {
-        case .receiveRequest:
-            schema = KagemushaRecursiveSpend.recipientReceiveOfferWireName
-        case .payment:
-            schema = KagemushaRecursiveSpend.peerPaymentWireNameV4
-        case .acknowledgement:
-            schema = KagemushaRecursiveSpend.acknowledgementWireName
-        }
         do {
             // Transport acceptance is deliberately native-independent:
             // canonical compact Norito framing, checksum, and the exact
@@ -433,7 +440,7 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
             // in IrohaPeerKagemushaAdapterV1/KagemushaPeerPayload.
             try KagemushaRecursiveSpend.requireArchive(
                 canonicalPayload,
-                schema: schema,
+                schema: kind.requiredKagemushaCanonicalSchema,
                 field: "ipm1.kagemusha.\(kind)"
             )
         } catch {

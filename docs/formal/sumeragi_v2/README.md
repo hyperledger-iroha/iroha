@@ -884,8 +884,9 @@ geometry, compact offline QCs, and parent height-context identity to the
 authenticated origin.
 
 The final successor/recovery closure adds six exact regressions without adding
-a module or corridor leg, yielding the current 515-test, 38-module, 61-leg
-inventory. The canonical module/test TSV inventory SHA-256 is
+a module. Three source-sealed format, build, and legacy-codec guard legs bring
+the current inventory to 515 tests across 38 modules and 64 legs.
+The canonical module/test TSV inventory SHA-256 is
 `b45ba53a16889f89b7ef9301bcba4143ae35cb2b6c7ec304f80b5b43622c53f7`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
@@ -923,14 +924,14 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 61 legs, including separate exact
+the complete pre-network corridor now spans 64 legs, including separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, the daemon genesis
 module, and source-sealed command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those thirty-eight modules or sixty-one legs. The
+geometry tests as part of those thirty-eight modules or sixty-four legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1006,7 +1007,7 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 61 pre-network legs and the exact
+binds original HEAD/tree/`Cargo.lock`, all 64 pre-network legs and the exact
 515-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable

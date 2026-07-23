@@ -9286,9 +9286,9 @@ def _first_json_mismatch(expected: Any, observed: Any, path: str = "$") -> str |
     if isinstance(expected, list):
         if len(expected) != len(observed):
             return path
-        for index, (expected_item, observed_item) in enumerate(
-            zip(expected, observed, strict=True)
-        ):
+        # Exact lengths were checked above; plain zip keeps this verifier
+        # compatible with the repository's Python 3.9 floor.
+        for index, (expected_item, observed_item) in enumerate(zip(expected, observed)):
             mismatch = _first_json_mismatch(
                 expected_item, observed_item, f"{path}[{index}]"
             )
@@ -36980,19 +36980,19 @@ def _production_liveness_release_inventory_errors(
                 f"{release_path}: production module {module} must contain exactly "
                 f"{expected_count} named tests; found {observed_count}"
             )
-    if source.splitlines().count("  readonly expected_corridor_leg_count=61") != 1:
+    if source.splitlines().count("  readonly expected_corridor_leg_count=64") != 1:
         errors.append(
             f"{release_path}: complete pre-network release corridor must remain "
-            "sealed at sixty-one legs"
+            "sealed at sixty-four legs"
         )
 
     expected_p2p_list = (
-        'production_p2p_unit_list="$(cargo test --locked -p iroha_p2p '
+        'production_p2p_unit_list="$(cargo test --locked --offline -p iroha_p2p '
         '--lib -- --list)"'
     )
     expected_p2p_ignored_list = (
         'production_p2p_ignored_unit_list="$(\n'
-        '  cargo test --locked -p iroha_p2p --lib -- --list --ignored\n'
+        '  cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored\n'
         ')"'
     )
     if source.count(expected_p2p_list) != 1 or source.count(
@@ -37004,13 +37004,13 @@ def _production_liveness_release_inventory_errors(
         )
     expected_irohad_list = (
         'production_irohad_unit_list="$(\n'
-        '  cargo test --locked -p irohad --bin irohad '
+        '  cargo test --locked --offline -p irohad --bin irohad '
         '--features test-network-message-control -- --list\n'
         ')"'
     )
     expected_irohad_ignored_list = (
         'production_irohad_ignored_unit_list="$(\n'
-        '  cargo test --locked -p irohad --bin irohad '
+        '  cargo test --locked --offline -p irohad --bin irohad '
         '--features test-network-message-control -- --list --ignored\n'
         ')"'
     )
@@ -37022,12 +37022,12 @@ def _production_liveness_release_inventory_errors(
             "test-network-message-control feature"
         )
     expected_config_list = (
-        'production_config_unit_list="$(cargo test --locked -p iroha_config '
+        'production_config_unit_list="$(cargo test --locked --offline -p iroha_config '
         '--lib -- --list)"'
     )
     expected_config_ignored_list = (
         'production_config_ignored_unit_list="$(\n'
-        '  cargo test --locked -p iroha_config --lib -- --list --ignored\n'
+        '  cargo test --locked --offline -p iroha_config --lib -- --list --ignored\n'
         ')"'
     )
     if source.count(expected_config_list) != 1 or source.count(
@@ -37044,7 +37044,7 @@ def _production_liveness_release_inventory_errors(
     )
     config_module_route = (
         '  elif [[ "$module" == parameters::* ]]; then\n'
-        '    module_command="cargo test --locked -p iroha_config --lib '
+        '    module_command="cargo test --locked --offline -p iroha_config --lib '
         '${module} -- --test-threads=1"'
     )
     if source.count(config_inventory_route) != 1 or source.count(
@@ -37066,12 +37066,12 @@ def _production_liveness_release_inventory_errors(
             "finality, offline compact-QC, and context-identity modules"
         )
     expected_data_model_list = (
-        'production_data_model_unit_list="$(cargo test --locked '
+        'production_data_model_unit_list="$(cargo test --locked --offline '
         '-p iroha_data_model --lib -- --list)"'
     )
     expected_data_model_ignored_list = (
         'production_data_model_ignored_unit_list="$(\n'
-        '  cargo test --locked -p iroha_data_model --lib -- --list --ignored\n'
+        '  cargo test --locked --offline -p iroha_data_model --lib -- --list --ignored\n'
         ')"'
     )
     if source.count(expected_data_model_list) != 1 or source.count(
@@ -37084,9 +37084,9 @@ def _production_liveness_release_inventory_errors(
     for fragment in (
         'if is_production_data_model_module "$required_test_module"; then',
         'elif is_production_data_model_module "$module"; then',
-        'module_command="cargo test --locked -p iroha_data_model --lib '
+        'module_command="cargo test --locked --offline -p iroha_data_model --lib '
         '${module} -- --test-threads=1"',
-        'cargo test --locked -p iroha_data_model --lib "$module" '
+        'cargo test --locked --offline -p iroha_data_model --lib "$module" '
         '-- --test-threads=1',
     ):
         if source.count(fragment) != 1:
@@ -37097,13 +37097,28 @@ def _production_liveness_release_inventory_errors(
 
     source_sealed_commands = (
         (
-            "source-sealed-workspace-clippy",
-            "cargo clippy --workspace --all-targets -- -D warnings",
+            "source-sealed-workspace-format",
+            "cargo fmt --all -- --check",
         ),
-        ("source-sealed-workspace-tests", "cargo test --locked --workspace"),
+        (
+            "source-sealed-legacy-codec-guard",
+            "bash scripts/check_no_legacy_codec.sh",
+        ),
+        (
+            "source-sealed-workspace-build",
+            "cargo build --locked --offline --workspace",
+        ),
+        (
+            "source-sealed-workspace-clippy",
+            "cargo clippy --locked --offline --workspace --all-targets -- -D warnings",
+        ),
+        (
+            "source-sealed-workspace-tests",
+            "cargo test --locked --offline --workspace",
+        ),
         (
             "source-sealed-irohad-tests",
-            "cargo test --locked -p irohad --bin irohad "
+            "cargo test --locked --offline -p irohad --bin irohad "
             "--features test-network-message-control",
         ),
     )
@@ -37169,7 +37184,7 @@ def _production_liveness_release_inventory_errors(
             expected_receipt_route = (
                 "if module in _DATA_MODEL_PRODUCTION_MODULES:\n"
                 "        return (\n"
-                '            "cargo test --locked -p iroha_data_model --lib "\n'
+                '            "cargo test --locked --offline -p iroha_data_model --lib "\n'
                 '            f"{module} -- --test-threads=1"\n'
                 "        )"
             )
@@ -37198,20 +37213,20 @@ def _production_liveness_release_inventory_errors(
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
             "inventories 515 named tests\nacross 38 Rust modules",
-            "all 61 pre-network legs and the exact\n515-test inventory",
+            "all 64 pre-network legs and the exact\n515-test inventory",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "yielding the current 515-test, 38-module, 61-leg\ninventory",
-            "pre-network corridor\nnow has 61 legs",
+            "yielding the current 515-test, 38-module, 64-leg\ninventory",
+            "pre-network corridor\nnow has 64 legs",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
             "The current 515-test inventory is a mechanically checked\n"
             "source contract",
-            "receipt binds the 61 pre-network corridor legs and\n"
+            "receipt binds the 64 pre-network corridor legs and\n"
             "their exact 515-test inventory",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",

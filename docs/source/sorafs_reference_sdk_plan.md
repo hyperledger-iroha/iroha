@@ -70,14 +70,16 @@ The existing `sorafs_manifest` crate exposes `ValidationOutcomeV1`,
 `sorafs-validate orderbook` / `sorafs-validate por` /
 `sorafs-validate pdp` / `sorafs-validate potr` /
 `sorafs-validate repair` / `sorafs-validate bundle` /
-`sorafs-validate governance` CLI commands cover Norito `ProviderAdvertV1`,
+`sorafs-validate governance` / `sorafs-validate release-manifest` CLI commands
+cover Norito `ProviderAdvertV1`,
 `ProviderAdmissionEnvelopeV1`, `ReplicationOrderV1`, `PorChallengeV1`,
 `PorProofV1`, `PdpCommitmentV1`, `PdpChallengeV1`, `PdpProofV1`,
 `PotrReceiptV1`, orderbook/settlement payloads, and repair payloads,
 fixture-directory bundle cross-link checks, governance log node
 validation, governance DAG block validation, signed governance DAG head-chain
 validation, provider advert signing, signed replication-order envelopes, and
-governance log node Ed25519 signing.
+governance log node Ed25519 signing, plus strict native raw Ed25519 release
+manifest signing and verification.
 `soranet_trustless_verifier --validation-outcome` emits the same
 `ValidationOutcomeV1` contract for manifest/CAR replay.
 
@@ -137,6 +139,7 @@ Current implementation slice: `cargo run -p sorafs_manifest --bin sorafs-validat
 | `sorafs-validate repair` | Validate repair payloads (`RepairEvidenceV1`, `RepairReportV1`, `RepairTaskRecordV1`, slash proposals, escalation policy/approval, signed auditor requests, worker payloads, task/audit events). | Implemented: `--kind <payload-kind> --input <file>` or aliases such as `--task <file>`, `--evidence <file>`, `--report <file>`, `--signed-auditor-request <file>`, `--worker-signature <file>`, `--event <file>`, `--audit-event <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`. | Norito bytes. |
 | `sorafs-validate governance` | Validate `GovernanceLogNodeV1` payloads, `GovernanceDagBlockV1` blocks, and signed `GovernanceDagHeadV1` chains. | Implemented: `--node <file>` (or `--input <file>` alias) with required `--cid <node-cid>`; `--block <file>` with optional `--cid <block-cid\|hex:HEX>`; or `--head <file> --block <file> [--block <file>...]`, plus `--format table\|json\|yaml` and `--telemetry-out <path>`. Node validation covers embedded payload policy, publisher metadata, Ed25519 and Dilithium3/ML-DSA publisher signatures, and required node-CID binding. Block/head validation covers canonical block-CID derivation, embedded node policy, block signatures, parent linkage, signed head binding, and block-count binding. | Norito bytes. |
 | `sorafs-validate bundle` | Run a composite check on a fixture bundle (admission artifacts plus order/proofs/receipts/repair payloads and orderbook fixtures). | Implemented: `--bundle <dir>`, `--format table\|json\|yaml`, `--telemetry-out <path>`, `--now <unix-seconds>`. Manifest/CAR policy replay is implemented by `soranet_trustless_verifier --validation-outcome`. | Directory matching fixture layout. |
+| `sorafs-validate release-manifest` | Verify a detached release-manifest signature or create one in the explicit development-only path. | Verification requires `--manifest <file>`, `--public-key <raw-32-byte-file>`, `--public-key-fingerprint <lowercase-sha256-hex>`, and `--signature <raw-64-byte-file>`. Development signing replaces `--signature` with `--signing-seed <raw-32-byte-file> --signature-out <new-file> --development-local-signing`. Inputs are bounded direct regular files; signatures use strict Ed25519 verification and output is no-clobber. | Exact release-manifest bytes plus raw Ed25519 material. |
 | `soranet_trustless_verifier --validation-outcome` | Replay `ManifestV1` policy and a full CARv2 stream into the reference outcome contract. | Implemented: `--manifest <manifest.to>`, `--car <payload.car>`, optional `--config <toml>`, `--json-out <path>`, `--quiet`, `--generated-at <unix-seconds>`. | Manifest Norito or JSON plus CAR bytes. |
 | `sorafs-validate sign` | Produce signed reference payloads using operator or governance keys. | Implemented: `--kind advert --input <advert.to> --out <signed-advert.to> (--key-hex <hex> \| --key <path>)`, `--kind order --input <order.to> --out <signed-order.to> (--key-hex <hex> \| --key <path>)`, `--kind orderbook --payload-kind order-request\|order-cancel\|settlement-receipt --input <payload.to> --out <signed-payload.to> (--key-hex <hex> \| --key <path>)`, `--kind governance --input <node.to> --out <signed-node.to> (--key-hex <hex> \| --key <path>)`, `--format table\|json\|yaml`, `--telemetry-out <path>`, `--now <unix-seconds>` for adverts. | Norito bytes -> Norito bytes. |
 
@@ -363,11 +366,12 @@ convert decoded or raw Norito payloads into the shared validation functions.
   smoke checks, records per-file, binary, FFI-header, archive, and manifest
   digests under an untracked output directory, and can emit a detached manifest
   signature. The production path uses `--manifest-signature-in`; an owner-only
-  Ed25519 PEM private key is admitted only with the explicit
-  `--development-local-signing` mode. Both paths require the separate Ed25519
-  public key and reviewed SHA-256 fingerprint of its canonical DER SubjectPublicKeyInfo.
-  The helper pins every signing input into an owner-private ephemeral snapshot,
-  uses raw Ed25519 signing and verification, accepts only a nonzero 64-byte
+  raw 32-byte Ed25519 seed is admitted only with the explicit
+  `--development-local-signing` mode. Both paths require the separate raw
+  32-byte Ed25519 public key and reviewed SHA-256 fingerprint of those exact
+  public-key bytes. The helper pins every signing input into an owner-private
+  ephemeral snapshot, delegates signing and strict verification to the native
+  `sorafs-validate release-manifest` command, accepts only a nonzero 64-byte
   signature, and publishes to a new collision-free output. For the reference
   production release, `--manifest-signature-in` admits the raw signature
   produced by a PKCS#11/HSM over an earlier byte-identical manifest run, so the
@@ -420,11 +424,11 @@ convert decoded or raw Norito payloads into the shared validation functions.
    archive, `.sha256` files, manifest JSON, manifest signature, FFI
    header copy, and smoke-output hash. Do not persist runtime signing seeds,
    release private keys, public-key files, tokens, or raw payload fixtures in
-   release evidence. For a signed local package, keep the private-key file
+   release evidence. For a signed local package, keep the development seed file
    current-user-owned with exactly one hard link and mode `0400` or `0600`,
    supply the corresponding
    public key with `--manifest-public-key`, and pass its independently reviewed
-   lowercase DER SubjectPublicKeyInfo SHA-256 fingerprint through
+   lowercase raw-public-key SHA-256 fingerprint through
    `--manifest-public-key-fingerprint`.
 3. Run `docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh` against
    the staged binaries by setting `SORAFS_VALIDATE_BIN` and
@@ -473,7 +477,7 @@ and the `release_manifest_digest_hex` it was built against.
 - The reference production path uses `--manifest-signature-in` with a raw
   Ed25519 signature produced by the governed PKCS#11/HSM signer over an earlier
   byte-identical manifest run. This mode is mutually exclusive with the local
-  PEM signing-key option and still requires the reviewed public key and
+  raw-seed signing option and still requires the reviewed raw public key and
   fingerprint.
 - The mandatory native release matrix is
   `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,

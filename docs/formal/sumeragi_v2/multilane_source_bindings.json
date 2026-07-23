@@ -56,7 +56,7 @@
           "required_tokens": [
             "LaneDrainStateV1",
             "InvalidAutoscaleManagedLane",
-            "canonical_merged_lane_frontier_from_world"
+            "evidence_aware_lane_drain_frontier_from_world"
           ]
         },
         {
@@ -65,7 +65,7 @@
           "symbol": "pending_autoscale_lane_drain_body",
           "required_tokens": [
             "autoscale_lane_drain_state_matches_context",
-            "canonical_merged_lane_frontier_from_world",
+            "evidence_aware_lane_drain_frontier_from_world",
             "validate_lane_drain_certificate_body"
           ]
         },

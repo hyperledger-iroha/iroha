@@ -17362,13 +17362,13 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "canonical module/test inventory SHA-256",
         ),
         (
-            'production_p2p_unit_list="$(cargo test --locked -p iroha_p2p --lib -- --list)"',
-            'production_p2p_unit_list="$(cargo test --locked -p iroha_p2p --all-features --lib -- --list)"',
+            'production_p2p_unit_list="$(cargo test --locked --offline -p iroha_p2p --lib -- --list)"',
+            'production_p2p_unit_list="$(cargo test --locked --offline -p iroha_p2p --all-features --lib -- --list)"',
             "reviewed P2P corridor must use exact default-feature test discovery",
         ),
         (
-            'production_config_unit_list="$(cargo test --locked -p iroha_config --lib -- --list)"',
-            'production_config_unit_list="$(cargo test --locked -p iroha_config --all-features --lib -- --list)"',
+            'production_config_unit_list="$(cargo test --locked --offline -p iroha_config --lib -- --list)"',
+            'production_config_unit_list="$(cargo test --locked --offline -p iroha_config --all-features --lib -- --list)"',
             "exact-output configuration discovery must use the exact iroha_config library test surface",
         ),
         (
@@ -17378,10 +17378,10 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         ),
         (
             'elif [[ "$module" == parameters::* ]]; then\n'
-            '    module_command="cargo test --locked -p iroha_config --lib '
+            '    module_command="cargo test --locked --offline -p iroha_config --lib '
             '${module} -- --test-threads=1"',
             'elif [[ "$module" == parameters::* ]]; then\n'
-            '    module_command="cargo test --locked -p iroha_core --lib '
+            '    module_command="cargo test --locked --offline -p iroha_core --lib '
             '${module} -- --test-threads=1"',
             "exact-output configuration tests must route through the iroha_config library corridor",
         ),
@@ -17563,14 +17563,14 @@ def test_production_release_inventory_seals_successor_parent_binding(
     (
         (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
-            "yielding the current 515-test, 38-module, 61-leg\ninventory",
-            "yielding the current 515-test, 38-module, 60-leg\ninventory",
+            "yielding the current 515-test, 38-module, 64-leg\ninventory",
+            "yielding the current 515-test, 38-module, 63-leg\ninventory",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "receipt binds the 61 pre-network corridor legs and\n"
+            "receipt binds the 64 pre-network corridor legs and\n"
             "their exact 515-test inventory",
-            "receipt binds the 60 pre-network corridor legs and\n"
+            "receipt binds the 63 pre-network corridor legs and\n"
             "their exact 515-test inventory",
         ),
     ),
@@ -17635,18 +17635,18 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=61",
-            "  readonly expected_corridor_leg_count=60",
-            "sealed at sixty-one legs",
+            "  readonly expected_corridor_leg_count=64",
+            "  readonly expected_corridor_leg_count=63",
+            "sealed at sixty-four legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
             '  source-sealed-workspace-tests command 0 \\\n'
+            '  "cargo test --locked --offline --workspace" \\\n'
+            "  cargo test --locked --offline --workspace",
+            '  source-sealed-workspace-tests command 0 \\\n'
             '  "cargo test --locked --workspace" \\\n'
             "  cargo test --locked --workspace",
-            '  source-sealed-workspace-tests command 0 \\\n'
-            '  "cargo test --workspace" \\\n'
-            "  cargo test --workspace",
             "source-sealed command-success leg source-sealed-workspace-tests",
         ),
     ),
@@ -18830,23 +18830,24 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
     )
-    assert len(receipt_module._corridor_legs()) == 61
+    assert len(receipt_module._corridor_legs()) == 64
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
     ) == (
-        "cargo test --locked -p iroha_config --lib parameters::actual::tests "
+        "cargo test --locked --offline -p iroha_config --lib "
+        "parameters::actual::tests "
         "-- --test-threads=1"
     )
     assert receipt_module._production_module_command(
         "parameters::user::duration_clamp_tests"
     ) == (
-        "cargo test --locked -p iroha_config --lib "
+        "cargo test --locked --offline -p iroha_config --lib "
         "parameters::user::duration_clamp_tests -- --test-threads=1"
     )
     assert receipt_module._production_module_command(
         "block::consensus_v2::finality::tests"
     ) == (
-        "cargo test --locked -p iroha_data_model --lib "
+        "cargo test --locked --offline -p iroha_data_model --lib "
         "block::consensus_v2::finality::tests -- --test-threads=1"
     )
     for _, module, expected_count in receipt_module._PRODUCTION_MODULES:
@@ -18997,36 +18998,36 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in release_source
     )
     assert (
-        'cargo test --locked -p iroha_core --lib "$module" -- --test-threads=1'
+        'cargo test --locked --offline -p iroha_core --lib "$module" -- --test-threads=1'
         in release_source
     )
     assert (
-        'cargo test --locked -p iroha_p2p --lib "$module" -- --test-threads=1'
+        'cargo test --locked --offline -p iroha_p2p --lib "$module" -- --test-threads=1'
         in release_source
     )
     assert (
-        "cargo test --locked -p irohad --bin irohad --features "
+        "cargo test --locked --offline -p irohad --bin irohad --features "
         'test-network-message-control \\\n        "$module" -- --test-threads=1'
         in release_source
     )
     assert (
-        'cargo test --locked -p iroha_config --lib "$module" -- --test-threads=1'
+        'cargo test --locked --offline -p iroha_config --lib "$module" -- --test-threads=1'
         in release_source
     )
     assert (
-        'production_config_unit_list="$(cargo test --locked -p iroha_config '
+        'production_config_unit_list="$(cargo test --locked --offline -p iroha_config '
         '--lib -- --list)"'
         in release_source
     )
     assert (
         'production_config_ignored_unit_list="$(\n'
-        '  cargo test --locked -p iroha_config --lib -- --list --ignored\n'
+        '  cargo test --locked --offline -p iroha_config --lib -- --list --ignored\n'
         ')"'
         in release_source
     )
     assert 'elif [[ "$required_test" == parameters::* ]]; then' in release_source
     assert (
-        "cargo test --locked -p integration_tests --test "
+        "cargo test --locked --offline -p integration_tests --test "
         "sumeragi_v2_runner_isolated "
         "sumeragi_v2_runner::prepare_qc_split_tests "
         "-- --test-threads=1"
@@ -19137,16 +19138,29 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         assert test_name in release_source
     assert "taira_soak_contract_files=(" in release_source
     assert "did not run exactly 39 passing tests" in release_source
-    assert "expected_corridor_leg_count=61" in release_source
+    assert "expected_corridor_leg_count=64" in release_source
     for leg_id, command in (
+        ("source-sealed-workspace-format", "cargo fmt --all -- --check"),
+        (
+            "source-sealed-legacy-codec-guard",
+            "bash scripts/check_no_legacy_codec.sh",
+        ),
+        (
+            "source-sealed-workspace-build",
+            "cargo build --locked --offline --workspace",
+        ),
         (
             "source-sealed-workspace-clippy",
-            "cargo clippy --workspace --all-targets -- -D warnings",
+            "cargo clippy --locked --offline --workspace --all-targets "
+            "-- -D warnings",
         ),
-        ("source-sealed-workspace-tests", "cargo test --locked --workspace"),
+        (
+            "source-sealed-workspace-tests",
+            "cargo test --locked --offline --workspace",
+        ),
         (
             "source-sealed-irohad-tests",
-            "cargo test --locked -p irohad --bin irohad "
+            "cargo test --locked --offline -p irohad --bin irohad "
             "--features test-network-message-control",
         ),
     ):

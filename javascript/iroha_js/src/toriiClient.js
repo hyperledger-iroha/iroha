@@ -75,7 +75,6 @@ import {
   parseSccpJsonObject,
   parseSccpBridgeSubmitResponseJson,
 } from "./sccp.js";
-import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 import {
   normalizeKagemushaAssetSelector,
@@ -87,18 +86,33 @@ import {
   normalizeKagemushaTopUpRequestV4,
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
+import {
+  VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
+  VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+  encodeValidationFeeCurrentPolicyProofRequestV1,
+  normalizeValidationFeeCheckpointV1,
+  normalizeValidationFeeLedgerBindingV1,
+  verifyValidationFeeCurrentPolicyProofV1,
+} from "./validationFeeConsensus.js";
 
 const DEFAULT_PAGE_SIZE = 100;
-const VALIDATION_FEE_VERIFICATION_CONTEXTS = new WeakMap();
 const APPLICATION_JSON = "application/json";
+const APPLICATION_NORITO = "application/x-norito";
 const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: APPLICATION_JSON });
 const JSON_REQUEST_HEADERS = Object.freeze({
   "Content-Type": APPLICATION_JSON,
   Accept: APPLICATION_JSON,
 });
 
-const DEFAULT_SUCCESS_STATUSES = ["Approved", "Committed", "Applied"];
 const DEFAULT_FAILURE_STATUSES = ["Rejected", "Expired"];
+const AUTHORITATIVE_PIPELINE_STATUS_KINDS = new Set([
+  "Queued",
+  "Approved",
+  "Committed",
+  "Applied",
+  "Rejected",
+  "Expired",
+]);
 const DEFAULT_TX_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TX_STATUS_TIMEOUT_MS = 30_000;
 const IVM_ARTIFACT_MAX_BASE64_LENGTH =
@@ -297,11 +311,9 @@ const DA_FETCH_ARTIFACT_PREFIX = "artifacts/da/fetch_";
 const DA_PROVE_ARTIFACT_PREFIX = "artifacts/da/prove_availability_";
 const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "signal",
-  "scope",
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
-  "successStatuses",
   "failureStatuses",
   "onStatus",
 ]);
@@ -311,7 +323,6 @@ const GET_TX_STATUS_OPTION_KEYS = new Set([
   "allowShortHash",
   "signal",
   "scope",
-  "endpoints",
 ]);
 const ALIAS_CANONICAL_AUTH_OPTION_KEYS = new Set(["canonicalAuth"]);
 const ALIAS_BY_ACCOUNT_OPTION_KEYS = new Set([
@@ -1309,74 +1320,18 @@ function normalizeStatusSet(input, defaultStatuses) {
   return result;
 }
 
-function normalizeTransactionStatusScope(value, context, defaultScope = "auto") {
-  const raw = value === undefined || value === null ? defaultScope : value;
-  const normalized = String(raw).trim().toLowerCase();
-  if (!normalized) {
-    return defaultScope;
+function normalizeTransactionStatusScope(value, context) {
+  if (value === undefined) {
+    return "global";
   }
-  if (normalized === "local" || normalized === "auto" || normalized === "global") {
-    return normalized;
+  if (value === "local" || value === "global") {
+    return value;
   }
   throw createValidationError(
     ValidationErrorCode.INVALID_OBJECT,
-    `${context} must be one of: local, auto, global`,
+    `${context} must be one of: local, global`,
     context,
   );
-}
-
-function normalizeStatusEndpointCandidates(primaryBaseUrl, endpoints, context) {
-  const normalized = [];
-  const seen = new Set();
-  const pushEndpoint = (value, pathLabel) => {
-    const text = String(value ?? "").trim();
-    if (!text) {
-      return;
-    }
-    let parsed;
-    try {
-      parsed = new URL(text);
-    } catch {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${pathLabel} must be a valid absolute URL`,
-        pathLabel,
-      );
-    }
-    parsed.pathname = "";
-    parsed.search = "";
-    parsed.hash = "";
-    const canonical = parsed.toString().replace(/\/+$/u, "");
-    if (!seen.has(canonical)) {
-      seen.add(canonical);
-      normalized.push(canonical);
-    }
-  };
-
-  pushEndpoint(primaryBaseUrl, `${context}.primary`);
-  if (endpoints === undefined || endpoints === null) {
-    return normalized;
-  }
-
-  let values;
-  if (typeof endpoints === "string") {
-    values = endpoints.split(",").map((entry) => entry.trim());
-  } else if (Array.isArray(endpoints)) {
-    values = endpoints;
-  } else if (typeof endpoints[Symbol.iterator] === "function") {
-    values = [...endpoints];
-  } else {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must be a string or iterable of URLs`,
-      context,
-    );
-  }
-
-  values.forEach((value, index) => {
-    pushEndpoint(value, `${context}[${index}]`);
-  });
-  return normalized;
 }
 
 function readHeaderValue(headers, name) {
@@ -1538,10 +1493,6 @@ function sortJsonForErrorMessage(value) {
  * @property {number | null | undefined} [retry]
  * @property {string | null} raw
  */
-export function getTrustedValidationFeeVerificationContext(client) {
-  return VALIDATION_FEE_VERIFICATION_CONTEXTS.get(client) ?? null;
-}
-
 export class ToriiClient {
   /**
    * @param {string} baseUrl Base Torii URL (e.g. http://localhost:8080).
@@ -1558,13 +1509,10 @@ export class ToriiClient {
  * @param {Record<string, string>} [options.defaultHeaders]
  * @param {string} [options.authToken]
  * @param {string} [options.apiToken]
- * @param {"local"|"auto"|"global"} [options.transactionStatusScope]
- * @param {ReadonlyArray<string> | string} [options.statusEndpoints]
  * @param {typeof sorafsGatewayFetch} [options.sorafsGatewayFetch] Custom gateway fetch hook (tests).
  * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
  * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
  * @param {(manifest: Buffer, payload: Buffer, options: Record<string, unknown>) => unknown} [options.generateDaProofSummary] Custom proof summary generator (tests).
- * @param {object} [options.validationFeeVerificationContext] Immutable, out-of-band validation-fee trust anchor.
  * @param {object} [options.__nativeBinding] Custom native binding (tests).
  */
   constructor(baseUrl, options = {}) {
@@ -1591,16 +1539,6 @@ export class ToriiClient {
       );
     }
     this._nativeBinding = opts.__nativeBinding;
-    const validationFeeVerificationContext =
-      opts.validationFeeVerificationContext === undefined
-        ? null
-        : snapshotValidationFeePolicyVerificationContext(
-            opts.validationFeeVerificationContext,
-          );
-    VALIDATION_FEE_VERIFICATION_CONTEXTS.set(
-      this,
-      validationFeeVerificationContext,
-    );
     if (
       opts.sorafsGatewayFetch !== undefined &&
       typeof opts.sorafsGatewayFetch !== "function"
@@ -1642,7 +1580,6 @@ export class ToriiClient {
     delete overrides.onSorafsAliasWarning;
     delete overrides.sorafsGatewayFetch;
     delete overrides.generateDaProofSummary;
-    delete overrides.validationFeeVerificationContext;
     delete overrides.__nativeBinding;
     this._config = resolveToriiClientConfig({
       config: opts.config,
@@ -3169,6 +3106,135 @@ export class ToriiClient {
       throw new Error("fee quote endpoint returned no payload");
     }
     return normalizeFeeQuoteResponse(body, "fee quote response");
+  }
+
+  /**
+   * Fetch and locally verify one bounded validation-fee consensus proof page.
+   *
+   * @param {object} binding exact immutable ledger binding
+   * @param {object | null} checkpoint durable checkpoint, or null for binding.checkpoint
+   * @param {{signal?: AbortSignal}} [options]
+   */
+  async getValidationFeeCurrentPolicyProofPage(
+    binding,
+    checkpoint = null,
+    options = {},
+  ) {
+    const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
+    const normalizedCheckpoint =
+      checkpoint === null || checkpoint === undefined
+        ? normalizedBinding.checkpoint
+        : normalizeValidationFeeCheckpointV1(checkpoint);
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getValidationFeeCurrentPolicyProofPage",
+    );
+    const request = encodeValidationFeeCurrentPolicyProofRequestV1(
+      normalizedCheckpoint,
+    );
+    const response = await this._request(
+      "POST",
+      VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
+      {
+        headers: {
+          "Content-Type": APPLICATION_NORITO,
+          Accept: APPLICATION_NORITO,
+        },
+        body: request,
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const contentType = this._getHeader(response, "content-type") ?? "";
+    if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
+      const error = new TypeError(
+        "validation-fee proof response must use application/x-norito",
+      );
+      await cancelSccpResponseBody(response, error);
+      throw error;
+    }
+    const proofNorito = Buffer.from(
+      await readBoundedSccpResponseBytes(
+        response,
+        VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+        "validation-fee proof",
+      ),
+    );
+    const projection = verifyValidationFeeCurrentPolicyProofV1(
+      proofNorito,
+      normalizedBinding,
+      normalizedCheckpoint,
+    );
+    const promotedCheckpoint = Object.freeze({
+      height: projection.evaluated_block_height,
+      contextId: projection.evaluated_context_id,
+    });
+    return Object.freeze({
+      proofNorito,
+      projection,
+      promotedCheckpoint,
+    });
+  }
+
+  /**
+   * Repeatedly verify bounded pages until Torii's observed ledger tip.
+   *
+   * Persist each page's `promotedCheckpoint` yourself when crash-durable
+   * promotion is required; this convenience method promotes only in memory.
+   */
+  async catchUpValidationFeeCurrentPolicyProof(binding, options = {}) {
+    const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
+    const normalizedOptions = ensureRecord(
+      options ?? {},
+      "catchUpValidationFeeCurrentPolicyProof options",
+    );
+    assertSupportedOptionKeys(
+      normalizedOptions,
+      new Set(["checkpoint", "maxPages", "signal"]),
+      "catchUpValidationFeeCurrentPolicyProof options",
+    );
+    let checkpoint =
+      normalizedOptions.checkpoint === undefined
+        ? normalizedBinding.checkpoint
+        : normalizeValidationFeeCheckpointV1(normalizedOptions.checkpoint);
+    const maxPages =
+      normalizedOptions.maxPages === undefined
+        ? 4096
+        : ToriiClient._normalizeUnsignedInteger(
+            normalizedOptions.maxPages,
+            "catchUpValidationFeeCurrentPolicyProof.maxPages",
+            { allowZero: false },
+          );
+    if (maxPages > 4096) {
+      throw new TypeError(
+        "catchUpValidationFeeCurrentPolicyProof.maxPages must not exceed 4096",
+      );
+    }
+    for (let pagesVerified = 1; pagesVerified <= maxPages; pagesVerified += 1) {
+      const page = await this.getValidationFeeCurrentPolicyProofPage(
+        normalizedBinding,
+        checkpoint,
+        { signal: normalizedOptions.signal },
+      );
+      if (
+        page.projection.evaluated_block_height < checkpoint.height ||
+        (page.projection.more_available &&
+          page.projection.evaluated_block_height === checkpoint.height)
+      ) {
+        throw new Error("validation-fee checkpoint promotion did not advance");
+      }
+      checkpoint = page.promotedCheckpoint;
+      if (!page.projection.more_available) {
+        return Object.freeze({
+          ...page,
+          binding: normalizedBinding,
+          pagesVerified,
+        });
+      }
+    }
+    throw new Error(
+      `validation-fee checkpoint promotion exceeded ${maxPages} pages`,
+    );
   }
 
   /**
@@ -5278,8 +5344,7 @@ export class ToriiClient {
    * @param {{
    *   allowShortHash?: boolean,
    *   signal?: AbortSignal,
-   *   scope?: "local" | "auto" | "global",
-   *   endpoints?: ReadonlyArray<string> | string,
+   *   scope?: "local" | "global",
    * }} [options]
    * @returns {Promise<any>} Parsed JSON if present; otherwise null.
   */
@@ -5308,12 +5373,6 @@ export class ToriiClient {
     const scope = normalizeTransactionStatusScope(
       optionRecord.scope,
       "getTransactionStatus options.scope",
-      this._config.transactionStatusScope || "global",
-    );
-    const endpointCandidates = normalizeStatusEndpointCandidates(
-      this._baseUrl,
-      optionRecord.endpoints ?? this._config.statusEndpoints,
-      "getTransactionStatus options.endpoints",
     );
     const { signal } = normalizeSignalOption(
       optionRecord,
@@ -5324,54 +5383,16 @@ export class ToriiClient {
       "getTransactionStatus.hashHex",
       { allowShort: allowShortHash },
     );
-    const candidates =
-      scope === "local" ? endpointCandidates.slice(0, 1) : endpointCandidates;
-    let firstError = null;
-    for (const endpointBaseUrl of candidates) {
-      try {
-        const payload = await this._getTransactionStatusFromEndpoint(
-          endpointBaseUrl,
-          normalizedHash,
-          { signal, scope },
-        );
-        if (!payload) {
-          continue;
-        }
-        if (
-          endpointBaseUrl !== this._baseUrl &&
-          payload &&
-          typeof payload === "object" &&
-          !Array.isArray(payload)
-        ) {
-          return {
-            ...payload,
-            resolved_from: endpointBaseUrl,
-          };
-        }
-        return payload;
-      } catch (error) {
-        if (this._isAbortError(error)) {
-          throw error;
-        }
-        if (!firstError) {
-          firstError = error;
-        }
-      }
-    }
-    if (firstError) {
-      throw firstError;
-    }
-    return null;
+    return this._fetchTransactionStatus(normalizedHash, { signal, scope });
   }
 
-  async _getTransactionStatusFromEndpoint(baseUrl, normalizedHash, options = {}) {
+  async _fetchTransactionStatus(normalizedHash, options = {}) {
     const { signal, scope } = options;
     const response = await this._request(
       "GET",
-      `${baseUrl}/v1/pipeline/transactions/status`,
+      "/v1/pipeline/transactions/status",
       {
         params: { hash: normalizedHash, scope },
-        allowAbsoluteUrl: true,
         retryProfile: "pipeline",
         signal,
       },
@@ -5435,8 +5456,6 @@ export class ToriiClient {
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
-   *   scope?: "local" | "auto" | "global",
-   *   successStatuses?: Iterable<string>,
    *   failureStatuses?: Iterable<string>,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
    * }} [options]
@@ -5454,10 +5473,8 @@ export class ToriiClient {
       timeoutMs,
       maxAttempts,
       signal,
-      successSet,
       failureSet,
       onStatus,
-      scope,
     } = ToriiClient._normalizeTransactionStatusPollOptions(
       options,
       "waitForTransactionStatus options",
@@ -5473,9 +5490,18 @@ export class ToriiClient {
     while (true) {
       throwIfAborted(signal);
       attempts += 1;
-      lastPayload = await this.getTransactionStatus(normalizedHash, { signal, scope });
+      lastPayload = await this.getTransactionStatus(normalizedHash, {
+        signal,
+        scope: "global",
+      });
+      let statusResolution = null;
       if (lastPayload !== null) {
         assertPipelineTransactionStatusMatchesHash(
+          lastPayload,
+          normalizedHash,
+          "waitForTransactionStatus response",
+        );
+        statusResolution = classifyPipelineTransactionStatusResolution(
           lastPayload,
           normalizedHash,
           "waitForTransactionStatus response",
@@ -5487,10 +5513,24 @@ export class ToriiClient {
       }
       throwIfAborted(signal);
       if (status !== null) {
-        if (successSet.has(status)) {
+        if (
+          status === "Applied" &&
+          statusResolution?.resolvedFrom === "state"
+        ) {
           return lastPayload;
         }
-        if (failureSet.has(status)) {
+        const isCanonicalTerminalFailure =
+          status === "Rejected" || status === "Expired";
+        const isStateTerminalFailure =
+          isCanonicalTerminalFailure &&
+          statusResolution?.resolvedFrom === "state";
+        const isConfiguredStateFailure =
+          failureSet.has(status) &&
+          statusResolution?.resolvedFrom === "state";
+        if (
+          isStateTerminalFailure ||
+          isConfiguredStateFailure
+        ) {
           throw new TransactionStatusError(normalizedHash, status, lastPayload);
         }
       }
@@ -5541,7 +5581,6 @@ export class ToriiClient {
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
-   *   successStatuses?: Iterable<string>,
    *   failureStatuses?: Iterable<string>,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
    * }} options
@@ -5553,7 +5592,14 @@ export class ToriiClient {
       "submitTransactionAndWait options",
     );
     const { hashHex, ...pollOptions } = record;
-    const normalizedHash = requireHexString(hashHex, "options.hashHex");
+    const normalizedHash = normalizeHashLike32(
+      requireHexString(hashHex, "options.hashHex"),
+      "options.hashHex",
+    );
+    ToriiClient._normalizeTransactionStatusPollOptions(
+      pollOptions,
+      "submitTransactionAndWait options",
+    );
     await this.submitTransaction(payload, { signal: pollOptions.signal });
     return this.waitForTransactionStatus(normalizedHash, pollOptions);
   }
@@ -12003,10 +12049,8 @@ export class ToriiClient {
         intervalMs: DEFAULT_TX_STATUS_POLL_INTERVAL_MS,
         timeoutMs: DEFAULT_TX_STATUS_TIMEOUT_MS,
         maxAttempts: null,
-        successSet: normalizeStatusSet(undefined, DEFAULT_SUCCESS_STATUSES),
         failureSet: normalizeStatusSet(undefined, DEFAULT_FAILURE_STATUSES),
         onStatus: null,
-        scope: undefined,
       };
     }
     const record = requirePlainObjectOption(options, context);
@@ -12016,10 +12060,6 @@ export class ToriiClient {
         ? context.slice(0, -8)
         : context;
     const { signal } = normalizeSignalOption(record, signalContext);
-    const scope =
-      record.scope === undefined || record.scope === null
-        ? undefined
-        : normalizeTransactionStatusScope(record.scope, `${context}.scope`, "global");
     let intervalMs = DEFAULT_TX_STATUS_POLL_INTERVAL_MS;
     if (record.intervalMs !== undefined && record.intervalMs !== null) {
       intervalMs = ToriiClient._normalizeUnsignedInteger(
@@ -12058,15 +12098,24 @@ export class ToriiClient {
       }
       onStatus = record.onStatus;
     }
+    const failureSet = normalizeStatusSet(
+      record.failureStatuses,
+      DEFAULT_FAILURE_STATUSES,
+    );
+    if (failureSet.has("Applied")) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.failureStatuses cannot classify Applied as failure`,
+        `${context}.failureStatuses`,
+      );
+    }
     return {
       signal,
       intervalMs,
       timeoutMs,
       maxAttempts,
-      successSet: normalizeStatusSet(record.successStatuses, DEFAULT_SUCCESS_STATUSES),
-      failureSet: normalizeStatusSet(record.failureStatuses, DEFAULT_FAILURE_STATUSES),
+      failureSet,
       onStatus,
-      scope,
     };
   }
 
@@ -21090,15 +21139,14 @@ function toBuffer(value) {
 
 function normalizeByteArray(value, context) {
   const bytes = value.map((entry, index) => {
-    const numeric = Number(entry);
-    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 255) {
+    if (!Number.isInteger(entry) || entry < 0 || entry > 255) {
       throw createValidationError(
         ValidationErrorCode.VALUE_OUT_OF_RANGE,
         `${context}[${index}] must be an integer between 0 and 255`,
         `${context}[${index}]`,
       );
     }
-    return numeric;
+    return entry;
   });
   return Buffer.from(bytes);
 }
@@ -29649,6 +29697,91 @@ function assertPipelineTransactionStatusMatchesHash(payload, expectedHash, conte
   return payload;
 }
 
+function classifyPipelineTransactionStatusResolution(
+  payload,
+  expectedHash,
+  context,
+) {
+  const record = ensureRecord(payload, context);
+  const observedHash = normalizeHex32String(record.hash, `${context}.hash`);
+  if (observedHash !== expectedHash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.hash does not match requested transaction ${expectedHash}`,
+      `${context}.hash`,
+    );
+  }
+  if (record.scope !== "global") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.scope must be global`,
+      `${context}.scope`,
+    );
+  }
+  if (typeof record.summary !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.summary must be a string`,
+      `${context}.summary`,
+    );
+  }
+  const status = ensureRecord(record.status, `${context}.status`);
+  const kind = status.kind;
+  if (
+    typeof kind !== "string" ||
+    !AUTHORITATIVE_PIPELINE_STATUS_KINDS.has(kind)
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.status.kind is missing or unsupported`,
+      `${context}.status.kind`,
+    );
+  }
+  const resolvedFrom = record.resolved_from;
+  if (typeof resolvedFrom !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.resolved_from must be a string`,
+      `${context}.resolved_from`,
+    );
+  }
+  if (!["queue", "cache", "state"].includes(resolvedFrom)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.resolved_from is unsupported`,
+      `${context}.resolved_from`,
+    );
+  }
+  if (kind === "Applied") {
+    if (
+      !Number.isSafeInteger(status.block_height) ||
+      status.block_height <= 0
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} Applied status must have a positive block height`,
+        `${context}.status`,
+      );
+    }
+    if (resolvedFrom !== "cache" && resolvedFrom !== "state") {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} Applied status must be cache- or state-resolved`,
+        `${context}.resolved_from`,
+      );
+    }
+  } else if (kind === "Rejected" || kind === "Expired") {
+    if (resolvedFrom !== "cache" && resolvedFrom !== "state") {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} terminal failure must be cache- or state-resolved`,
+        `${context}.resolved_from`,
+      );
+    }
+  }
+  return { kind, resolvedFrom };
+}
+
 function normalizePipelinePreflight(payload, context = "pipeline preflight response") {
   const record = ensureRecord(payload ?? {}, context);
   const sumeragi = ensureRecord(record.sumeragi, `${context}.sumeragi`);
@@ -30832,7 +30965,7 @@ function decodeDaDigestTuple(value, expectedLength, name) {
   if (bytes.length !== expectedLength) {
     throw new TypeError(`${name} must contain ${expectedLength} entries`);
   }
-  const buffer = Buffer.from(bytes);
+  const buffer = normalizeByteArray(bytes, name);
   if (buffer.length !== expectedLength) {
     throw new TypeError(`${name} must decode to ${expectedLength} bytes`);
   }

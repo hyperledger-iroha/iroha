@@ -2130,7 +2130,9 @@ pub enum PrivacyAggregateWorkerError {
     #[error("privacy aggregate differential privacy requires hidden cycle PRF output")]
     MissingCyclePrfOutput,
     /// Hidden PRF output was supplied for a policy that does not use DP.
-    #[error("privacy aggregate cycle PRF output is forbidden when differential privacy is disabled")]
+    #[error(
+        "privacy aggregate cycle PRF output is forbidden when differential privacy is disabled"
+    )]
     UnexpectedCyclePrfOutput,
     /// The governed epsilon/cap parameters would exceed the bounded exact sampler policy.
     #[error(
@@ -2302,15 +2304,14 @@ fn build_population_aggregate(
     let source_subject_count = distinct_subject_count(events);
 
     let aggregate_id = aggregate_id(&config.aggregate_id_prefix, &population);
-    let source_payload_digest =
-        source_payload_digest(
-            config,
-            cycle_prf_output,
-            &population,
-            events,
-            suppressed_count,
-            policy_digest,
-        );
+    let source_payload_digest = source_payload_digest(
+        config,
+        cycle_prf_output,
+        &population,
+        events,
+        suppressed_count,
+        policy_digest,
+    );
     let published_metrics = metrics
         .into_iter()
         .map(|(key, (unit, value))| {
@@ -2447,8 +2448,7 @@ fn apply_metric_noise(
         return u64::try_from(value)
             .map_err(|_| PrivacyAggregateWorkerError::MetricArithmeticOverflow);
     };
-    let prf_output = cycle_prf_output
-        .ok_or(PrivacyAggregateWorkerError::MissingCyclePrfOutput)?;
+    let prf_output = cycle_prf_output.ok_or(PrivacyAggregateWorkerError::MissingCyclePrfOutput)?;
     let epsilon_numerator = config.privacy.epsilon_numerator.ok_or(
         PrivacyAggregateWorkerError::InvalidPrivacyParameters {
             message: "epsilon_numerator is required for exact discrete-Laplace noise".to_string(),
@@ -2603,10 +2603,10 @@ fn validate_discrete_laplace_parameters(
     Ok(())
 }
 
-fn noise_randomness_commitment(seed: &[u8; 32]) -> [u8; 32] {
+fn noise_randomness_commitment(prf_output: &[u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NOISE_RANDOMNESS_COMMITMENT_DOMAIN_V1);
-    hasher.update(seed);
+    hasher.update(prf_output);
     *hasher.finalize().as_bytes()
 }
 
@@ -3675,6 +3675,43 @@ mod tests {
         assert_eq!(
             tampered.validate(),
             Err(PrivacyCompositionBudgetError::InvalidChargeChain)
+        );
+    }
+
+    #[test]
+    fn privacy_cycle_prf_request_binds_policy_and_exact_window() {
+        let window = PrivacyAggregateCycleWindow {
+            cycle_start_unix: 100,
+            cycle_end_unix: 200,
+            due_at_unix: 210,
+        };
+        let request =
+            PrivacyCyclePrfRequestV1::new([0xC0; 32], window).expect("canonical PRF request");
+
+        assert_eq!(request.version(), PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1);
+        assert_eq!(request.policy_digest(), [0xC0; 32]);
+        assert_eq!(request.cycle_id(), privacy_aggregate_cycle_id(window));
+        assert_eq!(request.cycle_start_unix(), 100);
+        assert_eq!(request.cycle_end_unix(), 200);
+        assert_eq!(request.due_at_unix(), 210);
+
+        let other_policy =
+            PrivacyCyclePrfRequestV1::new([0xC1; 32], window).expect("other policy request");
+        let other_window = PrivacyCyclePrfRequestV1::new(
+            [0xC0; 32],
+            PrivacyAggregateCycleWindow {
+                cycle_start_unix: 200,
+                cycle_end_unix: 300,
+                due_at_unix: 310,
+            },
+        )
+        .expect("other window request");
+        assert_ne!(request.binding_digest(), other_policy.binding_digest());
+        assert_ne!(request.cycle_id(), other_window.cycle_id());
+        assert_ne!(request.binding_digest(), other_window.binding_digest());
+        assert_eq!(
+            PrivacyCyclePrfRequestV1::new([0; 32], window),
+            Err(PrivacyCyclePrfRequestErrorV1::MissingPolicyDigest)
         );
     }
 

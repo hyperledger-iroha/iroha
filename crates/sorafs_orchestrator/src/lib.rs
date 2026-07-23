@@ -1523,7 +1523,14 @@ pub mod bindings {
                             })
                         })
                         .transpose()?
-                        .map(|value| value as u32);
+                        .map(|value| {
+                            u32::try_from(value).map_err(|_| {
+                                ConfigJsonError::new(format!(
+                                    "relay_path_hints[{index}].avg_rtt_ms exceeds u32::MAX"
+                                ))
+                            })
+                        })
+                        .transpose()?;
                     let region = obj
                         .get("region")
                         .map(|value| {
@@ -1545,10 +1552,24 @@ pub mod bindings {
                             })
                         })
                         .transpose()?
-                        .map(|value| value as u32);
+                        .map(|value| {
+                            u32::try_from(value).map_err(|_| {
+                                ConfigJsonError::new(format!(
+                                    "relay_path_hints[{index}].asn exceeds u32::MAX"
+                                ))
+                            })
+                        })
+                        .transpose()?;
                     let validator_lane = obj
                         .get("validator_lane")
-                        .and_then(json::Value::as_bool)
+                        .map(|value| {
+                            value.as_bool().ok_or_else(|| {
+                                ConfigJsonError::new(format!(
+                                    "relay_path_hints[{index}].validator_lane must be a boolean"
+                                ))
+                            })
+                        })
+                        .transpose()?
                         .unwrap_or(false);
                     let hint = RelayPathHint::from_hex(
                         relay_id_hex,
@@ -1923,7 +1944,14 @@ pub mod bindings {
                         .transpose()?;
                     let validator_lane = obj
                         .get("validator_lane")
-                        .and_then(Value::as_bool)
+                        .map(|value| {
+                            value.as_bool().ok_or_else(|| {
+                                ConfigJsonError::new(format!(
+                                    "relay_path_hints[{index}].validator_lane must be a boolean"
+                                ))
+                            })
+                        })
+                        .transpose()?
                         .unwrap_or(false);
 
                     let hint =
@@ -7495,6 +7523,42 @@ mod tests {
     }
 
     #[test]
+    fn config_json_rejects_invalid_relay_hint_boundaries() {
+        let overflow = u64::from(u32::MAX) + 1;
+        for (field, invalid, expected_error) in [
+            (
+                "validator_lane",
+                Value::from("true"),
+                "validator_lane must be a boolean",
+            ),
+            (
+                "avg_rtt_ms",
+                Value::from(overflow),
+                "avg_rtt_ms exceeds u32::MAX",
+            ),
+            ("asn", Value::from(overflow), "asn exceeds u32::MAX"),
+        ] {
+            let hint = Value::Object(Map::from_iter([
+                ("relay_id_hex".into(), Value::from("aa".repeat(32))),
+                (field.into(), invalid),
+            ]));
+            let value = Value::Object(Map::from_iter([(
+                "relay_path_hints".into(),
+                Value::Array(vec![hint]),
+            )]));
+
+            let err = match config_from_json(&value) {
+                Ok(_) => panic!("invalid relay hint must be rejected"),
+                Err(err) => err,
+            };
+            assert!(
+                err.to_string().contains(expected_error),
+                "unexpected error for {field}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn guard_policy_reports_deficit_when_missing_pq() {
         let mut summary = PolicySummary::new(AnonymityPolicy::GuardPq, 3, 1);
         summary.update_selected_counts(3, 0);
@@ -10065,6 +10129,48 @@ mod tests {
         assert_eq!(parsed_hint.region.as_deref(), Some("eu-west"));
         assert_eq!(parsed_hint.asn, Some(64500));
         assert!(parsed_hint.validator_lane);
+    }
+
+    #[test]
+    fn config_json_defaults_absent_validator_lane_to_false() {
+        let mut value = bindings::config_to_json(&OrchestratorConfig::default());
+        value
+            .as_object_mut()
+            .expect("config JSON should be an object")
+            .insert(
+                "relay_path_hints".into(),
+                Value::Array(vec![Value::Object(Map::from_iter([(
+                    "relay_id_hex".into(),
+                    Value::from("aa".repeat(32)),
+                )]))]),
+            );
+
+        let parsed = bindings::config_from_json(&value).expect("parse relay path hint");
+        assert_eq!(parsed.relay_path_hints.len(), 1);
+        assert!(!parsed.relay_path_hints[0].validator_lane);
+    }
+
+    #[test]
+    fn config_json_rejects_non_boolean_validator_lane() {
+        for invalid in [Value::from("true"), Value::from(1)] {
+            let mut value = bindings::config_to_json(&OrchestratorConfig::default());
+            value
+                .as_object_mut()
+                .expect("config JSON should be an object")
+                .insert(
+                    "relay_path_hints".into(),
+                    Value::Array(vec![Value::Object(Map::from_iter([
+                        ("relay_id_hex".into(), Value::from("aa".repeat(32))),
+                        ("validator_lane".into(), invalid),
+                    ]))]),
+                );
+
+            let err = match bindings::config_from_json(&value) {
+                Ok(_) => panic!("non-boolean validator lane must be rejected"),
+                Err(err) => err,
+            };
+            assert!(err.to_string().contains("validator_lane must be a boolean"));
+        }
     }
 
     #[test]

@@ -81,10 +81,10 @@ object TransferWirePayloadEncoder {
 
     /**
      * Encodes an `AccountId` bare payload using the same layout expected by transaction
-     * instruction fields.
+     * instruction fields and larger authenticated compact-Norito structures.
      */
     @JvmStatic
-    internal fun encodeAccountIdPayload(accountId: String): ByteArray {
+    fun encodeAccountIdPayload(accountId: String): ByteArray {
         val parsed = AccountId.parse(accountId)
         val encoder = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
         AccountIdAdapter().encode(encoder, parsed)

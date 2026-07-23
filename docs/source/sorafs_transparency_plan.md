@@ -120,7 +120,18 @@ moderation ledger publication service described by the original plan.
   composition budget. Delta is fixed at zero. `sorafs_node::StorageConfig`
   validates and projects that single production policy, and
   `NodeHandle::publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
-  accepts only the runtime threshold-PRF output and predecessor block hash.
+  accepts only the evaluation timestamp and predecessor block hash.
+- Differential-privacy publication requires a deployment-owned
+  `PrivacyCyclePrfProviderV1`. Node startup fails closed when the configured
+  aggregate policy requires noise and no provider is injected. For every due
+  window, including catch-up windows, the node constructs a fresh canonical
+  request bound to the governed policy digest plus the exact cycle id, start,
+  end, and due timestamps. All-zero outputs and fixed provider failure classes
+  fail closed without exposing provider diagnostics; provider shares, seeds,
+  and raw outputs never enter configuration, requests, logs, or durable state.
+  Only the domain-separated output commitment enters the public aggregate
+  metadata and source digest. The standard daemon does not ship a file- or
+  environment-backed substitute for the production threshold service.
 - Torii exposes
   `/v1/sorafs/transparency/privacy-aggregates/source-events` for
   canonical-authenticated local aggregate source-event ingestion. The handler
@@ -132,10 +143,11 @@ moderation ledger publication service described by the original plan.
   `/v1/sorafs/transparency/privacy-aggregates/publish-due` for
   canonical-authenticated local configured aggregate publication. The handler
   evaluates the configured schedule, catches up stale due event-backed windows,
-  accepts only an optional hidden threshold-PRF output and previous block hash,
-  uses exact integer discrete-Laplace sampling, and atomically commits the
-  composition-budget charge, processed-cycle state, source-event removal, and
-  durable Governance DAG outbox entry. It returns structured
+  rejects caller-supplied policy or PRF material, accepts only `now_unix` and an
+  optional previous block hash, obtains fresh hidden randomness through the
+  runtime provider, uses exact integer discrete-Laplace sampling, and atomically
+  commits the composition-budget charge, processed-cycle state, source-event
+  removal, and durable Governance DAG outbox entry. It returns structured
   published/skipped/already-published outcomes with cycle hashes when a cycle is
   published.
 - `iroha::Client` and
@@ -408,7 +420,7 @@ verify the same canonical payloads used for publication.
 | Ledger builder | Builds cycle headers, entry roots, proofs, and publisher signatures. | V1 payload/proof/publication helpers shipped in the data model; local source-entry cycle builder, local node publication to filesystem/CAR, signed runtime DAG external payloads, payload-free publication readback canary tooling, and the rollout evidence verifier are shipped; deployed anchoring and captured service rollout evidence remain open. |
 | Proof API | Serves cycle metadata, entries, inclusion proofs, proof-token issuance indexes, explorer snapshots, and token verification. | Local Torii readback for published cycles, entry proofs, proof-token issuance indexes, explorer snapshots, and proof-token verification is shipped with bounded list/explorer arrays, local verifier throttling, local browser UI route, client/CLI readback helpers, payload-free explorer canary tooling, and rollout evidence summary validation; deployed service hardening and captured public rollout evidence are not shipped. |
 | Receipt explorer | Public UI for browsing cycles and verifying entries. | Local explorer snapshot API, static Torii browser UI, CLI readback bridge, `iroha sorafs transparency explorer-canary` rollout-evidence tooling, and summary-gate validation are shipped; captured deployed public rollout evidence is not shipped. |
-| DP aggregator | Publishes SFM-4c privacy-safe moderation aggregates. | Canonical aggregate payloads, ledger-entry conversion, node-side cycle publication bridge, local source-event suppression/noise worker, config-backed due-cycle scheduler API, canonical-authenticated Torii source-event ingestion, a canonical-authenticated local publish-due trigger, client/CLI producer plus scheduler trigger tooling, privacy aggregate canary evidence tooling, and rollout evidence summary validation are shipped; captured deployed source-event producer and scheduler rollout evidence remains open. |
+| DP aggregator | Publishes SFM-4c privacy-safe moderation aggregates. | Canonical aggregate payloads, ledger-entry conversion, node-side cycle publication bridge, local source-event suppression/noise worker, config-backed due-cycle scheduler API, fail-closed runtime threshold-PRF boundary with exact per-window request binding and commitment-only publication, canonical-authenticated Torii source-event ingestion, a caller-seed-free authenticated publish-due trigger, client/CLI producer plus scheduler trigger tooling, privacy aggregate canary evidence tooling, and rollout evidence summary validation are shipped; a reviewed production threshold-service adapter plus captured deployed source-event producer and scheduler rollout evidence remain open. |
 
 Document only the local `/v1/sorafs/transparency/*` readback,
 canonical-authenticated source-entry ingest, privacy aggregate source-event
@@ -437,6 +449,9 @@ shipped until the live builder, deployment, and explorer paths exist.
   client/CLI producer and scheduler trigger tooling,
   `NodeHandle::record_privacy_aggregate_source_event(...)`, and
   `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`.
+  Inject the reviewed runtime threshold-PRF service adapter on every
+  DP-enabled node; no file, environment, request, or deterministic fallback is
+  permitted.
 - Finish deployed proof API hardening and capture public receipt explorer
   rollout evidence by running the shipped `iroha sorafs transparency
   explorer-canary` tooling beyond the local token-verifier throttle, bounded

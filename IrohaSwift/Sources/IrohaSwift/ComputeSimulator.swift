@@ -47,7 +47,22 @@ public enum ComputeSimulator {
             throw ComputeSimulatorError.missingRoute
         }
         let payloadHash = hashLiteral(for: payload)
-        let expectedHash = (call["request"] as? [String: Any])?["payload_hash"] as? String
+        let expectedHash: String?
+        if let rawRequest = call["request"] {
+            guard let request = rawRequest as? [String: Any] else {
+                throw ComputeSimulatorError.decodeFailure("request must be an object")
+            }
+            if let rawExpectedHash = request["payload_hash"] {
+                guard let parsed = rawExpectedHash as? String else {
+                    throw ComputeSimulatorError.decodeFailure("request.payload_hash must be a string")
+                }
+                expectedHash = parsed
+            } else {
+                expectedHash = nil
+            }
+        } else {
+            expectedHash = nil
+        }
         if let expectedHash, expectedHash != payloadHash {
             throw ComputeSimulatorError.invalidPayloadHash(expected: expectedHash, actual: payloadHash)
         }
@@ -70,7 +85,15 @@ public enum ComputeSimulator {
         } else {
             maxResponseBytes = 0
         }
-        let entrypoint = route["entrypoint"] as? String ?? "echo"
+        let entrypoint: String
+        if let rawEntrypoint = route["entrypoint"] {
+            guard let parsed = rawEntrypoint as? String else {
+                throw ComputeSimulatorError.decodeFailure("route.entrypoint must be a string")
+            }
+            entrypoint = parsed
+        } else {
+            entrypoint = "echo"
+        }
         let response = try runEntrypoint(
             name: entrypoint,
             payload: payload,

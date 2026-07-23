@@ -6,10 +6,12 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Any, Callable
 
@@ -619,6 +621,55 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         bundle.flush_manifest()
         with self.assertRaisesRegex(VALIDATOR.EvidenceError, "normalized relative"):
             VALIDATOR.validate_evidence(bundle.manifest_path)
+
+    def test_rejects_unexpected_file_and_directory_inventory(self) -> None:
+        unexpected = self.bundle.root / "unexpected.txt"
+        unexpected.write_text("not referenced\n", encoding="utf-8")
+        self.assert_invalid("file inventory.*unexpected")
+
+        unexpected.unlink()
+        (self.bundle.root / "empty").mkdir()
+        self.assert_invalid("directory inventory.*unexpected")
+
+    def test_rejects_bundle_symlinks(self) -> None:
+        link = self.bundle.root / "linked-artifact"
+        try:
+            link.symlink_to(self.bundle.manifest_path)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"symlinks unavailable: {error}")
+        self.assert_invalid("contains a symlink")
+
+    def test_rejects_bundle_hardlink_aliases(self) -> None:
+        alias = self.bundle.root / "manifest-alias"
+        try:
+            os.link(self.bundle.manifest_path, alias)
+        except OSError as error:
+            self.skipTest(f"hard links unavailable: {error}")
+        self.assert_invalid("hard-link alias")
+
+    def test_rejects_bundle_nonregular_entries(self) -> None:
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFOs unavailable")
+        fifo = self.bundle.root / "unexpected-fifo"
+        os.mkfifo(fifo)
+        self.assert_invalid("nonregular entry")
+
+    def test_rejects_unsafe_bundle_path_components(self) -> None:
+        unsafe = self.bundle.root / "unsafe\nname"
+        unsafe.write_text("unsafe\n", encoding="utf-8")
+        self.assert_invalid("unsafe path component")
+
+    def test_rejects_oversize_files_before_hashing(self) -> None:
+        with mock.patch.object(VALIDATOR, "MAX_BUNDLE_FILE_BYTES", 1):
+            self.assert_invalid("file exceeds 1 bytes")
+
+    def test_rejects_excessive_file_count(self) -> None:
+        with mock.patch.object(VALIDATOR, "MAX_BUNDLE_FILE_COUNT", 1):
+            self.assert_invalid("file-count limit 1")
+
+    def test_rejects_excessive_aggregate_size(self) -> None:
+        with mock.patch.object(VALIDATOR, "MAX_BUNDLE_TOTAL_BYTES", 1):
+            self.assert_invalid("aggregate size limit 1 bytes")
 
     def test_rejects_duplicate_json_object_keys(self) -> None:
         path = self.bundle.raw_path(1, "one_lane")

@@ -1059,6 +1059,14 @@ diagnostics must be added here or mapped to a ledger row before release.
   conflicting generic consensus-message pair before enabling penalties. It is
   not specific to lane/autoscale/merge/Native AMX behavior and remains in the
   generic consensus proof ledger.
+- **Generic Decision fetch refinement:** the TODO in
+  `SumeragiV2CertifiedRequestHashAuthorityProofs.tla` concerns the concrete
+  `ExecuteDecisionFetch` trace mapping for generic historical Decision body
+  recovery. The corresponding debt is already owned by
+  `ProgressWitnessProductionRefinementObligation`; it does not model lane
+  reservations, autonomous merge carriers, Native participant evidence,
+  autoscale, drain, or retirement and is therefore outside this multilane
+  closure ledger.
 
 Out-of-scope classification means these TODOs do not block multilane closure.
 It does not mark them implemented, safe for removal, or release-evidenced.

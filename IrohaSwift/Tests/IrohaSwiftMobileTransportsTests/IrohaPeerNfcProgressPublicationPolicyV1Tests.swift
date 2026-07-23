@@ -183,8 +183,12 @@ final class IrohaPeerNfcRetryLimitsBoxV1Tests: XCTestCase {
             "Sources/IrohaSwiftMobileTransports/IrohaPeerNfcCoreNFCV1.swift"
         )
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let startupRetryStart = try XCTUnwrap(source.range(
+            of: "if IrohaPeerNfcStartupResponseRetryPolicyV1"
+        ))
         let catchStart = try XCTUnwrap(source.range(
-            of: "catch let error as IrohaPeerNfcCoreNFCErrorV1"
+            of: "catch let error as IrohaPeerNfcCoreNFCErrorV1",
+            range: startupRetryStart.upperBound..<source.endIndex
         ))
         let genericCatch = try XCTUnwrap(source.range(
             of: "} catch {",
@@ -198,6 +202,12 @@ final class IrohaPeerNfcRetryLimitsBoxV1Tests: XCTestCase {
         XCTAssertTrue(typedCatch.contains("throw error"))
         XCTAssertTrue(source.contains(
             "catch is IrohaPeerNfcRetryableTransportErrorV1"
+        ))
+        XCTAssertTrue(source.contains(
+            ".readerTransceiveErrorTagResponseError"
+        ))
+        XCTAssertTrue(source.contains(
+            "IrohaPeerNfcStartupResponseRetryPolicyV1"
         ))
         XCTAssertTrue(source.contains(
             "Application preparation and checkpoint persistence"
@@ -398,6 +408,30 @@ final class IrohaPeerNfcTerminalEventGateV1Tests: XCTestCase {
 }
 
 final class IrohaPeerNfcRetryGateV1Tests: XCTestCase {
+    func testOnlyInitialSelectNotReadyResponsesAreRetryable() {
+        for status in [
+            IrohaPeerNfcStatusWordV1.notFound,
+            .conditionsNotSatisfied,
+        ] {
+            XCTAssertTrue(IrohaPeerNfcStartupResponseRetryPolicyV1.shouldRetry(
+                IrohaPeerNfcAPDUResponseV1(statusWord: status),
+                for: .selectApplication
+            ))
+            XCTAssertFalse(IrohaPeerNfcStartupResponseRetryPolicyV1.shouldRetry(
+                IrohaPeerNfcAPDUResponseV1(statusWord: status),
+                for: .getInfo
+            ))
+        }
+        XCTAssertFalse(IrohaPeerNfcStartupResponseRetryPolicyV1.shouldRetry(
+            IrohaPeerNfcAPDUResponseV1(statusWord: .success),
+            for: .selectApplication
+        ))
+        XCTAssertFalse(IrohaPeerNfcStartupResponseRetryPolicyV1.shouldRetry(
+            IrohaPeerNfcAPDUResponseV1(statusWord: .storageFailure),
+            for: .selectApplication
+        ))
+    }
+
     func testPublicRetryPolicyBoundsAreFinite() {
         XCTAssertTrue(IrohaPeerNfcReaderRetryPolicyV1.areValid(
             maximumContactAttempts: 1,
@@ -464,6 +498,221 @@ final class IrohaPeerNfcRetryGateV1Tests: XCTestCase {
         XCTAssertFalse(gate.mayRedetect())
         XCTAssertFalse(gate.beginContactAttempt())
         XCTAssertEqual(gate.redetectionTimeoutNanoseconds, 3_000_000_000)
+    }
+}
+
+final class IrohaPeerNfcStartupRecoveryV1Tests: XCTestCase {
+    func testFirstSelectNotReadyThenOneOperationCompletesWithOneDurableDebit()
+        async throws {
+        for startupStatus in [
+            IrohaPeerNfcStatusWordV1.notFound,
+            .conditionsNotSatisfied,
+        ] {
+            let request = try IrohaPeerWireMessageV1(
+                profile: .offlineNote,
+                kind: .receiveRequest,
+                schemaVersion: 1,
+                canonicalPayload: Data(repeating: 0x31, count: 96)
+            )
+            let payment = try IrohaPeerWireMessageV1(
+                profile: .offlineNote,
+                kind: .payment,
+                schemaVersion: 1,
+                canonicalPayload: Data(repeating: 0x32, count: 192)
+            )
+            let acknowledgement = try IrohaPeerWireMessageV1(
+                profile: .offlineNote,
+                kind: .acknowledgement,
+                schemaVersion: 1,
+                canonicalPayload: Data(repeating: 0x33, count: 80)
+            )
+            let limits = IrohaPeerNfcLimitsV1(
+                maximumReadChunkBytes: 240,
+                maximumWriteChunkBytes: 203
+            )
+            let harness = try IrohaPeerNfcStartupRecoveryHarnessV1(
+                startupStatus: startupStatus,
+                sessionID: Data((1...IrohaPeerNfcV1.sessionIDBytes).map(UInt8.init)),
+                request: request,
+                payment: payment,
+                acknowledgement: acknowledgement,
+                limits: limits
+            )
+            let retryGate = IrohaPeerNfcRetryGateV1(.init(
+                maximumContactAttempts: 3,
+                redetectionTimeoutMilliseconds: 3_000
+            ))
+            var result: IrohaPeerNfcReaderExchangeResultV1?
+
+            while retryGate.beginContactAttempt() {
+                do {
+                    result = try await IrohaPeerNfcReaderExchangeV1.run(
+                        restoredCheckpoint: await harness.durableCheckpoint(),
+                        profilePolicy: .init(profile: .offlineNote),
+                        limits: limits,
+                        transceive: { command in
+                            let response = try await harness.transceive(command)
+                            if IrohaPeerNfcStartupResponseRetryPolicyV1
+                                .shouldRetry(response, for: command) {
+                                throw IrohaPeerNfcStartupRecoveryFailureV1.retryContact
+                            }
+                            return response
+                        },
+                        loadOrCreateDurableCheckpoint: { info, receivedRequest in
+                            try await harness.loadOrCreateCheckpoint(
+                                info: info,
+                                request: receivedRequest
+                            )
+                        },
+                        updateDurableCheckpoint: { checkpoint in
+                            await harness.updateCheckpoint(checkpoint)
+                        }
+                    )
+                    break
+                } catch IrohaPeerNfcStartupRecoveryFailureV1.retryContact {
+                    XCTAssertTrue(retryGate.mayRedetect())
+                }
+            }
+
+            let completed = try XCTUnwrap(result)
+            let snapshot = await harness.snapshot()
+            XCTAssertEqual(completed.acknowledgement, acknowledgement)
+            XCTAssertEqual(completed.checkpoint.durableAcknowledgement, acknowledgement)
+            XCTAssertEqual(snapshot.selectCount, 2)
+            XCTAssertEqual(snapshot.checkpointCreationCount, 1)
+            XCTAssertEqual(snapshot.durableDebitCount, 1)
+            XCTAssertEqual(snapshot.receiverDurableCommitCount, 1)
+            XCTAssertEqual(snapshot.phase, .complete)
+        }
+    }
+}
+
+private enum IrohaPeerNfcStartupRecoveryFailureV1: Error {
+    case retryContact
+}
+
+private actor IrohaPeerNfcStartupRecoveryHarnessV1 {
+    struct Snapshot: Sendable {
+        let selectCount: Int
+        let checkpointCreationCount: Int
+        let durableDebitCount: Int
+        let receiverDurableCommitCount: Int
+        let phase: IrohaPeerNfcPhaseV1
+    }
+
+    private let startupStatus: IrohaPeerNfcStatusWordV1
+    private var receiver: IrohaPeerNfcReceiverSessionV1
+    private let payment: IrohaPeerWireMessageV1
+    private let acknowledgement: IrohaPeerWireMessageV1
+    private let limits: IrohaPeerNfcLimitsV1
+    private var checkpoint: Data?
+    private var selectCount = 0
+    private var checkpointCreationCount = 0
+    private var durableDebitCount = 0
+    private var receiverDurableCommitCount = 0
+
+    init(
+        startupStatus: IrohaPeerNfcStatusWordV1,
+        sessionID: Data,
+        request: IrohaPeerWireMessageV1,
+        payment: IrohaPeerWireMessageV1,
+        acknowledgement: IrohaPeerWireMessageV1,
+        limits: IrohaPeerNfcLimitsV1
+    ) throws {
+        self.startupStatus = startupStatus
+        receiver = try IrohaPeerNfcReceiverSessionV1(
+            sessionID: sessionID,
+            receiveRequest: request.encoded,
+            profilePolicy: .init(profile: .offlineNote),
+            limits: limits
+        )
+        self.payment = payment
+        self.acknowledgement = acknowledgement
+        self.limits = limits
+    }
+
+    func transceive(
+        _ command: IrohaPeerNfcCommandV1
+    ) throws -> IrohaPeerNfcAPDUResponseV1 {
+        if case .selectApplication = command {
+            selectCount += 1
+            if selectCount == 1 {
+                return IrohaPeerNfcAPDUResponseV1(statusWord: startupStatus)
+            }
+        }
+        if case .beginPayment = command {
+            switch try receiver.preparePaymentAdmission(command) {
+            case .alreadyAdmitted:
+                break
+            case .requiresDurableAdmission(let context):
+                try receiver.installPaymentAdmission(
+                    IrohaPeerNfcDurablePaymentAdmissionV1(context: context)
+                )
+            }
+            return IrohaPeerNfcAPDUResponseV1(statusWord: .success)
+        }
+        if case .commit = command {
+            switch try receiver.prepareCommit(command) {
+            case .alreadyCommitted:
+                break
+            case .requiresDurableCommit(let context):
+                receiverDurableCommitCount += 1
+                try receiver.installDurableAcknowledgement(
+                    IrohaPeerNfcDurableAcknowledgementV1(
+                        context: context,
+                        acknowledgement: acknowledgement.encoded,
+                        limits: limits
+                    )
+                )
+            }
+            return IrohaPeerNfcAPDUResponseV1(statusWord: .success)
+        }
+        return IrohaPeerNfcAPDUResponseV1(
+            data: try receiver.handle(command),
+            statusWord: .success
+        )
+    }
+
+    func loadOrCreateCheckpoint(
+        info: IrohaPeerNfcInfoV1,
+        request: IrohaPeerWireMessageV1
+    ) throws -> IrohaPeerNfcSenderCheckpointV1 {
+        if let checkpoint {
+            return try IrohaPeerNfcSenderCheckpointV1.decode(
+                checkpoint,
+                profilePolicy: .init(profile: .offlineNote),
+                limits: limits
+            )
+        }
+        checkpointCreationCount += 1
+        let created = try IrohaPeerNfcSenderCheckpointV1(
+            sessionID: info.identity.sessionID,
+            receiveRequest: request.encoded,
+            payment: payment.encoded,
+            profilePolicy: .init(profile: .offlineNote),
+            limits: limits
+        )
+        checkpoint = created.encoded
+        durableDebitCount += 1
+        return created
+    }
+
+    func updateCheckpoint(_ checkpoint: Data) {
+        self.checkpoint = Data(checkpoint)
+    }
+
+    func durableCheckpoint() -> Data? {
+        checkpoint.map { Data($0) }
+    }
+
+    func snapshot() -> Snapshot {
+        Snapshot(
+            selectCount: selectCount,
+            checkpointCreationCount: checkpointCreationCount,
+            durableDebitCount: durableDebitCount,
+            receiverDurableCommitCount: receiverDurableCommitCount,
+            phase: receiver.phase
+        )
     }
 }
 

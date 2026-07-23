@@ -152,7 +152,9 @@ def fixture_writer(tmp_path: Path) -> Path:
     project = tmp_path / "writer-project"
     scripts = project / "scripts"
     formal = scripts / "formal"
+    nexus = scripts / "nexus"
     formal.mkdir(parents=True)
+    nexus.mkdir()
     writer = scripts / SCRIPT.name
     shutil.copy2(SCRIPT, writer)
     shutil.copy2(
@@ -162,6 +164,10 @@ def fixture_writer(tmp_path: Path) -> Path:
     shutil.copy2(
         ROOT_DIR / "scripts" / "sumeragi_v2_localnet_manifest.py",
         scripts / "sumeragi_v2_localnet_manifest.py",
+    )
+    shutil.copy2(
+        ROOT_DIR / "scripts" / "nexus" / "validate_multilane_scaling_evidence.py",
+        nexus / "validate_multilane_scaling_evidence.py",
     )
     fixture_cargo = project / ".cargo"
     fixture_cargo.mkdir()
@@ -690,6 +696,365 @@ def make_bootstrap_evidence(
         ],
         "bootstrap_identity_ssh_keygen": identity_paths["ssh_keygen"],
         "bootstrap_identity_revocation": identity_paths["ssh_revocation"],
+    }
+
+
+def make_scaling_evidence(
+    tmp_path: Path, *, head: str, sealed_manifest: str
+) -> dict[str, Path]:
+    root = tmp_path / "scaling"
+    inputs = root / "inputs"
+    tooling_dir = root / "tooling"
+    inputs.mkdir(parents=True)
+    tooling_dir.mkdir()
+
+    def write_json(path: Path, value: object) -> None:
+        path.write_text(
+            json.dumps(value, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def ref(path: Path) -> dict[str, str]:
+        return {
+            "path": path.relative_to(root).as_posix(),
+            "sha256": sha256(path),
+        }
+
+    config = inputs / "nexus_config.toml"
+    config.write_text("[nexus]\nenabled = true\n", encoding="utf-8")
+    identity = {
+        "schema": "iroha.sumeragi_v2.multilane_scaling.identity.v1",
+        "hardware": {
+            "machine_id": "receipt-contract-host",
+            "cpu_model": "Receipt Contract CPU",
+            "physical_core_count": 8,
+            "logical_core_count": 16,
+            "memory_bytes": 32_000_000_000,
+            "storage_model": "Receipt Contract NVMe",
+        },
+        "software": {
+            "os": "ContractOS",
+            "kernel": "contract-kernel",
+            "architecture": "x86_64",
+            "python_version": "3.9.contract",
+            "rustc_version": "rustc contract",
+            "source_revision": head,
+            "workspace_source_sha256": sealed_manifest,
+            "nexus_config_sha256": sha256(config),
+            "irohad_sha256": "c" * 64,
+            "iroha_cli_sha256": "d" * 64,
+        },
+    }
+    identity_path = inputs / "identity.json"
+    write_json(identity_path, identity)
+    harness = inputs / "trial_harness.sh"
+    harness.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+
+    validator_source = (
+        ROOT_DIR / "scripts" / "nexus" / "validate_multilane_scaling_evidence.py"
+    )
+    validator = tooling_dir / validator_source.name
+    shutil.copy2(validator_source, validator)
+    required_tooling = (
+        ("localnet", "scripts/deploy_localnet.sh"),
+        ("load_generator", "scripts/tx_load.py"),
+        ("nexus_load_bundle", "scripts/nexus_lane_load_test.py"),
+    )
+    tooling = []
+    for role, source_path in required_tooling:
+        source = ROOT_DIR / source_path
+        artifact = tooling_dir / source.name
+        shutil.copy2(source, artifact)
+        tooling.append(
+            {
+                "role": role,
+                "source_path": source_path,
+                "artifact": ref(artifact),
+            }
+        )
+
+    workload = {
+        "offered_load_tps": 20.0,
+        "warmup_seconds": 5.0,
+        "measurement_seconds": 20.0,
+        "min_interval_samples": 20,
+        "min_latency_samples": 100,
+        "max_offered_load_deviation_fraction": 0.01,
+    }
+    budgets = {
+        "queue_depth_max": 100,
+        "index_entries_max": 200,
+        "memory_bytes_max": 10_000,
+        "disk_bytes_max": 20_000,
+    }
+    namespace = "receipt-contract-g-scale"
+    runs = []
+    sequence = 0
+    for pair_index in range(1, 6):
+        seed = hashlib.sha256(
+            f"{namespace}:{pair_index}".encode("utf-8")
+        ).hexdigest()
+        for variant, lane_count, committed, latency in (
+            ("one_lane", 1, 100, 10.0),
+            ("four_lane", 4, 160, 12.0),
+        ):
+            sequence += 1
+            lane_ids = (
+                ["lane-a"]
+                if lane_count == 1
+                else ["lane-a", "lane-b", "lane-c", "lane-d"]
+            )
+            run_dir = root / "runs" / f"pair_{pair_index:02d}" / variant
+            support = run_dir / "support"
+            support.mkdir(parents=True)
+            lifecycle = support / "lifecycle.json"
+            metrics = support / "metrics.prom"
+            load_log = support / "tx_load.log"
+            load_manifest = support / "load_test_manifest.json"
+            write_json(lifecycle, {"active_execution_lanes": lane_ids})
+            metrics.write_text(
+                f"nexus_lane_configured_total {lane_count}\n", encoding="utf-8"
+            )
+            load_log.write_text("receipt scaling fixture\n", encoding="utf-8")
+            write_json(
+                load_manifest,
+                {
+                    "version": 1,
+                    "lanes": lane_ids,
+                    "workload_seed": seed,
+                    "inputs": {
+                        "status_file": lifecycle.name,
+                        "metrics_file": metrics.name,
+                    },
+                },
+            )
+            offered_parts = [20] * 20
+            accepted_parts = [20] * 20
+            quotient, remainder = divmod(committed, 20)
+            committed_parts = [
+                quotient + (1 if index < remainder else 0)
+                for index in range(20)
+            ]
+            samples = []
+            for index, interval_committed in enumerate(committed_parts):
+                samples.append(
+                    {
+                        "sequence": index + 1,
+                        "start_offset_seconds": float(index),
+                        "end_offset_seconds": float(index + 1),
+                        "offered_count": offered_parts[index],
+                        "accepted_count": accepted_parts[index],
+                        "committed_count": interval_committed,
+                        "commit_latencies_ms": [latency] * interval_committed,
+                        "queue_depth": 12,
+                        "index_entries": 24,
+                        "memory_bytes": 1_019,
+                        "disk_bytes": 2_019,
+                    }
+                )
+            raw = run_dir / "raw_samples.json"
+            write_json(
+                raw,
+                {
+                    "schema": "iroha.sumeragi_v2.multilane_scaling.run.v1",
+                    "pair_index": pair_index,
+                    "variant": variant,
+                    "active_execution_lanes": lane_count,
+                    "execution_lane_ids": lane_ids,
+                    "seed": seed,
+                    "identity_before": identity,
+                    "identity_after": identity,
+                    "workload": workload,
+                    "status": {
+                        "outcome": "passed",
+                        "skipped": False,
+                        "failure": None,
+                    },
+                    "summary": {
+                        "offered_count": 400,
+                        "accepted_count": 400,
+                        "committed_count": committed,
+                        "queue_depth_max": 12,
+                        "index_entries_max": 24,
+                        "memory_bytes_max": 1_019,
+                        "disk_bytes_max": 2_019,
+                    },
+                    "samples": samples,
+                    "artifacts": {
+                        "nexus_load_test_manifest": ref(load_manifest),
+                        "lifecycle_snapshot": ref(lifecycle),
+                        "metrics_snapshot": ref(metrics),
+                        "load_generator_log": ref(load_log),
+                    },
+                },
+            )
+            command_log = run_dir / "trial.log"
+            command_log.write_text("receipt scaling trial passed\n", encoding="utf-8")
+            runs.append(
+                {
+                    "sequence": sequence,
+                    "pair_index": pair_index,
+                    "variant": variant,
+                    "active_execution_lanes": lane_count,
+                    "seed": seed,
+                    "status": "passed",
+                    "skipped": False,
+                    "exit_code": 0,
+                    "raw_samples": ref(raw),
+                    "command_log": ref(command_log),
+                }
+            )
+
+    manifest = root / "scaling_evidence.json"
+    write_json(
+        manifest,
+        {
+            "schema": "iroha.sumeragi_v2.multilane_scaling.evidence.v1",
+            "generated_at_utc": "2026-07-23T12:00:00Z",
+            "pair_count": 5,
+            "seed_namespace": namespace,
+            "seed_derivation": (
+                "sha256(seed_namespace + ':' + decimal_pair_index)"
+            ),
+            "identity": ref(identity_path),
+            "configuration": ref(config),
+            "workload": workload,
+            "budgets": budgets,
+            "observation_scope": {
+                "queue": "maximum per-peer queue depth",
+                "index": "designated peer lane index entries",
+                "memory": "aggregate peer RSS",
+                "disk": "aggregate lane storage bytes",
+            },
+            "thresholds": {
+                "min_four_lane_throughput_ratio": 1.5,
+                "max_four_lane_p95_latency_ratio": 1.25,
+            },
+            "trial_harness": ref(harness),
+            "validator": ref(validator),
+            "tooling": tooling,
+            "runs": runs,
+        },
+    )
+    report = root / "validation_report.json"
+    validation = subprocess.run(
+        [
+            sys.executable,
+            str(validator_source),
+            str(manifest),
+            "--report",
+            str(report),
+            "--quiet",
+        ],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if validation.returncode != 0:
+        raise AssertionError(validation.stderr)
+    return {
+        "scaling_root": root,
+        "scaling_manifest": manifest,
+        "scaling_report": report,
+        "scaling_identity": identity_path,
+        "scaling_validator": validator,
+        "scaling_trial_log": root / runs[0]["command_log"]["path"],
+    }
+
+
+def make_g12_evidence(
+    tmp_path: Path,
+    *,
+    head: str,
+    tree: str,
+    sealed_manifest: str,
+    lock: str,
+) -> dict[str, Path | list[Path]]:
+    seed_dir = tmp_path / "g12-seed"
+    soak_dir = tmp_path / "g12-soak"
+    seed_dir.mkdir()
+    soak_dir.mkdir()
+    seed_test = (
+        "nexus::cross_dataspace_localnet::"
+        "cross_dataspace_atomic_swap_is_all_or_nothing"
+    )
+    soak_test = (
+        "nexus::cross_dataspace_localnet::"
+        "cross_dataspace_two_hour_fault_soak_preserves_multilane_application"
+    )
+
+    def passing_log(test: str, filtered: int) -> str:
+        return "\n".join(
+            (
+                "running 1 test",
+                f"test {test} ... ok",
+                "",
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+                f"{filtered} filtered out; finished in 0.01s",
+            )
+        ) + "\n"
+
+    seed_logs = []
+    summary_lines = [
+        "ordinal\tseed\tstatus\tprocess_retries\tlog_sha256\tlog"
+    ]
+    for ordinal in range(10):
+        log = seed_dir / f"seed-{ordinal:02d}.log"
+        log.write_text(passing_log(seed_test, 99), encoding="utf-8")
+        seed_logs.append(log)
+        summary_lines.append(
+            f"{ordinal}\tnexus-cross-dataspace-v1-seed-{ordinal:02d}\t"
+            f"passed\t0\t{sha256(log)}\t{log.name}"
+        )
+    seed_summary = seed_dir / "runs.tsv"
+    seed_summary.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+    seed_completion = seed_dir / "COMPLETED.tsv"
+    write_tsv(
+        seed_completion,
+        {
+            "schema_version": "1",
+            "mode": "deterministic-seed-matrix",
+            "head_commit": head,
+            "head_tree": tree,
+            "source_manifest_sha256": sealed_manifest,
+            "cargo_lock_sha256": lock,
+            "expected_runs": "10",
+            "passed_runs": "10",
+            "failed_runs": "0",
+            "process_retry_runs": "0",
+            "runs_sha256": sha256(seed_summary),
+        },
+    )
+
+    soak_log = soak_dir / "fault-soak.log"
+    soak_log.write_text(passing_log(soak_test, 7), encoding="utf-8")
+    soak_completion = soak_dir / "COMPLETED.tsv"
+    write_tsv(
+        soak_completion,
+        {
+            "schema_version": "1",
+            "mode": "two-hour-fault-soak",
+            "head_commit": head,
+            "head_tree": tree,
+            "source_manifest_sha256": sealed_manifest,
+            "cargo_lock_sha256": lock,
+            "seed": "nexus-cross-dataspace-v1-seed-00",
+            "duration_seconds": "7200",
+            "expected_runs": "1",
+            "passed_runs": "1",
+            "failed_runs": "0",
+            "process_retry_runs": "0",
+            "log_sha256": sha256(soak_log),
+        },
+    )
+    return {
+        "g12_seed_completion": seed_completion,
+        "g12_seed_summary": seed_summary,
+        "g12_seed_logs": seed_logs,
+        "g12_seed_log": seed_logs[3],
+        "g12_soak_completion": soak_completion,
+        "g12_soak_log": soak_log,
     }
 
 
@@ -1224,6 +1589,37 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     formal_verus_log.write_text(
         "fixture production Verus verification passed\n", encoding="utf-8"
     )
+    formal_multilane_apalache_evidence = (
+        formal_dir / "multilane_apalache_evidence.tsv"
+    )
+    formal_multilane_apalache_evidence.write_text(
+        "\n".join(
+            (
+                "schema_version\t1",
+                "backend\tapalache",
+                "version\t0.52.2",
+                "launcher_sha256\t"
+                "bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501898d33ea7d1da3a8cd7",
+                "jar_sha256\t"
+                "1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a",
+                f"source_manifest_sha256\t{sealed_manifest}",
+                "result_count\t3",
+                "result\tautoscale-lifecycle\tSumeragiV2AutoscaleLifecycle\t"
+                "multilane_autoscale_lifecycle_fixed.cfg\t8\tNoError\t"
+                f"{'1' * 64}\t{'2' * 64}\t{'3' * 64}",
+                "result\tnative-application-evidence\t"
+                "SumeragiV2NativeApplicationEvidence\t"
+                "multilane_native_application_evidence_fixed.cfg\t5\tNoError\t"
+                f"{'4' * 64}\t{'5' * 64}\t{'6' * 64}",
+                "result\tautonomous-reservation-carrier\t"
+                "SumeragiV2AutonomousReservationCarrier\t"
+                "multilane_autonomous_reservation_carrier_fixed.cfg\t10\tNoError\t"
+                f"{'7' * 64}\t{'8' * 64}\t{'9' * 64}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     formal_cross_tool_evidence = formal_dir / "cross_tool_evidence.json"
     formal_cross_tool_evidence.write_text(
         '{"backend_verification":true,"canonical":true}\n', encoding="utf-8"
@@ -1256,6 +1652,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "proof_evidence_sha256": sha256(formal_evidence),
             "verus_evidence_sha256": sha256(formal_verus_evidence),
             "verus_log_sha256": sha256(formal_verus_log),
+            "multilane_apalache_evidence_sha256": sha256(
+                formal_multilane_apalache_evidence
+            ),
             "cross_tool_evidence_sha256": sha256(formal_cross_tool_evidence),
             "harness_cargo_lock_sha256": sha256(formal_harness_lock),
             "formal_toolchain_sha256": sha256(formal_toolchain),
@@ -1454,8 +1853,22 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "log_sha256": sha256(taira_log),
         },
     )
+    scaling = make_scaling_evidence(
+        tmp_path,
+        head=head,
+        sealed_manifest=sealed_manifest,
+    )
+    g12 = make_g12_evidence(
+        tmp_path,
+        head=head,
+        tree=tree,
+        sealed_manifest=sealed_manifest,
+        lock=lock,
+    )
     return {
         **bootstrap,
+        **scaling,
+        **g12,
         "candidate": candidate,
         "sealed": sealed,
         "release_root": release_root,
@@ -1486,6 +1899,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "formal_evidence": formal_evidence,
         "formal_verus_evidence": formal_verus_evidence,
         "formal_verus_log": formal_verus_log,
+        "formal_multilane_apalache_evidence": formal_multilane_apalache_evidence,
         "formal_cross_tool_evidence": formal_cross_tool_evidence,
         "formal_harness_lock": formal_harness_lock,
         "formal_toolchain": formal_toolchain,
@@ -1538,6 +1952,7 @@ def run_writer(
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/formal/check_sumeragi_v2_proof_ledger.py"),
         Path("scripts/formal/sumeragi_v2_verus_evidence.py"),
+        Path("scripts/nexus/validate_multilane_scaling_evidence.py"),
         Path("scripts/check_taira_v2_soak_evidence.py"),
         Path(".cargo/config.toml"),
     ):
@@ -1606,6 +2021,12 @@ def run_writer(
             str(evidence["chaos_completion"]),
             "--taira-completion",
             str(evidence["taira_completion"]),
+            "--g12-seed-completion",
+            str(evidence["g12_seed_completion"]),
+            "--g12-fault-soak-completion",
+            str(evidence["g12_soak_completion"]),
+            "--scaling-evidence-manifest",
+            str(evidence["scaling_manifest"]),
             "--repository-root",
             str(repository_root),
             "--output",
@@ -1817,6 +2238,9 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "formal_proof_evidence": "formal_evidence",
         "formal_verus_evidence": "formal_verus_evidence",
         "formal_verus_log": "formal_verus_log",
+        "formal_multilane_apalache_evidence": (
+            "formal_multilane_apalache_evidence"
+        ),
         "formal_cross_tool_evidence": "formal_cross_tool_evidence",
         "formal_harness_lock": "formal_harness_lock",
         "formal_toolchain": "formal_toolchain",
@@ -1859,6 +2283,54 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         if artifact["path"].endswith("-preflight-proof-fidelity.log")
     ]
     assert len(proof_fidelity_logs) == 1
+
+    scaling_root = evidence["scaling_root"]
+    assert isinstance(scaling_root, Path)
+    scaling_bundle = receipt["evidence"]["multilane_scaling_bundle"]
+    scaling_paths = sorted(
+        path for path in scaling_root.rglob("*") if path.is_file()
+    )
+    assert scaling_bundle["root"] == str(scaling_root.resolve())
+    assert scaling_bundle["file_count"] == len(scaling_paths)
+    assert scaling_bundle["total_size_bytes"] == sum(
+        path.stat().st_size for path in scaling_paths
+    )
+    assert [record["relative_path"] for record in scaling_bundle["files"]] == [
+        path.relative_to(scaling_root).as_posix() for path in scaling_paths
+    ]
+    for record, path in zip(scaling_bundle["files"], scaling_paths):
+        assert record == {
+            "relative_path": path.relative_to(scaling_root).as_posix(),
+            "path": str(path.resolve()),
+            "sha256": sha256(path),
+            "size_bytes": path.stat().st_size,
+            "mode": f"{path.stat().st_mode & 0o7777:04o}",
+            "owner_uid": os.geteuid(),
+            "nlink": 1,
+        }
+
+    g12 = receipt["evidence"]["g12_cross_dataspace"]
+    g12_seed_logs = evidence["g12_seed_logs"]
+    assert isinstance(g12_seed_logs, list)
+    g12_expected = {
+        "seed_completion": evidence["g12_seed_completion"],
+        "seed_summary": evidence["g12_seed_summary"],
+        "fault_soak_completion": evidence["g12_soak_completion"],
+        "fault_soak_log": evidence["g12_soak_log"],
+    }
+    for receipt_name, path in g12_expected.items():
+        assert isinstance(path, Path)
+        assert g12[receipt_name] == {
+            "path": str(path.resolve()),
+            "sha256": sha256(path),
+            "size_bytes": path.stat().st_size,
+            "mode": f"{path.stat().st_mode & 0o7777:04o}",
+            "owner_uid": os.geteuid(),
+            "nlink": 1,
+        }
+    assert [record["path"] for record in g12["seed_run_logs"]] == [
+        str(path.resolve()) for path in g12_seed_logs
+    ]
 
 
 def test_receipt_links_required_cross_tool_evidence(tmp_path: Path) -> None:
@@ -2600,6 +3072,10 @@ def test_receipt_rejects_cross_source_completion(
         ("formal_evidence", "formal proof evidence digest mismatch"),
         ("formal_verus_evidence", "formal Verus evidence digest mismatch"),
         ("formal_verus_log", "formal Verus log digest mismatch"),
+        (
+            "formal_multilane_apalache_evidence",
+            "formal multilane Apalache evidence digest mismatch",
+        ),
         ("formal_toolchain", "formal toolchain digest mismatch"),
         ("formal_verus_tool", "formal verus tool digest mismatch"),
         ("corridor_summary", "corridor summary digest mismatch"),

@@ -7924,6 +7924,7 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert "write_sha256_sidecar()" in packager
     assert "validate_new_manifest_signature_output()" in packager
     assert "snapshot_release_signing_input()" in packager
+    assert 'cd "$release_signing_snapshot_dir" && pwd -P' in packager
     assert "install_manifest_signature()" in packager
     assert "def write_all(fd, chunk)" in packager
     assert packager.count("def sync_output_parent(") >= 2
@@ -7947,7 +7948,11 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert 'write_sha256_sidecar "$binary_sha_path"' in packager
     assert 'write_sha256_sidecar "$archive_sha_path"' in packager
     assert 'write_sha256_sidecar "$manifest_sha_path"' in packager
-    assert '-out "$signature_tmp_path"' in packager
+    assert '"${stage_dir}/${packaged_binary_name}" release-manifest' in packager
+    assert '--signing-seed "$manifest_signing_key"' in packager
+    assert '--signature-out "$signature_tmp_path"' in packager
+    assert '--signature "$manifest_signature_path"' in packager
+    assert "openssl" not in packager.lower()
     assert (
         '"$signature_source_path" "$manifest_signature_path" "$manifest_path"'
         in packager
@@ -7987,6 +7992,7 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
         "test_release_packager_writes_manifest_signature_through_hardened_path"
         in packager_test
     )
+    assert "test_release_packager_rejects_weak_ed25519_public_key" in packager_test
     assert "test_release_packager_rejects_symlinked_staged_entries" in packager_test
     assert (
         "test_release_packager_rejects_symlinked_output_parent_before_archive"

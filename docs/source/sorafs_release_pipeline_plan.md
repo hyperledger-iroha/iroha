@@ -99,24 +99,27 @@ summary: Current SF-6 release automation and QA surfaces.
   records binary/header/archive SHA256 digests, records manifest and staged-file
   digests, and runs fixture smoke checks before archive creation. The
   production path accepts only a detached signature through
-  `--manifest-signature-in`; the local PEM signer additionally requires the
-  explicit `--development-local-signing` mode and is not a production release
-  path. Manifest signing is raw Ed25519 only and requires the matching
+  `--manifest-signature-in`; the local raw-seed signer additionally requires
+  the explicit `--development-local-signing` mode and is not a production
+  release path. Manifest signing is raw Ed25519 only and requires a 32-byte raw
   `--manifest-public-key` plus an independently reviewed lowercase SHA-256
-  fingerprint of its canonical DER SubjectPublicKeyInfo through
-  `--manifest-public-key-fingerprint`. The private key must be owned by the
-  current effective user, have exactly one hard link, and use mode `0400` or
-  `0600`. Every key or external signature input is copied from one stable
-  no-follow descriptor into an owner-private ephemeral snapshot before any
-  build work; all later inspection, signing, verification, and reported
-  fingerprint values use that pinned snapshot. The helper rejects
-  incompatible or mismatched key types, fingerprint mismatches, and signatures
+  fingerprint of those exact public-key bytes through
+  `--manifest-public-key-fingerprint`. The development seed is exactly 32 raw
+  bytes, must be owned by the current effective user, have exactly one hard
+  link, and use mode `0400` or `0600`. Every key, seed, or external signature
+  input is copied from one stable no-follow descriptor into an owner-private
+  ephemeral snapshot before any build work. The packaged `sorafs-validate
+  release-manifest` command performs strict native key, fingerprint, and
+  signature validation with `ed25519-dalek`; it also performs the explicitly
+  development-gated raw-seed signing path. The helper rejects encoded,
+  malformed, or mismatched key material, fingerprint mismatches, and signatures
   that are not a verified, nonzero 64-byte Ed25519 value. The reference
   production release keeps the private key in PKCS#11/HSM custody: generate the
   deterministic manifest once, sign its exact bytes with the HSM, then rerun
   the identical package command with `--manifest-signature-in`, the reviewed
-  Ed25519 public key, and its fingerprint. The packager recreates the manifest
-  and admits the external signature only when raw Ed25519 verification succeeds.
+  raw Ed25519 public key, and its fingerprint. The packager recreates the
+  manifest and admits the external signature only when native strict Ed25519
+  verification succeeds.
   Signature publication is no-clobber and rejects the stage, archive, manifest,
   checksum sidecars, input identities, existing destinations, and stale default
   signatures before generated artifacts are changed.

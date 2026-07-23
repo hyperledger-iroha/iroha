@@ -5,9 +5,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::{PermissionsExt, symlink};
+
 use assert_cmd::cargo::cargo_bin_cmd;
-use ed25519_dalek::{Signer, SigningKey};
-use iroha_crypto::{Algorithm, KeyPair};
+use ed25519_dalek::{Signature, Signer, SigningKey};
+use iroha_crypto::{Algorithm, KeyPair, sha256};
 use norito::json::Value;
 use sorafs_manifest::repair::QueuedRepairStateV1;
 use sorafs_manifest::{
@@ -24,6 +27,75 @@ fn workspace_fixture(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(path)
+}
+
+fn run_release_manifest_verify(
+    manifest: &Path,
+    public_key: &Path,
+    fingerprint: &str,
+    signature: &Path,
+) -> std::process::Output {
+    cargo_bin_cmd!("sorafs-validate")
+        .args([
+            "release-manifest",
+            "--manifest",
+            manifest.to_str().expect("manifest path is utf-8"),
+            "--public-key",
+            public_key.to_str().expect("public key path is utf-8"),
+            "--public-key-fingerprint",
+            fingerprint,
+            "--signature",
+            signature.to_str().expect("signature path is utf-8"),
+        ])
+        .output()
+        .expect("run sorafs-validate release-manifest")
+}
+
+fn run_release_manifest_development_sign(
+    manifest: &Path,
+    public_key: &Path,
+    fingerprint: &str,
+    signing_seed: &Path,
+    signature_out: &Path,
+    development_gate: bool,
+) -> std::process::Output {
+    let mut command = cargo_bin_cmd!("sorafs-validate");
+    command.args([
+        "release-manifest",
+        "--manifest",
+        manifest.to_str().expect("manifest path is utf-8"),
+        "--public-key",
+        public_key.to_str().expect("public key path is utf-8"),
+        "--public-key-fingerprint",
+        fingerprint,
+        "--signing-seed",
+        signing_seed.to_str().expect("signing seed path is utf-8"),
+        "--signature-out",
+        signature_out
+            .to_str()
+            .expect("signature output path is utf-8"),
+    ]);
+    if development_gate {
+        command.arg("--development-local-signing");
+    }
+    command
+        .output()
+        .expect("run sorafs-validate release-manifest development signing")
+}
+
+fn assert_release_manifest_failure(output: &std::process::Output, exit_code: i32, message: &str) {
+    assert_eq!(
+        output.status.code(),
+        Some(exit_code),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(message),
+        "missing `{message}` in stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn potr_receipt() -> PotrReceiptV1 {
@@ -46,6 +118,10 @@ fn potr_receipt() -> PotrReceiptV1 {
         gateway_signature: None,
         provider_signature: None,
     };
+    sign_potr_fixture(receipt)
+}
+
+fn sign_potr_fixture(receipt: PotrReceiptV1) -> PotrReceiptV1 {
     let gateway_key =
         KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519).expect("fixture gateway key");
     let provider_key =
@@ -967,7 +1043,17 @@ fn sorafs_validate_bundle_accepts_committed_fixture_root() {
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
         outcome.get("code").and_then(Value::as_str),
-        Some("SFS-OK-000")
+        Some("SFS-PDP-DIAG-000")
+    );
+    assert!(
+        outcome
+            .get("context")
+            .and_then(Value::as_array)
+            .is_some_and(|fields| fields.iter().any(|field| {
+                field.get("key").and_then(Value::as_str) == Some("production_acceptance")
+                    && field.get("value").and_then(Value::as_str) == Some("false")
+            })),
+        "{outcome:?}"
     );
     assert_eq!(
         outcome.get("generated_at").and_then(Value::as_u64),
@@ -1044,6 +1130,9 @@ fn sorafs_validate_bundle_rejects_manifest_mismatch() {
     let mut receipt = potr_receipt();
     receipt.manifest_digest = [0x99; 32];
     receipt.provider_id = [0x10; 32];
+    receipt.gateway_signature = None;
+    receipt.provider_signature = None;
+    let receipt = sign_potr_fixture(receipt);
     fs::write(
         receipt_dir.join("receipt_v1.to"),
         norito::to_bytes(&receipt).expect("encode receipt"),
@@ -1657,4 +1746,373 @@ fn sorafs_validate_sign_governance_writes_valid_signed_norito() {
         validate_outcome.get("status").and_then(Value::as_str),
         Some("Ok")
     );
+}
+
+#[test]
+fn sorafs_validate_release_manifest_verifies_strict_raw_ed25519() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical tempdir root");
+    let manifest = root.join("release.manifest.json");
+    let public_key = root.join("release-public.key");
+    let signature = root.join("release-manifest.sig");
+    let manifest_bytes = br#"{"package":"sorafs-validate","schema_version":1}"#;
+    let signing_key = SigningKey::from_bytes(&[0x61; 32]);
+    let public_key_bytes = signing_key.verifying_key().to_bytes();
+    fs::write(&manifest, manifest_bytes).expect("write release manifest");
+    fs::write(&public_key, public_key_bytes).expect("write raw public key");
+    fs::write(&signature, signing_key.sign(manifest_bytes).to_bytes())
+        .expect("write raw signature");
+    let fingerprint = hex::encode(sha256(public_key_bytes));
+
+    let output =
+        run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("release manifest Ed25519 signature verified")
+    );
+
+    fs::write(
+        &manifest,
+        br#"{"package":"sorafs-validate","schema_version":2}"#,
+    )
+    .expect("tamper release manifest");
+    let tampered =
+        run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
+    assert_eq!(tampered.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&tampered.stderr).contains("Ed25519 signature verification failed")
+    );
+}
+
+#[test]
+fn sorafs_validate_release_manifest_rejects_malformed_crypto_inputs() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical tempdir root");
+    let manifest = root.join("release.manifest.json");
+    let public_key = root.join("release-public.key");
+    let signature = root.join("release-manifest.sig");
+    let manifest_bytes = b"canonical release manifest\n";
+    let signing_key = SigningKey::from_bytes(&[0x62; 32]);
+    let public_key_bytes = signing_key.verifying_key().to_bytes();
+    let fingerprint = hex::encode(sha256(public_key_bytes));
+    fs::write(&manifest, manifest_bytes).expect("write release manifest");
+    fs::write(&public_key, public_key_bytes).expect("write raw public key");
+
+    fs::write(&signature, [0_u8; 64]).expect("write zero signature");
+    let zero =
+        run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
+    assert_eq!(zero.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&zero.stderr).contains("must not be all zero"));
+
+    fs::write(&signature, [0x11_u8; 63]).expect("write short signature");
+    let short =
+        run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
+    assert_eq!(short.status.code(), Some(2));
+
+    fs::write(&signature, [0x11_u8; 64]).expect("write invalid signature");
+    let invalid =
+        run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("signature verification failed"));
+
+    let uppercase = run_release_manifest_verify(
+        &manifest,
+        &public_key,
+        fingerprint.to_uppercase().as_str(),
+        &signature,
+    );
+    assert_eq!(uppercase.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&uppercase.stderr).contains("lowercase SHA-256 hex"));
+
+    let mut weak_public_key = [0_u8; 32];
+    weak_public_key[0] = 1;
+    fs::write(&public_key, weak_public_key).expect("write small-order public key");
+    fs::write(&signature, [0x11_u8; 64]).expect("write signature for weak key");
+    let weak_fingerprint = hex::encode(sha256(weak_public_key));
+    let weak = run_release_manifest_verify(
+        &manifest,
+        &public_key,
+        weak_fingerprint.as_str(),
+        &signature,
+    );
+    assert_eq!(weak.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&weak.stderr).contains("must not be weak or small-order"));
+
+    fs::write(&public_key, b"-----BEGIN PUBLIC KEY-----\n").expect("write PEM-shaped key");
+    let encoded =
+        run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
+    assert_eq!(encoded.status.code(), Some(2));
+}
+
+#[test]
+fn sorafs_validate_release_manifest_rejects_binding_and_size_adversaries() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical tempdir root");
+    let manifest = root.join("release.manifest.json");
+    let public_key = root.join("release-public.key");
+    let signature = root.join("release-manifest.sig");
+    let seed_path = root.join("release-signing.seed");
+    let manifest_bytes = b"canonical release manifest\n";
+    let signing_key = SigningKey::from_bytes(&[0x71; 32]);
+    let public_key_bytes = signing_key.verifying_key().to_bytes();
+    let fingerprint = hex::encode(sha256(public_key_bytes));
+    fs::write(&manifest, manifest_bytes).expect("write release manifest");
+    fs::write(&public_key, public_key_bytes).expect("write raw public key");
+    fs::write(&signature, signing_key.sign(manifest_bytes).to_bytes())
+        .expect("write release signature");
+    fs::write(&seed_path, [0x71_u8; 32]).expect("write signing seed");
+    #[cfg(unix)]
+    fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o600))
+        .expect("secure signing seed");
+
+    let wrong_fingerprint =
+        run_release_manifest_verify(&manifest, &public_key, &"00".repeat(32), &signature);
+    assert_release_manifest_failure(
+        &wrong_fingerprint,
+        2,
+        "public key does not match the reviewed fingerprint",
+    );
+
+    fs::write(&seed_path, [0x72_u8; 32]).expect("write mismatched signing seed");
+    let mismatch_out = root.join("mismatch.sig");
+    let mismatch = run_release_manifest_development_sign(
+        &manifest,
+        &public_key,
+        &fingerprint,
+        &seed_path,
+        &mismatch_out,
+        true,
+    );
+    assert_release_manifest_failure(
+        &mismatch,
+        2,
+        "public key does not match the development signing seed",
+    );
+    assert!(!mismatch_out.exists());
+
+    fs::write(&seed_path, [0_u8; 32]).expect("write all-zero signing seed");
+    let zero_out = root.join("zero.sig");
+    let zero = run_release_manifest_development_sign(
+        &manifest,
+        &public_key,
+        &fingerprint,
+        &seed_path,
+        &zero_out,
+        true,
+    );
+    assert_release_manifest_failure(&zero, 2, "development signing seed must not be all zero");
+    assert!(!zero_out.exists());
+
+    fs::write(&seed_path, [0x71_u8; 32]).expect("restore signing seed");
+    fs::write(&manifest, vec![b'x'; 1024 * 1024 + 1]).expect("write oversized manifest");
+    let oversized_out = root.join("oversized.sig");
+    let oversized = run_release_manifest_development_sign(
+        &manifest,
+        &public_key,
+        &fingerprint,
+        &seed_path,
+        &oversized_out,
+        true,
+    );
+    assert_release_manifest_failure(&oversized, 2, "size is outside the supported range");
+    assert!(!oversized_out.exists());
+}
+
+#[test]
+fn sorafs_validate_release_manifest_development_signing_is_explicit_and_no_clobber() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical tempdir root");
+    let manifest = root.join("release.manifest.json");
+    let seed_path = root.join("release-signing.seed");
+    let public_key = root.join("release-public.key");
+    let signature_out = root.join("release-manifest.sig");
+    let manifest_bytes = b"canonical release manifest\n";
+    let signing_key = SigningKey::from_bytes(&[0x63; 32]);
+    let public_key_bytes = signing_key.verifying_key().to_bytes();
+    let fingerprint = hex::encode(sha256(public_key_bytes));
+    fs::write(&manifest, manifest_bytes).expect("write release manifest");
+    fs::write(&seed_path, [0x63_u8; 32]).expect("write raw seed");
+    #[cfg(unix)]
+    fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o600)).expect("secure raw seed");
+    fs::write(&public_key, public_key_bytes).expect("write raw public key");
+
+    let output = cargo_bin_cmd!("sorafs-validate")
+        .args([
+            "release-manifest",
+            "--manifest",
+            manifest.to_str().expect("manifest path is utf-8"),
+            "--public-key",
+            public_key.to_str().expect("public key path is utf-8"),
+            "--public-key-fingerprint",
+            &fingerprint,
+            "--signing-seed",
+            seed_path.to_str().expect("seed path is utf-8"),
+            "--signature-out",
+            signature_out.to_str().expect("signature path is utf-8"),
+            "--development-local-signing",
+        ])
+        .output()
+        .expect("run development release-manifest signing");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let signature: [u8; 64] = fs::read(&signature_out)
+        .expect("read generated signature")
+        .try_into()
+        .expect("generated signature length");
+    signing_key
+        .verifying_key()
+        .verify_strict(manifest_bytes, &Signature::from_bytes(&signature))
+        .expect("generated release signature verifies");
+
+    let clobber = cargo_bin_cmd!("sorafs-validate")
+        .args([
+            "release-manifest",
+            "--manifest",
+            manifest.to_str().expect("manifest path is utf-8"),
+            "--public-key",
+            public_key.to_str().expect("public key path is utf-8"),
+            "--public-key-fingerprint",
+            &fingerprint,
+            "--signing-seed",
+            seed_path.to_str().expect("seed path is utf-8"),
+            "--signature-out",
+            signature_out.to_str().expect("signature path is utf-8"),
+            "--development-local-signing",
+        ])
+        .output()
+        .expect("rerun development signing");
+    assert_eq!(clobber.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&clobber.stderr).contains("must not already exist"));
+
+    let missing_gate_out = root.join("ungated.sig");
+    let missing_gate = cargo_bin_cmd!("sorafs-validate")
+        .args([
+            "release-manifest",
+            "--manifest",
+            manifest.to_str().expect("manifest path is utf-8"),
+            "--public-key",
+            public_key.to_str().expect("public key path is utf-8"),
+            "--public-key-fingerprint",
+            &fingerprint,
+            "--signing-seed",
+            seed_path.to_str().expect("seed path is utf-8"),
+            "--signature-out",
+            missing_gate_out.to_str().expect("signature path is utf-8"),
+        ])
+        .output()
+        .expect("run ungated development signing");
+    assert_eq!(missing_gate.status.code(), Some(4));
+    assert!(!missing_gate_out.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn sorafs_validate_release_manifest_rejects_unsafe_paths_and_permissions() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical tempdir root");
+    let manifest = root.join("release.manifest.json");
+    let seed_path = root.join("release-signing.seed");
+    let public_key = root.join("release-public.key");
+    let public_key_link = root.join("release-public-link.key");
+    let signature = root.join("release-manifest.sig");
+    let signature_link = root.join("release-manifest-link.sig");
+    let signing_key = SigningKey::from_bytes(&[0x64; 32]);
+    let public_key_bytes = signing_key.verifying_key().to_bytes();
+    let fingerprint = hex::encode(sha256(public_key_bytes));
+    fs::write(&manifest, b"canonical release manifest\n").expect("write release manifest");
+    fs::write(&public_key, public_key_bytes).expect("write public key");
+    fs::write(&seed_path, [0x64_u8; 32]).expect("write seed");
+    fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o600))
+        .expect("secure signing seed");
+    symlink(&public_key, &public_key_link).expect("create public key symlink");
+    fs::write(
+        &signature,
+        signing_key.sign(b"canonical release manifest\n").to_bytes(),
+    )
+    .expect("write signature");
+    symlink(&signature, &signature_link).expect("create signature symlink");
+
+    let linked_public = run_release_manifest_verify(
+        &manifest,
+        &public_key_link,
+        fingerprint.as_str(),
+        &signature,
+    );
+    assert_release_manifest_failure(&linked_public, 2, "direct regular file");
+
+    let linked_signature = run_release_manifest_verify(
+        &manifest,
+        &public_key,
+        fingerprint.as_str(),
+        &signature_link,
+    );
+    assert_release_manifest_failure(&linked_signature, 2, "direct regular file");
+
+    let real_signature_parent = root.join("real-signature-parent");
+    fs::create_dir(&real_signature_parent).expect("create real signature parent");
+    let nested_signature = real_signature_parent.join("release.sig");
+    fs::copy(&signature, &nested_signature).expect("copy nested signature");
+    let linked_signature_parent = root.join("linked-signature-parent");
+    symlink(&real_signature_parent, &linked_signature_parent)
+        .expect("create symlinked signature parent");
+    let parent_linked = run_release_manifest_verify(
+        &manifest,
+        &public_key,
+        fingerprint.as_str(),
+        &linked_signature_parent.join("release.sig"),
+    );
+    assert_release_manifest_failure(&parent_linked, 2, "parent must be a real directory");
+
+    let hardlinked_seed = root.join("release-signing-hardlink.seed");
+    fs::hard_link(&seed_path, &hardlinked_seed).expect("hard-link signing seed");
+    let hardlink_out = root.join("hardlink.sig");
+    let hardlink = run_release_manifest_development_sign(
+        &manifest,
+        &public_key,
+        &fingerprint,
+        &hardlinked_seed,
+        &hardlink_out,
+        true,
+    );
+    assert_release_manifest_failure(&hardlink, 2, "must have exactly one hard link");
+    assert!(!hardlink_out.exists());
+    fs::remove_file(&hardlinked_seed).expect("remove temporary signing seed hard link");
+
+    fs::set_permissions(&public_key, fs::Permissions::from_mode(0o666))
+        .expect("make public key group/world writable");
+    let writable_out = root.join("writable-public.sig");
+    let writable_public = run_release_manifest_development_sign(
+        &manifest,
+        &public_key,
+        &fingerprint,
+        &seed_path,
+        &writable_out,
+        true,
+    );
+    assert_release_manifest_failure(&writable_public, 2, "must not be group- or world-writable");
+    assert!(!writable_out.exists());
+    fs::set_permissions(&public_key, fs::Permissions::from_mode(0o644))
+        .expect("restore public key permissions");
+
+    fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o644))
+        .expect("make seed permissions unsafe");
+    let unsafe_out = root.join("unsafe.sig");
+    let unsafe_seed = run_release_manifest_development_sign(
+        &manifest,
+        &public_key,
+        &fingerprint,
+        &seed_path,
+        &unsafe_out,
+        true,
+    );
+    assert_release_manifest_failure(&unsafe_seed, 2, "owner-only 0400 or 0600");
+    assert!(!unsafe_out.exists());
 }

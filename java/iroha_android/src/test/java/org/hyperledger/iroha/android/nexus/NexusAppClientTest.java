@@ -5,19 +5,24 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
+import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.IrohaClient;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.PipelineStatusOptions;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.numeric.NumericV1;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.junit.Test;
@@ -25,11 +30,14 @@ import org.junit.Test;
 public final class NexusAppClientTest {
 
   private static final String ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+  private static final byte[] SIGNING_PRIVATE_KEY_SEED = filled(0x11, 32);
   private static final byte[] PUBLIC_KEY =
-      hexToBytes("d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737");
-  private static final byte[] WALLET_SIGNATURE =
-      hexToBytes(
-          "c82d2ee732a9251153eff6f510a0d12b292cb51a5d961a7eddb84f6ee944e34eaca60ca2f1ccfe7a53fd6813fc9a6db9e35cb276b2411b7d583d45fdc6caee05");
+      new Ed25519PrivateKeyParameters(SIGNING_PRIVATE_KEY_SEED, 0)
+          .generatePublicKey()
+          .getEncoded();
+  private static final byte[] WALLET_SIGNATURE = fixtureExpectedBytes("wallet_signature_hex");
+  private static final FeePaymentIntent TEST_FEE_PAYMENT =
+      FeePaymentIntent.authority(Collections.emptyList());
   private static final String ACCOUNT_ID =
       "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
   private static final String DESTINATION_ACCOUNT_ID =
@@ -44,6 +52,7 @@ public final class NexusAppClientTest {
             .sourceAssetId("asset")
             .quantity(quantity)
             .destinationAccountId(DESTINATION_ACCOUNT_ID)
+            .feePayment(TEST_FEE_PAYMENT)
             .build();
       } catch (final IllegalArgumentException expected) {
         threw = true;
@@ -57,6 +66,7 @@ public final class NexusAppClientTest {
             .sourceAssetId("asset")
             .quantity(NumericV1.QuantityValue.parseCanonical("1.25"))
             .destinationAccountId(DESTINATION_ACCOUNT_ID)
+            .feePayment(TEST_FEE_PAYMENT)
             .build()
             .quantity());
   }
@@ -84,7 +94,10 @@ public final class NexusAppClientTest {
     final NexusTransferReceipt receipt =
         client.transferWithWallet(approved.session(), sampleInput(), new NexusFinalizeOptions());
 
-    assertEquals("Committed", receipt.finalStatus().get("status"));
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> finalStatus =
+        (Map<String, Object>) receipt.finalStatus().get("status");
+    assertEquals("Applied", finalStatus.get("kind"));
     assertEquals(receipt.transactionHashHex(), torii.submittedHash);
     assertEquals(receipt.transactionHashHex(), SignedTransactionHasher.hashHex(receipt.signedTransaction()));
     assertArrayEquals(PUBLIC_KEY, receipt.signedTransaction().publicKey());
@@ -116,9 +129,21 @@ public final class NexusAppClientTest {
                 "test-chain", null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()));
 
     final NexusTransferDraft draft = client.buildTransferDraft(sampleInput());
+    final byte[] fixtureSignature = hexToBytes(string(expected, "wallet_signature_hex"));
+    final SignedTransaction signed =
+        SignedTransaction.builder()
+            .setEncodedPayload(draft.signable().payloadBytes())
+            .setSignature(fixtureSignature)
+            .setPublicKey(PUBLIC_KEY)
+            .setSchemaName(new NoritoJavaCodecAdapter().schemaName())
+            .build();
 
     assertEquals(string(expected, "payload_hash_hex"), draft.signable().payloadHashHex());
     assertArrayEquals(hexToBytes(string(expected, "payload_bytes_hex")), draft.signable().payloadBytes());
+    assertArrayEquals(signPayload(draft.signable().payloadBytes()), fixtureSignature);
+    assertEquals(
+        string(expected, "signed_transaction_hash_hex"), SignedTransactionHasher.hashHex(signed));
+    assertEquals(Arrays.asList("Submitted", "Applied"), expected.get("status_sequence"));
   }
 
   @Test
@@ -139,16 +164,17 @@ public final class NexusAppClientTest {
             draft.signable().authority(),
             draft.signable().signingPublicKey(),
             "0");
+    final byte[] walletSignature = signPayload(signable.payloadBytes());
 
     final NexusTransferReceipt receipt =
         client.finalizeAndSubmit(
             signable,
-            new NexusWalletSignature(WALLET_SIGNATURE, "0"),
+            new NexusWalletSignature(walletSignature, "0"),
             new NexusFinalizeOptions(false, null));
 
     assertEquals(receipt.transactionHashHex(), torii.submittedHash);
     assertEquals(receipt.transactionHashHex(), SignedTransactionHasher.hashHex(receipt.signedTransaction()));
-    assertArrayEquals(WALLET_SIGNATURE, receipt.signedTransaction().signature());
+    assertArrayEquals(walletSignature, receipt.signedTransaction().signature());
     assertArrayEquals(PUBLIC_KEY, receipt.signedTransaction().publicKey());
   }
 
@@ -321,6 +347,20 @@ public final class NexusAppClientTest {
         expectNexusError(
             () -> invalidKey.awaitApproval(new NexusConnectSession("session-1", "sora://wallet/connect")));
     assertEquals("invalid_signing_public_key", invalidKeyError.code());
+
+    final NexusAppClient mixedTorsionKey =
+        new NexusAppClient(
+            new NexusAppConfig("test-chain", null, null, null, null, null, Collections.emptyMap()),
+            new ApprovalConnect(new NexusApprovedAccount(ACCOUNT_ID, filled(0x11, 32))),
+            null,
+            null);
+
+    final NexusAppError mixedTorsionError =
+        expectNexusError(
+            () ->
+                mixedTorsionKey.awaitApproval(
+                    new NexusConnectSession("session-1", "sora://wallet/connect")));
+    assertEquals("invalid_signing_public_key", mixedTorsionError.code());
   }
 
   @Test
@@ -382,7 +422,8 @@ public final class NexusAppClientTest {
             null,
             new FakeToriiClient());
     final NexusTransferDraft draft = draftClient.buildTransferDraft(sampleInput());
-    final NexusWalletSignature signature = new NexusWalletSignature(WALLET_SIGNATURE);
+    final NexusWalletSignature signature =
+        new NexusWalletSignature(signPayload(draft.signable().payloadBytes()));
 
     final NexusAppClient mismatchClient =
         new NexusAppClient(
@@ -413,6 +454,48 @@ public final class NexusAppClientTest {
     final NexusAppError statusError =
         expectNexusError(() -> statusFailureClient.finalizeAndSubmit(draft.signable(), signature));
     assertEquals("status_wait_failed", statusError.code());
+
+    final NexusAppClient committedOnlyClient =
+        new NexusAppClient(
+            new NexusAppConfig("test-chain", null, null, null, null, null, Collections.emptyMap()),
+            null,
+            null,
+            new FakeToriiClient(null, null, null, "Committed"));
+    final NexusAppError committedOnlyError =
+        expectNexusError(() -> committedOnlyClient.finalizeAndSubmit(draft.signable(), signature));
+    assertEquals("status_wait_non_applied", committedOnlyError.code());
+  }
+
+  @Test
+  public void finalizeAndSubmitRejectsValidSignatureBoundToDifferentPayloadBytes() {
+    final FakeToriiClient torii = new FakeToriiClient();
+    final NexusAppClient client =
+        new NexusAppClient(
+            new NexusAppConfig(
+                "test-chain", null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
+            null,
+            null,
+            torii);
+    final NexusTransferDraft draft = client.buildTransferDraft(sampleInput());
+    final byte[] signature = signPayload(draft.signable().payloadBytes());
+    final byte[] tamperedPayload = draft.signable().payloadBytes();
+    tamperedPayload[tamperedPayload.length - 1] ^= 0x01;
+    final NexusSignableTransaction tamperedSignable =
+        new NexusSignableTransaction(
+            tamperedPayload,
+            draft.signable().payloadHashHex(),
+            draft.signable().authority(),
+            draft.signable().signingPublicKey(),
+            draft.signable().signatureAlgorithm());
+
+    final NexusAppError error =
+        expectNexusError(
+            () ->
+                client.finalizeAndSubmit(
+                    tamperedSignable, new NexusWalletSignature(signature)));
+
+    assertEquals("invalid_signature", error.code());
+    assertEquals(null, torii.submittedHash);
   }
 
   @Test
@@ -438,6 +521,7 @@ public final class NexusAppClientTest {
         .sourceAssetId(ASSET_DEFINITION_ID + "#" + ACCOUNT_ID)
         .quantity("12.34")
         .destinationAccountId(DESTINATION_ACCOUNT_ID)
+        .feePayment(TEST_FEE_PAYMENT)
         .creationTimeMs(1_700_000_000_000L)
         .ttlMs(30_000L)
         .nonce(7)
@@ -468,6 +552,22 @@ public final class NexusAppClientTest {
     return (String) map.get(key);
   }
 
+  private static byte[] fixtureExpectedBytes(final String key) {
+    try {
+      return hexToBytes(string(asMap(loadNexusFixture().get("expected")), key));
+    } catch (final Exception ex) {
+      throw new ExceptionInInitializerError(ex);
+    }
+  }
+
+  private static byte[] signPayload(final byte[] payloadBytes) {
+    final byte[] message = IrohaHash.prehash(payloadBytes);
+    final Ed25519Signer signer = new Ed25519Signer();
+    signer.init(true, new Ed25519PrivateKeyParameters(SIGNING_PRIVATE_KEY_SEED, 0));
+    signer.update(message, 0, message.length);
+    return signer.generateSignature();
+  }
+
   private static byte[] hexToBytes(final String hex) {
     final byte[] bytes = new byte[hex.length() / 2];
     for (int i = 0; i < bytes.length; i++) {
@@ -496,7 +596,7 @@ public final class NexusAppClientTest {
   }
 
   private static final class FakeConnect implements NexusConnectTransport {
-    private final byte[] signature = Arrays.copyOf(WALLET_SIGNATURE, WALLET_SIGNATURE.length);
+    private byte[] signature;
     private NexusSignableTransaction lastSignable;
 
     @Override
@@ -529,6 +629,7 @@ public final class NexusAppClientTest {
         final NexusAppConfig config) {
       lastSignable = signable;
       assertEquals(NexusAppClient.SIGNATURE_ALGORITHM_ED25519, signable.signatureAlgorithm());
+      signature = signPayload(signable.payloadBytes());
       return new NexusWalletSignature(signature);
     }
   }
@@ -601,19 +702,29 @@ public final class NexusAppClientTest {
     private final String responseHash;
     private final RuntimeException submitFailure;
     private final RuntimeException statusFailure;
+    private final String statusKind;
     private String submittedHash;
 
     private FakeToriiClient() {
-      this(null, null, null);
+      this(null, null, null, "Applied");
     }
 
     private FakeToriiClient(
         final String responseHash,
         final RuntimeException submitFailure,
         final RuntimeException statusFailure) {
+      this(responseHash, submitFailure, statusFailure, "Applied");
+    }
+
+    private FakeToriiClient(
+        final String responseHash,
+        final RuntimeException submitFailure,
+        final RuntimeException statusFailure,
+        final String statusKind) {
       this.responseHash = responseHash;
       this.submitFailure = submitFailure;
       this.statusFailure = statusFailure;
+      this.statusKind = statusKind;
     }
 
     @Override
@@ -636,7 +747,17 @@ public final class NexusAppClientTest {
         failed.completeExceptionally(statusFailure);
         return failed;
       }
-      return CompletableFuture.completedFuture(Map.of("status", "Committed", "hash", hashHex));
+      final Map<String, Object> status =
+          "Applied".equals(statusKind)
+              ? Map.of("kind", statusKind, "block_height", 7)
+              : Map.of("kind", statusKind);
+      return CompletableFuture.completedFuture(
+          Map.of(
+              "hash", hashHex,
+              "status", status,
+              "summary", statusKind,
+              "scope", "global",
+              "resolved_from", "Applied".equals(statusKind) ? "state" : "cache"));
     }
   }
 }

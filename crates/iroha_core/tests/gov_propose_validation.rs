@@ -269,6 +269,8 @@ fn enact_requires_approved_status() {
             status: iroha_core::state::GovernanceProposalStatus::Proposed,
             pipeline: iroha_core::state::GovernancePipeline::seeded(1, None, &stx.gov),
             parliament_snapshot: None,
+            finalization_evidence: None,
+            enacted_at_height: None,
         },
     );
 
@@ -299,6 +301,8 @@ fn proposal_record_exposes_deploy_payload() {
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
         pipeline: iroha_core::state::GovernancePipeline::default(),
         parliament_snapshot: None,
+        finalization_evidence: None,
+        enacted_at_height: None,
     };
     let payload = record
         .as_deploy_contract()

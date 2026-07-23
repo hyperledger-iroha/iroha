@@ -13,7 +13,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -852,6 +852,7 @@ pub struct ModerationOrchestratorV1 {
     config: ModerationOrchestratorConfigV1,
     deps: ModerationOrchestratorDepsV1,
     state: Mutex<ModerationOrchestratorCheckpointV1>,
+    durability_faulted: AtomicBool,
 }
 
 impl fmt::Debug for ModerationOrchestratorV1 {
@@ -860,6 +861,10 @@ impl fmt::Debug for ModerationOrchestratorV1 {
             .debug_struct("ModerationOrchestratorV1")
             .field("config", &self.config)
             .field("deps", &self.deps)
+            .field(
+                "durability_faulted",
+                &self.durability_faulted.load(Ordering::Acquire),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -908,7 +913,14 @@ impl ModerationOrchestratorV1 {
             config,
             deps,
             state: Mutex::new(state),
+            durability_faulted: AtomicBool::new(false),
         })
+    }
+
+    /// Return the validated non-secret runtime configuration.
+    #[must_use]
+    pub fn config(&self) -> &ModerationOrchestratorConfigV1 {
+        &self.config
     }
 
     /// Reconcile the complete local projection and all durable delivery state.
@@ -982,7 +994,7 @@ impl ModerationOrchestratorV1 {
                     status: StoredOperationStatusV1::Finalized,
                     transaction_id: None,
                 });
-                persist_checkpoint(&self.config, &mut state)?;
+                self.persist_checkpoint_locked(&mut state)?;
                 return Ok(ModerationSubmitOutcomeV1 {
                     operation_id,
                     transaction_id: None,
@@ -1017,7 +1029,7 @@ impl ModerationOrchestratorV1 {
             attempts: 0,
             state: StoredOutboxStateV1::Ready,
         });
-        persist_checkpoint(&self.config, &mut state)?;
+        self.persist_checkpoint_locked(&mut state)?;
 
         // Consult the stable cross-replica operation registry before the first
         // submission. A racing peer may already own the same transaction.
@@ -1150,10 +1162,16 @@ impl ModerationOrchestratorV1 {
     /// Return the complete current finalized projection.
     #[must_use]
     pub fn snapshot(&self) -> Option<ModerationFinalizedLedgerSnapshotV1> {
-        self.state
-            .lock()
-            .ok()
-            .and_then(|state| state.finalized_snapshot.clone())
+        if self.durability_faulted.load(Ordering::Acquire) {
+            return None;
+        }
+        self.state.lock().ok().and_then(|state| {
+            if self.durability_faulted.load(Ordering::Acquire) {
+                None
+            } else {
+                state.finalized_snapshot.clone()
+            }
+        })
     }
 
     /// Return one committed appeal projection.
@@ -1195,9 +1213,31 @@ impl ModerationOrchestratorV1 {
         std::sync::MutexGuard<'_, ModerationOrchestratorCheckpointV1>,
         ModerationOrchestratorError,
     > {
-        self.state
+        if self.durability_faulted.load(Ordering::Acquire) {
+            return Err(ModerationOrchestratorError::DurabilityFaulted);
+        }
+        let state = self
+            .state
             .lock()
-            .map_err(|_| ModerationOrchestratorError::StateLockPoisoned)
+            .map_err(|_| ModerationOrchestratorError::StateLockPoisoned)?;
+        if self.durability_faulted.load(Ordering::Acquire) {
+            return Err(ModerationOrchestratorError::DurabilityFaulted);
+        }
+        Ok(state)
+    }
+
+    fn persist_checkpoint_locked(
+        &self,
+        state: &mut ModerationOrchestratorCheckpointV1,
+    ) -> Result<(), ModerationOrchestratorError> {
+        if self.durability_faulted.load(Ordering::Acquire) {
+            return Err(ModerationOrchestratorError::DurabilityFaulted);
+        }
+        if let Err(error) = persist_checkpoint(&self.config, state) {
+            self.durability_faulted.store(true, Ordering::Release);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn reconcile_locked(
@@ -1250,7 +1290,7 @@ impl ModerationOrchestratorV1 {
         state.finalized_snapshot_digest = Some(digest);
         self.reconcile_outbox_locked(state)?;
         self.queue_terminal_handoffs_locked(state)?;
-        persist_checkpoint(&self.config, state)
+        self.persist_checkpoint_locked(state)
     }
 
     fn reconcile_outbox_locked(
@@ -1411,7 +1451,7 @@ impl ModerationOrchestratorV1 {
         }
         state.outbox[position].attempts = state.outbox[position].attempts.saturating_add(1);
         state.outbox[position].state = StoredOutboxStateV1::Ambiguous;
-        persist_checkpoint(&self.config, state)?;
+        self.persist_checkpoint_locked(state)?;
 
         let entry = state.outbox[position].clone();
         let request = ModerationTransactionRequestV1 {
@@ -1483,7 +1523,7 @@ impl ModerationOrchestratorV1 {
                 });
             }
         }
-        persist_checkpoint(&self.config, state)
+        self.persist_checkpoint_locked(state)
     }
 
     fn queue_terminal_handoffs_locked(
@@ -1610,7 +1650,7 @@ impl ModerationOrchestratorV1 {
         state.completed_handoffs.sort_unstable();
         state.completed_handoffs.dedup();
         state.dead_letters.extend(dead);
-        persist_checkpoint(&self.config, state)
+        self.persist_checkpoint_locked(state)
     }
 }
 
@@ -1629,18 +1669,70 @@ pub fn moderation_request_binding_digest_v1(
     authority: &AccountId,
     action: &ModerationNativeActionV1,
 ) -> Result<[u8; 32], ModerationOrchestratorError> {
+    validate_request_binding_target(method, canonical_path_and_query)?;
     let action_bytes = action.canonical_bytes()?;
     let authority = authority.to_string();
     Ok(domain_hash(
         REQUEST_BINDING_DOMAIN_V1,
         &[
-            method.to_ascii_uppercase().as_bytes(),
+            method.as_bytes(),
             canonical_path_and_query.as_bytes(),
             raw_body,
             authority.as_bytes(),
             &action_bytes,
         ],
     ))
+}
+
+fn validate_request_binding_target(
+    method: &str,
+    canonical_path_and_query: &str,
+) -> Result<(), ModerationOrchestratorError> {
+    fn is_http_token_byte(byte: u8) -> bool {
+        byte.is_ascii_uppercase()
+            || byte.is_ascii_digit()
+            || matches!(
+                byte,
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+            )
+    }
+
+    if method.is_empty() || !method.bytes().all(is_http_token_byte) {
+        return Err(ModerationOrchestratorError::InvalidRequestBinding);
+    }
+    if !canonical_path_and_query.starts_with('/')
+        || canonical_path_and_query.contains('#')
+        || canonical_path_and_query.contains('\\')
+        || canonical_path_and_query
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == b' ')
+        || canonical_path_and_query.matches('?').count() > 1
+    {
+        return Err(ModerationOrchestratorError::InvalidRequestBinding);
+    }
+    let path = canonical_path_and_query
+        .split_once('?')
+        .map_or(canonical_path_and_query, |(path, _)| path);
+    if path
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+    {
+        return Err(ModerationOrchestratorError::InvalidRequestBinding);
+    }
+    Ok(())
 }
 
 fn maintenance_request_binding_digest(
@@ -3059,6 +3151,41 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ModerationOrchestratorE
     let parent = path.parent().ok_or_else(|| {
         ModerationOrchestratorError::CheckpointIo("checkpoint path has no parent".to_owned())
     })?;
+    let parent_before = fs::symlink_metadata(parent).map_err(|error| {
+        ModerationOrchestratorError::CheckpointIo(format!(
+            "inspect checkpoint parent before write: {error}"
+        ))
+    })?;
+    if parent_before.file_type().is_symlink() || !parent_before.is_dir() {
+        return Err(ModerationOrchestratorError::CheckpointIo(
+            "checkpoint parent must remain a real directory".to_owned(),
+        ));
+    }
+    let mut directory_options = OpenOptions::new();
+    directory_options.read(true);
+    #[cfg(unix)]
+    directory_options.custom_flags(SAFE_OPEN_FLAGS);
+    let parent_directory = directory_options.open(parent).map_err(|error| {
+        ModerationOrchestratorError::CheckpointIo(format!(
+            "open checkpoint parent before write: {error}"
+        ))
+    })?;
+    let opened_parent = parent_directory.metadata().map_err(|error| {
+        ModerationOrchestratorError::CheckpointIo(format!(
+            "inspect opened checkpoint parent before write: {error}"
+        ))
+    })?;
+    if !opened_parent.is_dir() {
+        return Err(ModerationOrchestratorError::CheckpointIo(
+            "opened checkpoint parent is not a directory".to_owned(),
+        ));
+    }
+    #[cfg(unix)]
+    if parent_before.dev() != opened_parent.dev() || parent_before.ino() != opened_parent.ino() {
+        return Err(ModerationOrchestratorError::CheckpointIo(
+            "checkpoint parent changed identity while opening".to_owned(),
+        ));
+    }
     let mut random_nonce = [0_u8; 16];
     OsRng.try_fill_bytes(&mut random_nonce).map_err(|error| {
         ModerationOrchestratorError::CheckpointIo(format!(
@@ -3090,20 +3217,46 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ModerationOrchestratorE
         let mut file = options.open(&temp).map_err(|error| {
             ModerationOrchestratorError::CheckpointIo(format!("create atomic checkpoint: {error}"))
         })?;
-        validate_checkpoint_metadata(
-            &temp,
-            &file.metadata().map_err(|error| {
-                ModerationOrchestratorError::CheckpointIo(format!(
-                    "inspect atomic checkpoint: {error}"
-                ))
-            })?,
-        )?;
+        let opened_temp = file.metadata().map_err(|error| {
+            ModerationOrchestratorError::CheckpointIo(format!("inspect atomic checkpoint: {error}"))
+        })?;
+        validate_checkpoint_metadata(&temp, &opened_temp)?;
         file.write_all(bytes).map_err(|error| {
             ModerationOrchestratorError::CheckpointIo(format!("write checkpoint: {error}"))
         })?;
         file.sync_all().map_err(|error| {
             ModerationOrchestratorError::CheckpointIo(format!("sync checkpoint: {error}"))
         })?;
+        let named_temp = fs::symlink_metadata(&temp).map_err(|error| {
+            ModerationOrchestratorError::CheckpointIo(format!(
+                "reinspect atomic checkpoint before rename: {error}"
+            ))
+        })?;
+        validate_checkpoint_metadata(&temp, &named_temp)?;
+        #[cfg(unix)]
+        if opened_temp.dev() != named_temp.dev() || opened_temp.ino() != named_temp.ino() {
+            return Err(ModerationOrchestratorError::CheckpointIo(
+                "atomic checkpoint changed identity before rename".to_owned(),
+            ));
+        }
+        let parent_before_rename = fs::symlink_metadata(parent).map_err(|error| {
+            ModerationOrchestratorError::CheckpointIo(format!(
+                "reinspect checkpoint parent before rename: {error}"
+            ))
+        })?;
+        if parent_before_rename.file_type().is_symlink() || !parent_before_rename.is_dir() {
+            return Err(ModerationOrchestratorError::CheckpointIo(
+                "checkpoint parent changed to a non-directory before rename".to_owned(),
+            ));
+        }
+        #[cfg(unix)]
+        if opened_parent.dev() != parent_before_rename.dev()
+            || opened_parent.ino() != parent_before_rename.ino()
+        {
+            return Err(ModerationOrchestratorError::CheckpointIo(
+                "checkpoint parent changed identity before rename".to_owned(),
+            ));
+        }
         drop(file);
         if let Ok(metadata) = fs::symlink_metadata(path) {
             validate_checkpoint_metadata(path, &metadata)?;
@@ -3111,43 +3264,37 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ModerationOrchestratorE
         fs::rename(&temp, path).map_err(|error| {
             ModerationOrchestratorError::CheckpointIo(format!("replace checkpoint: {error}"))
         })?;
-        let before_parent = fs::symlink_metadata(parent).map_err(|error| {
+        let committed = fs::symlink_metadata(path).map_err(|error| {
+            ModerationOrchestratorError::CheckpointDurabilityUncertain(format!(
+                "inspect committed checkpoint after rename: {error}"
+            ))
+        })?;
+        validate_checkpoint_metadata(path, &committed).map_err(|error| {
+            ModerationOrchestratorError::CheckpointDurabilityUncertain(error.to_string())
+        })?;
+        #[cfg(unix)]
+        if opened_temp.dev() != committed.dev() || opened_temp.ino() != committed.ino() {
+            return Err(ModerationOrchestratorError::CheckpointDurabilityUncertain(
+                "committed checkpoint changed identity after rename".to_owned(),
+            ));
+        }
+        let parent_after = fs::symlink_metadata(parent).map_err(|error| {
             ModerationOrchestratorError::CheckpointDurabilityUncertain(format!(
                 "inspect checkpoint parent after rename: {error}"
             ))
         })?;
-        if before_parent.file_type().is_symlink() || !before_parent.is_dir() {
+        if parent_after.file_type().is_symlink() || !parent_after.is_dir() {
             return Err(ModerationOrchestratorError::CheckpointDurabilityUncertain(
                 "checkpoint parent changed to a non-directory".to_owned(),
             ));
         }
-        let mut directory_options = OpenOptions::new();
-        directory_options.read(true);
         #[cfg(unix)]
-        directory_options.custom_flags(SAFE_OPEN_FLAGS);
-        let directory = directory_options.open(parent).map_err(|error| {
-            ModerationOrchestratorError::CheckpointDurabilityUncertain(format!(
-                "open checkpoint parent after rename: {error}"
-            ))
-        })?;
-        let opened_parent = directory.metadata().map_err(|error| {
-            ModerationOrchestratorError::CheckpointDurabilityUncertain(format!(
-                "inspect opened checkpoint parent: {error}"
-            ))
-        })?;
-        if !opened_parent.is_dir() {
+        if opened_parent.dev() != parent_after.dev() || opened_parent.ino() != parent_after.ino() {
             return Err(ModerationOrchestratorError::CheckpointDurabilityUncertain(
-                "opened checkpoint parent is not a directory".to_owned(),
+                "checkpoint parent changed identity during atomic replacement".to_owned(),
             ));
         }
-        #[cfg(unix)]
-        if before_parent.dev() != opened_parent.dev() || before_parent.ino() != opened_parent.ino()
-        {
-            return Err(ModerationOrchestratorError::CheckpointDurabilityUncertain(
-                "checkpoint parent changed identity while opening".to_owned(),
-            ));
-        }
-        directory.sync_all().map_err(|error| {
+        parent_directory.sync_all().map_err(|error| {
             ModerationOrchestratorError::CheckpointDurabilityUncertain(format!(
                 "sync checkpoint parent after rename: {error}"
             ))
@@ -3180,8 +3327,8 @@ pub enum ModerationOrchestratorError {
         /// Native payload authority.
         native: String,
     },
-    /// Authenticated request binding is inert.
-    #[error("moderation authenticated request binding digest must be non-zero")]
+    /// Authenticated request binding is malformed or inert.
+    #[error("invalid moderation authenticated request binding")]
     InvalidRequestBinding,
     /// A stable semantic identity was reused for different action bytes.
     #[error("moderation operation idempotency conflict for {}", hex::encode(.operation_id))]
@@ -3232,6 +3379,9 @@ pub enum ModerationOrchestratorError {
     /// Rename committed but durability could not be established.
     #[error("moderation checkpoint durability is uncertain: {0}")]
     CheckpointDurabilityUncertain(String),
+    /// A prior checkpoint failure made the in-memory state unsafe to reuse.
+    #[error("moderation orchestrator is fail-stopped after a checkpoint failure")]
+    DurabilityFaulted,
     /// Durable generation overflowed.
     #[error("moderation checkpoint generation overflow")]
     GenerationOverflow,
@@ -3808,5 +3958,88 @@ mod tests {
         assert_eq!(activation.case_id(), "case-failover");
         assert_eq!(activation.round_id(), "round-1");
         assert_eq!(*activation.sortition_digest(), expected_sortition_digest);
+    }
+
+    #[test]
+    fn authenticated_request_binding_is_exact_and_canonical() {
+        let authority = account(1);
+        let action = policy_action(policy(1));
+        let first = moderation_request_binding_digest_v1(
+            "POST",
+            "/v1/sorafs/moderation/actions?revision=1",
+            b"body",
+            &authority,
+            &action,
+        )
+        .expect("canonical binding");
+        let changed_body = moderation_request_binding_digest_v1(
+            "POST",
+            "/v1/sorafs/moderation/actions?revision=1",
+            b"changed",
+            &authority,
+            &action,
+        )
+        .expect("canonical binding");
+        let changed_query = moderation_request_binding_digest_v1(
+            "POST",
+            "/v1/sorafs/moderation/actions?revision=2",
+            b"body",
+            &authority,
+            &action,
+        )
+        .expect("canonical binding");
+
+        assert_ne!(first, changed_body);
+        assert_ne!(first, changed_query);
+        assert!(matches!(
+            moderation_request_binding_digest_v1(
+                "post",
+                "/v1/sorafs/moderation/actions",
+                b"body",
+                &authority,
+                &action,
+            ),
+            Err(ModerationOrchestratorError::InvalidRequestBinding)
+        ));
+        assert!(matches!(
+            moderation_request_binding_digest_v1(
+                "POST",
+                "/v1/sorafs/../moderation/actions",
+                b"body",
+                &authority,
+                &action,
+            ),
+            Err(ModerationOrchestratorError::InvalidRequestBinding)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_failure_latches_the_process_fail_closed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
+        let bounds = config(&temp, "checkpoint.norito");
+        let checkpoint_path = bounds.checkpoint_path.clone();
+        let orchestrator =
+            ModerationOrchestratorV1::open(bounds, deps(reader, submitter)).expect("orchestrator");
+        std::os::unix::fs::symlink(
+            checkpoint_path.with_extension("untrusted-target"),
+            &checkpoint_path,
+        )
+        .expect("install checkpoint symlink");
+
+        assert!(matches!(
+            orchestrator.reconcile(),
+            Err(ModerationOrchestratorError::CheckpointIo(_))
+        ));
+        std::fs::remove_file(&checkpoint_path).expect("remove checkpoint symlink");
+        assert_eq!(
+            orchestrator.reconcile(),
+            Err(ModerationOrchestratorError::DurabilityFaulted)
+        );
+        assert!(orchestrator.snapshot().is_none());
     }
 }

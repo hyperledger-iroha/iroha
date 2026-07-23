@@ -12,6 +12,7 @@ mod value;
 pub use value::Value;
 
 pub mod floor_planner;
+pub use floor_planner::V1;
 pub use floor_planner::single_pass::SimpleFloorPlanner;
 
 pub mod layouter;

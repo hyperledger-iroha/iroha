@@ -388,9 +388,8 @@ pub use transparency::{
     PrivacyCyclePrfProviderErrorV1, PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestErrorV1,
     PrivacyCyclePrfRequestV1, ProofTokenIssuanceIngestError, TransparencyLedgerIngestError,
     TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError,
-    appeal_finance_report_source_entry,
-    appeal_finance_settlement_receipt_source_entry, gar_enforcement_receipt_source_entry,
-    moderation_ballot_governance_event_source_entry,
+    appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
+    gar_enforcement_receipt_source_entry, moderation_ballot_governance_event_source_entry,
     moderation_evidence_viewer_audit_report_source_entry, proof_token_issuance_from_base64,
     proof_token_issuance_from_frame, reserve_appeal_source_entry,
     reserve_lifecycle_event_source_entry, reserve_lifecycle_policy_source_entry,
@@ -828,10 +827,6 @@ impl LocalCheckpointWriteError {
             error,
             committed: true,
         }
-    }
-
-    fn kind(&self) -> ErrorKind {
-        self.error.kind()
     }
 }
 
@@ -4179,8 +4174,7 @@ impl NodeHandle {
     ) -> Result<Self, NodeInitError> {
         Self::try_new_with_runtime_deps(
             config,
-            NodeRuntimeDeps::default()
-                .with_moderation_quarantine_key_wrapper(key_wrapper),
+            NodeRuntimeDeps::default().with_moderation_quarantine_key_wrapper(key_wrapper),
         )
     }
 
@@ -4254,8 +4248,7 @@ impl NodeHandle {
             config,
             repair_config,
             gc_config,
-            NodeRuntimeDeps::default()
-                .with_moderation_quarantine_key_wrapper(key_wrapper),
+            NodeRuntimeDeps::default().with_moderation_quarantine_key_wrapper(key_wrapper),
         )
     }
 
@@ -6672,14 +6665,11 @@ impl NodeHandle {
         let request = PrivacyCyclePrfRequestV1::new(policy_digest, window).map_err(|_| {
             GovernancePublishError::other("privacy cycle PRF request binding is invalid")
         })?;
-        let provider = self
-            .privacy_cycle_prf_provider
-            .as_deref()
-            .ok_or_else(|| {
-                GovernancePublishError::other(
-                    "runtime threshold PRF provider is unavailable for differential privacy",
-                )
-            })?;
+        let provider = self.privacy_cycle_prf_provider.as_deref().ok_or_else(|| {
+            GovernancePublishError::other(
+                "runtime threshold PRF provider is unavailable for differential privacy",
+            )
+        })?;
         let output = provider
             .derive_cycle_output(&request)
             .map_err(|error| match error {
@@ -7281,10 +7271,7 @@ impl NodeHandle {
                     "enabled privacy aggregate scheduler is missing its governed policy",
                 )
             })?;
-            (
-                policy.cycle_config(),
-                policy.composition_budget(),
-            )
+            (policy.cycle_config(), policy.composition_budget())
         };
         self.publish_due_privacy_aggregate_cycle_from_source_events(
             now_unix,
@@ -27128,7 +27115,7 @@ mod tests {
     }
 
     #[test]
-    fn publish_due_privacy_aggregate_cycle_derives_distinct_prf_requests_for_catch_up_windows() {
+    fn privacy_cycle_prf_derives_distinct_requests_for_catch_up_windows() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let provider = Arc::new(TestPrivacyCyclePrfProvider::bound());
         let trait_provider: Arc<dyn PrivacyCyclePrfProviderV1> = provider.clone();
@@ -27196,7 +27183,7 @@ mod tests {
     }
 
     #[test]
-    fn privacy_aggregate_startup_requires_runtime_prf_provider() {
+    fn privacy_cycle_prf_startup_requires_runtime_provider() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let cfg = privacy_aggregate_storage_config(&root);
@@ -27207,7 +27194,7 @@ mod tests {
     }
 
     #[test]
-    fn privacy_aggregate_rejects_zero_and_failed_provider_outputs_without_diagnostics() {
+    fn privacy_cycle_prf_rejects_zero_and_failed_outputs_without_diagnostics() {
         for (mode, expected) in [
             (
                 TestPrivacyCyclePrfMode::Zero,
@@ -27254,7 +27241,7 @@ mod tests {
     }
 
     #[test]
-    fn node_debug_redacts_runtime_crypto_provider_implementations() {
+    fn privacy_cycle_prf_debug_redacts_runtime_crypto_provider_implementations() {
         let config = StorageConfig::builder().enabled(false).build();
         let privacy_provider: Arc<dyn PrivacyCyclePrfProviderV1> =
             Arc::new(TestPrivacyCyclePrfProvider::bound());

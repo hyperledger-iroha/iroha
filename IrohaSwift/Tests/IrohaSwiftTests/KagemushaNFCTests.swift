@@ -40,12 +40,12 @@ final class KagemushaNFCTests: XCTestCase {
 
     func testApplicationIdentifierContractIsExactAndStrict() throws {
         let identifier = try KagemushaNFCProtocol.applicationIdentifier(
-            hex: " f049524f48415045455201 "
+            hex: " f0504b45504b524e464301 "
         )
         XCTAssertEqual(identifier, KagemushaNFCProtocol.defaultApplicationIdentifier)
         XCTAssertEqual(
             try KagemushaNFCProtocol.applicationIdentifierHex(identifier),
-            "F049524F48415045455201"
+            "F0504B45504B524E464301"
         )
         XCTAssertEqual(
             KagemushaNFCProtocol.parseCommand(
@@ -63,7 +63,7 @@ final class KagemushaNFCTests: XCTestCase {
             .selectOtherApplication
         )
         for invalid in ["", "F", "F049524Z", "F049 52", "F049524F",
-                        "F049524F48415045455201020304050607"] {
+                        "F0504B45504B524E464301020304050607"] {
             XCTAssertThrowsError(
                 try KagemushaNFCProtocol.applicationIdentifier(hex: invalid),
                 invalid

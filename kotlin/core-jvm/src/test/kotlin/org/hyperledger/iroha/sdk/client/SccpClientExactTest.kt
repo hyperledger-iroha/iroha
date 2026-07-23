@@ -27,14 +27,15 @@ import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.sccp.SccpLaneIdV1
 import org.hyperledger.iroha.sdk.sccp.SccpNetworkV1
 import org.hyperledger.iroha.sdk.sccp.SccpV1
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class SccpClientExactTest {
     private val authority = AccountAddress
-        .fromAccount(ByteArray(32) { 0x11 }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(0x11), "ed25519")
         .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
     private val otherAuthority = AccountAddress
-        .fromAccount(ByteArray(32) { 0x12 }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(0x12), "ed25519")
         .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
     private val bridgeFeePayment = FeePaymentIntent.authority(emptyList())
 
@@ -171,7 +172,7 @@ class SccpClientExactTest {
 
     @Test
     fun submitAuthorityRequiresExactTairaDiscriminant() {
-        val address = AccountAddress.fromAccount(ByteArray(32) { 0x41 }, "ed25519")
+        val address = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x41), "ed25519")
         val tairaAuthority = address.toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
         val artifact = canonicalArtifact()
         val nativeArtifact = canonicalNativeArtifact()

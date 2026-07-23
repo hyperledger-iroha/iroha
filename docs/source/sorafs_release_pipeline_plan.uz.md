@@ -2,12 +2,17 @@
 lang: uz
 direction: ltr
 source: docs/source/sorafs_release_pipeline_plan.md
-status: needs-review
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f256aaf61e64742a07cbc567fc5cef49e9028602037cdf80a4afd486e9ba9cf3
-source_last_modified: "2026-07-03T17:29:04.185345+00:00"
-translation_last_reviewed: 2026-07-03
+source_hash: 7127f10220a8c860a92a0f029b3415797fb9729bf808bee11dce3c7fffafa2b3
+source_last_modified: "2026-07-23T20:31:11.000000+00:00"
+translation_last_reviewed: 2026-07-23
 ---
+---
+title: SoraFS CLI/SDK Release & Testing Pipeline
+summary: Current SF-6 release automation and QA surfaces.
+---
+
 # SoraFS CLI/SDK Release & Testing Pipeline
 
 ## Goals
@@ -53,10 +58,24 @@ translation_last_reviewed: 2026-07-03
 ## Tooling
 
 - `ci/check_sorafs_cli_release.sh` is the committed local release gate for
-  formatting, Clippy, shell syntax, and focused SoraFS crate tests.
-- `docs/examples/sorafs_ci.md` carries the GitHub Actions release workflow
-  template. Commit `.github/workflows/sorafs-cli-release.yml` from that
-  template during release cutover if GitHub-hosted packaging is required.
+  formatting, Clippy, shell syntax, adversarial release-helper tests, and
+  focused SoraFS crate tests.
+- `.github/workflows/sorafs-cli-release.yml` runs the strict release gate,
+  validates `release/version-map.toml`, builds Linux/macOS/Windows `sorafs_cli` and
+  `sorafs_fetch` candidates, packages `sorafs-validate` with its checked FFI
+  header and deterministic manifest, generates an SPDX JSON dependency SBOM,
+  fails on known high/critical vulnerabilities, and optionally keyless-signs
+  and immediately verifies every candidate, manifest, SBOM, and scan report
+  through GitHub OIDC for an exact `sorafs-cli-v<version>` tag or reviewed manual
+  dispatch. `docs/examples/sorafs_ci.md` remains an integration example, not
+  the authoritative release workflow.
+- `scripts/check_sorafs_release_automation.py` pins the three SoraFS workflows
+  to reviewed full action commit hashes, rejects floating actions,
+  `pull_request_target`, network-bootstrap shell commands, cancellable evidence
+  jobs, missing release commands, and globally scoped OIDC permission. The
+  fixture and SDK lanes pin Python 3.11, supported Go 1.26 where used, and Node 24 LTS runtimes, and the
+  release gate installs only exact top-level versions from
+  `scripts/requirements.txt` before its Python tests.
 - SDK companion guard lanes are already wired through
   `.github/workflows/pr_sorafs_pin_register_sdk.yml` and
   `ci/check_sorafs_pin_register_sdk_guard.sh`, with Swift, JVM, C#,
@@ -80,14 +99,49 @@ translation_last_reviewed: 2026-07-03
   The wrapper rejects symlinked or non-regular bundle, signature, sign-summary,
   and verify-summary targets, plus symlinked output-parent components, before
   invoking the signing CLI so release evidence cannot be written through
-  ambiguous filesystem aliases.
+  ambiguous filesystem aliases. Wrapper options must also provide explicit
+  non-option-shaped values, and manifest, chunk-plan, chunk-summary, identity
+  token file, and prebuilt CLI inputs are rejected when they are symlinks,
+  missing, non-regular, or reached through symlinked parent components.
 - `scripts/package_sorafs_validate_release.sh` builds or packages
   `sorafs-validate` into `dist/sorafs-validate-release/`, stages the checked
   `include/sorafs_reference.h` C FFI header for downstream SDK bindings,
   records binary/header/archive SHA256 digests, records manifest and staged-file
-  digests, can emit a detached manifest signature with
-  `--manifest-signing-key`, and runs fixture smoke checks before archive
-  creation. Archive creation uses a metadata-normalized tar/gzip writer
+  digests, and runs fixture smoke checks before archive creation. The
+  production path accepts only a detached signature through
+  `--manifest-signature-in`; the local raw-seed signer additionally requires
+  the explicit `--development-local-signing` mode and is not a production
+  release path. Manifest signing is raw Ed25519 only and requires a 32-byte raw
+  `--manifest-public-key` plus an independently reviewed lowercase SHA-256
+  fingerprint of those exact public-key bytes through
+  `--manifest-public-key-fingerprint`. The development seed is exactly 32 raw
+  bytes, must be owned by the current effective user, have exactly one hard
+  link, and use mode `0400` or `0600`. Every key, seed, or external signature
+  input is copied from one stable no-follow descriptor into an owner-private
+  ephemeral snapshot before any build work. The packaged `sorafs-validate
+  release-manifest` command performs strict native key, fingerprint, and
+  signature validation with `ed25519-dalek`; it also performs the explicitly
+  development-gated raw-seed signing path. The helper rejects encoded,
+  malformed, or mismatched key material, fingerprint mismatches, and signatures
+  that are not a verified, nonzero 64-byte Ed25519 value. The reference
+  production release keeps the private key in PKCS#11/HSM custody: generate the
+  deterministic manifest once, sign its exact bytes with the HSM, then rerun
+  the identical package command with `--manifest-signature-in`, the reviewed
+  raw Ed25519 public key, and its fingerprint. The packager recreates the
+  manifest and admits the external signature only when native strict Ed25519
+  verification succeeds.
+  Signature publication is no-clobber and rejects the stage, archive, manifest,
+  checksum sidecars, input identities, existing destinations, and stale default
+  signatures before generated artifacts are changed.
+  Packager options must
+  provide explicit non-option-shaped values, prebuilt binaries, manifest
+  signing keys, manifest public keys, and the checked FFI header are rejected
+  when they are symlinks, missing, non-regular, non-executable where required,
+  or reached through symlinked parent components, and `--out-dir` is rejected
+  when it is a symlink or parent-aliased before any cleanup can remove staged
+  artifacts. Runtime keys are never staged or written into release artifacts.
+  Archive creation uses a
+  metadata-normalized tar/gzip writer
   (sorted entries, zero mtime, fixed uid/gid, deterministic file modes) so
   identical staged inputs reproduce the same archive hash. Generated `dist/*`
   artifacts remain untracked; keep only `dist/.gitkeep` committed.
@@ -96,6 +150,26 @@ translation_last_reviewed: 2026-07-03
   the signed manifest expected by clients.
 - `scripts/check_sorafs_production_readiness.py` is the final aggregate
   SoraFS promotion gate over the per-lane rollout/release evidence summaries.
+  Final readiness also requires exactly one signed, payload-free
+  `sorafs.production_readiness.foundational_prerequisites.v1` envelope covering
+  the exact ordered set `SFM-1`, `SF-1`, `SF-2`, `SF-2c`, `SF-3`, `SF-4`,
+  `SF-5b`, `SF-6`, and `SF-8a`. Each prerequisite row must be `verified`, carry
+  a fresh non-zero SHA-256 evidence anchor that is unique across the envelope,
+  and use the same final deployment ID and environment as every lane. The
+  envelope is signed over domain-separated canonical JSON with Ed25519; the
+  trusted public key is supplied at runtime, only its SHA-256 fingerprint is
+  copied to the aggregate report, and private keys, raw evidence, signatures,
+  and arbitrary payload fields are never copied there. The signing preimage is
+  the ASCII domain
+  `iroha:sorafs:production-readiness:foundational-prerequisites:v1` followed by
+  a zero byte and the compact, key-sorted, ASCII-escaped JSON encoding of the
+  whole envelope with only `signature.signature_hex` omitted; the algorithm and
+  trusted-key fingerprint remain signed. Operators must also pin
+  the exact monotonic release sequence and predecessor-envelope SHA-256 on the
+  command line. This makes missing, duplicate, stale, future-dated, mixed-context,
+  replayed, rolled-back, digest-tampered, self-signed, or signature-forged
+  prerequisite statements fail closed instead of allowing later feature lanes
+  to imply that their foundations were qualified.
   It requires each selected lane summary to be `ready`, have empty summary and
   artifact/load-error lists, carry fresh reviewed deployment-context
   fingerprints, cover that lane checker's full default required-kind set with
@@ -169,7 +243,15 @@ translation_last_reviewed: 2026-07-03
   before emitting
   `sorafs.production_readiness.aggregate_gate.v1`. The companion
   `scripts/run_sorafs_production_readiness.py` accepts reviewed per-lane
-  summary paths, requires exactly one summary input per required gate, requires
+  summary paths, requires exactly one summary input per required gate plus one
+  `--foundational-prerequisite-summary`, and requires the reviewed
+  `--foundational-prerequisite-signer-public-key-hex`,
+  `--foundational-prerequisite-release-sequence`, and
+  `--foundational-prerequisite-previous-envelope-sha256` trust/continuity
+  values. The schema-closed foundational metadata row in its dry-run plan
+  records only the prerequisite envelope path, exact required IDs, signer
+  fingerprint, sequence, and predecessor digest; neither the aggregate row nor
+  that metadata row stores signatures or evidence payload. The runner also requires
   an explicit canonical `--deployment-id`/`--environment` pair whose deployment
   id passes the reviewed deployment-id policy, carries no staging markers, and
   whose environment is `prod` or `production`, advertises both flags as
@@ -179,6 +261,10 @@ translation_last_reviewed: 2026-07-03
   `--require-gate` selection, validates the schema-closed collection plan
   envelope against the built command plan and independently rechecks final
   production deployment context before dry-run output or execution,
+  rejects reviewed summary, verifier, output, URL, and passthrough argument
+  strings whose raw or repeatedly percent-decoded components contain
+  secret-looking material, traversal, path separators, drive prefixes, or
+  URI-scheme-like host/path tokens before they can enter dry-run plans,
   rejects non-object or non-strict-JSON collection-plan renderings before
   stdout or verifier launch,
   and emits that dry-run collection plan so release operators can inspect the
@@ -199,17 +285,34 @@ translation_last_reviewed: 2026-07-03
   (`python/iroha_python`). Version and publish them through their package-native
   tooling, but keep release notes tied to the same fixture and schema hashes as
   the CLI.
-- There is no committed `release/version-map.toml` in this checkout. Add that
-  file together with the workflow step that consumes it if cross-package
-  publishing starts requiring a machine-readable version map.
+- `release/version-map.toml` is the schema-versioned cross-package release map.
+  `scripts/check_sorafs_release_version_map.py` rejects extra fields, duplicate
+  or unsorted package rows, ambiguous/symlinked paths, invalid SemVer, unsupported
+  ecosystems, and versions that drift from Cargo, Gradle properties, npm,
+  Python, MSBuild, or a canonical plain-SemVer source such as
+  `IrohaSwift/VERSION`. The release workflow consumes the validated top-level
+  release version and rejects a mismatched release tag before building artifacts.
 
 ## SBOM & Vulnerability Scanning
 
-- The committed SoraFS CLI gate currently covers formatting, Clippy, shell
-  syntax checks, the `sorafs_reference.h`/`reference_ffi.rs` header-contract
-  guard, and focused tests. Public artifact publishing should add SBOM
-  generation and signing to the same scripts before the artifacts are
-  advertised.
+- The committed SoraFS CLI gate covers formatting, Clippy, shell syntax checks,
+  the `sorafs_reference.h`/`reference_ffi.rs` header-contract guard, and focused
+  tests. The release workflow generates one source dependency SBOM at the gate
+  and a separate Syft SPDX JSON SBOM from each Linux, macOS, and Windows binary
+  package, including its deterministic standalone reference-validator archive
+  and FFI header, with Syft v1.44.0 and Grype v0.112.0 pinned explicitly. Both
+  the source and platform SBOMs
+  fail the candidate on high/critical Grype findings. Every platform package
+  includes its platform-specific SBOM and SARIF report, the source scan, and
+  all other candidate files in `SHA256SUMS`; requested keyless signing then
+  requires exactly the three expected platform checksum manifests, rejects
+  duplicate entries or any listed/actual file-set mismatch, verifies every
+  digest, and only then creates GitHub/Sigstore SLSA build
+  provenance over the complete candidate set. The offline provenance bundle is
+  retained with the candidate before every file is keyless-signed and
+  immediately verified together with the binaries. Public promotion
+  still requires a clean hosted run and the deployment/package canaries; source
+  configuration alone is not release evidence.
 - Existing repository patterns to reuse include `scripts/js_sbom_provenance.sh`,
   `scripts/android_sbom_provenance.sh`, and the docs portal `syft` packaging
   path. Keep generated SBOMs and signatures beside the release hashes in the

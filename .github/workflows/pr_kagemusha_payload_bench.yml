@@ -78,7 +78,7 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaScaledAmountTests.swift"
-      - "IrohaSwift/Tests/IrohaSwiftTests/OfflineDeviceAttestationABI20ParityTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/OfflineDeviceAttestationABI21ParityTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ToriiKagemushaAPIModelsTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift"
@@ -854,7 +854,7 @@ jobs:
         working-directory: java/iroha_android
 
   csharp-torii:
-    name: C# ABI-20/V4 Torii DTOs
+    name: C# ABI-21/V4 Torii DTOs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -864,7 +864,7 @@ jobs:
       - run: ci/check_kagemusha_recursive_spend_csharp_sdk.sh
 
   javascript-torii:
-    name: JavaScript ABI-20/V4 Torii DTOs
+    name: JavaScript ABI-21/V4 Torii DTOs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

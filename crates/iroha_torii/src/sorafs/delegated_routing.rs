@@ -1653,7 +1653,7 @@ mod tests {
 
     #[tokio::test]
     async fn authority_cache_reuses_one_byte_identical_committed_projection() {
-        let app = crate::test_utils::mk_app_state_for_tests_with_world(
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
             iroha_core::state::World::default(),
         );
         let cache = Arc::clone(&app.sorafs_routing_authority_cache);

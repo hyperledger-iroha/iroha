@@ -6,12 +6,10 @@ import Foundation
 /// protocol. V1 has one application identifier, one command set, and no codec
 /// negotiation or legacy fallback.
 public enum IrohaPeerNfcV1 {
-    /// ISO/IEC 7816 application identifier `F049524F48415045455201`.
-    public static let applicationIdentifier = Data([
-        0xF0, 0x49, 0x52, 0x4F, 0x48, 0x41, 0x50, 0x45, 0x45, 0x52, 0x01,
-    ])
-    public static let applicationIdentifierHex = "F049524F48415045455201"
-    public static let buildProfileMarker = "IrohaPeerNfcV1.AID.F049524F48415045455201"
+    /// ISO/IEC 7816 application identifier `F0504B45504B524E464301`.
+    public static let applicationIdentifierHex = "F0504B45504B524E464301"
+    public static let applicationIdentifier = decodeHex(applicationIdentifierHex)
+    public static let buildProfileMarker = "IrohaPeerNfcV1.AID.F0504B45504B524E464301"
     public static let commandClass: UInt8 = 0x80
     public static let wireVersion: UInt8 = 1
     public static let sessionIDBytes = 16
@@ -20,6 +18,22 @@ public enum IrohaPeerNfcV1 {
     public static let maximumMessageBytes = IrohaPeerWireMessageV1.headerBytes + 24_576
     public static let infoBytes = 98
     public static let statusBytes = 174
+
+    private static func decodeHex(_ value: String) -> Data {
+        precondition(value.count.isMultiple(of: 2))
+        var bytes = Data()
+        bytes.reserveCapacity(value.count / 2)
+        var cursor = value.startIndex
+        while cursor < value.endIndex {
+            let next = value.index(cursor, offsetBy: 2)
+            guard let byte = UInt8(value[cursor..<next], radix: 16) else {
+                preconditionFailure("Iroha peer NFC AID must be hexadecimal")
+            }
+            bytes.append(byte)
+            cursor = next
+        }
+        return bytes
+    }
     public static let paymentAdmissionBytes = 244
 
     fileprivate static let infoMagic = Data("INF1".utf8)

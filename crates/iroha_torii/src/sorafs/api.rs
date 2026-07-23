@@ -31945,7 +31945,10 @@ mod advert_tests {
         potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus, sign_potr_receipt_v1},
         proof_stream::ProofStreamTier,
     };
-    use sorafs_node::{ModerationQuarantineKeyWrapper, config::StorageConfig};
+    use sorafs_node::{
+        ModerationQuarantineKeyWrapper, NodeRuntimeDeps, PrivacyCyclePrfProviderErrorV1,
+        PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestV1, config::StorageConfig,
+    };
     use std::collections::{BTreeMap, HashSet};
     use tempfile::{NamedTempFile, TempDir};
     use tokio::net::TcpListener;
@@ -35635,6 +35638,20 @@ mod advert_tests {
 
     fn sorafs_app_state_with_privacy_aggregate_schedule()
     -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+        struct TestPrivacyCyclePrfProvider;
+
+        impl PrivacyCyclePrfProviderV1 for TestPrivacyCyclePrfProvider {
+            fn derive_cycle_output(
+                &self,
+                request: &PrivacyCyclePrfRequestV1,
+            ) -> Result<[u8; 32], PrivacyCyclePrfProviderErrorV1> {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(b"sorafs.torii.test-privacy-cycle-prf.v1");
+                hasher.update(&request.binding_digest());
+                Ok(*hasher.finalize().as_bytes())
+            }
+        }
+
         let auth = orderbook_auth_fixture();
         let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -35650,7 +35667,12 @@ mod advert_tests {
             }))
             .privacy_aggregate_policy(Some(privacy_aggregate_api_policy_config()))
             .build();
-        let node = sorafs_node::NodeHandle::new(cfg);
+        let node = sorafs_node::NodeHandle::try_new_with_runtime_deps(
+            cfg,
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(Arc::new(TestPrivacyCyclePrfProvider)),
+        )
+        .expect("initialise test node with privacy-cycle PRF provider");
         assert!(node.has_governance_publisher());
         let app_inner = Arc::get_mut(&mut app).expect("unique app state");
         app_inner.sorafs_node = node;

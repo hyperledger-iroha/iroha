@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model
 
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.norito.NoritoException
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import kotlin.test.Test
@@ -100,21 +101,32 @@ class TransactionPayloadTest {
     @Test
     fun `zero nonce throws`() {
         assertFailsWith<IllegalArgumentException> {
-            testPayload(nonce = 0, creationTimeMs = 1000L)
+            testPayload(nonce = 0L, creationTimeMs = 1000L)
         }
     }
 
     @Test
     fun `negative nonce throws`() {
         assertFailsWith<IllegalArgumentException> {
-            testPayload(nonce = -1, creationTimeMs = 1000L)
+            testPayload(nonce = -1L, creationTimeMs = 1000L)
         }
     }
 
     @Test
-    fun `positive nonce is valid`() {
-        val payload = testPayload(nonce = 42, creationTimeMs = 1000L)
-        assertEquals(42, payload.nonce)
+    fun `full nonzero u32 nonce range is valid`() {
+        val payload = testPayload(nonce = 0xffff_ffffL, creationTimeMs = 1000L)
+        assertEquals(0xffff_ffffL, payload.nonce)
+
+        val adapter = NoritoJavaCodecAdapter()
+        val decoded = adapter.decodeTransaction(adapter.encodeTransaction(payload))
+        assertEquals(0xffff_ffffL, decoded.nonce)
+    }
+
+    @Test
+    fun `nonce above u32 range throws`() {
+        assertFailsWith<IllegalArgumentException> {
+            testPayload(nonce = 0x1_0000_0000L, creationTimeMs = 1000L)
+        }
     }
 
     @Test
@@ -157,7 +169,7 @@ class TransactionPayloadTest {
         assertEquals("chain2", copied.chainId)
         assertEquals(sampleAuthority(0x21), copied.authority)
         assertEquals(2000L, copied.creationTimeMs)
-        assertEquals(10, copied.nonce)
+        assertEquals(10L, copied.nonce)
     }
 
     @Test
@@ -243,7 +255,7 @@ class TransactionPayloadTest {
         creationTimeMs: Long = System.currentTimeMillis(),
         executable: Executable = Executable.instructions(emptyList()),
         timeToLiveMs: Long? = null,
-        nonce: Int? = null,
+        nonce: Long? = null,
         feePayment: FeePaymentIntent = FeePaymentIntent.authority(emptyList()),
         metadata: Map<String, JsonValue> = emptyMap(),
     ): TransactionPayload = TransactionPayload(
@@ -258,7 +270,7 @@ class TransactionPayloadTest {
     )
 
     private fun sampleAuthority(fill: Int): String = AccountAddress
-        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
     companion object {

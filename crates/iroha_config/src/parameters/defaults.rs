@@ -1697,6 +1697,37 @@ pub mod sorafs {
             /// Initial ECH enabled state reported via telemetry.
             pub const ECH_ENABLED: bool = false;
         }
+
+        /// Governed compliance-controller defaults.
+        pub mod compliance {
+            use std::time::Duration;
+
+            use iroha_config_base::util::Bytes;
+
+            /// Keep the signed compliance controller disabled until governance
+            /// identities, feeds, storage, and a runtime transport are provisioned.
+            pub const ENABLED: bool = false;
+            /// Maximum encoded feed response.
+            pub const MAX_ENCODED_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
+            /// Maximum normalized/decompressed feed response.
+            pub const MAX_DECODED_BYTES: Bytes<u64> = Bytes(16 * 1024 * 1024);
+            /// Maximum admitted redirect count.
+            pub const MAX_REDIRECTS: u8 = 3;
+            /// Maximum distinct public DNS answers.
+            pub const MAX_DNS_ADDRESSES: usize = 8;
+            /// Per-connection feed timeout.
+            pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+            /// Total feed operation timeout.
+            pub const TOTAL_TIMEOUT: Duration = Duration::from_secs(20);
+            /// Maximum accepted timestamp skew.
+            pub const MAX_CLOCK_SKEW: Duration = Duration::from_secs(5 * 60);
+            /// Maximum age of one source feed at catalog construction.
+            pub const MAX_FEED_AGE: Duration = Duration::from_secs(60 * 60);
+            /// Maximum signed catalog validity interval.
+            pub const MAX_CATALOG_VALIDITY: Duration = Duration::from_secs(2 * 60 * 60);
+            /// Maximum durable promotion/rollback history.
+            pub const MAX_HISTORY_ENTRIES: usize = 256;
+        }
     }
 }
 

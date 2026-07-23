@@ -3,17 +3,17 @@ use group::Curve;
 use std::iter;
 
 use super::{
-    vanishing, ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, ChallengeY, Error,
-    VerifyingKey,
+    ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, ChallengeY, Error, VerifyingKey,
+    vanishing,
 };
 use crate::arithmetic::compute_inner_product;
-use crate::poly::commitment::{CommitmentScheme, Verifier};
 use crate::poly::VerificationStrategy;
+use crate::poly::commitment::{CommitmentScheme, Verifier};
 use crate::poly::{
-    commitment::{Blind, Params},
     VerifierQuery,
+    commitment::{Blind, Params},
 };
-use crate::transcript::{read_n_scalars, EncodedChallenge, TranscriptRead};
+use crate::transcript::{EncodedChallenge, TranscriptRead, read_n_scalars};
 
 #[cfg(feature = "batch")]
 mod batch;

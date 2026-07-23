@@ -2,6 +2,7 @@
 //! Native AMX multidataspace routing integration coverage.
 
 use std::{
+    collections::BTreeSet,
     num::NonZeroU32,
     time::{Duration, Instant},
 };
@@ -71,6 +72,9 @@ const VALIDATOR_FEE_SEED: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(90);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PIPELINE_TIME: Duration = Duration::from_secs(2);
+const NATIVE_AMX_SOAK_ITERATIONS_ENV: &str = "IROHA_NATIVE_AMX_SOAK_ITERATIONS";
+const NATIVE_AMX_SOAK_ITERATIONS_DEFAULT: usize = 10;
+const NATIVE_AMX_SOAK_ITERATIONS_MAX: usize = 100;
 
 #[derive(Clone)]
 struct ConfigLayer(Table);
@@ -783,7 +787,7 @@ fn assert_native_amx_relay_tamper_matrix(
     Ok(())
 }
 
-async fn wait_for_status_native_amx_evidence(
+async fn wait_for_diagnostics_native_amx_evidence(
     client: &Client,
     receipt: &NativeAmxReceipt,
     context: &str,
@@ -819,19 +823,20 @@ async fn wait_for_status_native_amx_evidence(
                     audit_native_amx_relay(&relay, &commitment, receipt)?;
                     return Ok((commitment, relay));
                 }
-                last_error =
-                    Some("typed status omitted the exact commitment or relay receipt".to_owned());
+                last_error = Some(
+                    "typed diagnostics omitted the exact commitment or relay receipt".to_owned(),
+                );
             }
             Ok(Err(err)) => last_error = Some(err.to_string()),
-            Err(err) => last_error = Some(format!("status task join error: {err}")),
+            Err(err) => last_error = Some(format!("diagnostics task join error: {err}")),
         }
         sleep(STATUS_POLL_INTERVAL).await;
     }
     let suffix = last_error
-        .map(|err| format!("; last status error: {err}"))
+        .map(|err| format!("; last diagnostics error: {err}"))
         .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for exact native AMX commitment and relay evidence{suffix}"
+        "{context}: timed out waiting for exact native AMX commitment and relay diagnostics{suffix}"
     ))
 }
 
@@ -853,10 +858,10 @@ async fn wait_for_all_peers_to_observe_native_amx_evidence(
 
     let mut canonical: Option<(LaneBlockCommitment, LaneRelayEnvelope)> = None;
     for (index, peer) in network.peers().iter().enumerate() {
-        let observed = wait_for_status_native_amx_evidence(
+        let observed = wait_for_diagnostics_native_amx_evidence(
             &peer.client(),
             expected_receipt,
-            &format!("{context}: peer {index} status"),
+            &format!("{context}: peer {index} diagnostics"),
         )
         .await?;
         if let Some((canonical_commitment, canonical_relay)) = canonical.as_ref() {
@@ -877,27 +882,30 @@ async fn wait_for_all_peers_to_observe_native_amx_evidence(
         .ok_or_else(|| eyre!("{context}: four-peer network returned no native AMX relay"))
 }
 
-async fn fetch_sumeragi_status_json(client: &Client) -> Result<JsonValue> {
-    let status_url = client.torii_url.join("v1/sumeragi/status")?;
+async fn fetch_sumeragi_diagnostics_json(client: &Client) -> Result<JsonValue> {
+    let diagnostics_url = client.torii_url.join("v1/sumeragi/diagnostics")?;
     let response = reqwest::Client::new()
-        .get(status_url)
+        .get(diagnostics_url)
         .send()
         .await
-        .wrap_err("fetch Sumeragi status")?;
+        .wrap_err("fetch Sumeragi diagnostics")?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .wrap_err("read Sumeragi status body")?;
+        .wrap_err("read Sumeragi diagnostics body")?;
     ensure!(
         status.is_success(),
-        "Sumeragi status request failed with status {status}: {body}"
+        "Sumeragi diagnostics request failed with status {status}: {body}"
     );
-    json::from_str(&body).wrap_err("parse Sumeragi status JSON")
+    json::from_str(&body).wrap_err("parse Sumeragi diagnostics JSON")
 }
 
-fn status_contains_native_amx_receipt(status: &JsonValue, receipt: &NativeAmxReceipt) -> bool {
-    let Some(commitments) = status
+fn diagnostics_contain_native_amx_receipt(
+    diagnostics: &JsonValue,
+    receipt: &NativeAmxReceipt,
+) -> bool {
+    let Some(commitments) = diagnostics
         .get("lane_settlement_commitments")
         .and_then(JsonValue::as_array)
     else {
@@ -986,8 +994,8 @@ fn status_contains_native_amx_receipt(status: &JsonValue, receipt: &NativeAmxRec
     })
 }
 
-fn native_amx_status_summary(status: &JsonValue) -> String {
-    let Some(commitments) = status
+fn native_amx_diagnostics_summary(diagnostics: &JsonValue) -> String {
+    let Some(commitments) = diagnostics
         .get("lane_settlement_commitments")
         .and_then(JsonValue::as_array)
     else {
@@ -1045,7 +1053,7 @@ fn native_amx_status_summary(status: &JsonValue) -> String {
     )
 }
 
-async fn wait_for_status_native_amx_receipt(
+async fn wait_for_diagnostics_native_amx_receipt(
     client: &Client,
     receipt: &NativeAmxReceipt,
     context: &str,
@@ -1053,24 +1061,100 @@ async fn wait_for_status_native_amx_receipt(
     let started = Instant::now();
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match fetch_sumeragi_status_json(client).await {
-            Ok(status) if status_contains_native_amx_receipt(&status, receipt) => return Ok(()),
-            Ok(status) => {
+        match fetch_sumeragi_diagnostics_json(client).await {
+            Ok(diagnostics) if diagnostics_contain_native_amx_receipt(&diagnostics, receipt) => {
+                return Ok(());
+            }
+            Ok(diagnostics) => {
                 last_error = Some(format!(
-                    "status did not include expected native AMX receipt ({})",
-                    native_amx_status_summary(&status)
+                    "diagnostics did not include expected native AMX receipt ({})",
+                    native_amx_diagnostics_summary(&diagnostics)
                 ));
             }
-            Err(err) => last_error = Some(err.to_string()),
+            Err(error) => last_error = Some(error.to_string()),
         }
         sleep(STATUS_POLL_INTERVAL).await;
     }
     let suffix = last_error
-        .map(|err| format!("; last status error: {err}"))
+        .map(|error| format!("; last diagnostics error: {error}"))
         .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for native AMX receipt in Sumeragi status{suffix}"
+        "{context}: timed out waiting for native AMX receipt in Sumeragi diagnostics{suffix}"
     ))
+}
+
+fn native_amx_soak_iterations() -> Result<usize> {
+    let raw = std::env::var(NATIVE_AMX_SOAK_ITERATIONS_ENV)
+        .unwrap_or_else(|_| NATIVE_AMX_SOAK_ITERATIONS_DEFAULT.to_string());
+    let iterations = raw.parse::<usize>().wrap_err_with(|| {
+        format!("{NATIVE_AMX_SOAK_ITERATIONS_ENV} must be an integer in 1..={NATIVE_AMX_SOAK_ITERATIONS_MAX}")
+    })?;
+    ensure!(
+        (1..=NATIVE_AMX_SOAK_ITERATIONS_MAX).contains(&iterations),
+        "{NATIVE_AMX_SOAK_ITERATIONS_ENV} must be in 1..={NATIVE_AMX_SOAK_ITERATIONS_MAX}, got {iterations}"
+    );
+    Ok(iterations)
+}
+
+fn native_amx_soak_transaction(
+    submitter: &Client,
+    iteration: usize,
+    initialize_dataspaces: bool,
+) -> Result<SignedTransaction> {
+    let merchant_domain = DomainId::try_new(format!("soakmerchant{iteration:03}"), "acme")
+        .wrap_err("construct soak merchant domain")?;
+    let treasury_domain = DomainId::try_new(format!("soakbankvault{iteration:03}"), "bank")
+        .wrap_err("construct soak bank domain")?;
+    let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
+    let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
+    let mut instructions = Vec::with_capacity(if initialize_dataspaces { 4 } else { 2 });
+    if initialize_dataspaces {
+        instructions.push(dataspace_setup_instruction(
+            "acme",
+            acme_dataspace,
+            &submitter.account,
+        )?);
+        instructions.push(dataspace_setup_instruction(
+            "bank",
+            bank_dataspace,
+            &submitter.account,
+        )?);
+    }
+    instructions.push(domain_setup_instruction_in_dataspace(
+        &merchant_domain,
+        acme_dataspace,
+        &submitter.account,
+    )?);
+    instructions.push(domain_setup_instruction_in_dataspace(
+        &treasury_domain,
+        bank_dataspace,
+        &submitter.account,
+    )?);
+    Ok(submitter.build_transaction(instructions, Metadata::default()))
+}
+
+fn ensure_entrypoint_committed_once(
+    client: &Client,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    context: &str,
+) -> Result<()> {
+    let occurrences = client
+        .query(FindBlocks)
+        .execute_all()
+        .wrap_err_with(|| format!("{context}: query canonical blocks"))?
+        .iter()
+        .map(|block| {
+            block
+                .entrypoint_hashes()
+                .filter(|hash| *hash == entrypoint_hash)
+                .count()
+        })
+        .sum::<usize>();
+    ensure!(
+        occurrences == 1,
+        "{context}: expected one canonical application for {entrypoint_hash}, observed {occurrences}"
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1139,7 +1223,7 @@ async fn mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result
         )
         .await?;
         assert_native_amx_relay_tamper_matrix(&relay, &receipt)?;
-        wait_for_status_native_amx_receipt(&submitter, &receipt, context).await?;
+        wait_for_diagnostics_native_amx_receipt(&submitter, &receipt, context).await?;
 
         submitter.submit::<InstructionBox>(
             Log::new(
@@ -1239,8 +1323,150 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
         )
         .await?;
         assert_native_amx_relay_tamper_matrix(&relay, &receipt)?;
-        wait_for_status_native_amx_receipt(&restarted_client, &receipt, context).await?;
+        wait_for_diagnostics_native_amx_receipt(&restarted_client, &receipt, context).await?;
 
+        Ok(())
+    }
+    .await;
+
+    network.shutdown().await;
+    result
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "long-running rotating-validator Native AMX fault soak"]
+async fn native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs()
+-> Result<()> {
+    init_instruction_registry();
+    let context =
+        stringify!(native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs);
+    let iterations = native_amx_soak_iterations()?;
+    let Some(network) = sandbox::start_network_async_or_skip(localnet_builder(), context).await?
+    else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        let config_layers: Vec<ConfigLayer> = network
+            .config_layers()
+            .map(|layer| ConfigLayer(layer.into_owned()))
+            .collect();
+        let mut observed_sources = BTreeSet::new();
+
+        for iteration in 0..iterations {
+            let offline_index = iteration % PEERS;
+            let submit_index = (offline_index + 1) % PEERS;
+            let offline_peer = network
+                .peers()
+                .get(offline_index)
+                .cloned()
+                .ok_or_else(|| eyre!("iteration {iteration}: missing offline peer"))?;
+            let submit_peer = network
+                .peers()
+                .get(submit_index)
+                .ok_or_else(|| eyre!("iteration {iteration}: missing submit peer"))?;
+            let submitter =
+                submit_peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+            let transaction =
+                native_amx_soak_transaction(&submitter, iteration, iteration == 0)?;
+            let entrypoint_hash = transaction.hash_as_entrypoint();
+
+            offline_peer.shutdown().await;
+
+            // Always restart the rotated validator, even if the three-live-peer
+            // commit attempt fails. This keeps the failure diagnostic local to
+            // the iteration and lets network teardown remain deterministic.
+            let outage_result: Result<(SignedBlock, NativeAmxReceipt)> = async {
+                let approved_route =
+                    submit_and_wait_for_approval(&submitter, transaction.clone()).await?;
+                if let Some((lane_id, dataspace_id)) = approved_route {
+                    ensure!(
+                        (lane_id == LaneId::new(ACME_LANE)
+                            && dataspace_id == DataSpaceId::new(ACME_DATASPACE))
+                            || (lane_id == LaneId::new(UNIVERSAL_LANE)
+                                && dataspace_id == DataSpaceId::UNIVERSAL),
+                        "iteration {iteration}: unexpected coordinator route lane {} dataspace {}",
+                        lane_id.as_u32(),
+                        dataspace_id.as_u64()
+                    );
+                }
+                let block = wait_for_block_with_entrypoint(
+                    &submitter,
+                    entrypoint_hash,
+                    &format!("iteration {iteration}: three-live-validator commit"),
+                )
+                .await?;
+                let receipt = assert_native_amx_execution_context(&block, &transaction)?;
+                ensure!(
+                    observed_sources.insert(receipt.source_id),
+                    "iteration {iteration}: a source identity was reused"
+                );
+                let [first, second] = receipt.legs.as_slice() else {
+                    return Err(eyre!(
+                        "iteration {iteration}: expected exactly two participant legs"
+                    ));
+                };
+                ensure!(
+                    first.prepare_qc.body != second.prepare_qc.body
+                        && first.commit_qc.body != second.commit_qc.body,
+                    "iteration {iteration}: participant routes did not retain independent phase-QC bodies"
+                );
+                Ok((block, receipt))
+            }
+            .await;
+
+            let restart_result = offline_peer
+                .start_checked(config_layers.iter().cloned(), None)
+                .await
+                .wrap_err_with(|| {
+                    format!("iteration {iteration}: restart validator {offline_index}")
+                });
+            restart_result?;
+            let (block, receipt) = outage_result?;
+
+            let relay = wait_for_all_peers_to_observe_native_amx_evidence(
+                &network,
+                &transaction,
+                block.hash(),
+                &receipt,
+                &format!("iteration {iteration}: post-restart convergence"),
+            )
+            .await?;
+            assert_native_amx_relay_tamper_matrix(&relay, &receipt)?;
+
+            for (peer_index, peer) in network.peers().iter().enumerate() {
+                let client = peer.client();
+                ensure_entrypoint_committed_once(
+                    &client,
+                    entrypoint_hash,
+                    &format!("iteration {iteration}: peer {peer_index}"),
+                )?;
+                let diagnostics = client
+                    .get_sumeragi_diagnostics()
+                    .wrap_err_with(|| {
+                        format!("iteration {iteration}: peer {peer_index} diagnostics")
+                    })?;
+                let durable_rows = diagnostics
+                    .native_amx_participant_applications
+                    .iter()
+                    .filter(|row| {
+                        row.application_block_hash == Some(block.hash())
+                            && row.state.as_str() == "durably_applied"
+                    })
+                    .collect::<Vec<_>>();
+                ensure!(
+                    durable_rows.len() == 1
+                        && durable_rows[0].lane_id == LaneId::new(BANK_LANE)
+                        && durable_rows[0].dataspace_id == DataSpaceId::new(BANK_DATASPACE),
+                    "iteration {iteration}: peer {peer_index} must expose exactly the separate BANK participant application, got {durable_rows:?}"
+                );
+            }
+        }
+
+        ensure!(
+            observed_sources.len() == iterations,
+            "fault soak lost or duplicated Native AMX source identities"
+        );
         Ok(())
     }
     .await;

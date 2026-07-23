@@ -372,6 +372,14 @@ codegen-units = 256
 debug = 0
 codegen-units = 256
 
+# `iroha_data_model` is a very broad derive-heavy crate. LLVM `-O3` for this
+# one package exceeds the reviewed mobile/Kagemusha release-build memory
+# envelope even with a single job and hundreds of codegen units. Measured O2
+# also crossed the fixed 13 GiB soft ceiling before proof work began, so O1
+# avoids that optimizer-only peak. Halo2, core, and the bridge remain at O3.
+[profile.release.package.iroha_data_model]
+opt-level = 1
+
 [profile.deploy]
 inherits = "release"
 strip = "symbols"

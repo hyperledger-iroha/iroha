@@ -16,11 +16,12 @@ import json
 import math
 import os
 import re
+import stat
 import statistics
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn, Sequence
 
 
@@ -35,6 +36,9 @@ MIN_THROUGHPUT_RATIO = 1.5
 MAX_P95_LATENCY_RATIO = 1.25
 MAX_OFFERED_LOAD_DEVIATION_FRACTION = 0.01
 SEED_DERIVATION = "sha256(seed_namespace + ':' + decimal_pair_index)"
+MAX_BUNDLE_FILE_COUNT = 256
+MAX_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
+MAX_BUNDLE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 
 REQUIRED_TOOLING = (
     ("localnet", "scripts/deploy_localnet.sh"),
@@ -45,6 +49,7 @@ REQUIRED_TOOLING = (
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _SEED_NAMESPACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SAFE_PATH_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _MANIFEST_FIELDS = {
     "schema",
@@ -268,6 +273,119 @@ def _require_text(value: Any, label: str) -> str:
     return value
 
 
+def _require_safe_relative_path(value: Any, label: str) -> str:
+    relative = _require_text(value, label)
+    pure = PurePosixPath(relative)
+    if (
+        relative != pure.as_posix()
+        or pure.is_absolute()
+        or not pure.parts
+        or any(
+            part in {"", ".", ".."}
+            or _SAFE_PATH_COMPONENT_RE.fullmatch(part) is None
+            for part in pure.parts
+        )
+    ):
+        _fail(f"{label} must be a normalized relative safe in-bundle path")
+    return relative
+
+
+def _scan_bundle(root: Path) -> tuple[set[str], set[str]]:
+    """Enumerate a bounded bundle without following links or special files."""
+
+    try:
+        root_metadata = root.lstat()
+    except OSError as error:
+        raise EvidenceError(
+            f"evidence bundle root cannot be inspected: {root}: {error}"
+        ) from error
+    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(
+        root_metadata.st_mode
+    ):
+        _fail(f"evidence bundle root must be a non-symlink directory: {root}")
+
+    files: set[str] = set()
+    directories: set[str] = set()
+    inodes: dict[tuple[int, int], str] = {}
+    total_bytes = 0
+
+    def visit(directory: Path, prefix: PurePosixPath | None) -> None:
+        nonlocal total_bytes
+        try:
+            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        except OSError as error:
+            raise EvidenceError(
+                f"evidence bundle directory cannot be enumerated: {directory}: {error}"
+            ) from error
+        for entry in entries:
+            component = entry.name
+            if _SAFE_PATH_COMPONENT_RE.fullmatch(component) is None:
+                _fail(
+                    "evidence bundle contains an unsafe path component: "
+                    f"{component!r}"
+                )
+            relative_path = (
+                PurePosixPath(component)
+                if prefix is None
+                else prefix / component
+            )
+            relative = relative_path.as_posix()
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise EvidenceError(
+                    f"evidence bundle entry cannot be inspected: {relative}: {error}"
+                ) from error
+            if stat.S_ISLNK(metadata.st_mode):
+                _fail(f"evidence bundle contains a symlink: {relative}")
+            if stat.S_ISDIR(metadata.st_mode):
+                directories.add(relative)
+                visit(Path(entry.path), relative_path)
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                _fail(f"evidence bundle contains a nonregular entry: {relative}")
+            if metadata.st_nlink != 1:
+                _fail(f"evidence bundle file has a hard-link alias: {relative}")
+            inode = (metadata.st_dev, metadata.st_ino)
+            alias = inodes.get(inode)
+            if alias is not None:
+                _fail(
+                    "evidence bundle files are hard-link aliases: "
+                    f"{alias} and {relative}"
+                )
+            inodes[inode] = relative
+            if metadata.st_size > MAX_BUNDLE_FILE_BYTES:
+                _fail(
+                    f"evidence bundle file exceeds {MAX_BUNDLE_FILE_BYTES} bytes: "
+                    f"{relative}"
+                )
+            total_bytes += metadata.st_size
+            if total_bytes > MAX_BUNDLE_TOTAL_BYTES:
+                _fail(
+                    "evidence bundle exceeds aggregate size limit "
+                    f"{MAX_BUNDLE_TOTAL_BYTES} bytes"
+                )
+            files.add(relative)
+            if len(files) > MAX_BUNDLE_FILE_COUNT:
+                _fail(
+                    "evidence bundle exceeds file-count limit "
+                    f"{MAX_BUNDLE_FILE_COUNT}"
+                )
+
+    visit(root, None)
+    return files, directories
+
+
+def _expected_bundle_directories(files: set[str]) -> set[str]:
+    directories: set[str] = set()
+    for relative in files:
+        parent = PurePosixPath(relative).parent
+        while parent != PurePosixPath("."):
+            directories.add(parent.as_posix())
+            parent = parent.parent
+    return directories
+
+
 def _require_int(value: Any, label: str, *, minimum: int = 0) -> int:
     if type(value) is not int or value < minimum:
         _fail(f"{label} must be an integer >= {minimum}")
@@ -302,14 +420,18 @@ def _require_digest(value: Any, label: str) -> str:
     return digest
 
 
-def _require_ref(value: Any, root: Path, label: str) -> Path:
+def _require_ref(
+    value: Any,
+    root: Path,
+    label: str,
+    *,
+    referenced_paths: set[str] | None = None,
+) -> Path:
     ref = _require_object(value, label)
     _require_exact_fields(ref, _FILE_REF_FIELDS, label)
-    relative = _require_text(ref["path"], f"{label}.path")
+    relative = _require_safe_relative_path(ref["path"], f"{label}.path")
     expected_digest = _require_digest(ref["sha256"], f"{label}.sha256")
-    relative_path = Path(relative)
-    if relative_path.is_absolute() or any(part in {"", ".", ".."} for part in relative_path.parts):
-        _fail(f"{label}.path must be a normalized relative in-bundle path")
+    relative_path = PurePosixPath(relative)
 
     candidate = root
     for part in relative_path.parts:
@@ -327,6 +449,8 @@ def _require_ref(value: Any, root: Path, label: str) -> Path:
             f"{label}.sha256 mismatch for {relative}: "
             f"recorded={expected_digest}, actual={actual_digest}"
         )
+    if referenced_paths is not None:
+        referenced_paths.add(relative)
     return candidate
 
 
@@ -415,6 +539,7 @@ def _validate_raw_run(
     budgets: dict[str, Any],
     evidence_root: Path,
     seen_support_paths: set[Path],
+    referenced_paths: set[str],
 ) -> RunMetrics:
     run = _require_object(raw, label)
     _require_exact_fields(run, _RAW_RUN_FIELDS, label)
@@ -452,7 +577,12 @@ def _validate_raw_run(
     _require_exact_fields(artifacts, _RUN_ARTIFACT_FIELDS, f"{label}.artifacts")
     artifact_paths: dict[str, Path] = {}
     for name in sorted(_RUN_ARTIFACT_FIELDS):
-        path = _require_ref(artifacts[name], evidence_root, f"{label}.artifacts.{name}")
+        path = _require_ref(
+            artifacts[name],
+            evidence_root,
+            f"{label}.artifacts.{name}",
+            referenced_paths=referenced_paths,
+        )
         if path in seen_support_paths:
             _fail(f"{label}.artifacts.{name} duplicates support evidence from another run")
         seen_support_paths.add(path)
@@ -639,7 +769,11 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
     if manifest_path.is_symlink() or not manifest_path.is_file():
         _fail(f"evidence manifest must be a regular non-symlink file: {manifest_path}")
     manifest_path = manifest_path.resolve()
+    if manifest_path.name != "scaling_evidence.json":
+        _fail("evidence manifest must use the canonical scaling_evidence.json name")
     root = manifest_path.parent
+    bundle_files, bundle_directories = _scan_bundle(root)
+    referenced_paths: set[str] = set()
     manifest = _require_object(load_json(manifest_path, "evidence manifest"), "evidence manifest")
     _require_exact_fields(manifest, _MANIFEST_FIELDS, "evidence manifest")
     if manifest["schema"] != EVIDENCE_SCHEMA:
@@ -654,12 +788,18 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
     if manifest["seed_derivation"] != SEED_DERIVATION:
         _fail(f"evidence manifest.seed_derivation must be {SEED_DERIVATION!r}")
 
-    identity_path = _require_ref(manifest["identity"], root, "evidence manifest.identity")
+    identity_path = _require_ref(
+        manifest["identity"],
+        root,
+        "evidence manifest.identity",
+        referenced_paths=referenced_paths,
+    )
     identity = validate_identity(load_json(identity_path, "pinned identity"), "pinned identity")
     config_path = _require_ref(
         manifest["configuration"],
         root,
         "evidence manifest.configuration",
+        referenced_paths=referenced_paths,
     )
     if sha256_file(config_path) != identity["software"]["nexus_config_sha256"]:
         _fail("configuration artifact does not match identity.software.nexus_config_sha256")
@@ -742,8 +882,18 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
             f"expected {MAX_P95_LATENCY_RATIO}"
         )
 
-    _require_ref(manifest["trial_harness"], root, "evidence manifest.trial_harness")
-    _require_ref(manifest["validator"], root, "evidence manifest.validator")
+    _require_ref(
+        manifest["trial_harness"],
+        root,
+        "evidence manifest.trial_harness",
+        referenced_paths=referenced_paths,
+    )
+    _require_ref(
+        manifest["validator"],
+        root,
+        "evidence manifest.validator",
+        referenced_paths=referenced_paths,
+    )
     tooling = _require_list(manifest["tooling"], "evidence manifest.tooling")
     if len(tooling) != len(REQUIRED_TOOLING):
         _fail("evidence manifest.tooling must contain the three required tooling artifacts")
@@ -754,7 +904,12 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
         _require_exact_fields(entry, _TOOL_FIELDS, label)
         if entry["role"] != role or entry["source_path"] != source_path:
             _fail(f"{label} does not identify required tool {role}:{source_path}")
-        _require_ref(entry["artifact"], root, f"{label}.artifact")
+        _require_ref(
+            entry["artifact"],
+            root,
+            f"{label}.artifact",
+            referenced_paths=referenced_paths,
+        )
 
     runs = _require_list(manifest["runs"], "evidence manifest.runs")
     expected_run_count = EXPECTED_PAIR_COUNT * 2
@@ -803,8 +958,18 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
         if entry["exit_code"] != 0 or type(entry["exit_code"]) is not int:
             _fail(f"{label}.exit_code must be integer zero")
 
-        raw_path = _require_ref(entry["raw_samples"], root, f"{label}.raw_samples")
-        log_path = _require_ref(entry["command_log"], root, f"{label}.command_log")
+        raw_path = _require_ref(
+            entry["raw_samples"],
+            root,
+            f"{label}.raw_samples",
+            referenced_paths=referenced_paths,
+        )
+        log_path = _require_ref(
+            entry["command_log"],
+            root,
+            f"{label}.command_log",
+            referenced_paths=referenced_paths,
+        )
         if raw_path in seen_raw_paths:
             _fail(f"{label}.raw_samples duplicates another run path")
         seen_raw_paths.add(raw_path)
@@ -827,6 +992,7 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
                 budgets=budget_values,
                 evidence_root=root,
                 seen_support_paths=seen_support_paths,
+                referenced_paths=referenced_paths,
             )
         )
 
@@ -907,6 +1073,25 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
         _fail(
             "four-lane pooled p95 commit latency gate failed: "
             f"ratio={latency_ratio:.12g} > {MAX_P95_LATENCY_RATIO}"
+        )
+
+    expected_files = referenced_paths | {"scaling_evidence.json"}
+    if "validation_report.json" in bundle_files:
+        expected_files.add("validation_report.json")
+    unexpected_files = sorted(bundle_files - expected_files)
+    missing_files = sorted(expected_files - bundle_files)
+    if unexpected_files or missing_files:
+        _fail(
+            "evidence bundle file inventory differs from the canonical manifest; "
+            f"missing={missing_files}, unexpected={unexpected_files}"
+        )
+    expected_directories = _expected_bundle_directories(expected_files)
+    unexpected_directories = sorted(bundle_directories - expected_directories)
+    missing_directories = sorted(expected_directories - bundle_directories)
+    if unexpected_directories or missing_directories:
+        _fail(
+            "evidence bundle directory inventory differs from canonical paths; "
+            f"missing={missing_directories}, unexpected={unexpected_directories}"
         )
 
     return {

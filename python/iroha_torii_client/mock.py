@@ -270,6 +270,8 @@ class _MockState:
             return self._pipeline_config(body)
         if method == "POST" and path == "/__mock__/accounts/config":
             return self._account_config(body)
+        if method == "POST" and path == "/__mock__/sumeragi/config":
+            return self._sumeragi_config(body)
         if method == "POST" and path == "/__mock__/gov/config":
             return self._gov_config(body)
         if method == "POST" and path == "/__mock__/sccp/config":
@@ -1786,6 +1788,32 @@ class _MockState:
                 "no_participation_total": 9,
             },
         }
+
+    def _sumeragi_config(self, body: bytes) -> _Response:
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError as err:
+            raise ValueError(f"invalid sumeragi config: {err}") from err
+        if not isinstance(payload, dict):
+            raise ValueError("sumeragi config must be an object")
+
+        updates: Dict[str, Dict[str, Any]] = {}
+        for field, attribute in (
+            ("status", "sumeragi_status"),
+            ("leader", "sumeragi_leader"),
+            ("telemetry", "sumeragi_telemetry"),
+        ):
+            value = payload.get(field)
+            if value is not None:
+                if not isinstance(value, dict):
+                    raise ValueError(f"{field} must be an object")
+                updates[attribute] = dict(value)
+
+        with self._lock:
+            for attribute, value in updates.items():
+                setattr(self, attribute, value)
+
+        return _json_response(HTTPStatus.OK, {"ok": True})
 
 
 def _is_true(values: Optional[Iterable[str]]) -> bool:

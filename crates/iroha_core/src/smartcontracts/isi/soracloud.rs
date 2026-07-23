@@ -25727,6 +25727,15 @@ mod tests {
             .unwrap_or_else(|err| panic!("failed to parse {}: {err}", fixture_path.display()))
     }
 
+    fn shared_identifier_receipt_fixture() -> norito::json::Value {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/soracloud/identifier_receipt_vectors_v1.json");
+        let fixture = std::fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", fixture_path.display()));
+        norito::json::from_str(&fixture)
+            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", fixture_path.display()))
+    }
+
     fn shared_fhe_governance_bundle_fixture() -> FheGovernanceBundleV1 {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/soracloud/fhe_governance_bundle_v1.json");
@@ -25798,6 +25807,47 @@ mod tests {
             SORACLOUD_BFV_OPERATION_VECTOR_SET
         );
         operation_vectors
+    }
+
+    fn assert_bfv_policy_identity_fixture(root: &norito::json::Value) {
+        let policy = fixture_get(root, "policy");
+        let owner_literal = fixture_str(policy, "owner");
+        let owner = AccountId::parse_encoded(owner_literal)
+            .expect("BFV fixture owner must be a strictly admissible canonical I105 account");
+        assert_eq!(
+            owner.canonical(),
+            owner_literal,
+            "BFV fixture owner must use its canonical I105 rendering"
+        );
+
+        let resolver_literal = fixture_str(policy, "resolver_public_key");
+        let resolver = resolver_literal
+            .parse::<PublicKey>()
+            .expect("BFV fixture resolver public key must pass strict cryptographic validation");
+        assert_eq!(
+            resolver
+                .try_to_prefixed_string()
+                .expect("validated BFV resolver public key must render canonically"),
+            resolver_literal,
+            "BFV fixture resolver public key must use canonical prefixed multihash syntax"
+        );
+        assert_eq!(
+            resolver.algorithm(),
+            Algorithm::Ed25519,
+            "BFV fixture resolver must use Ed25519"
+        );
+        assert_eq!(
+            owner.account_id().try_signatory(),
+            Some(&resolver),
+            "BFV fixture owner must be controlled by the resolver public key"
+        );
+
+        let receipt_fixture = shared_identifier_receipt_fixture();
+        assert_eq!(
+            resolver_literal,
+            fixture_str(&receipt_fixture, "resolver_public_key"),
+            "BFV and receipt fixtures must reuse the deterministic resolver identity"
+        );
     }
 
     fn assert_bfv_public_parameters_fixture(
@@ -27128,6 +27178,7 @@ mod tests {
     #[test]
     fn soracloud_bfv_operation_vectors_match_shared_fixture() {
         let root = shared_bfv_fixture();
+        assert_bfv_policy_identity_fixture(&root);
         let operation_vectors = fixture_operation_vectors(&root);
         let (params, public_parameters, secret_key, evaluation_keys) =
             bfv_operation_material(operation_vectors);

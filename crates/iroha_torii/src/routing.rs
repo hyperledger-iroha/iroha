@@ -10304,29 +10304,31 @@ fn bind_permanent_asset_alias_for_test(
 }
 
 #[cfg(test)]
-fn bind_account_alias_for_test(
-    state: &std::sync::Arc<iroha_core::state::State>,
+fn insert_account_alias_binding_for_test(
+    world: &mut iroha_core::state::WorldTransaction<'_, '_>,
     account_id: &AccountId,
-    alias_literal: &str,
+    label: iroha_data_model::account::rekey::AccountAlias,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
 ) {
-    use iroha_core::smartcontracts::Execute as _;
-
-    let label = iroha_data_model::account::rekey::AccountAlias::from_literal(
-        alias_literal,
-        &state.nexus_snapshot().dataspace_catalog,
-    )
-    .expect("valid account alias");
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
+    let selector = iroha_core::sns::selector_for_account_alias(&label, catalog)
+        .expect("account alias selector");
+    let address = iroha_data_model::account::AccountAddress::from_account_id(account_id)
+        .expect("account alias owner address");
+    let record = iroha_data_model::sns::NameRecordV1::new(
+        selector.clone(),
+        account_id.clone(),
+        vec![iroha_data_model::sns::NameControllerV1::account(&address)],
         0,
         0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        iroha_data_model::metadata::Metadata::default(),
     );
-    let mut block = state.block(header);
-    let mut tx = block.transaction();
-    let world = tx.world_mut_for_testing();
+    world.smart_contract_state_mut_for_testing().insert(
+        iroha_core::sns::record_storage_key(&selector),
+        norito::codec::Encode::encode(&record),
+    );
     world
         .account_aliases_mut_for_testing()
         .insert(label.clone(), account_id.clone());
@@ -10343,8 +10345,181 @@ fn bind_account_alias_for_test(
         label.clone(),
         iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
     );
+}
+
+#[cfg(test)]
+fn bind_account_alias_for_test(
+    state: &std::sync::Arc<iroha_core::state::State>,
+    account_id: &AccountId,
+    alias_literal: &str,
+) {
+    use iroha_core::smartcontracts::Execute as _;
+
+    let catalog = state.nexus_snapshot().dataspace_catalog;
+    let label =
+        iroha_data_model::account::rekey::AccountAlias::from_literal(alias_literal, &catalog)
+            .expect("valid account alias");
+    let selector = iroha_core::sns::selector_for_account_alias(&label, &catalog)
+        .expect("account alias selector");
+    let address = iroha_data_model::account::AccountAddress::from_account_id(account_id)
+        .expect("account alias owner address");
+    let record = iroha_data_model::sns::NameRecordV1::new(
+        selector.clone(),
+        account_id.clone(),
+        vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+        0,
+        0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        iroha_data_model::metadata::Metadata::default(),
+    );
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero_ext::nonzero!(1_u64),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    tx.world_mut_for_testing()
+        .smart_contract_state_mut_for_testing()
+        .insert(
+            iroha_core::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    let resolved_alias = iroha_data_model::alias_setup::ResolvedAccountAliasV1::resolve_catalog(
+        alias_literal,
+        &catalog,
+    )
+    .expect("resolved account alias");
+    iroha_data_model::isi::alias_setup::EnsureAlias::new(
+        iroha_data_model::alias_setup::AliasIntentV1::AccountAlias(
+            iroha_data_model::alias_setup::AliasAccountIntentV1 {
+                alias: resolved_alias,
+                target_account: account_id.clone(),
+                provision: iroha_data_model::alias_setup::AccountProvisionV1::Existing,
+                role: iroha_data_model::alias_setup::AccountAliasRoleV1::Additional,
+            },
+        ),
+        iroha_data_model::alias_setup::AliasLeaseAcquisitionV1::new(1, None),
+        iroha_data_model::alias_setup::AliasQuoteGuardV1 {
+            expected_policy_version: 0,
+            expected_payment_asset: iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::domain::DomainId::try_new("assets", "universal")
+                    .expect("fixture asset domain"),
+                "xor".parse().expect("fixture asset name"),
+            ),
+            max_amount: iroha_primitives::numeric::Quantity::zero(),
+            valid_until_ms: 0,
+        },
+    )
+    .execute(account_id, &mut tx)
+    .expect("repair account alias binding from active SNS lease");
     tx.apply();
     block.commit().expect("commit account alias for test");
+    let state_view = state.view();
+    assert_eq!(
+        iroha_core::sns::active_account_alias_owner(state_view.world(), &catalog, &label, 0,)
+            .as_ref(),
+        Some(account_id),
+        "active SNS account-alias lease must resolve to the fixture account",
+    );
+    assert_eq!(
+        iroha_core::sns::resolve_active_account_alias(state_view.world(), &catalog, &label, 0,)
+            .as_ref(),
+        Some(account_id),
+        "authoritative account-alias lease and binding indexes must agree",
+    );
+}
+
+#[cfg(test)]
+fn bind_universal_account_alias_on_world_for_test(
+    world: &iroha_core::state::World,
+    account_id: &AccountId,
+    alias_literal: &str,
+) {
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+    let label =
+        iroha_data_model::account::rekey::AccountAlias::from_literal(alias_literal, &catalog)
+            .expect("valid universal account alias");
+    let selector = iroha_core::sns::selector_for_account_alias(&label, &catalog)
+        .expect("account alias selector");
+    let mut block = world.block();
+    let mut tx = block
+        .transaction_without_telemetry(iroha_config::parameters::actual::LaneConfig::default(), 0);
+    insert_account_alias_binding_for_test(&mut tx, account_id, label.clone(), &catalog);
+    tx.apply();
+    block.commit();
+    let world_view = world.view();
+    assert_eq!(
+        iroha_core::sns::active_owner_by_selector(&world_view, &selector, 0).as_ref(),
+        Some(account_id),
+        "active SNS account-alias record must be committed to fixture state",
+    );
+    assert_eq!(
+        iroha_core::sns::active_account_alias_selector(&world_view, &catalog, &label, 0)
+            .expect("active account-alias selector"),
+        selector,
+        "active and statically rendered account-alias selectors must agree",
+    );
+    assert_eq!(
+        iroha_core::sns::active_account_alias_owner(&world_view, &catalog, &label, 0).as_ref(),
+        Some(account_id),
+        "active SNS account-alias lease must resolve to the fixture account",
+    );
+    assert_eq!(
+        iroha_core::sns::resolve_active_account_alias(&world_view, &catalog, &label, 0).as_ref(),
+        Some(account_id),
+        "authoritative account-alias lease and binding indexes must agree",
+    );
+}
+
+#[cfg(test)]
+fn grant_account_alias_resolve_for_test(
+    state: &std::sync::Arc<iroha_core::state::State>,
+    authority: &AccountId,
+    alias_literal: &str,
+) {
+    use iroha_core::smartcontracts::Execute as _;
+
+    let catalog = &state.nexus_snapshot().dataspace_catalog;
+    let alias =
+        iroha_data_model::account::rekey::AccountAlias::from_literal(alias_literal, catalog)
+            .expect("valid account alias");
+    let scope = match alias.domain_id(catalog).expect("valid alias domain") {
+        Some(domain_id) => {
+            iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                domain_id,
+            )
+        }
+        None => {
+            iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                alias.dataspace,
+            )
+        }
+    };
+    let permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::account::CanResolveAccountAlias { scope }.into();
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero_ext::nonzero!(1_u64),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    iroha_data_model::isi::Grant::account_permission(permission, authority.clone())
+        .execute(authority, &mut tx)
+        .expect("grant account-alias resolve permission");
+    tx.apply();
+    block
+        .commit()
+        .expect("commit account-alias resolve permission");
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -23856,7 +24031,10 @@ mod multisig_selector_tests {
     fn install_paynet_routing_state(state: &State) {
         let (lane_catalog, dataspace_catalog) = paynet_routing_catalogs();
         let mut nexus = state.nexus.write();
+        nexus.enabled = true;
         nexus.routing_policy = paynet_routing_policy();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
         nexus.lane_catalog = lane_catalog;
         nexus.dataspace_catalog = dataspace_catalog;
     }
@@ -23888,7 +24066,10 @@ mod multisig_selector_tests {
         )
         .expect("valid SBP lane catalog");
         let mut nexus = state.nexus.write();
+        nexus.enabled = true;
         nexus.routing_policy = paynet_routing_policy();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
         nexus.lane_catalog = lane_catalog;
         nexus.dataspace_catalog = dataspace_catalog;
     }
@@ -24014,17 +24195,9 @@ mod multisig_selector_tests {
         let expired_instructions = vec![dm::Log::new(dm::Level::INFO, "expired".to_owned()).into()];
         let expired_hash = HashOf::new(&expired_instructions);
 
-        let label = iroha_data_model::account::rekey::AccountAlias::new(
-            label_name,
-            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                domain_id.clone().name().clone(),
-            )),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-        );
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let multisig_account = Account::new(multisig_id.account().clone())
-            .with_label(Some(label))
             .with_metadata(multisig_metadata)
             .build(&authority);
         let signer_one_account = Account::new(signer_one_id.account().clone()).build(&authority);
@@ -24034,6 +24207,11 @@ mod multisig_selector_tests {
             [domain],
             [multisig_account, signer_one_account, signer_two_account],
             [],
+        );
+        bind_universal_account_alias_on_world_for_test(
+            &world,
+            &multisig_account_id,
+            &alias_literal,
         );
         insert_native_multisig_account_state(
             &mut world,
@@ -24130,22 +24308,19 @@ mod multisig_selector_tests {
             IrohaJson::new(spec.clone()),
         );
 
-        let label = iroha_data_model::account::rekey::AccountAlias::new(
-            label_name,
-            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                domain_id.clone().name().clone(),
-            )),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-        );
         let authority = signer_id.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let multisig_account = Account::new(multisig_id.account().clone())
-            .with_label(Some(label))
             .with_metadata(multisig_metadata)
             .build(&authority);
         let signer_account = Account::new(signer_id.account().clone()).build(&authority);
 
         let mut world = World::with([domain], [multisig_account, signer_account], []);
+        bind_universal_account_alias_on_world_for_test(
+            &world,
+            &multisig_account_id,
+            &alias_literal,
+        );
         insert_native_multisig_account_state(
             &mut world,
             &multisig_account_id,
@@ -24181,12 +24356,12 @@ mod multisig_selector_tests {
             kotoba: Vec::new(),
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                 name: "main".to_owned(),
-                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
                 params: Vec::new(),
                 argument_schema: None,
                 return_type: None,
                 return_schema: None,
-                permission: None,
+                permission: Some("CanEnactGovernance".to_owned()),
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: Some(true),
@@ -24247,17 +24422,9 @@ mod multisig_selector_tests {
             IrohaJson::new(spec.clone()),
         );
 
-        let label = iroha_data_model::account::rekey::AccountAlias::new(
-            label_name,
-            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                domain_id.clone().name().clone(),
-            )),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-        );
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let multisig_account = Account::new(multisig_id.account().clone())
-            .with_label(Some(label))
             .with_metadata(multisig_metadata)
             .build(&authority);
         let signer_one_account = Account::new(signer_one_id.account().clone()).build(&authority);
@@ -24274,6 +24441,7 @@ mod multisig_selector_tests {
             &spec,
         );
         let state = build_state(world);
+        bind_account_alias_for_test(&state, &multisig_account_id, &alias_literal);
 
         (
             state,
@@ -24609,10 +24777,15 @@ mod multisig_selector_tests {
     #[test]
     fn multisig_selector_rejects_noncanonical_alias_whitespace() {
         let state = build_state(World::default());
+        let authority =
+            checked_multisig_selector_account_id(0x77, "derive alias parser authority key");
         for alias in ["", " ", " cbdc@banka.universal", "cbdc@banka.universal "] {
-            let err =
-                resolve_multisig_account_selector(state.as_ref(), &alias_selector(alias), None)
-                    .expect_err("noncanonical alias whitespace must be rejected");
+            let err = resolve_multisig_account_selector(
+                state.as_ref(),
+                &alias_selector(alias),
+                Some(&authority),
+            )
+            .expect_err("noncanonical alias whitespace must be rejected");
             let message = expect_app_validation(err, "multisig_selector_invalid");
             assert!(message.contains("exact non-empty canonical literal"));
         }
@@ -24757,12 +24930,16 @@ mod multisig_selector_tests {
 
     #[tokio::test]
     async fn multisig_spec_returns_not_found_for_unknown_alias() {
-        let state = build_state(World::default());
-        let err = handle_post_multisig_spec(
+        let (world, _multisig, resolve_authority, _signer_two, alias_literal, _active_hash) =
+            multisig_test_world();
+        let state = build_state(world);
+        grant_account_alias_resolve_for_test(&state, &resolve_authority, &alias_literal);
+        let err = handle_post_multisig_spec_for_authority(
             state,
-            NoritoJson(MultisigSpecRequestDto {
+            MultisigSpecRequestDto {
                 selector: alias_selector("missing@banka.universal"),
-            }),
+            },
+            resolve_authority,
         )
         .await
         .expect_err("unknown alias must fail");
@@ -24778,22 +24955,17 @@ mod multisig_selector_tests {
         let scoped = dm::AccountId::new(keypair.public_key().clone());
         let authority = scoped.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(scoped.account().clone())
-            .with_label(Some(account::rekey::AccountAlias::new(
-                "cbdc".parse().expect("label"),
-                Some(account::rekey::AccountAliasDomain::new(
-                    domain_id.name().clone(),
-                )),
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-            )))
-            .build(&authority);
+        let account = Account::new(scoped.account().clone()).build(&authority);
         let state = build_state(World::with([domain], [account], []));
+        bind_account_alias_for_test(&state, &scoped, "cbdc@banka.universal");
+        grant_account_alias_resolve_for_test(&state, &scoped, "cbdc@banka.universal");
 
-        let err = handle_post_multisig_spec(
+        let err = handle_post_multisig_spec_for_authority(
             state,
-            NoritoJson(MultisigSpecRequestDto {
+            MultisigSpecRequestDto {
                 selector: alias_selector("cbdc@banka.universal"),
-            }),
+            },
+            scoped,
         )
         .await
         .expect_err("non-multisig alias must fail");
@@ -25019,18 +25191,9 @@ mod multisig_selector_tests {
             transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
         };
 
-        let label = iroha_data_model::account::rekey::AccountAlias::new(
-            label_name.clone(),
-            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                domain_id.clone().name().clone(),
-            )),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-        );
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let multisig_account = Account::new(multisig_id.account().clone())
-            .with_label(Some(label))
-            .build(&authority);
+        let multisig_account = Account::new(multisig_id.account().clone()).build(&authority);
         let signer_one_account = Account::new(signer_one_id.account().clone()).build(&authority);
         let signer_two_account = Account::new(signer_two_id.account().clone()).build(&authority);
 
@@ -25047,11 +25210,15 @@ mod multisig_selector_tests {
         );
 
         let state = build_state(world);
-        let JsonBody(response) = handle_post_multisig_spec(
+        let alias_literal = format!("{label_name}@{domain_id}");
+        bind_account_alias_for_test(&state, &multisig_account_id, &alias_literal);
+        grant_account_alias_resolve_for_test(&state, &signer_one_id, &alias_literal);
+        let JsonBody(response) = handle_post_multisig_spec_for_authority(
             state,
-            NoritoJson(MultisigSpecRequestDto {
-                selector: alias_selector(&format!("{label_name}@{domain_id}")),
-            }),
+            MultisigSpecRequestDto {
+                selector: alias_selector(&alias_literal),
+            },
+            signer_one_id,
         )
         .await
         .expect("native account state should resolve spec");
@@ -25160,21 +25327,17 @@ mod multisig_selector_tests {
 
     #[tokio::test]
     async fn multisig_read_endpoints_match_alias_and_concrete_resolution() {
-        let (
-            world,
-            multisig_account_id,
-            _signer_one_id,
-            _signer_two_id,
-            alias_literal,
-            active_hash,
-        ) = multisig_test_world();
+        let (world, multisig_account_id, signer_one_id, _signer_two_id, alias_literal, active_hash) =
+            multisig_test_world();
         let state = build_state(world);
+        grant_account_alias_resolve_for_test(&state, &signer_one_id, &alias_literal);
 
-        let JsonBody(alias_spec) = handle_post_multisig_spec(
+        let JsonBody(alias_spec) = handle_post_multisig_spec_for_authority(
             state.clone(),
-            NoritoJson(MultisigSpecRequestDto {
+            MultisigSpecRequestDto {
                 selector: alias_selector(&alias_literal),
-            }),
+            },
+            signer_one_id.clone(),
         )
         .await
         .expect("alias spec");
@@ -25192,14 +25355,15 @@ mod multisig_selector_tests {
         );
         assert_eq!(alias_spec.spec, concrete_spec.spec);
 
-        let JsonBody(alias_query) = handle_post_multisig_proposals_query(
+        let JsonBody(alias_query) = handle_post_multisig_proposals_query_for_authority(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            MultisigProposalsQueryRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
-            }),
+            },
+            signer_one_id.clone(),
         )
         .await
         .expect("alias query");
@@ -25222,13 +25386,14 @@ mod multisig_selector_tests {
         assert_eq!(alias_query.proposals, concrete_query.proposals);
         assert_eq!(alias_query.proposals[0].proposal_id, active_hash);
 
-        let JsonBody(alias_resolve) = handle_post_multisig_proposals_resolve(
+        let JsonBody(alias_resolve) = handle_post_multisig_proposals_resolve_for_authority(
             state.clone(),
-            NoritoJson(MultisigProposalsResolveRequestDto {
+            MultisigProposalsResolveRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
-            }),
+            },
+            signer_one_id,
         )
         .await
         .expect("alias resolve");
@@ -25252,17 +25417,19 @@ mod multisig_selector_tests {
 
     #[tokio::test]
     async fn multisig_proposals_query_is_bounded_and_cursor_is_context_bound() {
-        let (world, multisig_account_id, _signer_one, _signer_two, alias_literal, active_hash) =
+        let (world, multisig_account_id, signer_one, _signer_two, alias_literal, active_hash) =
             multisig_test_world();
         let state = build_state(world);
-        let JsonBody(first) = handle_post_multisig_proposals_query(
+        grant_account_alias_resolve_for_test(&state, &signer_one, &alias_literal);
+        let JsonBody(first) = handle_post_multisig_proposals_query_for_authority(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            MultisigProposalsQueryRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: Vec::new(),
                 cursor: None,
                 limit: Some(1),
-            }),
+            },
+            signer_one,
         )
         .await
         .expect("first bounded proposal page");
@@ -25510,7 +25677,7 @@ mod multisig_selector_tests {
             canceled_instructions,
             1_700_000_000_222,
             4_000_000_000_000,
-            BTreeSet::from([signer_one_id]),
+            BTreeSet::from([signer_one_id.clone()]),
             None,
         );
         world.smart_contract_state_mut_for_testing().insert(
@@ -25534,15 +25701,17 @@ mod multisig_selector_tests {
             .expect("encode canceled terminal state"),
         );
         let state = build_state(world);
+        grant_account_alias_resolve_for_test(&state, &signer_one_id, &alias_literal);
 
-        let JsonBody(query_response) = handle_post_multisig_proposals_query(
+        let JsonBody(query_response) = handle_post_multisig_proposals_query_for_authority(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            MultisigProposalsQueryRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: vec!["CANCELED".to_owned()],
                 cursor: None,
                 limit: None,
-            }),
+            },
+            signer_one_id.clone(),
         )
         .await
         .expect("query canceled");
@@ -25554,13 +25723,14 @@ mod multisig_selector_tests {
             Some(1_700_000_000_333)
         );
 
-        let JsonBody(resolve_response) = handle_post_multisig_proposals_resolve(
+        let JsonBody(resolve_response) = handle_post_multisig_proposals_resolve_for_authority(
             state,
-            NoritoJson(MultisigProposalsResolveRequestDto {
+            MultisigProposalsResolveRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: Some(canceled_hash.clone()),
                 instructions_hash: None,
-            }),
+            },
+            signer_one_id,
         )
         .await
         .expect("resolve canceled");
@@ -25991,9 +26161,15 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_approve_accepts_alias_selector_and_returns_resolved_account_id() {
-        let (world, multisig_account_id, _signer_one_id, signer_two_id, alias_literal, active_hash) =
-            multisig_test_world();
+    async fn multisig_approve_prepares_with_concrete_selector_and_returns_resolved_account_id() {
+        let (
+            world,
+            multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            active_hash,
+        ) = multisig_test_world();
         let state = build_state(world);
         let response = handle_post_contract_call_multisig_approve(
             Arc::new("multisig-selector-test".parse().expect("chain id")),
@@ -26001,7 +26177,7 @@ mod multisig_selector_tests {
             state,
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigContractCallApproveDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 private_key: None,
                 public_key_hex: None,
@@ -26031,9 +26207,15 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_cancel_accepts_alias_selector_and_returns_cancel_proposal_hash() {
-        let (world, multisig_account_id, _signer_one_id, signer_two_id, alias_literal, active_hash) =
-            multisig_test_world();
+    async fn multisig_cancel_prepares_with_concrete_selector_and_returns_cancel_proposal_hash() {
+        let (
+            world,
+            multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            active_hash,
+        ) = multisig_test_world();
         let state = build_state(world);
         let response = handle_post_multisig_cancel(
             Arc::new("multisig-selector-test".parse().expect("chain id")),
@@ -26041,7 +26223,7 @@ mod multisig_selector_tests {
             state,
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigCancelRequestDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 private_key: None,
                 public_key_hex: None,
@@ -26083,7 +26265,7 @@ mod multisig_selector_tests {
             multisig_account_id,
             signer_one_id,
             signer_two_id,
-            alias_literal,
+            _alias_literal,
             active_hash,
         ) = multisig_test_world();
         let target_hash = active_hash
@@ -26118,7 +26300,7 @@ mod multisig_selector_tests {
             state,
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigCancelRequestDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
                 private_key: None,
                 public_key_hex: None,
@@ -26148,13 +26330,13 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_propose_accepts_alias_selector_and_returns_resolved_account_id() {
+    async fn multisig_propose_prepares_with_concrete_selector_and_returns_resolved_account_id() {
         let (
             state,
             multisig_account_id,
             authority_account_id,
             signer_two_id,
-            alias_literal,
+            _alias_literal,
             authority_keypair,
         ) = multisig_contract_test_fixture();
         install_contract_instance(
@@ -26171,7 +26353,7 @@ mod multisig_selector_tests {
             state,
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigContractCallProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
                 private_key: None,
                 public_key_hex: None,
@@ -26212,7 +26394,7 @@ mod multisig_selector_tests {
             multisig_account_id,
             authority_account_id,
             signer_two_id,
-            alias_literal,
+            _alias_literal,
             authority_keypair,
         ) = multisig_contract_test_fixture();
         let code = ivm::KotodamaCompiler::new()
@@ -26244,7 +26426,7 @@ seiyaku BytesPayloadNormalizeTest {
             Arc::clone(&state),
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigContractCallProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
                 private_key: None,
                 public_key_hex: None,
@@ -26304,13 +26486,13 @@ seiyaku BytesPayloadNormalizeTest {
     }
 
     #[tokio::test]
-    async fn multisig_generic_propose_accepts_alias_selector_and_returns_resolved_account_id() {
+    async fn multisig_generic_propose_prepares_with_concrete_selector() {
         let (
             state,
             multisig_account_id,
             _authority_account_id,
             signer_two_id,
-            alias_literal,
+            _alias_literal,
             _authority_keypair,
         ) = multisig_contract_test_fixture();
         let instruction: dm::InstructionBox =
@@ -26322,7 +26504,7 @@ seiyaku BytesPayloadNormalizeTest {
             state,
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
                 private_key: None,
                 public_key_hex: None,
@@ -26360,7 +26542,7 @@ seiyaku BytesPayloadNormalizeTest {
 
     #[tokio::test]
     async fn multisig_generic_propose_rejects_incomplete_detached_signature_fields() {
-        let (state, _multisig_account_id, _authority_account_id, signer_two_id, alias_literal, _) =
+        let (state, multisig_account_id, _authority_account_id, signer_two_id, _alias_literal, _) =
             multisig_contract_test_fixture();
         let instruction: dm::InstructionBox =
             dm::Log::new(dm::Level::INFO, "multisig propose".to_owned()).into();
@@ -26371,7 +26553,7 @@ seiyaku BytesPayloadNormalizeTest {
             state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 private_key: None,
                 public_key_hex: None,
@@ -26396,7 +26578,7 @@ seiyaku BytesPayloadNormalizeTest {
             state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 private_key: None,
                 public_key_hex: Some("00".repeat(32)),
@@ -26421,7 +26603,7 @@ seiyaku BytesPayloadNormalizeTest {
             state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id),
                 signer_account_id: signer_two_id.clone(),
                 private_key: None,
                 public_key_hex: Some("  ".to_owned()),
@@ -26455,7 +26637,7 @@ seiyaku BytesPayloadNormalizeTest {
             0xff, 0xff, 0xff, 0x7f,
         ];
 
-        let (state, _multisig_account_id, _authority_account_id, signer_two_id, alias_literal, _) =
+        let (state, multisig_account_id, _authority_account_id, signer_two_id, _alias_literal, _) =
             multisig_contract_test_fixture();
         let instruction: dm::InstructionBox =
             dm::Log::new(dm::Level::INFO, "multisig propose".to_owned()).into();
@@ -26466,7 +26648,7 @@ seiyaku BytesPayloadNormalizeTest {
             state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 private_key: None,
                 public_key_hex: Some("not hex".to_owned()),
@@ -26496,7 +26678,7 @@ seiyaku BytesPayloadNormalizeTest {
                 state.clone(),
                 MaybeTelemetry::disabled(),
                 NoritoJson(MultisigProposeDto {
-                    selector: alias_selector(&alias_literal),
+                    selector: concrete_selector(multisig_account_id.clone()),
                     signer_account_id: signer_two_id.clone(),
                     private_key: None,
                     public_key_hex: Some(hex::encode(public_key)),
@@ -26534,7 +26716,7 @@ seiyaku BytesPayloadNormalizeTest {
             state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 private_key: None,
                 public_key_hex: Some(other_public_key_hex),
@@ -26564,7 +26746,7 @@ seiyaku BytesPayloadNormalizeTest {
             state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
                 private_key: None,
                 public_key_hex: Some(signer_public_key_hex.clone()),
@@ -26590,7 +26772,7 @@ seiyaku BytesPayloadNormalizeTest {
             state,
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id),
                 signer_account_id: signer_two_id,
                 private_key: None,
                 public_key_hex: Some(signer_public_key_hex),
@@ -26614,7 +26796,7 @@ seiyaku BytesPayloadNormalizeTest {
     async fn multisig_generic_immediate_propose_routes_inner_dataspace() {
         use base64::Engine as _;
 
-        let (mut world, multisig_account_id, signer_account_id, alias_literal, signer_keypair) =
+        let (mut world, multisig_account_id, signer_account_id, _alias_literal, signer_keypair) =
             quorum_one_multisig_world();
         let chain_id: Arc<ChainId> = Arc::new(
             "multisig-generic-immediate-route-test"
@@ -26696,7 +26878,7 @@ seiyaku BytesPayloadNormalizeTest {
             Arc::clone(&state),
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id,
                 private_key: None,
                 public_key_hex: Some(public_key_hex),
@@ -26715,6 +26897,14 @@ seiyaku BytesPayloadNormalizeTest {
         .expect("immediate multisig proposal should submit");
         let payload = decode_json_response(response).await;
         assert_eq!(payload["submitted"].as_bool(), Some(true));
+        let submitted_hash = payload["tx_hash_hex"]
+            .as_str()
+            .expect("submitted transaction hash");
+        assert_eq!(
+            payload["executed_tx_hash_hex"].as_str(),
+            Some(submitted_hash),
+            "a quorum-reaching proposal executes inside the submitted transaction",
+        );
 
         let mut queued_event = None;
         while let Ok(event) = event_receiver.try_recv() {
@@ -26731,6 +26921,104 @@ seiyaku BytesPayloadNormalizeTest {
             RoutingDecision::new(queued_event.lane_id, queued_event.dataspace_id),
             RoutingDecision::new(paynet_lane_id, paynet_dataspace_id),
             "immediate multisig proposal should preserve the inner instruction route",
+        );
+    }
+
+    #[tokio::test]
+    async fn multisig_generic_proposal_only_response_has_no_executed_hash() {
+        use base64::Engine as _;
+
+        let (
+            mut world,
+            multisig_account_id,
+            signer_one_id,
+            _signer_two_id,
+            _alias_literal,
+            _active_hash,
+        ) = multisig_test_world();
+        let signer_keypair =
+            checked_multisig_selector_keypair(0x60, "derive quorum-two proposal signer key");
+        assert_eq!(
+            signer_one_id.signatory(),
+            signer_keypair.public_key(),
+            "fixture signer identity must match its deterministic key",
+        );
+        let chain_id: Arc<ChainId> = Arc::new(
+            "multisig-generic-proposal-only-test"
+                .parse()
+                .expect("chain id"),
+        );
+        let creation_time_ms = current_time_millis();
+        let instructions = vec![dm::InstructionBox::from(dm::Log::new(
+            dm::Level::INFO,
+            "proposal requires another signature".to_owned(),
+        ))];
+        insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            instructions.clone(),
+            creation_time_ms,
+            creation_time_ms + 60_000,
+            BTreeSet::new(),
+            None,
+        );
+        let state = build_state(world);
+        let fee_payment = dm::FeePaymentIntent::authority(Vec::new(), None);
+        let mut builder = dm::TransactionBuilder::new(
+            chain_id.as_ref().clone(),
+            signer_one_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(Duration::from_millis(creation_time_ms));
+        let signed = sign_app_api_transaction(
+            builder
+                .with_fee_payment_intent(fee_payment.clone())
+                .with_metadata(build_multisig_propose_metadata_with_validation_fee(
+                    None, None,
+                ))
+                .with_instructions([dm::InstructionBox::from(MultisigPropose::new(
+                    multisig_account_id.clone(),
+                    instructions.clone(),
+                    None,
+                ))]),
+            signer_keypair.private_key(),
+            ENDPOINT_MULTISIG_PROPOSE,
+        )
+        .expect("sign detached quorum-two proposal");
+        let (_, public_key_bytes) = signer_keypair.public_key().to_bytes();
+        let public_key_hex = hex::encode(public_key_bytes);
+        let signature_b64 = base64::engine::general_purpose::STANDARD
+            .encode(signed.signature().payload().payload());
+
+        let response = handle_post_multisig_propose(
+            chain_id,
+            build_queue(),
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigProposeDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                signer_account_id: signer_one_id,
+                private_key: None,
+                public_key_hex: Some(public_key_hex),
+                signature_b64: Some(signature_b64),
+                creation_time_ms: Some(creation_time_ms),
+                fee_payment,
+                memo: None,
+                validation_fee_policy_version: None,
+                validation_fee_policy_hash: None,
+                validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
+                instructions,
+            }),
+        )
+        .await
+        .expect("proposal-only multisig transaction should submit");
+        let payload = decode_json_response(response).await;
+        assert_eq!(payload["submitted"].as_bool(), Some(true));
+        assert!(payload["tx_hash_hex"].as_str().is_some());
+        assert!(
+            payload["executed_tx_hash_hex"].is_null(),
+            "a proposal below quorum must not claim that value-moving instructions executed",
         );
     }
 
@@ -26785,10 +27073,10 @@ seiyaku BytesPayloadNormalizeTest {
     async fn multisig_generic_propose_rejects_private_key_server_side_signing() {
         let (
             state,
-            _multisig_account_id,
+            multisig_account_id,
             _authority_account_id,
             signer_two_id,
-            alias_literal,
+            _alias_literal,
             authority_keypair,
         ) = multisig_contract_test_fixture();
         let instruction: dm::InstructionBox =
@@ -26800,7 +27088,7 @@ seiyaku BytesPayloadNormalizeTest {
             state,
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigProposeDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id),
                 signer_account_id: signer_two_id,
                 private_key: Some(dm::ExposedPrivateKey(
                     authority_keypair.private_key().clone(),
@@ -27015,9 +27303,15 @@ seiyaku BytesPayloadNormalizeTest {
     }
 
     #[tokio::test]
-    async fn multisig_generic_approve_accepts_alias_selector_and_returns_resolved_account_id() {
-        let (world, multisig_account_id, _signer_one_id, signer_two_id, alias_literal, active_hash) =
-            multisig_test_world();
+    async fn multisig_generic_approve_prepares_with_concrete_selector() {
+        let (
+            world,
+            multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            active_hash,
+        ) = multisig_test_world();
         let state = build_state(world);
 
         let response = handle_post_multisig_approve(
@@ -27026,7 +27320,7 @@ seiyaku BytesPayloadNormalizeTest {
             state,
             MaybeTelemetry::disabled(),
             NoritoJson(MultisigApproveDto {
-                selector: alias_selector(&alias_literal),
+                selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
                 private_key: None,
                 public_key_hex: None,
@@ -27282,7 +27576,11 @@ pub async fn handle_post_contract_call_multisig_propose(
             proposal_id: Some(proposal_id),
             instructions_hash: Some(instructions_hash),
             tx_hash_hex: Some(tx_hash_hex.clone()),
-            executed_tx_hash_hex: None,
+            // A quorum-reaching proposal carries MultisigPropose and
+            // MultisigApprove in this same transaction. The nested contract
+            // call therefore has the same authoritative finality identity as
+            // the submitted outer transaction.
+            executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
             creation_time_ms: Some(creation_time_ms),
             fee_payment: fee_payment.clone(),
             signing_message_b64: None,
@@ -27865,7 +28163,11 @@ pub async fn handle_post_multisig_propose(
                 proposal_id: Some(proposal_id),
                 instructions_hash: Some(instructions_hash),
                 tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: None,
+                // The quorum-one fast path executes the proposed instruction
+                // batch atomically in this same transaction. Returning its
+                // hash lets clients distinguish completed value movement from
+                // a proposal that is only collecting signatures.
+                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
                 creation_time_ms: Some(creation_time_ms),
                 fee_payment: fee_payment.clone(),
                 signing_message_b64: None,
@@ -42599,9 +42901,8 @@ mod stateful_account_path_parser_tests {
         state::{State, World},
     };
     use iroha_data_model::{
-        account::{Account, rekey::AccountAlias},
+        account::Account,
         domain::{Domain, DomainId},
-        name::Name,
     };
     use iroha_test_samples::ALICE_ID;
 
@@ -42612,18 +42913,9 @@ mod stateful_account_path_parser_tests {
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let authority = ALICE_ID.clone();
         let scoped_account_id = authority.clone();
-        let alias = AccountAlias::new(
-            Name::from_str("operator").expect("alias name"),
-            Some(account::rekey::AccountAliasDomain::new(
-                domain_id.name().clone(),
-            )),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-        );
         let world = World::with(
             [Domain::new(domain_id).build(&authority)],
-            [Account::new(scoped_account_id.account().clone())
-                .with_label(Some(alias))
-                .build(&authority)],
+            [Account::new(scoped_account_id.account().clone()).build(&authority)],
             [],
         );
         let state = Arc::new(State::new_for_testing(
@@ -42631,6 +42923,7 @@ mod stateful_account_path_parser_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
+        bind_account_alias_for_test(&state, &scoped_account_id, "operator@banka.universal");
         let telemetry = MaybeTelemetry::for_tests();
 
         let (resolved, canonical) = parse_account_path_segment_with_state(
@@ -55176,6 +55469,9 @@ pub async fn handle_v1_sumeragi_diagnostics(
     } else {
         Vec::new()
     };
+    let durable_lane_diagnostics = nexus_enabled
+        .then(|| state.durable_lane_diagnostics())
+        .unwrap_or_default();
 
     let lane_commitments = nexus_enabled
         .then(|| {
@@ -55259,21 +55555,13 @@ pub async fn handle_v1_sumeragi_diagnostics(
         lane_relay_envelopes: nexus_enabled
             .then_some(snapshot.lane_relay_envelopes)
             .unwrap_or_default(),
-        lane_payload_ownerships: nexus_enabled
-            .then_some(snapshot.lane_payload_ownerships)
-            .unwrap_or_default(),
-        committed_lane_blocks: nexus_enabled
-            .then(|| {
-                snapshot
-                    .committed_lane_blocks
-                    .iter()
-                    .map(committed_lane_block_wire)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        lane_block_sessions: nexus_enabled
-            .then_some(snapshot.lane_block_sessions)
-            .unwrap_or_default(),
+        lane_payload_ownerships: durable_lane_diagnostics.lane_payload_ownerships,
+        committed_lane_blocks: durable_lane_diagnostics
+            .committed_lane_blocks
+            .iter()
+            .map(committed_lane_block_wire)
+            .collect(),
+        lane_block_sessions: durable_lane_diagnostics.lane_block_sessions,
         lane_governance_sealed_total: nexus_enabled
             .then_some(snapshot.lane_governance_sealed_total)
             .unwrap_or_default(),
@@ -57151,33 +57439,32 @@ mod validation_fee_torii_ingress_tests {
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{Queue, TransactionGuard},
-        smartcontracts::Execute,
         smartcontracts::ivm::cache::IvmCache,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, KeyPair, blake2::Blake2b512};
     use iroha_data_model::{
         account::AccountId,
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::DomainId,
-        isi::{SetParameter, Transfer},
+        isi::Transfer,
         metadata::Metadata,
-        parameter::Parameter,
         prelude::*,
         transaction::SignedTransaction,
         validation_fee::{
-            SignedValidationFeePolicyV1, VALIDATION_FEE_DS_SCALE,
-            VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
-            VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-            ValidationFeeChargingMode, ValidationFeeGovernanceKeyV1,
-            ValidationFeeGovernanceKeysetV1, ValidationFeeMultisigMarkerV1,
-            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
-            ValidationFeePolicySignatureV1, ValidationFeePolicyV1,
+            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
+            VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY, ValidationFeeChargingMode,
+            ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
+            ValidationFeeGovernanceWindowV1, ValidationFeeMultisigMarkerV1,
+            ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
+            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
     use iroha_primitives::{json::Json, numeric::Quantity};
+    use sha2::Digest as _;
 
     use super::*;
 
@@ -57327,92 +57614,173 @@ mod validation_fee_torii_ingress_tests {
     ) -> ValidationFeePolicyV1 {
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            network_id: state.chain_id.to_string(),
+            chain_id: state.chain_id.clone(),
             genesis_hash,
             policy_version: 1,
             previous_policy_hash: None,
-            ds_asset_id: fee_asset.to_string(),
+            ds_asset_id: fee_asset,
             ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
             fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
-            treasury_account_id: treasury.to_string(),
+            treasury_account_id: treasury,
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: 3,
             expires_after_height: Some(100),
-            governance_keyset_id: "validation-fee-governance-v1".to_string(),
             exemption_classes: Vec::new(),
+            treasury_payout_binding: None,
         }
     }
 
     fn validation_fee_policy_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
-        policy.ds_asset_id.parse().expect("policy DS asset id")
+        policy.ds_asset_id.clone()
     }
 
     fn validation_fee_policy_treasury(policy: &ValidationFeePolicyV1) -> AccountId {
-        AccountId::parse_encoded(policy.treasury_account_id.as_str())
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("policy treasury account id")
-    }
-
-    fn signed_policy(
-        policy: ValidationFeePolicyV1,
-        key_pairs: &[&KeyPair],
-    ) -> SignedValidationFeePolicyV1 {
-        SignedValidationFeePolicyV1 {
-            signatures: key_pairs
-                .iter()
-                .map(|key_pair| ValidationFeePolicySignatureV1 {
-                    public_key: key_pair.public_key().clone(),
-                    signature: SignatureOf::try_new(
-                        key_pair.private_key(),
-                        &policy.signing_payload(),
-                    )
-                    .expect("policy signature"),
-                })
-                .collect(),
-            policy,
-        }
-    }
-
-    fn policy_registry(policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistryV1 {
-        let entry = ValidationFeePolicyRegistryEntryV1::from_policy(policy)
-            .expect("validation-fee registry entry");
-        ValidationFeePolicyRegistryV1 {
-            active_policy_hash: entry.policy_hash,
-            active_policy_version: entry.policy_version,
-            registered_policies: vec![entry],
-        }
+        policy.treasury_account_id.clone()
     }
 
     fn install_validation_fee_policy(
         state: &Arc<State>,
         authority: &AccountId,
         policy: ValidationFeePolicyV1,
-        key_pairs: &[&KeyPair],
     ) {
-        let keyset = ValidationFeeGovernanceKeysetV1 {
-            keyset_id: policy.governance_keyset_id.clone(),
-            threshold: u16::try_from(key_pairs.len()).expect("threshold fits"),
-            keys: key_pairs
-                .iter()
-                .map(|key_pair| ValidationFeeGovernanceKeyV1 {
-                    public_key: key_pair.public_key().clone(),
-                    weight: 1,
-                })
-                .collect(),
+        use iroha_data_model::{
+            governance::types::{
+                GovernanceFinalizationEvidence, ParliamentBodies, ParliamentBody, ParliamentRoster,
+                ProposalKind, ValidationFeePolicyProposal,
+            },
+            isi::governance::VotingMode,
         };
-        let signed = signed_policy(policy.clone(), key_pairs);
-        let registry = policy_registry(&policy);
+
+        let member = authority.clone();
+        let rosters = [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ]
+        .into_iter()
+        .map(|body| {
+            (
+                body,
+                ParliamentRoster {
+                    body,
+                    epoch: 1,
+                    members: vec![member.clone()],
+                    alternates: Vec::new(),
+                    verified: 1,
+                    candidate_count: 1,
+                    derived_by: Default::default(),
+                },
+            )
+        })
+        .collect();
+        let bodies = ParliamentBodies {
+            selection_epoch: 1,
+            rosters,
+        };
+        let roster_digest = Blake2b512::digest(
+            norito::to_bytes(&bodies).expect("encode validation-fee Parliament bodies"),
+        );
+        let mut roster_root = [0; 32];
+        roster_root.copy_from_slice(&roster_digest[..32]);
+        let kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+            policy: policy.clone(),
+            payout_lifecycle_proposal_id: None,
+        });
+        let proposal_id = kind.fingerprint();
+        let authorization = ValidationFeeParliamentAuthorizationV1 {
+            proposal_id,
+            proposal_fingerprint: proposal_id,
+            proposal_time_roster_root: roster_root,
+            referendum_window: ValidationFeeGovernanceWindowV1 {
+                lower: 1,
+                upper: 100,
+            },
+            finalization: ValidationFeeFinalizationEvidenceV1 {
+                referendum_id: proposal_id,
+                finalized_at_height: 2,
+                mode: ValidationFeeGovernanceVotingModeV1::Plain,
+                approve: 1,
+                reject: 0,
+                abstain: 0,
+                min_turnout: 1,
+                approval_threshold_numerator: 1,
+                approval_threshold_denominator: 2,
+                approved: true,
+            },
+            enacted_at_height: 2,
+        };
+        let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(policy, authorization, None)
+            .expect("validation-fee registry entry");
+        let registry = ValidationFeePolicyRegistryV1 {
+            registered_policies: vec![entry],
+        };
         let mut block = state.block(block_header(2, 1_700_000_001_000));
         let mut stx = block.transaction();
-        for custom in [
-            keyset.into_custom_parameter(),
-            registry.into_custom_parameter(),
-            signed.into_custom_parameter(),
+        stx.world.governance_proposals_mut().insert(
+            proposal_id,
+            iroha_core::state::GovernanceProposalRecord {
+                proposer: authority.clone(),
+                kind,
+                created_height: 1,
+                status: iroha_core::state::GovernanceProposalStatus::Enacted,
+                pipeline: iroha_core::state::GovernancePipeline::default(),
+                parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
+                    selection_epoch: 1,
+                    beacon: [0x55; 32],
+                    roster_root,
+                    bodies,
+                }),
+                finalization_evidence: Some(GovernanceFinalizationEvidence {
+                    proposal_id,
+                    referendum_id: proposal_id,
+                    finalized_at_height: 2,
+                    mode: VotingMode::Plain,
+                    approve: 1,
+                    reject: 0,
+                    abstain: 0,
+                    min_turnout: 1,
+                    approval_threshold_numerator: 1,
+                    approval_threshold_denominator: 2,
+                    approved: true,
+                }),
+                enacted_at_height: Some(2),
+            },
+        );
+        let referendum_id = hex::encode(proposal_id);
+        stx.world.governance_referenda_mut().insert(
+            referendum_id.clone(),
+            iroha_core::state::GovernanceReferendumRecord {
+                h_start: 1,
+                h_end: 100,
+                status: iroha_core::state::GovernanceReferendumStatus::Closed,
+                mode: iroha_core::state::GovernanceReferendumMode::Plain,
+            },
+        );
+        let mut approvals = iroha_core::state::GovernanceStageApprovals::default();
+        for body in [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
         ] {
-            SetParameter::new(Parameter::Custom(custom))
-                .execute(authority, &mut stx)
-                .expect("install validation-fee custom parameter");
+            approvals
+                .ensure_stage(body, 1, 1, 10_000)
+                .record(authority.clone());
         }
+        stx.world
+            .governance_stage_approvals_mut()
+            .insert(referendum_id, approvals);
+        stx.world
+            .parameters_mut_for_testing()
+            .get_mut()
+            .set_parameter(Parameter::Custom(registry.into_custom_parameter()));
         stx.apply();
         block.commit().expect("commit validation-fee policy");
     }
@@ -57582,10 +57950,8 @@ mod validation_fee_torii_ingress_tests {
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
         let chain_id = Arc::new(state.chain_id.clone());
         let genesis_hash = commit_empty_genesis_like_block(&state);
-        let gov_1 = ed25519_key_pair(21, "derive validation-fee governance signer one");
-        let gov_2 = ed25519_key_pair(22, "derive validation-fee governance signer two");
         let policy = validation_fee_policy(&state, fee_asset.clone(), treasury, genesis_hash);
-        install_validation_fee_policy(&state, &user, policy.clone(), &[&gov_1, &gov_2]);
+        install_validation_fee_policy(&state, &user, policy.clone());
 
         let missing_fee_queue = queue();
         let missing_fee_tx = signed_transfer(
@@ -57640,11 +58006,9 @@ mod validation_fee_torii_ingress_tests {
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
         let chain_id = Arc::new(state.chain_id.clone());
         let genesis_hash = commit_empty_genesis_like_block(&state);
-        let gov_1 = ed25519_key_pair(21, "derive validation-fee governance signer one");
-        let gov_2 = ed25519_key_pair(22, "derive validation-fee governance signer two");
         let policy =
             validation_fee_policy(&state, fee_asset.clone(), treasury.clone(), genesis_hash);
-        install_validation_fee_policy(&state, &user, policy.clone(), &[&gov_1, &gov_2]);
+        install_validation_fee_policy(&state, &user, policy.clone());
         let (multisig, _) = account(4, "derive validation-fee multisig account");
 
         let proposal = || {
@@ -57756,10 +58120,8 @@ mod validation_fee_torii_ingress_tests {
     ) {
         let (app, user, user_key_pair, recipient, treasury, fee_asset) = test_app_state();
         let genesis_hash = commit_empty_genesis_like_block(&app.state);
-        let gov_1 = ed25519_key_pair(21, "derive validation-fee governance signer one");
-        let gov_2 = ed25519_key_pair(22, "derive validation-fee governance signer two");
         let policy = validation_fee_policy(&app.state, fee_asset.clone(), treasury, genesis_hash);
-        install_validation_fee_policy(&app.state, &user, policy.clone(), &[&gov_1, &gov_2]);
+        install_validation_fee_policy(&app.state, &user, policy.clone());
         (app, user, user_key_pair, recipient, policy)
     }
 
@@ -69841,9 +70203,7 @@ mod accounts_query_tests {
                 [domain],
                 [
                     dm::Account::new(exec_id.account().clone()).build(&exec_authority),
-                    dm::Account::new(account_id.account().clone())
-                        .with_label(Some(label.clone()))
-                        .build(&labelled_authority),
+                    dm::Account::new(account_id.account().clone()).build(&labelled_authority),
                 ],
                 [],
             ),
@@ -69857,6 +70217,7 @@ mod accounts_query_tests {
         let alias_literal = label
             .to_literal(&state.nexus_snapshot().dataspace_catalog)
             .expect("canonical alias literal");
+        bind_account_alias_for_test(&state, &account_id, &alias_literal);
         let alias_env = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
@@ -70025,9 +70386,7 @@ mod accounts_query_tests {
                 [domain],
                 [
                     dm::Account::new(exec_id.account().clone()).build(&exec_authority),
-                    dm::Account::new(account_id.account().clone())
-                        .with_label(Some(label.clone()))
-                        .build(&labelled_authority),
+                    dm::Account::new(account_id.account().clone()).build(&labelled_authority),
                 ],
                 [],
             ),
@@ -70039,6 +70398,7 @@ mod accounts_query_tests {
         let alias_literal = label
             .to_literal(&state.nexus_snapshot().dataspace_catalog)
             .expect("canonical alias literal");
+        bind_account_alias_for_test(&state, &account_id, &alias_literal);
         let filter = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("id".to_owned()),
             Value::String(alias_literal.clone()),

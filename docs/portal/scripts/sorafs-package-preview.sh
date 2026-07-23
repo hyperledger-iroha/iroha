@@ -10,6 +10,10 @@ CONFIG_PATH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config)
+      if [[ $# -lt 2 ]]; then
+        echo "--config requires a path" >&2
+        exit 2
+      fi
       CONFIG_PATH="$2"
       shift 2
       ;;
@@ -46,9 +50,13 @@ if [[ -n "${CONFIG_PATH}" ]]; then
     echo "preview config not found at ${CONFIG_PATH}" >&2
     exit 1
   fi
-  readarray -t config_values < <(node <<'NODE' "${CONFIG_PATH}")
+  config_values=()
+  while IFS= read -r value; do
+    config_values[${#config_values[@]}]="${value}"
+  done < <(
+    node - "${CONFIG_PATH}" <<'NODE'
 const fs = require('node:fs');
-const path = process.argv[1];
+const path = process.argv[2];
 const data = JSON.parse(fs.readFileSync(path, 'utf8'));
 function emit(key) {
   const value = data[key];
@@ -63,6 +71,7 @@ emit('authority');
 emit('private_key');
 emit('submitted_epoch');
 NODE
+  )
   TORII_URL="${config_values[0]}"
   AUTHORITY="${config_values[1]}"
   PRIVATE_KEY="${config_values[2]}"

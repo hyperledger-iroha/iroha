@@ -6,6 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     fs,
     io::{BufWriter, Write},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{
         Mutex,
@@ -40,7 +41,7 @@ use iroha::{
         isi::{Log, SetKeyValue},
         merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
         metadata::Metadata,
-        nexus::{DataSpaceId, LaneId},
+        nexus::{DataSpaceId, LaneCatalog, LaneId},
         prelude::{
             FindAccountById, HashOf, Name, QueryBuilderExt, SignedTransaction,
             TransactionEntrypoint,
@@ -51,7 +52,16 @@ use iroha::{
         },
     },
 };
+use iroha_config::{
+    kura::{FsyncMode, InitMode},
+    parameters::{
+        actual::{Kura as KuraConfig, LaneConfig as LaneDerivedConfig},
+        defaults,
+    },
+};
+use iroha_config_base::WithOrigin;
 use iroha_core::{
+    kura::Kura,
     lane_consensus::{validate_lane_block_proposal, validate_lane_block_qc_aggregate},
     merge::{
         MergeLedgerCandidate, merge_chain_id_digest, merge_execution_batch_commitments_match,
@@ -61,11 +71,13 @@ use iroha_core::{
         MergeCandidateAdvertV1, canonical_merge_candidate_bytes, decode_certified_merge_sidecar,
         decode_merge_candidate_body,
     },
+    queue::{LaneQueueReservationKeyV1, RoutingPlan},
     sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::ALICE_ID;
+use norito::codec::{Decode, Encode};
 use toml::{Table, Value as TomlValue};
 
 const TOTAL_PEERS: usize = 4;
@@ -127,6 +139,25 @@ const AUTOSCALE_DRAIN_COMMITMENT_LOG_MARKER: &str =
 const TWO_PHASE_DRAIN_PIPELINE_TIME: Duration = Duration::from_secs(5);
 const TWO_PHASE_DRAIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(6);
 const TWO_PHASE_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const LANE_INCARNATION_MARKER_VERSION: u8 = 3;
+const LANE_INCARNATION_MARKER_FILE: &str = ".lane-incarnation.norito";
+const EVICTED_BLOCK_INDEX_START: u64 = u64::MAX;
+const BLOCK_INDEX_ENTRY_BYTES: usize = core::mem::size_of::<u64>() * 2;
+const FOUR_PEER_RELEASE_COPY_MAX_ENTRIES: usize = 65_536;
+const FOUR_PEER_RELEASE_COPY_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+#[norito(deny_unknown_fields)]
+struct LaneIncarnationMarkerV3 {
+    version: u8,
+    lane_id: LaneId,
+    incarnation: Hash,
+    activation_height: u64,
+    move_target_blocks: Option<String>,
+    move_target_merge: Option<String>,
+    block_store_digest: Hash,
+    merge_log_digest: Hash,
+}
 
 fn lane_descriptor(index: i64, alias: &str) -> Table {
     let mut lane = Table::new();
@@ -301,6 +332,31 @@ fn validate_lane_drain_lifecycle_order(
         "lane retirement is not strictly later than its certificate carrier"
     );
     Ok(())
+}
+
+fn lifecycle_advanced_after_intent(
+    evidence: &LaneDrainLifecycleLogEvidence,
+    intent: LaneDrainIntentLogEvidence,
+) -> bool {
+    evidence
+        .commitments
+        .iter()
+        .any(|commitment| commitment.carrier_height > intent.close_global_height)
+        || evidence
+            .retirement_heights
+            .iter()
+            .any(|height| *height > intent.close_global_height)
+}
+
+fn first_retirement_height_after(
+    evidence: &LaneDrainLifecycleLogEvidence,
+    carrier_height: u64,
+) -> Option<u64> {
+    evidence
+        .retirement_heights
+        .iter()
+        .copied()
+        .find(|height| *height > carrier_height)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1634,6 +1690,24 @@ fn wait_for_uncommitted_lane_drain_intent_on_all_peers(
     timeout: Duration,
     context: &str,
 ) -> Result<LaneDrainIntentLogEvidence> {
+    wait_for_new_uncommitted_lane_drain_intent_on_all_peers(
+        network,
+        heartbeat_clients,
+        lane_id,
+        0,
+        timeout,
+        context,
+    )
+}
+
+fn wait_for_new_uncommitted_lane_drain_intent_on_all_peers(
+    network: &sandbox::SerializedNetwork,
+    heartbeat_clients: &[Client],
+    lane_id: u32,
+    after_close_height: u64,
+    timeout: Duration,
+    context: &str,
+) -> Result<LaneDrainIntentLogEvidence> {
     let started = Instant::now();
     let mut heartbeat_sequence = 0_u64;
     let mut next_heartbeat_at = Instant::now();
@@ -1647,27 +1721,31 @@ fn wait_for_uncommitted_lane_drain_intent_on_all_peers(
             .collect::<Result<Vec<_>>>();
         match current {
             Ok(current) => {
-                if current
-                    .iter()
-                    .any(|peer| !peer.commitments.is_empty() || !peer.retirement_heights.is_empty())
-                {
-                    return Err(eyre!(
-                        "{context}: lane {lane_id} advanced past the intent-only phase before the close-boundary assertion; lifecycle evidence: {current:?}"
-                    ));
-                }
                 let mut counts = BTreeMap::<LaneDrainIntentLogEvidence, usize>::new();
                 for peer in &current {
                     for intent in &peer.intents {
-                        *counts.entry(*intent).or_default() += 1;
+                        if intent.close_global_height > after_close_height {
+                            *counts.entry(*intent).or_default() += 1;
+                        }
                     }
                 }
-                if let Some((intent, count)) =
-                    counts.into_iter().find(|(_, count)| *count == TOTAL_PEERS)
+                if let Some((intent, count)) = counts
+                    .into_iter()
+                    .rev()
+                    .find(|(_, count)| *count == TOTAL_PEERS)
                 {
                     ensure!(
                         count == TOTAL_PEERS,
                         "all-peer intent count changed during observation"
                     );
+                    if current
+                        .iter()
+                        .any(|peer| lifecycle_advanced_after_intent(peer, intent))
+                    {
+                        return Err(eyre!(
+                            "{context}: lane {lane_id} advanced past the new intent-only phase before the close-boundary assertion; selected intent: {intent:?}; lifecycle evidence: {current:?}"
+                        ));
+                    }
                     return Ok(intent);
                 }
                 last_evidence = current;
@@ -1690,7 +1768,7 @@ fn wait_for_uncommitted_lane_drain_intent_on_all_peers(
         thread::sleep(TWO_PHASE_DRAIN_POLL_INTERVAL);
     }
     Err(eyre!(
-        "{context}: timed out waiting for one identical committed lane {lane_id} drain intent on all {TOTAL_PEERS} peers before its certificate carrier; last evidence: {last_evidence:?}; last error: {last_error:?}"
+        "{context}: timed out waiting for one identical committed lane {lane_id} drain intent newer than close height {after_close_height} on all {TOTAL_PEERS} peers before its certificate carrier; last evidence: {last_evidence:?}; last error: {last_error:?}"
     ))
 }
 
@@ -1824,6 +1902,7 @@ struct LaneCommitmentSnapshot {
 struct LaneRelaySnapshot {
     lane_id: u32,
     dataspace_id: u64,
+    lane_incarnation: Hash,
     block_height: u64,
     descriptor_hash: Option<Hash>,
     merge_admissible: bool,
@@ -1833,6 +1912,7 @@ struct LaneRelaySnapshot {
 struct CommittedLaneBlockSnapshot {
     lane_id: u32,
     dataspace_id: u64,
+    lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_view: u64,
     descriptor_hash: Hash,
@@ -2067,6 +2147,7 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                         .map(|lane| LaneRelaySnapshot {
                             lane_id: lane.lane_id.as_u32(),
                             dataspace_id: lane.dataspace_id.as_u64(),
+                            lane_incarnation: lane.lane_incarnation,
                             block_height: lane.block_height,
                             descriptor_hash: lane.lane_block_descriptor_hash,
                             merge_admissible: lane.is_merge_admissible(),
@@ -2083,6 +2164,7 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                         .map(|entry| CommittedLaneBlockSnapshot {
                             lane_id: entry.lane_id.as_u32(),
                             dataspace_id: entry.dataspace_id.as_u64(),
+                            lane_incarnation: entry.lane_incarnation,
                             lane_block_height: entry.lane_block_height,
                             lane_block_view: entry.lane_block_view,
                             descriptor_hash: entry.descriptor_hash,
@@ -2336,6 +2418,7 @@ fn peer_lane_commitment_evidence(
 fn lane_relay_latest_rows_equivalent(left: &LaneRelaySnapshot, right: &LaneRelaySnapshot) -> bool {
     left.lane_id == right.lane_id
         && left.dataspace_id == right.dataspace_id
+        && left.lane_incarnation == right.lane_incarnation
         && left.block_height == right.block_height
         && left.descriptor_hash == right.descriptor_hash
         && left.merge_admissible == right.merge_admissible
@@ -2448,6 +2531,7 @@ fn committed_lane_block_latest_rows_equivalent(
 ) -> bool {
     left.lane_id == right.lane_id
         && left.dataspace_id == right.dataspace_id
+        && left.lane_incarnation == right.lane_incarnation
         && left.lane_block_height == right.lane_block_height
         && left.lane_block_view == right.lane_block_view
         && left.descriptor_hash == right.descriptor_hash
@@ -4582,8 +4666,8 @@ fn validate_lane_drain_certificate_evidence(
     Ok(())
 }
 
-fn lane_drain_entry(peer: &NetworkPeer, lane_id: LaneId) -> Result<Option<MergeLedgerEntry>> {
-    let matches = read_peer_merge_ledger_entries(peer)?
+fn lane_drain_entries(peer: &NetworkPeer, lane_id: LaneId) -> Result<Vec<MergeLedgerEntry>> {
+    Ok(read_peer_merge_ledger_entries(peer)?
         .into_iter()
         .filter(|entry| {
             entry
@@ -4591,10 +4675,63 @@ fn lane_drain_entry(peer: &NetworkPeer, lane_id: LaneId) -> Result<Option<MergeL
                 .first()
                 .is_some_and(|certificate| certificate.body.intent.lane_id == lane_id)
         })
-        .collect::<Vec<_>>();
+        .collect())
+}
+
+fn lane_drain_entry(peer: &NetworkPeer, lane_id: LaneId) -> Result<Option<MergeLedgerEntry>> {
+    let matches = lane_drain_entries(peer, lane_id)?;
     ensure!(
         matches.len() <= 1,
         "peer durable merge ledger contains multiple certificates for one lane incarnation"
+    );
+    Ok(matches.into_iter().next())
+}
+
+fn lane_drain_entry_for_intent(
+    peer: &NetworkPeer,
+    lane_id: LaneId,
+    intent_log: LaneDrainIntentLogEvidence,
+) -> Result<Option<MergeLedgerEntry>> {
+    let matches = lane_drain_entries(peer, lane_id)?
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .lane_drain_certificates
+                .first()
+                .is_some_and(|certificate| {
+                    let intent = &certificate.body.intent;
+                    intent.close_global_height == intent_log.close_global_height
+                        && intent.initial_merged_lane_height
+                            == intent_log.initial_merged_lane_height
+                })
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        matches.len() <= 1,
+        "peer durable merge ledger contains conflicting certificates for one exact drain intent"
+    );
+    Ok(matches.into_iter().next())
+}
+
+fn lane_drain_entry_for_incarnation(
+    peer: &NetworkPeer,
+    lane_id: LaneId,
+    lane_incarnation: Hash,
+) -> Result<Option<MergeLedgerEntry>> {
+    let matches = lane_drain_entries(peer, lane_id)?
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .lane_drain_certificates
+                .first()
+                .is_some_and(|certificate| {
+                    certificate.body.intent.lane_incarnation == lane_incarnation
+                })
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        matches.len() <= 1,
+        "peer durable merge ledger contains conflicting certificates for one lane incarnation"
     );
     Ok(matches.into_iter().next())
 }
@@ -4651,7 +4788,7 @@ fn wait_for_drain_certificate_on_running_peers(
                     .peers()
                     .get(*index)
                     .ok_or_else(|| eyre!("missing running peer index {index}"))?;
-                lane_drain_entry(peer, lane_id)
+                lane_drain_entry_for_intent(peer, lane_id, intent_log)
             })
             .collect::<Result<Vec<_>>>();
         let logs = running_peer_indices
@@ -4668,7 +4805,7 @@ fn wait_for_drain_certificate_on_running_peers(
             (Ok(entries), Ok(logs)) => {
                 if logs
                     .iter()
-                    .any(|evidence| !evidence.retirement_heights.is_empty())
+                    .any(|evidence| lifecycle_advanced_after_intent(evidence, intent_log))
                 {
                     return Err(eyre!(
                         "lane {lane_id} retired before the certificate-only phase could be observed; lifecycle logs: {logs:?}"
@@ -4747,7 +4884,7 @@ fn wait_for_drain_retirement_on_running_peers(
                     .peers()
                     .get(*index)
                     .ok_or_else(|| eyre!("missing running peer index {index}"))?;
-                lane_drain_entry(peer, lane_id)
+                lane_drain_entry_for_intent(peer, lane_id, intent_log)
             })
             .collect::<Result<Vec<_>>>();
         let logs = running_peer_indices
@@ -4781,17 +4918,12 @@ fn wait_for_drain_retirement_on_running_peers(
                         .iter()
                         .filter_map(|evidence| {
                             (evidence.intents.contains(&intent_log)
-                                && evidence.commitments.contains(&expected_commitment)
-                                && evidence
-                                    .retirement_heights
-                                    .iter()
-                                    .all(|height| *height > expected.merge_qc.carrier_height))
+                                && evidence.commitments.contains(&expected_commitment))
                             .then(|| {
-                                evidence
-                                    .retirement_heights
-                                    .iter()
-                                    .copied()
-                                    .find(|height| *height > expected.merge_qc.carrier_height)
+                                first_retirement_height_after(
+                                    evidence,
+                                    expected.merge_qc.carrier_height,
+                                )
                             })
                             .flatten()
                         })
@@ -4842,7 +4974,12 @@ fn wait_for_exact_lane_drain_entry(
     let mut last_entry = None;
     let mut last_error = None;
     while started.elapsed() <= timeout {
-        match lane_drain_entry(peer, lane_id) {
+        let expected_incarnation = expected
+            .lane_drain_certificates
+            .first()
+            .map(|certificate| certificate.body.intent.lane_incarnation)
+            .ok_or_else(|| eyre!("expected drain entry omitted its certificate"))?;
+        match lane_drain_entry_for_incarnation(peer, lane_id, expected_incarnation) {
             Ok(Some(entry)) if &entry == expected => return Ok(()),
             Ok(entry) => {
                 last_entry = entry;
@@ -4940,6 +5077,411 @@ fn merge_log_total_bytes(peer: &NetworkPeer) -> Result<u64> {
     Ok(total)
 }
 
+fn read_lane_incarnation_marker(path: &Path) -> Result<LaneIncarnationMarkerV3> {
+    let bytes = fs::read(path)
+        .map_err(|err| eyre!("read lane incarnation marker {}: {err}", path.display()))?;
+    let mut cursor = bytes.as_slice();
+    let marker = LaneIncarnationMarkerV3::decode_all(&mut cursor)
+        .map_err(|err| eyre!("decode lane incarnation marker {}: {err}", path.display()))?;
+    ensure!(
+        marker.encode() == bytes,
+        "{} is not a canonical lane incarnation marker",
+        path.display()
+    );
+    ensure!(
+        marker.version == LANE_INCARNATION_MARKER_VERSION,
+        "{} uses unsupported lane incarnation marker version {}",
+        path.display(),
+        marker.version
+    );
+    ensure!(
+        marker.incarnation.as_ref().iter().any(|byte| *byte != 0),
+        "{} contains a zero lane incarnation",
+        path.display()
+    );
+    Ok(marker)
+}
+
+fn elastic_lane_blocks_dir(peer: &NetworkPeer, lane_id: u32) -> PathBuf {
+    peer.kura_store_dir()
+        .join("blocks")
+        .join(autoscale_elastic_storage_segment(lane_id))
+}
+
+fn active_elastic_lane_marker(peer: &NetworkPeer, lane_id: u32) -> Result<LaneIncarnationMarkerV3> {
+    let path = elastic_lane_blocks_dir(peer, lane_id).join(LANE_INCARNATION_MARKER_FILE);
+    let marker = read_lane_incarnation_marker(&path)?;
+    ensure!(
+        marker.lane_id == LaneId::new(lane_id),
+        "{} names lane {}, expected {}",
+        path.display(),
+        marker.lane_id,
+        lane_id
+    );
+    Ok(marker)
+}
+
+fn converged_active_elastic_lane_marker(
+    network: &sandbox::SerializedNetwork,
+    lane_id: u32,
+) -> Result<LaneIncarnationMarkerV3> {
+    let markers = network
+        .peers()
+        .iter()
+        .enumerate()
+        .map(|(index, peer)| {
+            active_elastic_lane_marker(peer, lane_id)
+                .map_err(|err| eyre!("read peer {index} active lane marker: {err}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let expected = markers
+        .first()
+        .ok_or_else(|| eyre!("active lane marker convergence has no peers"))?;
+    ensure!(
+        markers.iter().all(|marker| marker == expected),
+        "active lane {lane_id} incarnation markers diverged: {markers:?}"
+    );
+    Ok(expected.clone())
+}
+
+fn archived_lane_incarnation_markers(
+    peer: &NetworkPeer,
+    lane_id: LaneId,
+) -> Result<Vec<(PathBuf, LaneIncarnationMarkerV3)>> {
+    let root = peer.kura_store_dir().join("retired").join("lane_geometry");
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut transition_roots = fs::read_dir(&root)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    transition_roots.sort();
+    ensure!(
+        transition_roots.len() <= 1_024,
+        "retired geometry transition count exceeds the test inspection bound"
+    );
+
+    let lane_archive = format!("lane_{:010}", lane_id.as_u32());
+    let mut markers = Vec::new();
+    for transition_root in transition_roots {
+        let metadata = fs::symlink_metadata(&transition_root)?;
+        ensure!(
+            !metadata.file_type().is_symlink() && metadata.is_dir(),
+            "retired geometry transition is not a regular directory: {}",
+            transition_root.display()
+        );
+        let marker_path = transition_root
+            .join(&lane_archive)
+            .join("previous_blocks")
+            .join(LANE_INCARNATION_MARKER_FILE);
+        if !marker_path.exists() {
+            continue;
+        }
+        let marker_metadata = fs::symlink_metadata(&marker_path)?;
+        ensure!(
+            !marker_metadata.file_type().is_symlink() && marker_metadata.is_file(),
+            "archived lane marker is not a regular file: {}",
+            marker_path.display()
+        );
+        let marker = read_lane_incarnation_marker(&marker_path)?;
+        ensure!(
+            marker.lane_id == lane_id,
+            "archived marker {} names another lane",
+            marker_path.display()
+        );
+        markers.push((marker_path, marker));
+    }
+    markers.sort_by_key(|(_, marker)| (marker.activation_height, marker.incarnation));
+    ensure!(
+        markers
+            .windows(2)
+            .all(|pair| pair[0].1.incarnation != pair[1].1.incarnation),
+        "retired geometry contains duplicate archives for one lane incarnation"
+    );
+    Ok(markers)
+}
+
+fn assert_archived_incarnation_on_all_peers(
+    network: &sandbox::SerializedNetwork,
+    lane_id: LaneId,
+    incarnation: Hash,
+) -> Result<Vec<PathBuf>> {
+    network
+        .peers()
+        .iter()
+        .enumerate()
+        .map(|(index, peer)| {
+            let matches = archived_lane_incarnation_markers(peer, lane_id)?
+                .into_iter()
+                .filter(|(_, marker)| marker.incarnation == incarnation)
+                .collect::<Vec<_>>();
+            ensure!(
+                matches.len() == 1,
+                "peer {index} retained {} archives for lane {lane_id} incarnation {incarnation}, expected exactly one",
+                matches.len()
+            );
+            Ok(matches[0].0.clone())
+        })
+        .collect()
+}
+
+fn copy_kura_tree_bounded(source: &Path, destination: &Path) -> Result<()> {
+    ensure!(
+        !destination.exists(),
+        "bounded Kura copy destination already exists: {}",
+        destination.display()
+    );
+    fs::create_dir_all(destination)?;
+    let mut pending = vec![(source.to_path_buf(), destination.to_path_buf())];
+    let mut entries_seen = 0_usize;
+    let mut bytes_copied = 0_u64;
+    while let Some((source_dir, destination_dir)) = pending.pop() {
+        let mut entries = fs::read_dir(&source_dir)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort();
+        for source_path in entries {
+            if source_path == source.join(".kura.lock") {
+                continue;
+            }
+            entries_seen = entries_seen.saturating_add(1);
+            ensure!(
+                entries_seen <= FOUR_PEER_RELEASE_COPY_MAX_ENTRIES,
+                "bounded Kura recovery copy exceeds {FOUR_PEER_RELEASE_COPY_MAX_ENTRIES} entries"
+            );
+            let metadata = fs::symlink_metadata(&source_path)?;
+            ensure!(
+                !metadata.file_type().is_symlink(),
+                "bounded Kura recovery copy encountered a symlink: {}",
+                source_path.display()
+            );
+            let name = source_path
+                .file_name()
+                .ok_or_else(|| eyre!("Kura copy source has no file name"))?;
+            let destination_path = destination_dir.join(name);
+            if metadata.is_dir() {
+                fs::create_dir(&destination_path)?;
+                pending.push((source_path, destination_path));
+            } else {
+                ensure!(
+                    metadata.is_file(),
+                    "bounded Kura recovery copy encountered a non-regular entry: {}",
+                    source_path.display()
+                );
+                bytes_copied = bytes_copied.saturating_add(metadata.len());
+                ensure!(
+                    bytes_copied <= FOUR_PEER_RELEASE_COPY_MAX_BYTES,
+                    "bounded Kura recovery copy exceeds {FOUR_PEER_RELEASE_COPY_MAX_BYTES} bytes"
+                );
+                fs::copy(&source_path, &destination_path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn offline_kura_config(store_dir: PathBuf, blocks_in_memory: NonZeroUsize) -> KuraConfig {
+    KuraConfig {
+        init_mode: InitMode::Strict,
+        store_dir: WithOrigin::inline(store_dir),
+        max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory,
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: FsyncMode::Batched,
+        fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+        roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas: defaults::kura::EVICTION_REQUIRED_REPLICAS,
+    }
+}
+
+fn assert_stale_archived_marker_rejected_by_recreated_store(
+    peer: &NetworkPeer,
+    lane_id: u32,
+    stale_marker_path: &Path,
+    expected_active: &LaneIncarnationMarkerV3,
+) -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let cloned_store = temp.path().join("stale-marker-recovery");
+    copy_kura_tree_bounded(&peer.kura_store_dir(), &cloned_store)?;
+    let cloned_active_marker = cloned_store
+        .join("blocks")
+        .join(autoscale_elastic_storage_segment(lane_id))
+        .join(LANE_INCARNATION_MARKER_FILE);
+    let live_marker_bytes = fs::read(&cloned_active_marker)?;
+    ensure!(
+        read_lane_incarnation_marker(&cloned_active_marker)? == *expected_active,
+        "cloned active marker changed before stale-artifact injection"
+    );
+    let catalog = LaneCatalog::default();
+    let lane_config = LaneDerivedConfig::from_catalog(&catalog);
+    let config = offline_kura_config(
+        cloned_store.clone(),
+        NonZeroUsize::new(2).expect("two is non-zero"),
+    );
+    let (control, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog)
+        .map_err(|err| {
+            eyre!("control cloned Kura store did not open before stale-marker injection: {err}")
+        })?;
+    drop(control);
+
+    fs::copy(stale_marker_path, &cloned_active_marker)?;
+    let stale = read_lane_incarnation_marker(&cloned_active_marker)?;
+    ensure!(
+        stale.incarnation != expected_active.incarnation,
+        "stale marker fixture accidentally uses the recreated incarnation"
+    );
+    let open = Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog);
+    ensure!(
+        open.is_err(),
+        "Kura accepted an archived incarnation marker as the recreated lane's active marker"
+    );
+    ensure!(
+        fs::read(elastic_lane_blocks_dir(peer, lane_id).join(LANE_INCARNATION_MARKER_FILE))?
+            == live_marker_bytes,
+        "stale-marker recovery fixture modified the live peer store"
+    );
+    Ok(())
+}
+
+fn decode_block_index_entry(bytes: &[u8], height: u64) -> Result<(u64, u64)> {
+    ensure!(height > 0, "block index height must be positive");
+    let index = usize::try_from(height.saturating_sub(1))?;
+    let start = index
+        .checked_mul(BLOCK_INDEX_ENTRY_BYTES)
+        .ok_or_else(|| eyre!("block index byte offset overflow"))?;
+    let end = start
+        .checked_add(BLOCK_INDEX_ENTRY_BYTES)
+        .ok_or_else(|| eyre!("block index byte range overflow"))?;
+    let entry = bytes
+        .get(start..end)
+        .ok_or_else(|| eyre!("block index omits height {height}"))?;
+    let offset = u64::from_le_bytes(entry[..8].try_into().expect("index offset is eight bytes"));
+    let length = u64::from_le_bytes(entry[8..].try_into().expect("index length is eight bytes"));
+    Ok((offset, length))
+}
+
+fn block_index_entry(peer: &NetworkPeer, height: u64) -> Result<(u64, u64)> {
+    let primary = LaneDerivedConfig::default()
+        .primary()
+        .blocks_dir(peer.kura_store_dir());
+    decode_block_index_entry(&fs::read(primary.join("blocks.index"))?, height)
+}
+
+fn evict_historical_block_body_offline(peer: &NetworkPeer, height: u64) -> Result<u64> {
+    let catalog = LaneCatalog::default();
+    let lane_config = LaneDerivedConfig::from_catalog(&catalog);
+    let config = offline_kura_config(
+        peer.kura_store_dir(),
+        NonZeroUsize::new(2).expect("two is non-zero"),
+    );
+    let (kura, block_count) =
+        Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog)?;
+    ensure!(
+        u64::try_from(block_count.0)?.saturating_sub(2) > height,
+        "historical carrier height {height} is still inside the two-block eviction tail at durable height {}",
+        block_count.0
+    );
+    let height = NonZeroUsize::new(usize::try_from(height)?)
+        .ok_or_else(|| eyre!("body eviction height must be positive"))?;
+    let payload_len = kura
+        .advertise_required_replicas_for_bench(height)
+        .ok_or_else(|| eyre!("historical carrier has no inline body to evict"))?;
+    let freed = kura.evict_block_bodies_for_bench(payload_len)?;
+    ensure!(
+        freed >= payload_len,
+        "body eviction freed {freed} bytes, below selected carrier length {payload_len}"
+    );
+    drop(kura);
+
+    let height_u64 = u64::try_from(height.get())?;
+    let (offset, retained_len) = block_index_entry(peer, height_u64)?;
+    ensure!(
+        offset == EVICTED_BLOCK_INDEX_START && retained_len == payload_len,
+        "historical carrier index was not durably marked evicted: offset={offset}, length={retained_len}, expected length={payload_len}"
+    );
+    let primary = LaneDerivedConfig::default()
+        .primary()
+        .blocks_dir(peer.kura_store_dir());
+    ensure!(
+        primary
+            .join("da_blocks")
+            .join(format!("{height_u64:020}.norito"))
+            .is_file(),
+        "body eviction omitted the authenticated DA recovery sidecar"
+    );
+    Ok(payload_len)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FourPeerByzantineFault {
+    ConflictingReady,
+    DuplicateInits,
+}
+
+fn four_peer_byzantine_fault_layer(fault: FourPeerByzantineFault) -> Table {
+    let mut rbc = Table::new();
+    match fault {
+        FourPeerByzantineFault::ConflictingReady => {
+            rbc.insert(
+                "conflicting_ready_mask".to_owned(),
+                TomlValue::Integer((1_i64 << TOTAL_PEERS) - 1),
+            );
+        }
+        FourPeerByzantineFault::DuplicateInits => {
+            rbc.insert("duplicate_inits".to_owned(), TomlValue::Boolean(true));
+        }
+    }
+    let mut debug = Table::new();
+    debug.insert("rbc".to_owned(), TomlValue::Table(rbc));
+    let mut sumeragi = Table::new();
+    sumeragi.insert("debug".to_owned(), TomlValue::Table(debug));
+    let mut layer = Table::new();
+    layer.insert("sumeragi".to_owned(), TomlValue::Table(sumeragi));
+    layer
+}
+
+fn restart_four_peer_validator(
+    network: &sandbox::SerializedNetwork,
+    runtime: &tokio::runtime::Runtime,
+    peer_index: usize,
+    base_layers: &[Table],
+    extra_layer: Option<Table>,
+    catch_up_height: u64,
+    context: &str,
+) -> Result<()> {
+    let peer = network
+        .peers()
+        .get(peer_index)
+        .ok_or_else(|| eyre!("{context}: missing peer {peer_index}"))?;
+    runtime.block_on(peer.shutdown_if_started());
+    let mut layers = base_layers.to_vec();
+    if let Some(extra_layer) = extra_layer {
+        layers.push(extra_layer);
+    }
+    runtime
+        .block_on(peer.start_checked(layers.iter(), None))
+        .map_err(|err| eyre!("{context}: restart peer {peer_index}: {err}"))?;
+    if catch_up_height > 0 {
+        runtime.block_on(async {
+            tokio::time::timeout(
+                network.sync_timeout().max(SUBMISSION_READY_TIMEOUT),
+                peer.once_block(catch_up_height),
+            )
+            .await
+            .map_err(|_| {
+                eyre!("{context}: peer {peer_index} did not catch up to block {catch_up_height}")
+            })
+        })?;
+    }
+    ensure!(
+        peer.is_running(),
+        "{context}: peer {peer_index} exited after restart"
+    );
+    Ok(())
+}
+
 fn wait_for_certified_elastic_lane(
     clients: &[Client],
     lane_id: LaneId,
@@ -4979,6 +5521,435 @@ fn wait_for_certified_elastic_lane(
     Err(eyre!(
         "timed out waiting for independently certified executable lane {lane_id} evidence on quorum peers; observed={last_observed}/{quorum_required}; errors={last_errors:?}"
     ))
+}
+
+fn wait_for_certified_elastic_lane_incarnation(
+    clients: &[Client],
+    lane_id: LaneId,
+    lane_incarnation: Hash,
+    quorum_required: usize,
+    timeout: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_observed = 0_usize;
+    let mut last_stale = Vec::new();
+    let mut last_errors = Vec::new();
+    while started.elapsed() <= timeout {
+        last_observed = 0;
+        last_stale.clear();
+        last_errors.clear();
+        for (index, client) in clients.iter().enumerate() {
+            match client.get_sumeragi_diagnostics() {
+                Ok(status) => {
+                    let lane_rows = status
+                        .committed_lane_blocks
+                        .iter()
+                        .filter(|block| block.lane_id == lane_id)
+                        .collect::<Vec<_>>();
+                    if lane_rows.iter().any(|block| {
+                        block.lane_incarnation == lane_incarnation
+                            && block.executable_payload_available
+                            && block.validator_count > 0
+                            && block.min_quorum > 0
+                            && block.min_quorum <= block.validator_count
+                            && block.prepare_qc_signer_count >= block.min_quorum
+                            && block.commit_qc_signer_count >= block.min_quorum
+                    }) {
+                        last_observed = last_observed.saturating_add(1);
+                    }
+                    if lane_rows
+                        .iter()
+                        .any(|block| block.lane_incarnation != lane_incarnation)
+                    {
+                        last_stale.push(index);
+                    }
+                }
+                Err(err) => last_errors.push((index, err.to_string())),
+            }
+        }
+        ensure!(
+            last_stale.is_empty(),
+            "diagnostics published stale committed lane identities for recreated lane {lane_id}; expected incarnation {lane_incarnation}, stale peers={last_stale:?}"
+        );
+        if last_observed >= quorum_required {
+            return Ok(());
+        }
+        thread::sleep(LANE_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "timed out waiting for independently certified executable lane {lane_id} incarnation {lane_incarnation} on quorum peers; observed={last_observed}/{quorum_required}; errors={last_errors:?}"
+    ))
+}
+
+fn validate_autonomous_merge_execution(
+    chain_id: &ChainId,
+    entry: &MergeLedgerEntry,
+    lane_id: LaneId,
+    lane_incarnation: Hash,
+    target_entrypoint: HashOf<TransactionEntrypoint>,
+) -> Result<()> {
+    validate_merge_qc_evidence(chain_id, entry)?;
+    let batch = entry
+        .execution_batch
+        .as_ref()
+        .ok_or_else(|| eyre!("autonomous carrier omitted its execution batch"))?;
+    ensure!(
+        merge_execution_batch_commitments_match(batch),
+        "autonomous execution batch commitments are inconsistent"
+    );
+    ensure!(
+        batch.application_block_header.height().get() == entry.merge_qc.carrier_height
+            && batch.application_block_header.prev_block_hash()
+                == Some(entry.merge_qc.carrier_parent_hash)
+            && batch.application_block_header.view_change_index() == entry.merge_qc.view,
+        "autonomous execution batch is not bound to its exact global carrier round"
+    );
+    let matches = batch
+        .lanes
+        .iter()
+        .filter(|execution| {
+            execution
+                .entrypoints
+                .iter()
+                .any(|entrypoint| entrypoint.hash() == target_entrypoint)
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        matches.len() == 1,
+        "autonomous target occurs in {} lane executions, expected exactly one",
+        matches.len()
+    );
+    let execution = matches[0];
+    let descriptor = &execution.proposal.descriptor;
+    let origin = &execution.origin_proposal.descriptor;
+    ensure!(
+        descriptor.lane_id == lane_id
+            && descriptor.dataspace_id == DataSpaceId::UNIVERSAL
+            && descriptor.lane_incarnation == lane_incarnation,
+        "autonomous execution is bound to another active lane identity"
+    );
+    ensure!(
+        origin.lane_id == descriptor.lane_id
+            && origin.dataspace_id == descriptor.dataspace_id
+            && origin.lane_incarnation == descriptor.lane_incarnation
+            && origin.lane_block_height == descriptor.lane_block_height,
+        "autonomous origin/current proposals disagree on their lifecycle slot"
+    );
+    validate_lane_block_proposal(&execution.origin_proposal)
+        .map_err(|err| eyre!("invalid autonomous origin proposal: {err}"))?;
+    validate_lane_block_proposal(&execution.proposal)
+        .map_err(|err| eyre!("invalid autonomous current proposal: {err}"))?;
+    ensure!(
+        execution.prepare_qc.payload_availability_qc.is_some(),
+        "autonomous prepare QC omitted its DA/RBC availability certificate"
+    );
+    let signer_pops = execution
+        .signer_proofs
+        .iter()
+        .map(|proof| (proof.public_key.clone(), proof.proof_of_possession.clone()))
+        .collect::<BTreeMap<_, _>>();
+    validate_lane_block_qc_aggregate(&execution.prepare_qc, &signer_pops)
+        .map_err(|err| eyre!("invalid autonomous prepare QC: {err}"))?;
+    validate_lane_block_qc_aggregate(&execution.commit_qc, &signer_pops)
+        .map_err(|err| eyre!("invalid autonomous commit QC: {err}"))?;
+    ensure!(
+        execution.source_bundle_hash == Hash::new(&execution.source_bundle),
+        "autonomous source-bundle hash mismatch"
+    );
+
+    let count = execution.entrypoints.len();
+    ensure!(
+        count > 0
+            && execution.entrypoint_hashes.len() == count
+            && execution.reservation_keys.len() == count
+            && execution.routing_plans.len() == count
+            && execution.native_amx_receipts.len() == count
+            && execution.result_hashes.len() == count
+            && execution.results.len() == count
+            && descriptor.accepted_transaction_hashes.len() == count,
+        "autonomous execution vectors are empty or misaligned"
+    );
+    ensure!(
+        execution
+            .entrypoints
+            .iter()
+            .filter(|entrypoint| entrypoint.hash() == target_entrypoint)
+            .count()
+            == 1,
+        "autonomous target entrypoint is duplicated inside one lane execution"
+    );
+
+    let mut reservation_identities = BTreeSet::new();
+    let mut entrypoint_identities = BTreeSet::new();
+    for (index, (((entrypoint, entrypoint_hash), reservation_bytes), routing_bytes)) in execution
+        .entrypoints
+        .iter()
+        .zip(&execution.entrypoint_hashes)
+        .zip(&execution.reservation_keys)
+        .zip(&execution.routing_plans)
+        .enumerate()
+    {
+        ensure!(
+            entrypoint.hash().as_ref() == entrypoint_hash.as_ref(),
+            "autonomous entrypoint hash vector differs at index {index}"
+        );
+        ensure!(
+            entrypoint_identities.insert(entrypoint.hash()),
+            "autonomous execution repeats an entrypoint at index {index}"
+        );
+        let reservation: LaneQueueReservationKeyV1 = norito::decode_from_bytes(reservation_bytes)
+            .map_err(|err| {
+            eyre!("decode autonomous reservation key at index {index}: {err}")
+        })?;
+        ensure!(
+            norito::to_bytes(&reservation)? == *reservation_bytes,
+            "autonomous reservation key {index} is not canonical framed Norito"
+        );
+        let routing_plan: RoutingPlan = norito::decode_from_bytes(routing_bytes)
+            .map_err(|err| eyre!("decode autonomous routing plan at index {index}: {err}"))?;
+        ensure!(
+            norito::to_bytes(&routing_plan)? == *routing_bytes,
+            "autonomous routing plan {index} is not canonical framed Norito"
+        );
+        ensure!(
+            reservation.version == LaneQueueReservationKeyV1::VERSION
+                && reservation.lane_id == origin.lane_id
+                && reservation.dataspace_id == origin.dataspace_id
+                && reservation.lane_incarnation == origin.lane_incarnation
+                && reservation.proposal_height == origin.proposal_height
+                && reservation.lane_block_height == origin.lane_block_height
+                && reservation.lane_block_view == origin.lane_block_view
+                && reservation.entrypoint_hash == entrypoint.hash()
+                && reservation.routing_plan_digest == routing_plan.digest()
+                && reservation.coordinator_leg.route.lane_id == origin.lane_id
+                && reservation.coordinator_leg.route.dataspace_id == origin.dataspace_id
+                && Hash::from(reservation.signed_transaction_hash)
+                    == descriptor.accepted_transaction_hashes[index],
+            "autonomous reservation key {index} differs from its exact transaction, route, or origin proposal"
+        );
+        ensure!(
+            reservation_identities.insert(reservation.digest()),
+            "autonomous execution repeats a reservation identity at index {index}"
+        );
+    }
+    Ok(())
+}
+
+fn autonomous_merge_entry(
+    peer: &NetworkPeer,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Result<Option<MergeLedgerEntry>> {
+    let matches = read_peer_merge_ledger_entries(peer)?
+        .into_iter()
+        .filter(|entry| {
+            entry.execution_batch.as_ref().is_some_and(|batch| {
+                batch.lanes.iter().any(|execution| {
+                    execution
+                        .entrypoints
+                        .iter()
+                        .any(|entrypoint| entrypoint.hash() == entrypoint_hash)
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        matches.len() <= 1,
+        "entrypoint {entrypoint_hash} occurs in multiple durable merge entries"
+    );
+    Ok(matches.into_iter().next())
+}
+
+fn wait_for_autonomous_merge_on_peers(
+    network: &sandbox::SerializedNetwork,
+    peer_indices: &[usize],
+    heartbeat_clients: &[Client],
+    lane_id: LaneId,
+    lane_incarnation: Hash,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    timeout: Duration,
+    context: &str,
+) -> Result<MergeLedgerEntry> {
+    let started = Instant::now();
+    let mut heartbeat_sequence = 0_u64;
+    let mut next_heartbeat_at = Instant::now();
+    let mut last_entries = Vec::new();
+    let mut last_error = None;
+    while started.elapsed() <= timeout {
+        let entries = peer_indices
+            .iter()
+            .map(|index| {
+                let peer = network
+                    .peers()
+                    .get(*index)
+                    .ok_or_else(|| eyre!("{context}: missing peer {index}"))?;
+                autonomous_merge_entry(peer, entrypoint_hash)
+            })
+            .collect::<Result<Vec<_>>>();
+        match entries {
+            Ok(entries) => {
+                if let Some(expected) = entries.first().and_then(Option::as_ref)
+                    && entries.iter().all(|entry| entry.as_ref() == Some(expected))
+                {
+                    validate_autonomous_merge_execution(
+                        &network.chain_id(),
+                        expected,
+                        lane_id,
+                        lane_incarnation,
+                        entrypoint_hash,
+                    )?;
+                    return Ok(expected.clone());
+                }
+                last_entries = entries;
+                last_error = None;
+            }
+            Err(err) => last_error = Some(err.to_string()),
+        }
+        let now = Instant::now();
+        if now >= next_heartbeat_at {
+            if let Err(err) = submit_rotating_heartbeat(
+                heartbeat_clients,
+                "four-peer-release-autonomous-heartbeat",
+                heartbeat_sequence,
+            ) {
+                last_error = Some(err);
+            }
+            heartbeat_sequence = heartbeat_sequence.saturating_add(1);
+            next_heartbeat_at = now + Duration::from_secs(1);
+        }
+        thread::sleep(TWO_PHASE_DRAIN_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "{context}: timed out waiting for one identical autonomous merge entry on peers {peer_indices:?}; last entries={last_entries:?}; last error={last_error:?}"
+    ))
+}
+
+fn merge_entrypoint_occurrences(
+    peer: &NetworkPeer,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Result<usize> {
+    Ok(read_peer_merge_ledger_entries(peer)?
+        .iter()
+        .flat_map(|entry| entry.execution_batch.iter())
+        .flat_map(|batch| &batch.lanes)
+        .flat_map(|execution| &execution.entrypoints)
+        .filter(|entrypoint| entrypoint.hash() == entrypoint_hash)
+        .count())
+}
+
+#[derive(Clone, Debug)]
+struct AutonomousCycleEvidence {
+    lane_marker: LaneIncarnationMarkerV3,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    merge_entry: MergeLedgerEntry,
+    committed: CommittedTransaction,
+}
+
+fn expand_elastic_lane_for_release_cycle(
+    network: &sandbox::SerializedNetwork,
+    submitters: &[Client],
+    quorum_required: usize,
+    cycle_index: usize,
+) -> Result<LaneIncarnationMarkerV3> {
+    let baseline_status = status_snapshot(network)?;
+    let baseline_storage = elastic_lane_storage_snapshot(network, ELASTIC_LANE_ID)?;
+    let baseline_transitions = autoscale_transition_snapshot_for_lane(network, ELASTIC_LANE_ID)?;
+    submit_load_round_robin(submitters, STRICT_CYCLE_LOAD_TX_COUNT)?;
+    let expansion_client = peer_client_with_timeout(network.peer());
+    wait_for_expanded_lanes_with_heartbeat(
+        network,
+        &expansion_client,
+        submitters,
+        STRICT_CYCLE_LOAD_TX_COUNT,
+        &baseline_status,
+        &baseline_storage,
+        &baseline_transitions,
+        ELASTIC_LANE_ID,
+        EXPANDED_PROVISIONED_LANES,
+        true,
+        true,
+        quorum_required,
+        STRICT_SCALE_OUT_WAIT_TIMEOUT,
+        &format!("four-peer release cycle {cycle_index} scale-out"),
+        &format!("four-peer-release-cycle-{cycle_index}-scale-out"),
+        EXPANSION_PROBE_INTERVAL,
+    )?;
+    let marker = converged_active_elastic_lane_marker(network, ELASTIC_LANE_ID)?;
+    wait_for_certified_elastic_lane_incarnation(
+        submitters,
+        LaneId::new(ELASTIC_LANE_ID),
+        marker.incarnation,
+        quorum_required,
+        STRICT_SCALE_OUT_WAIT_TIMEOUT,
+    )?;
+    Ok(marker)
+}
+
+fn execute_autonomous_release_cycle_transaction(
+    network: &sandbox::SerializedNetwork,
+    submitters: &[Client],
+    marker: LaneIncarnationMarkerV3,
+    cycle_index: usize,
+) -> Result<AutonomousCycleEvidence> {
+    let submitter = submitters
+        .first()
+        .ok_or_else(|| eyre!("autonomous release cycle has no submitter"))?;
+    let transaction = build_transaction_for_legacy_default_shard(
+        submitter,
+        u64::try_from(EXPANDED_PROVISIONED_LANES)?,
+        u64::from(ELASTIC_LANE_ID),
+        &format!("four-peer-release-autonomous-cycle-{cycle_index}"),
+    )?;
+    let transaction_hash = transaction.hash();
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    ensure!(
+        submitter.submit_transaction(&transaction)? == transaction_hash,
+        "Torii returned another autonomous transaction hash"
+    );
+    let peer_indices = (0..TOTAL_PEERS).collect::<Vec<_>>();
+    let merge_entry = wait_for_autonomous_merge_on_peers(
+        network,
+        &peer_indices,
+        submitters,
+        LaneId::new(ELASTIC_LANE_ID),
+        marker.incarnation,
+        entrypoint_hash,
+        SCALE_IN_WAIT_TIMEOUT,
+        &format!("four-peer release autonomous cycle {cycle_index}"),
+    )?;
+    let committed = wait_for_committed_transaction(
+        submitter,
+        entrypoint_hash,
+        SCALE_IN_WAIT_TIMEOUT,
+        &format!("four-peer release autonomous cycle {cycle_index} transaction"),
+    )?;
+    ensure!(
+        committed.result().0.is_ok(),
+        "autonomous cycle {cycle_index} transaction was rejected after acceptance"
+    );
+    for (index, client) in submitters.iter().enumerate() {
+        let observed = wait_for_committed_transaction(
+            client,
+            entrypoint_hash,
+            SCALE_IN_WAIT_TIMEOUT,
+            &format!("peer {index} autonomous cycle {cycle_index} convergence"),
+        )?;
+        ensure!(
+            observed == committed,
+            "peer {index} reconstructed different autonomous transaction proof material"
+        );
+    }
+    for (index, peer) in network.peers().iter().enumerate() {
+        ensure!(
+            merge_entrypoint_occurrences(peer, entrypoint_hash)? == 1,
+            "peer {index} recorded the autonomous entrypoint more than once"
+        );
+    }
+    Ok(AutonomousCycleEvidence {
+        lane_marker: marker,
+        entrypoint_hash,
+        merge_entry,
+        committed,
+    })
 }
 
 fn query_committed_transaction(
@@ -5150,6 +6121,447 @@ fn block_with_merge_reference(
     context.merge_entry = Some(reference);
     altered.set_execution_context(Some(context));
     altered
+}
+
+#[test]
+#[ignore = "four-peer multilane release lifecycle/adversarial gate"]
+fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts()
+-> Result<()> {
+    run_autoscale_localnet_test_on_large_stack(
+        stringify!(
+            nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts
+        ),
+        nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts_impl,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts_impl()
+-> Result<()> {
+    const TARGET_LANE: LaneId = LaneId::new(ELASTIC_LANE_ID);
+    const FIRST_BYZANTINE_PEER: usize = 3;
+    const RECREATION_RESTART_PEER: usize = 2;
+    const SECOND_BYZANTINE_PEER: usize = 1;
+    const OFFLINE_DRAIN_PEER: usize = 0;
+
+    let context = stringify!(
+        nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts
+    );
+    let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+        .lock()
+        .expect("autoscale localnet test mutex poisoned");
+    configure_load_sequence_seed(Some(context));
+    let started = sandbox::start_network_blocking_or_skip(
+        autoscale_localnet_builder().with_block_cadence(TWO_PHASE_DRAIN_PIPELINE_TIME),
+        context,
+    )?;
+    let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, context)?
+    else {
+        return Ok(());
+    };
+    ensure!(
+        network.peers().len() == TOTAL_PEERS,
+        "four-peer release lifecycle gate requires exactly {TOTAL_PEERS} peers"
+    );
+    wait_for_storage_lane_count(
+        &network,
+        INITIAL_PROVISIONED_LANES,
+        SCALE_OUT_WAIT_TIMEOUT,
+        "four-peer release baseline lane count",
+    )?;
+
+    let base_layers = network
+        .config_layers()
+        .map(Cow::into_owned)
+        .collect::<Vec<_>>();
+    let mut submitters = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect::<Vec<_>>();
+    wait_for_submission_ready(&submitters, SUBMISSION_READY_TIMEOUT, context)?;
+    let quorum_required = wait_for_commit_quorum_required(
+        &network,
+        QUORUM_DISCOVERY_TIMEOUT,
+        "four-peer release quorum discovery",
+    )?;
+    ensure!(
+        quorum_required == commit_quorum_from_len(TOTAL_PEERS)
+            && quorum_required == TOTAL_PEERS - 1,
+        "four-peer release gate requires an exact three-validator quorum"
+    );
+
+    let initial_height = submitters[0].get_status()?.blocks;
+    restart_four_peer_validator(
+        &network,
+        &runtime,
+        FIRST_BYZANTINE_PEER,
+        &base_layers,
+        Some(four_peer_byzantine_fault_layer(
+            FourPeerByzantineFault::ConflictingReady,
+        )),
+        initial_height,
+        "install first rotating Byzantine validator",
+    )?;
+    submitters = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect();
+    wait_for_submission_ready(
+        &submitters,
+        SUBMISSION_READY_TIMEOUT,
+        "first Byzantine window",
+    )?;
+
+    let marker_a =
+        expand_elastic_lane_for_release_cycle(&network, &submitters, quorum_required, 1)?;
+    let autonomous_a =
+        execute_autonomous_release_cycle_transaction(&network, &submitters, marker_a.clone(), 1)?;
+    ensure!(
+        autonomous_a.lane_marker == marker_a,
+        "first autonomous cycle changed the active lane marker"
+    );
+    let intent_a = wait_for_uncommitted_lane_drain_intent_on_all_peers(
+        &network,
+        &submitters,
+        ELASTIC_LANE_ID,
+        SCALE_IN_WAIT_TIMEOUT,
+        "four-peer release first intent",
+    )?;
+    let all_peer_indices = [0_usize, 1, 2, 3];
+    let drain_a = wait_for_drain_certificate_on_running_peers(
+        &network,
+        &all_peer_indices,
+        &submitters,
+        TARGET_LANE,
+        intent_a,
+        SCALE_IN_WAIT_TIMEOUT,
+    )?;
+    let (retired_a, retirement_a_height) = wait_for_drain_retirement_on_running_peers(
+        &network,
+        &all_peer_indices,
+        &submitters,
+        TARGET_LANE,
+        intent_a,
+        SCALE_IN_WAIT_TIMEOUT,
+    )?;
+    ensure!(
+        retired_a == drain_a,
+        "first retirement changed its globally certified drain entry"
+    );
+    let certificate_a = drain_a
+        .lane_drain_certificates
+        .first()
+        .ok_or_else(|| eyre!("first drain entry omitted its certificate"))?;
+    ensure!(
+        certificate_a.body.intent.lane_incarnation == marker_a.incarnation,
+        "first drain certificate did not bind incarnation A"
+    );
+    ensure!(
+        certificate_a.body.final_frontier.lane_incarnation == marker_a.incarnation
+            && certificate_a.body.final_frontier.unresolved_evidence_root
+                == iroha::data_model::merge::lane_drain_empty_unresolved_evidence_root(),
+        "first drain certificate did not close an evidence-clean exact-incarnation frontier"
+    );
+    wait_for_storage_lane_count(
+        &network,
+        INITIAL_PROVISIONED_LANES,
+        SCALE_IN_WAIT_TIMEOUT,
+        "four-peer release first destruction",
+    )?;
+    let archive_a_paths =
+        assert_archived_incarnation_on_all_peers(&network, TARGET_LANE, marker_a.incarnation)?;
+
+    restart_four_peer_validator(
+        &network,
+        &runtime,
+        FIRST_BYZANTINE_PEER,
+        &base_layers,
+        None,
+        retirement_a_height,
+        "heal first rotating Byzantine validator",
+    )?;
+    submitters = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect();
+    wait_for_submission_ready(
+        &submitters,
+        SUBMISSION_READY_TIMEOUT,
+        "post-first-fault recovery",
+    )?;
+    ensure!(
+        wait_for_committed_transaction(
+            &submitters[FIRST_BYZANTINE_PEER],
+            autonomous_a.entrypoint_hash,
+            SCALE_IN_WAIT_TIMEOUT,
+            "healed first Byzantine autonomous proof",
+        )? == autonomous_a.committed,
+        "healed first Byzantine peer reconstructed another autonomous proof"
+    );
+
+    let marker_b =
+        expand_elastic_lane_for_release_cycle(&network, &submitters, quorum_required, 2)?;
+    ensure!(
+        marker_b.lane_id == marker_a.lane_id
+            && marker_b.incarnation != marker_a.incarnation
+            && marker_b.activation_height > marker_a.activation_height,
+        "same-ID recreation did not allocate a later fresh incarnation: A={marker_a:?}, B={marker_b:?}"
+    );
+    for (index, peer) in network.peers().iter().enumerate() {
+        ensure!(
+            lane_drain_entry_for_incarnation(peer, TARGET_LANE, marker_a.incarnation)?.as_ref()
+                == Some(&drain_a),
+            "peer {index} lost or changed incarnation A's historical drain evidence during recreation"
+        );
+    }
+
+    runtime.block_on(network.peers()[RECREATION_RESTART_PEER].shutdown());
+    assert_stale_archived_marker_rejected_by_recreated_store(
+        &network.peers()[RECREATION_RESTART_PEER],
+        ELASTIC_LANE_ID,
+        &archive_a_paths[RECREATION_RESTART_PEER],
+        &marker_b,
+    )?;
+    let recreation_height = submitters[0].get_status()?.blocks;
+    restart_four_peer_validator(
+        &network,
+        &runtime,
+        RECREATION_RESTART_PEER,
+        &base_layers,
+        None,
+        recreation_height,
+        "restart recreated incarnation after stale-marker rejection",
+    )?;
+    wait_for_storage_lane_count(
+        &network,
+        EXPANDED_PROVISIONED_LANES,
+        SCALE_OUT_WAIT_TIMEOUT,
+        "recreated lane restart storage recovery",
+    )?;
+    ensure!(
+        active_elastic_lane_marker(&network.peers()[RECREATION_RESTART_PEER], ELASTIC_LANE_ID)?
+            == marker_b,
+        "restarted peer restored another active marker for incarnation B"
+    );
+    let restarted_a = wait_for_committed_transaction(
+        &peer_client_with_timeout(&network.peers()[RECREATION_RESTART_PEER]),
+        autonomous_a.entrypoint_hash,
+        SCALE_IN_WAIT_TIMEOUT,
+        "recreated-lane restart historical proof",
+    )?;
+    ensure!(
+        restarted_a == autonomous_a.committed,
+        "recreated-lane restart rewrote incarnation A's canonical proof"
+    );
+    wait_for_certified_elastic_lane_incarnation(
+        &network
+            .peers()
+            .iter()
+            .map(peer_client_with_timeout)
+            .collect::<Vec<_>>(),
+        TARGET_LANE,
+        marker_b.incarnation,
+        quorum_required,
+        STRICT_SCALE_OUT_WAIT_TIMEOUT,
+    )?;
+
+    let pre_second_fault_height = submitters[0].get_status()?.blocks;
+    restart_four_peer_validator(
+        &network,
+        &runtime,
+        SECOND_BYZANTINE_PEER,
+        &base_layers,
+        Some(four_peer_byzantine_fault_layer(
+            FourPeerByzantineFault::DuplicateInits,
+        )),
+        pre_second_fault_height,
+        "rotate Byzantine behavior to a second validator",
+    )?;
+    submitters = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect();
+    wait_for_submission_ready(
+        &submitters,
+        SUBMISSION_READY_TIMEOUT,
+        "second Byzantine window",
+    )?;
+    let autonomous_b =
+        execute_autonomous_release_cycle_transaction(&network, &submitters, marker_b.clone(), 2)?;
+    ensure!(
+        autonomous_b.merge_entry != autonomous_a.merge_entry
+            && autonomous_b.entrypoint_hash != autonomous_a.entrypoint_hash,
+        "recreated lane reused incarnation A's autonomous source identity"
+    );
+
+    restart_four_peer_validator(
+        &network,
+        &runtime,
+        SECOND_BYZANTINE_PEER,
+        &base_layers,
+        None,
+        autonomous_b.merge_entry.merge_qc.carrier_height,
+        "heal second rotating Byzantine validator",
+    )?;
+    submitters = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect();
+    ensure!(
+        wait_for_committed_transaction(
+            &submitters[SECOND_BYZANTINE_PEER],
+            autonomous_b.entrypoint_hash,
+            SCALE_IN_WAIT_TIMEOUT,
+            "healed second Byzantine autonomous proof",
+        )? == autonomous_b.committed,
+        "healed second Byzantine peer reconstructed another autonomous proof"
+    );
+
+    let intent_b = wait_for_new_uncommitted_lane_drain_intent_on_all_peers(
+        &network,
+        &submitters,
+        ELASTIC_LANE_ID,
+        intent_a.close_global_height,
+        SCALE_IN_WAIT_TIMEOUT,
+        "four-peer release recreated-lane intent",
+    )?;
+    ensure!(
+        intent_b.close_global_height > intent_a.close_global_height,
+        "recreated lane reused incarnation A's drain close boundary"
+    );
+    let offline_peer = network.peers()[OFFLINE_DRAIN_PEER].clone();
+    let offline_merge_bytes_before = merge_log_total_bytes(&offline_peer)?;
+    runtime.block_on(offline_peer.shutdown());
+    let running_peer_indices = [1_usize, 2, 3];
+    let drain_b = wait_for_drain_certificate_on_running_peers(
+        &network,
+        &running_peer_indices,
+        &submitters[1..],
+        TARGET_LANE,
+        intent_b,
+        SCALE_IN_WAIT_TIMEOUT,
+    )?;
+    let (retired_b, retirement_b_height) = wait_for_drain_retirement_on_running_peers(
+        &network,
+        &running_peer_indices,
+        &submitters[1..],
+        TARGET_LANE,
+        intent_b,
+        SCALE_IN_WAIT_TIMEOUT,
+    )?;
+    ensure!(
+        retired_b == drain_b,
+        "recreated-lane retirement changed its globally certified drain entry"
+    );
+    let certificate_b = drain_b
+        .lane_drain_certificates
+        .first()
+        .ok_or_else(|| eyre!("recreated-lane drain entry omitted its certificate"))?;
+    ensure!(
+        certificate_b.body.intent.lane_incarnation == marker_b.incarnation
+            && certificate_b.body.intent.lane_incarnation != marker_a.incarnation,
+        "recreated-lane drain certificate accepted incarnation A evidence"
+    );
+    ensure!(
+        certificate_b.body.final_frontier.lane_incarnation == marker_b.incarnation
+            && certificate_b.body.final_frontier.unresolved_evidence_root
+                == iroha::data_model::merge::lane_drain_empty_unresolved_evidence_root(),
+        "recreated-lane drain frontier retained unresolved work or another incarnation"
+    );
+    ensure!(
+        lane_drain_entry_for_incarnation(&offline_peer, TARGET_LANE, marker_b.incarnation)?
+            .is_none()
+            && merge_log_total_bytes(&offline_peer)? == offline_merge_bytes_before,
+        "offline validator received incarnation B's future retirement evidence"
+    );
+
+    restart_four_peer_validator(
+        &network,
+        &runtime,
+        OFFLINE_DRAIN_PEER,
+        &base_layers,
+        None,
+        retirement_b_height,
+        "recover validator rotated offline during recreated-lane drain",
+    )?;
+    wait_for_exact_lane_drain_entry(&offline_peer, TARGET_LANE, &drain_b, SCALE_IN_WAIT_TIMEOUT)?;
+    wait_for_storage_lane_count(
+        &network,
+        INITIAL_PROVISIONED_LANES,
+        SCALE_IN_WAIT_TIMEOUT,
+        "four-peer release final lane destruction",
+    )?;
+    for (index, peer) in network.peers().iter().enumerate() {
+        let incarnations = archived_lane_incarnation_markers(peer, TARGET_LANE)?
+            .into_iter()
+            .map(|(_, marker)| marker.incarnation)
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            incarnations.contains(&marker_a.incarnation)
+                && incarnations.contains(&marker_b.incarnation),
+            "peer {index} did not archive both same-ID incarnations: {incarnations:?}"
+        );
+        ensure!(
+            merge_entrypoint_occurrences(peer, autonomous_a.entrypoint_hash)? == 1
+                && merge_entrypoint_occurrences(peer, autonomous_b.entrypoint_hash)? == 1,
+            "peer {index} lost or duplicated autonomous work across A/B/A lifecycle recovery"
+        );
+        let diagnostics = peer_client_with_timeout(peer).get_sumeragi_diagnostics()?;
+        ensure!(
+            diagnostics
+                .committed_lane_blocks
+                .iter()
+                .all(|block| block.lane_id != TARGET_LANE),
+            "peer {index} published a retired incarnation as an active committed lane block"
+        );
+    }
+
+    let eviction_target = autonomous_a.merge_entry.merge_qc.carrier_height;
+    runtime.block_on(offline_peer.shutdown());
+    evict_historical_block_body_offline(&offline_peer, eviction_target)?;
+    restart_four_peer_validator(
+        &network,
+        &runtime,
+        OFFLINE_DRAIN_PEER,
+        &base_layers,
+        None,
+        retirement_b_height,
+        "restart after authenticated historical body eviction",
+    )?;
+    ensure!(
+        block_index_entry(&offline_peer, eviction_target)?.0 == EVICTED_BLOCK_INDEX_START,
+        "restart reinserted the evicted historical body into the canonical inline store"
+    );
+    let recovered_client = peer_client_with_timeout(&offline_peer);
+    for (cycle, evidence) in [(1, &autonomous_a), (2, &autonomous_b)] {
+        ensure!(
+            wait_for_committed_transaction(
+                &recovered_client,
+                evidence.entrypoint_hash,
+                SCALE_IN_WAIT_TIMEOUT,
+                &format!("post-pruning autonomous cycle {cycle} proof"),
+            )? == evidence.committed,
+            "post-pruning recovery changed autonomous cycle {cycle} proof material"
+        );
+        ensure!(
+            autonomous_merge_entry(&offline_peer, evidence.entrypoint_hash)?.as_ref()
+                == Some(&evidence.merge_entry),
+            "post-pruning recovery changed autonomous cycle {cycle} merge evidence"
+        );
+    }
+    let (evicted_carrier, _) = query_merge_carrier(&recovered_client, &autonomous_a.merge_entry)?;
+    ensure!(
+        autonomous_a
+            .committed
+            .verify_certified_merge_inclusion_in_block(&evicted_carrier),
+        "authenticated DA recovery body does not verify incarnation A's transaction proof"
+    );
+    Ok(())
 }
 
 #[test]
@@ -6607,9 +8019,10 @@ mod tests {
                 COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
                 COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
             },
-            nexus::DataSpaceId,
+            nexus::{DataSpaceId, LaneId},
         },
     };
+    use norito::codec::Encode;
     use tempfile::tempdir;
 
     use super::{
@@ -6618,20 +8031,23 @@ mod tests {
         AutoscaleSoakCycleEvent, AutoscaleSoakReporter, AutoscaleSoakRunSummary,
         AutoscaleTransitionStats, CommitQuorumObservation, CommitQuorumSource,
         CommittedLaneBlockSnapshot, ElasticLaneStorageStats, ExpandContractCycleOutcome,
-        LaneCommitmentSnapshot, LaneDrainCommitmentLogEvidence, LaneDrainIntentLogEvidence,
+        FourPeerByzantineFault, LaneCommitmentSnapshot, LaneDrainCommitmentLogEvidence,
+        LaneDrainIntentLogEvidence, LaneDrainLifecycleLogEvidence, LaneIncarnationMarkerV3,
         LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
         PUBLIC_PROFILE_ELASTIC_LANE_ID, PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
         PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES, PeerStatusSnapshot, SoakTimingSummary,
         autoscale_soak_duration_from_env_value, commit_quorum_observation,
         committed_lane_block_has_canonical_quorum_metadata, committed_lane_block_is_certified,
         contraction_observed_on_quorum_peers, contraction_observed_on_quorum_peers_for_profile,
-        elastic_lane_storage_progressed, expansion_observed_on_quorum_or_scale_out_transition,
+        decode_block_index_entry, elastic_lane_storage_progressed,
+        expansion_observed_on_quorum_or_scale_out_transition,
         expansion_observed_on_quorum_or_scale_out_transition_for_lane,
         expansion_observed_on_quorum_peers, expansion_observed_on_quorum_peers_for_lane,
         expansion_observed_on_storage, expansion_observed_on_storage_for_count,
         expansion_observed_on_storage_for_lane_count, expansion_probe_ready,
         expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
-        expansion_top_up_tx_count, is_autoscale_elastic_storage_segment,
+        expansion_top_up_tx_count, first_retirement_height_after, four_peer_byzantine_fault_layer,
+        is_autoscale_elastic_storage_segment, lifecycle_advanced_after_intent,
         parse_autoscale_transition_stats, parse_autoscale_transition_stats_for_lane,
         parse_lane_drain_lifecycle_log_evidence, peer_committed_lane_block_snapshot,
         peer_direct_applied_committed_lane_block_snapshot, peer_lane_commitment_snapshot,
@@ -6681,6 +8097,9 @@ mod tests {
         LaneRelaySnapshot {
             lane_id,
             dataspace_id,
+            lane_incarnation: Hash::new(format!(
+                "autoscale-localnet-relay-incarnation:{lane_id}:{dataspace_id}"
+            )),
             block_height,
             descriptor_hash,
             merge_admissible,
@@ -6939,6 +8358,9 @@ mod tests {
         CommittedLaneBlockSnapshot {
             lane_id,
             dataspace_id: 0,
+            lane_incarnation: Hash::new(format!(
+                "autoscale-localnet-incarnation:{lane_id}:{height}"
+            )),
             lane_block_height: height,
             lane_block_view: 0,
             descriptor_hash: Hash::new(format!("autoscale-localnet-descriptor:{lane_id}:{height}")),
@@ -12163,5 +13585,111 @@ mod tests {
             &elastic_still_active,
             1
         ));
+    }
+
+    #[test]
+    fn recreated_lane_lifecycle_helpers_ignore_only_historical_retirements() {
+        let intent = LaneDrainIntentLogEvidence {
+            height: 100,
+            close_global_height: 100,
+            initial_merged_lane_height: 7,
+        };
+        let mut evidence = LaneDrainLifecycleLogEvidence {
+            intents: BTreeSet::from([intent]),
+            commitments: BTreeSet::from([LaneDrainCommitmentLogEvidence {
+                height: 90,
+                carrier_height: 90,
+                final_lane_block_height: 6,
+            }]),
+            retirement_heights: BTreeSet::from([95]),
+        };
+        assert!(
+            !lifecycle_advanced_after_intent(&evidence, intent),
+            "incarnation A history must not make incarnation B appear to have skipped its intent-only phase"
+        );
+        assert_eq!(first_retirement_height_after(&evidence, 100), None);
+
+        evidence.commitments.insert(LaneDrainCommitmentLogEvidence {
+            height: 101,
+            carrier_height: 101,
+            final_lane_block_height: 7,
+        });
+        evidence.retirement_heights.extend([99, 102, 104]);
+        assert!(lifecycle_advanced_after_intent(&evidence, intent));
+        assert_eq!(
+            first_retirement_height_after(&evidence, 101),
+            Some(102),
+            "the recreated-lane observer must select the first strictly post-carrier retirement"
+        );
+    }
+
+    #[test]
+    fn four_peer_byzantine_layers_enable_one_exact_fault_class() {
+        let conflicting = four_peer_byzantine_fault_layer(FourPeerByzantineFault::ConflictingReady);
+        let conflicting_rbc = conflicting
+            .get("sumeragi")
+            .and_then(toml::Value::as_table)
+            .and_then(|sumeragi| sumeragi.get("debug"))
+            .and_then(toml::Value::as_table)
+            .and_then(|debug| debug.get("rbc"))
+            .and_then(toml::Value::as_table)
+            .expect("conflicting READY layer has an RBC table");
+        assert_eq!(
+            conflicting_rbc
+                .get("conflicting_ready_mask")
+                .and_then(toml::Value::as_integer),
+            Some(0b1111)
+        );
+        assert!(!conflicting_rbc.contains_key("duplicate_inits"));
+
+        let duplicate = four_peer_byzantine_fault_layer(FourPeerByzantineFault::DuplicateInits);
+        let duplicate_rbc = duplicate
+            .get("sumeragi")
+            .and_then(toml::Value::as_table)
+            .and_then(|sumeragi| sumeragi.get("debug"))
+            .and_then(toml::Value::as_table)
+            .and_then(|debug| debug.get("rbc"))
+            .and_then(toml::Value::as_table)
+            .expect("duplicate INIT layer has an RBC table");
+        assert_eq!(
+            duplicate_rbc
+                .get("duplicate_inits")
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert!(!duplicate_rbc.contains_key("conflicting_ready_mask"));
+    }
+
+    #[test]
+    fn block_index_decoder_requires_an_exact_positive_height_entry() {
+        let mut bytes = Vec::new();
+        for (offset, length) in [(11_u64, 22_u64), (u64::MAX, 33_u64)] {
+            bytes.extend_from_slice(&offset.to_le_bytes());
+            bytes.extend_from_slice(&length.to_le_bytes());
+        }
+        assert_eq!(decode_block_index_entry(&bytes, 1).unwrap(), (11, 22));
+        assert_eq!(decode_block_index_entry(&bytes, 2).unwrap(), (u64::MAX, 33));
+        assert!(decode_block_index_entry(&bytes, 0).is_err());
+        assert!(decode_block_index_entry(&bytes, 3).is_err());
+        assert!(decode_block_index_entry(&bytes[..bytes.len() - 1], 2).is_err());
+    }
+
+    #[test]
+    fn lane_incarnation_marker_mirror_has_canonical_v3_layout() -> Result<()> {
+        let marker = LaneIncarnationMarkerV3 {
+            version: 3,
+            lane_id: LaneId::new(1),
+            incarnation: Hash::new(b"four-peer-release-marker-incarnation"),
+            activation_height: 42,
+            move_target_blocks: Some("retired/blocks".to_owned()),
+            move_target_merge: Some("retired/merge.log".to_owned()),
+            block_store_digest: Hash::new(b"four-peer-release-marker-blocks"),
+            merge_log_digest: Hash::new(b"four-peer-release-marker-merge"),
+        };
+        let temp = tempdir()?;
+        let path = temp.path().join(".lane-incarnation.norito");
+        fs::write(&path, marker.encode())?;
+        assert_eq!(super::read_lane_incarnation_marker(&path)?, marker);
+        Ok(())
     }
 }

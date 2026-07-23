@@ -6,11 +6,26 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_no_legacy_codec.sh"
 RETIRED_HYPHEN_DEP = "parity" + "-" + "scale" + "-codec"
 RETIRED_UNDERSCORE_DEP = "parity" + "_" + "scale" + "_codec"
+RETIRED_NATIVE_AMX_V1_SOURCES = (
+    f'const RETIRED_WIRE_TOKEN: &str = "{"NativeAmxAttestationBody" + "V1"}";\n',
+    f'const RETIRED_WIRE_TOKEN: &str = "{"NativeAmxAttestationQc" + "V1"}";\n',
+    f'pub struct {"NativeAmxLeg" + "Record"} {{}}\n',
+    f'impl_decode_from_slice_via_codec!({"NativeAmxLeg" + "Record"});\n',
+    f'const RETIRED_WIRE_TOKEN: &str = "{"iroha:native-amx:" + "v1"}";\n',
+)
+RETIRED_LANE_HANDOFF_SOURCES = (
+    f"pub struct {'LaneExecutablePayload' + 'HandoffV1'} {{}}\n",
+    f"struct {'LaneExecutablePayload' + 'HandoffSignaturePreimage'} {{}}\n",
+    f"const {'LANE_EXECUTABLE_PAYLOAD_' + 'HANDOFF_VERSION_V2'}: u8 = 2;\n",
+    f'const RETIRED_DOMAIN: &str = "{"nexus:lane-executable-payload-" + "handoff:v2"}";\n',
+)
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -61,6 +76,8 @@ def test_guard_allows_clean_root_and_crate_manifests(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert "No retired codec dependencies found." in result.stdout
+    assert "No retired Native AMX V1 consensus codecs found." in result.stdout
+    assert "No retired lane executable payload handoff codecs found." in result.stdout
 
 
 def test_guard_rejects_root_manifest_dependency(tmp_path: Path) -> None:
@@ -149,3 +166,35 @@ legacy_codec = {{ package = "{RETIRED_HYPHEN_DEP}", version = "3" }}
     assert result.returncode == 1
     assert "retired codec dependency detected in:" in result.stderr
     assert str(manifest) in result.stderr
+
+
+@pytest.mark.parametrize("retired_source", RETIRED_NATIVE_AMX_V1_SOURCES)
+def test_guard_rejects_retired_native_amx_v1_consensus_codec(
+    tmp_path: Path, retired_source: str
+) -> None:
+    repo = _init_repo(tmp_path)
+    source = repo / "crates" / "demo" / "src" / "lib.rs"
+    source.parent.mkdir()
+    source.write_text(retired_source, encoding="utf-8")
+
+    result = _run_guard(repo)
+
+    assert result.returncode == 1
+    assert "retired Native AMX V1 consensus codec detected in:" in result.stderr
+    assert str(source) in result.stderr
+
+
+@pytest.mark.parametrize("retired_source", RETIRED_LANE_HANDOFF_SOURCES)
+def test_guard_rejects_retired_lane_executable_payload_handoff_codec(
+    tmp_path: Path, retired_source: str
+) -> None:
+    repo = _init_repo(tmp_path)
+    source = repo / "crates" / "demo" / "src" / "lib.rs"
+    source.parent.mkdir()
+    source.write_text(retired_source, encoding="utf-8")
+
+    result = _run_guard(repo)
+
+    assert result.returncode == 1
+    assert "retired lane executable payload handoff codec detected in:" in result.stderr
+    assert str(source) in result.stderr

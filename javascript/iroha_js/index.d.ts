@@ -4679,7 +4679,7 @@ export interface ToriiPipelineTransactionStatus {
   summary?: string;
   diagnostics?: ReadonlyArray<Record<string, unknown>>;
   trigger_completions?: ReadonlyArray<Record<string, unknown>>;
-  scope: "local" | "auto" | "global";
+  scope: "local" | "global";
   resolved_from: "cache" | "queue" | "state";
 }
 
@@ -5801,12 +5801,7 @@ type CryptoRuntimeNamespaceExport =
   | "verifySm2";
 
 
-export const Torii: IrohaJsRuntimeNamespace<ToriiRuntimeNamespaceExport> &
-  Readonly<{
-    getTrustedValidationFeeVerificationContext(
-      client: ToriiClient,
-    ): ValidationFeePolicyVerificationContext | null;
-  }>;
+export const Torii: IrohaJsRuntimeNamespace<ToriiRuntimeNamespaceExport>;
 export const Norito: IrohaJsRuntimeNamespace<NoritoRuntimeNamespaceExport>;
 export const Crypto: IrohaJsRuntimeNamespace<CryptoRuntimeNamespaceExport>;
 
@@ -5910,7 +5905,7 @@ export interface ToriiClientConfigSource extends ToriiClientRetryOptions {
   torii?: {
     apiTokens?: ReadonlyArray<string>;
   };
-  toriiClient?: ToriiClientRetryOptions & Record<string, unknown>;
+  toriiClient?: ToriiClientRetryOptions;
 }
 
 export interface ResolvedToriiClientConfig {
@@ -5937,8 +5932,6 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
   fetchImpl?: typeof fetch;
   config?: ToriiClientConfigSource;
   allowInsecure?: boolean;
-  /** Immutable out-of-band trust anchor required by validation-fee submission. */
-  validationFeeVerificationContext?: ValidationFeePolicyVerificationContext;
   sorafsAliasPolicy?: SorafsAliasPolicyOptions;
   onSorafsAliasWarning?: (warning: SorafsAliasWarning) => void;
   sorafsGatewayFetch?: typeof sorafsGatewayFetch;
@@ -5949,19 +5942,29 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
   ) => void;
 }
 
+/** Polling controls for global, state-authoritative transaction finality. */
 export interface TransactionStatusPollOptions {
   signal?: AbortSignal;
-  scope?: "local" | "auto" | "global";
   intervalMs?: number;
   timeoutMs?: number | null;
   maxAttempts?: number | null;
-  successStatuses?: Iterable<string>;
+  /**
+   * Additional state-resolved failure labels. State-resolved `Rejected` and
+   * `Expired` always fail.
+   */
   failureStatuses?: Iterable<string>;
   onStatus?: (
     status: string | null,
     payload: ToriiPipelineTransactionStatus | null,
     attempt: number,
   ) => void | Promise<void>;
+}
+
+/** Options for a single diagnostic status read; scope defaults to `global`. */
+export interface TransactionStatusReadOptions {
+  allowShortHash?: boolean;
+  signal?: AbortSignal;
+  scope?: "local" | "global";
 }
 
 export interface IsoBridgeSignerSnapshot {
@@ -8681,6 +8684,28 @@ export interface IvmProvedTransactionAssemblyInput {
   privateKeyAlgorithm?: string | null;
 }
 
+/** Exact unsigned proved-IVM payload plus its envelope-only proof attachment. */
+export type IvmProvedTransactionPayloadDraftInput = Omit<
+  IvmProvedTransactionAssemblyInput,
+  "privateKey" | "privateKeyAlgorithm"
+>;
+
+export interface IvmProvedTransactionPayloadDraftResult
+  extends TransactionPayloadDraftResult {
+  attachment: Record<string, unknown>;
+  attachmentJson: string;
+}
+
+export interface QuotedIvmProvedTransactionPayloadSigningInput {
+  payload:
+    | Record<string, unknown>
+    | IvmProvedTransactionPayloadDraftResult;
+  attachment?: object | string;
+  quotedFeePayment: BrowserFeePayment | Record<string, unknown> | string;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: string | null;
+}
+
 export interface RegisterMultisigTransactionInput extends FeePaymentRequired {
   chainId: string;
   authority: string;
@@ -8692,121 +8717,6 @@ export interface RegisterMultisigTransactionInput extends FeePaymentRequired {
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
   privateKeyAlgorithm?: string | null;
-}
-
-export type ValidationFeePolicyByteSource =
-  | Uint8Array
-  | ArrayBuffer
-  | ArrayBufferView
-  | readonly number[]
-  | string;
-
-export interface ValidationFeePolicyV1 {
-  schema_version: number;
-  network_id: string;
-  genesis_hash: ValidationFeePolicyByteSource;
-  policy_version: NumericLike;
-  previous_policy_hash: ValidationFeePolicyByteSource | null;
-  ds_asset_id: string;
-  ds_scale: number;
-  fee: string;
-  treasury_account_id: string;
-  charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
-  effective_from_height: NumericLike;
-  expires_after_height: NumericLike | null;
-  governance_keyset_id: string;
-  exemption_classes: readonly string[];
-}
-
-export interface ValidationFeePolicySignatureV1 {
-  signer_public_key?: ValidationFeePolicyByteSource;
-  public_key?: ValidationFeePolicyByteSource;
-  signature:
-    | ValidationFeePolicyByteSource
-    | {
-        payload?: ValidationFeePolicyByteSource;
-        bytes?: ValidationFeePolicyByteSource;
-        signature?: ValidationFeePolicyByteSource;
-      };
-}
-
-export interface SignedValidationFeePolicyV1 {
-  policy: ValidationFeePolicyV1;
-  signatures: readonly ValidationFeePolicySignatureV1[];
-}
-
-export interface ValidationFeeGovernanceKeyV1 {
-  public_key: ValidationFeePolicyByteSource;
-  weight: NumericLike;
-}
-
-export interface ValidationFeeGovernanceKeysetV1 {
-  keyset_id: string;
-  threshold: NumericLike;
-  keys?: readonly ValidationFeeGovernanceKeyV1[];
-  public_keys?: readonly ValidationFeePolicyByteSource[];
-  public_keys_hex?: readonly string[];
-}
-
-export interface ValidationFeePolicyRegistryEntryV1 {
-  policy_version: NumericLike;
-  policy_hash: ValidationFeePolicyByteSource;
-  previous_policy_hash: ValidationFeePolicyByteSource | null;
-}
-
-export interface ValidationFeePolicyRegistryV1 {
-  active_policy_hash: ValidationFeePolicyByteSource;
-  active_policy_version: NumericLike;
-  registered_policies: readonly ValidationFeePolicyRegistryEntryV1[];
-}
-
-export interface ValidationFeePolicyVerificationContext {
-  networkId?: string;
-  network_id?: string;
-  genesisHash?: ValidationFeePolicyByteSource;
-  genesis_hash?: ValidationFeePolicyByteSource;
-  currentHeight?: NumericLike;
-  current_height?: NumericLike;
-  governanceKeyset?: ValidationFeeGovernanceKeysetV1;
-  governance_keyset?: ValidationFeeGovernanceKeysetV1;
-  governanceKeysets?: readonly ValidationFeeGovernanceKeysetV1[];
-  governance_keysets?: readonly ValidationFeeGovernanceKeysetV1[];
-  policyRegistry?: ValidationFeePolicyRegistryV1;
-  policy_registry?: ValidationFeePolicyRegistryV1;
-  /** Active-policy verification is mandatory; `false` is rejected. */
-  requireActive?: true;
-  /** Snake-case alias for `requireActive`; `false` is rejected. */
-  require_active?: true;
-}
-
-export interface VerifiedValidationFeePolicy {
-  policy: ValidationFeePolicyV1;
-  policyHashHex: string;
-  policyVersion: bigint;
-  validSignatureCount: number;
-  validSignatureWeight: bigint;
-  registry: {
-    activePolicyVersion: bigint;
-    activePolicyHashHex: string;
-    registeredPolicyCount: number;
-  };
-}
-
-export interface IvmValidationFeePolicyIntent {
-  signedPolicy?: SignedValidationFeePolicyV1;
-  signed_policy?: SignedValidationFeePolicyV1;
-  /** Per-call trust overrides are rejected; configure the ToriiClient instead. */
-  verificationContext?: never;
-  /** Per-call trust overrides are rejected; configure the ToriiClient instead. */
-  verification_context?: never;
-  /** Optional assertion checked against the count derived from the proved overlay. */
-  qualifyingTransferCount?: NumericLike;
-  /** Snake-case alias for `qualifyingTransferCount`. */
-  qualifying_transfer_count?: NumericLike;
-  feeInstructionIndex?: NumericLike;
-  fee_instruction_index?: NumericLike;
-  feeTransferEntryIndex?: NumericLike | null;
-  fee_transfer_entry_index?: NumericLike | null;
 }
 
 export interface RequiredIvmOverlayTransfer {
@@ -8892,21 +8802,7 @@ type IvmProvedContractCallCore = IvmProvedContractCallInputBase &
  * Torii's simulation, the ledger/Core body hash, and every header/body byte
  * against those values before deriving, proving, signing, or submitting.
  */
-export type IvmProvedContractCallInput = IvmProvedContractCallCore &
-  IvmOptionalAliasPair<
-    "validationFeePolicy",
-    "validation_fee_policy",
-    IvmValidationFeePolicyIntent | null
-  >;
-
-/** Input for the strict validation-fee submission helper. */
-export type ValidationFeeIvmProvedContractCallInput =
-  IvmProvedContractCallCore &
-    IvmRequiredAliasPair<
-      "validationFeePolicy",
-      "validation_fee_policy",
-      IvmValidationFeePolicyIntent
-    >;
+export type IvmProvedContractCallInput = IvmProvedContractCallCore;
 
 export interface IvmProvedContractCallOptions {
   signal?: AbortSignal;
@@ -8915,7 +8811,6 @@ export interface IvmProvedContractCallOptions {
   waitForCommit?: boolean;
   transactionIntervalMs?: number;
   transactionTimeoutMs?: number | null;
-  transactionStatusScope?: "local" | "auto" | "global";
 }
 
 export interface IvmProvedContractCallResult {
@@ -8928,15 +8823,9 @@ export interface IvmProvedContractCallResult {
   proved: IvmProvedPayload;
   attachment: { [key: string]: JsonValue };
   proofJobId: string;
+  feeQuoteDraft: IvmProvedTransactionPayloadDraftResult;
+  feeQuote: FeeQuoteResponse;
   requiredOverlayTransfer: JsonValue | null;
-  validationFeePolicy: {
-    policyVersion: number;
-    policyHash: string;
-    qualifyingTransferCount: number;
-    feeInstructionIndex: number;
-    feeTransferEntryIndex: number | null;
-    feeQuantity: string;
-  } | null;
 }
 
 export interface MintAssetInput {
@@ -12028,12 +11917,11 @@ export interface ToriiBlockProofVerification {
 
 export interface ToriiBrowserTransactionStatusOptions
   extends ToriiBrowserRequestOptions {
-  scope?: "local" | "auto" | "global";
+  scope?: "local" | "global";
 }
 
 export interface ToriiBrowserTransactionStatusPollOptions
   extends ToriiBrowserRequestOptions {
-  scope?: "global";
   intervalMs?: number;
   timeoutMs?: number;
   maxAttempts?: number;
@@ -12347,6 +12235,63 @@ export declare class ToriiBrowserClient {
   ): Promise<unknown>;
 }
 
+export interface ValidationFeeCheckpointV1 {
+  readonly height: number | string | bigint;
+  readonly contextId: string;
+}
+
+export interface ValidationFeeLedgerBindingV1 {
+  readonly schema: "cbsi.mobile-validation-fee-ledger-binding.v1";
+  readonly chainId: string;
+  readonly genesisHash: string;
+  readonly policyChainGenesisHash: string;
+  readonly checkpoint: ValidationFeeCheckpointV1;
+}
+
+export interface NormalizedValidationFeeCheckpointV1 {
+  readonly height: bigint;
+  readonly contextId: string;
+}
+
+export interface NormalizedValidationFeeLedgerBindingV1 {
+  readonly schema: "cbsi.mobile-validation-fee-ledger-binding.v1";
+  readonly chainId: string;
+  readonly genesisHash: string;
+  readonly policyChainGenesisHash: string;
+  readonly checkpoint: NormalizedValidationFeeCheckpointV1;
+}
+
+export interface ValidationFeeVerifiedPolicyProjectionV1 {
+  readonly schema: "iroha.validation_fee.verified_policy_projection.v1";
+  readonly version: 1;
+  readonly chain_id: string;
+  readonly genesis_hash: string;
+  readonly policy_chain_genesis_hash: string;
+  readonly registry_hash: string;
+  readonly head_policy_version: bigint;
+  readonly head_policy_hash: string;
+  readonly current_policy: Readonly<Record<string, unknown>> | null;
+  readonly trusted_checkpoint_height: bigint;
+  readonly trusted_checkpoint_context_id: string;
+  readonly evaluated_block_height: bigint;
+  readonly evaluated_context_id: string;
+  readonly evaluated_block_hash: string;
+  readonly observed_ledger_tip_height: bigint;
+  readonly more_available: boolean;
+}
+
+export interface ValidationFeeCurrentPolicyProofPageV1 {
+  readonly proofNorito: Buffer;
+  readonly projection: ValidationFeeVerifiedPolicyProjectionV1;
+  readonly promotedCheckpoint: NormalizedValidationFeeCheckpointV1;
+}
+
+export interface ValidationFeePolicyProofCatchUpV1
+  extends ValidationFeeCurrentPolicyProofPageV1 {
+  readonly binding: NormalizedValidationFeeLedgerBindingV1;
+  readonly pagesVerified: number;
+}
+
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
   getKagemushaReadinessV4(
@@ -12608,6 +12553,19 @@ export declare class ToriiClient {
     payload: Record<string, unknown> | TransactionPayloadDraftResult,
     options: RequiredCanonicalRequestOptions,
   ): Promise<FeeQuoteResponse>;
+  getValidationFeeCurrentPolicyProofPage(
+    binding: ValidationFeeLedgerBindingV1,
+    checkpoint?: ValidationFeeCheckpointV1 | null,
+    options?: { signal?: AbortSignal },
+  ): Promise<ValidationFeeCurrentPolicyProofPageV1>;
+  catchUpValidationFeeCurrentPolicyProof(
+    binding: ValidationFeeLedgerBindingV1,
+    options?: {
+      checkpoint?: ValidationFeeCheckpointV1;
+      maxPages?: number;
+      signal?: AbortSignal;
+    },
+  ): Promise<ValidationFeePolicyProofCatchUpV1>;
   listIdentifierPolicies(options?: {
     signal?: AbortSignal;
   }): Promise<IdentifierPolicyListResponse>;
@@ -12843,12 +12801,7 @@ export declare class ToriiClient {
   ): Promise<{ acceptedCount: number; route?: unknown }>;
   getTransactionStatus(
     hashHex: string,
-    options?: {
-      allowShortHash?: boolean;
-      signal?: AbortSignal;
-      scope?: "local" | "auto" | "global";
-      endpoints?: ReadonlyArray<string> | string;
-    },
+    options?: TransactionStatusReadOptions,
   ): Promise<ToriiPipelineTransactionStatus | null>;
   waitForTransactionStatus(
     hashHex: string,
@@ -12860,12 +12813,7 @@ export declare class ToriiClient {
   ): Promise<ToriiPipelineTransactionStatus>;
   getTransactionStatusTyped(
     hashHex: string,
-    options?: {
-      allowShortHash?: boolean;
-      signal?: AbortSignal;
-      scope?: "local" | "auto" | "global";
-      endpoints?: ReadonlyArray<string> | string;
-    },
+    options?: TransactionStatusReadOptions,
   ): Promise<ToriiPipelineStatus | null>;
   waitForTransactionStatusTyped(
     hashHex: string,
@@ -14076,59 +14024,38 @@ export function buildApplySccpRouteGovernanceTransaction(
 export function buildIvmProvedTransaction(
   input: IvmProvedTransactionAssemblyInput,
 ): SignedTransactionResult;
+export function buildIvmProvedTransactionPayload(
+  input: IvmProvedTransactionPayloadDraftInput,
+): IvmProvedTransactionPayloadDraftResult;
+export function signQuotedIvmProvedTransactionPayload(
+  input: QuotedIvmProvedTransactionPayloadSigningInput,
+): SignedTransactionResult;
 
-export const VALIDATION_FEE_POLICY_SCHEMA_VERSION: 1;
-export const VALIDATION_FEE_DS_SCALE: 2;
-export const VALIDATION_FEE_INITIAL_AMOUNT: "0.1";
-export const VALIDATION_FEE_POLICY_HASH_DOMAIN: string;
-export const VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN: string;
-export const VALIDATION_FEE_POLICY_TYPE_NAME: string;
-export const VALIDATION_FEE_CHARGING_MODE: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
-export const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: "TREASURY_PAYOUT";
+export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
+export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "cbsi.mobile-validation-fee-ledger-binding.v1";
+export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: 4194304;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 21;
+export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA: "iroha.validation_fee.verified_policy_projection.v1";
 
-export class ValidationFeePolicyError extends Error {
-  readonly code: string;
-  constructor(code: string, message: string);
-}
+export function normalizeValidationFeeCheckpointV1(
+  checkpoint: ValidationFeeCheckpointV1,
+): NormalizedValidationFeeCheckpointV1;
+export function normalizeValidationFeeLedgerBindingV1(
+  binding: ValidationFeeLedgerBindingV1,
+): NormalizedValidationFeeLedgerBindingV1;
+export function encodeValidationFeeCurrentPolicyProofRequestV1(
+  checkpoint: ValidationFeeCheckpointV1,
+): Buffer;
+export function verifyValidationFeeCurrentPolicyProofV1(
+  proofNorito: Buffer | ArrayBuffer | ArrayBufferView,
+  binding: ValidationFeeLedgerBindingV1,
+  checkpoint: ValidationFeeCheckpointV1,
+): ValidationFeeVerifiedPolicyProjectionV1;
 
-export function encodeValidationFeePolicyNorito(
-  policy: ValidationFeePolicyV1,
-): Uint8Array;
-export function validationFeePolicyHash(policy: ValidationFeePolicyV1): string;
-export function validationFeePolicyLedgerSignaturePayload(
-  policy: ValidationFeePolicyV1,
-): Uint8Array;
-export function verifyValidationFeePolicyRegistry(
-  registry: ValidationFeePolicyRegistryV1,
-  policy: ValidationFeePolicyV1,
-): {
-  activePolicyVersion: bigint;
-  activePolicyHashHex: string;
-  registeredPolicyCount: number;
-};
-export function verifySignedValidationFeePolicy(
-  signedPolicy: SignedValidationFeePolicyV1,
-  context: ValidationFeePolicyVerificationContext,
-): VerifiedValidationFeePolicy;
-export function validationFeeQuantity(
-  policy: ValidationFeePolicyV1,
-  qualifyingTransferCount: NumericLike,
-): string;
-
-/** Generic proof-bound submission helper; validation-fee policy is optional. */
+/** Generic proof-bound submission helper. */
 export function submitIvmProvedContractCall(
   client: ToriiClient,
   input: IvmProvedContractCallInput,
-  options?: IvmProvedContractCallOptions,
-): Promise<IvmProvedContractCallResult>;
-
-/**
- * Strict proof-bound submission helper that requires and independently verifies
- * a signed active validation-fee policy before signing or submission.
- */
-export function submitValidationFeeIvmProvedContractCall(
-  client: ToriiClient,
-  input: ValidationFeeIvmProvedContractCallInput,
   options?: IvmProvedContractCallOptions,
 ): Promise<IvmProvedContractCallResult>;
 
@@ -14397,7 +14324,6 @@ export function submitSignedTransaction(
     pollIntervalMs?: number;
     timeoutMs?: number;
     privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
-    scope?: "local" | "auto" | "global" | string | null;
   },
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
 

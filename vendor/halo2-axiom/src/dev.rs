@@ -14,10 +14,9 @@ use crate::plonk::permutation::keygen::Assembly;
 use crate::{
     circuit,
     plonk::{
-        permutation,
-        sealed::{self, SealedPhase},
         Advice, Any, Assigned, Assignment, Challenge, Circuit, Column, ConstraintSystem, Error,
-        Expression, FirstPhase, Fixed, FloorPlanner, Instance, Phase, Selector,
+        Expression, FirstPhase, Fixed, FloorPlanner, Instance, Phase, Selector, permutation,
+        sealed::{self, SealedPhase},
     },
 };
 
@@ -612,7 +611,8 @@ impl<F: Field> Assignment<F> for MockProver<F> {
             self.namespace_prefix.push_str("::");
         }
         self.namespace_prefix.push_str(&name);
-        self.namespace_stack.push(NamespaceFrame { name, prefix_len });
+        self.namespace_stack
+            .push(NamespaceFrame { name, prefix_len });
     }
 
     fn pop_namespace(&mut self, gadget_name: Option<String>) {
@@ -958,14 +958,14 @@ impl<F: FromUniformBytes<64> + Ord> MockProver<F> {
                 &|query| {
                     let query = self.cs.fixed_queries[query.index.unwrap()];
                     let column_index = query.0.index();
-                    let rotation = query.1 .0;
+                    let rotation = query.1.0;
                     self.fixed[column_index][(row as i32 + n + rotation) as usize % n as usize]
                         .into()
                 },
                 &|query| {
                     let query = self.cs.advice_queries[query.index.unwrap()];
                     let column_index = query.0.index();
-                    let rotation = query.1 .0;
+                    let rotation = query.1.0;
                     self.advice[column_index][(row as i32 + n + rotation) as usize % n as usize]
                         .clone()
                         .into()
@@ -973,7 +973,7 @@ impl<F: FromUniformBytes<64> + Ord> MockProver<F> {
                 &|query| {
                     let query = self.cs.instance_queries[query.index.unwrap()];
                     let column_index = query.0.index();
-                    let rotation = query.1 .0;
+                    let rotation = query.1.0;
                     Value::Real(
                         self.instance[column_index]
                             [(row as i32 + n + rotation) as usize % n as usize]
@@ -1033,11 +1033,7 @@ impl<F: FromUniformBytes<64> + Ord> MockProver<F> {
                                     .map(move |c| load(c, table_row))
                                     .collect();
 
-                                if t != fill_row {
-                                    Some(t)
-                                } else {
-                                    None
-                                }
+                                if t != fill_row { Some(t) } else { None }
                             })
                             .collect();
                         cached_table.sort_unstable();
@@ -1441,11 +1437,7 @@ impl<F: FromUniformBytes<64> + Ord> MockProver<F> {
                                     .map(move |c| load(c, table_row))
                                     .collect();
 
-                                if t != fill_row {
-                                    Some(t)
-                                } else {
-                                    None
-                                }
+                                if t != fill_row { Some(t) } else { None }
                             })
                             .collect();
                         cached_table.par_sort_unstable();
@@ -1650,8 +1642,8 @@ mod tests {
     use crate::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
         plonk::{
-            sealed::SealedPhase, Advice, Any, Assigned, Circuit, Column, ConstraintSystem, Error,
-            Expression, FirstPhase, Fixed, Instance, Selector, TableColumn,
+            Advice, Any, Assigned, Circuit, Column, ConstraintSystem, Error, Expression,
+            FirstPhase, Fixed, Instance, Selector, TableColumn, sealed::SealedPhase,
         },
         poly::Rotation,
     };

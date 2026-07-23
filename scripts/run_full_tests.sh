@@ -449,14 +449,12 @@ for member in doc["workspace_members"]:
 }
 
 run_segmented_fast_tests() {
-    local package_file
     local package
     local -a packages
 
-    package_file="$(mktemp)"
-    fast_workspace_packages >"${package_file}"
-    mapfile -t packages <"${package_file}"
-    rm -f "${package_file}"
+    while IFS= read -r package; do
+        packages+=("${package}")
+    done < <(fast_workspace_packages)
 
     if ((${#packages[@]} == 0)); then
         echo "No workspace packages found for segmented fast tests" >&2
