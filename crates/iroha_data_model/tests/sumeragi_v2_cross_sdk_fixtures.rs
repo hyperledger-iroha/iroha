@@ -10,9 +10,9 @@ use iroha_data_model::{
         CommitCertificateResponse, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
         ConsensusRound, DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
         HeightContext, PROTOCOL_VERSION, PayloadChunk, PayloadEncoding, PayloadManifest, Proposal,
-        ProposalJustification, QuorumCertificate, SumeragiV2BodyState,
-        SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase, TimeoutCertificate,
-        TimeoutJustification, TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote,
+        ProposalJustification, QuorumCertificate, SumeragiV2BodyState, SumeragiV2Status,
+        SumeragiV2StatusPhase, TimeoutCertificate, TimeoutJustification, TimeoutVote,
+        TimeoutVoteGroup, ValidatorPower, Vote,
     },
     peer::PeerId,
 };
@@ -266,15 +266,6 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         pending_persistence_id: Some(17),
         last_committed_height: 0,
         last_committed_subject: None,
-        height_context: SumeragiV2HeightContextStatus {
-            epoch: context.epoch,
-            epoch_end_height: context.epoch_end_height,
-            mode: context.mode,
-            epoch_seed: context.leader_seed,
-            validator_count: 4,
-            quorum: context.quorum,
-        },
-        last_commit_qc: None,
     };
     status
         .validate()

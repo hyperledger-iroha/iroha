@@ -4339,14 +4339,6 @@ fn apply_state_geometry_config_before_kura_replay(
     Ok(())
 }
 
-fn apply_state_config_before_kura_replay(
-    state: &mut State,
-    config: &Config,
-) -> ReportResult<(), StartError> {
-    apply_state_runtime_config_before_snapshot_auth(state, config);
-    apply_state_geometry_config_before_kura_replay(state, config)
-}
-
 fn install_zk_config_before_kura_replay(
     state: &mut State,
     config: &Config,

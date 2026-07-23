@@ -21,7 +21,7 @@ use std::{
     num::NonZeroUsize,
 };
 
-use iroha_crypto::{HashOf, KeyPair, Signature};
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{ChainId, block::consensus_v2 as wire, peer::PeerId};
 use thiserror::Error;
 
