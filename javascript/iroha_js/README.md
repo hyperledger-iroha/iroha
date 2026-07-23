@@ -2675,13 +2675,13 @@ job without masking the original error; `ToriiClient.cancelIvmProveJob(jobId)`
 is also available for explicit lifecycle control.
 
 Validation-fee authority is ledger-native. Applications obtain bounded policy
-proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored to an
-immutable chain/genesis/policy-chain binding and a durable checkpoint. The ABI
-21 native bridge verifies the Norito proof and returns an immutable projection;
-JavaScript never substitutes application-supplied signatures or keysets for
-that trusted boundary. Persist every promoted checkpoint before requesting the
-next page. `catchUpValidationFeeCurrentPolicyProof` is available when in-memory
-promotion is sufficient.
+proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored
+to an immutable chain/genesis/policy-chain binding and a durable checkpoint.
+The ABI 21 native bridge verifies the Norito proof and returns an immutable
+projection; JavaScript never substitutes application-supplied signatures or
+keysets for that trusted boundary. Persist every promoted checkpoint before
+requesting the next page. `catchUpValidationFeeCurrentPolicyProof` is available
+when in-memory promotion is sufficient.
 
 ```js
 const binding = {
