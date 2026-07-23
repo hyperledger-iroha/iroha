@@ -9,6 +9,7 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
 
@@ -117,8 +118,8 @@ public final class TransferWirePayloadEncoderTests {
             1,
             2,
             Arrays.asList(
-                AccountAddress.MultisigMemberPayload.of(1, 1, filledKey((byte) 0x11)),
-                AccountAddress.MultisigMemberPayload.of(1, 1, filledKey((byte) 0x22))));
+                AccountAddress.MultisigMemberPayload.of(1, 1, TestEd25519Keys.publicKey(0x00)),
+                AccountAddress.MultisigMemberPayload.of(1, 1, TestEd25519Keys.publicKey(0x1F))));
     final String multisigAccountId =
         AccountAddress.fromMultisigPolicy(policy).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
@@ -137,8 +138,8 @@ public final class TransferWirePayloadEncoderTests {
             1,
             2,
             Arrays.asList(
-                AccountAddress.MultisigMemberPayload.of(1, 1, filledKey((byte) 0x11)),
-                AccountAddress.MultisigMemberPayload.of(1, 1, filledKey((byte) 0x22))));
+                AccountAddress.MultisigMemberPayload.of(1, 1, TestEd25519Keys.publicKey(0x00)),
+                AccountAddress.MultisigMemberPayload.of(1, 1, TestEd25519Keys.publicKey(0x1F))));
     final String multisigAccountId =
         AccountAddress.fromMultisigPolicy(policy).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final byte[] payload = TransferWirePayloadEncoder.encodeAccountIdPayload(multisigAccountId);

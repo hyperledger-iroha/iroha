@@ -23,7 +23,7 @@ use iroha_data_model::offline::{
 };
 use norito::codec::{Decode, Encode};
 
-use super::kagemusha_recursion_adapter::KagemushaSha256Chip;
+use super::kagemusha_sha256_v4::KagemushaSha256JobsV4;
 use super::kagemusha_v2::{
     I_APPEND_PROFILE as O_APPEND_PROFILE, I_ARTIFACT_MANIFEST_SHA256 as O_ARTIFACT_MANIFEST_SHA256,
     I_ASSET_ID_DIGEST as O_ASSET_ID_DIGEST, I_ASSET_SCALE as O_ASSET_SCALE,
@@ -84,7 +84,7 @@ use super::kagemusha_v2::{
     S_PROOF_STEP_COUNT, S_TOPUP_ANCHOR_COUNT, S_TOPUP_ANCHORS, S_VERIFIER_KEY_ID, S_VERSION,
 };
 
-/// Number of canonical Pallas-field elements in one ABI-20 V4 operation row.
+/// Number of canonical Pallas-field elements in one ABI-21 V4 operation row.
 pub const KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
 /// Exact number of little-endian `u32` limbs carrying the operation row.
 pub const KAGEMUSHA_STEP_OPERATION_LIMBS_V4: usize = KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4 * 8;
@@ -174,7 +174,7 @@ impl KagemushaStepOperationVectorV4 {
         Ok(fields)
     }
 
-    /// Match every operation field derivable from an ABI-20 terminal
+    /// Match every operation field derivable from an ABI-21 terminal
     /// statement before accepting the proof pair.
     ///
     /// The Step relation exposes the statement digest and the semantic
@@ -709,7 +709,7 @@ fn fill_statement_fields_v4(
 }
 
 impl KagemushaStepOperationVectorV4 {
-    /// Construct an ABI-20 initialization operation directly from the V4
+    /// Construct an ABI-21 initialization operation directly from the V4
     /// finalized receipt and V4 public statement. The V4 carriers are
     /// validated in place without projecting through a retired lifecycle carrier.
     pub fn from_init_v4(
@@ -821,7 +821,7 @@ impl KagemushaStepOperationVectorV4 {
         Ok(Self::from_fields(fields))
     }
 
-    /// Construct an ABI-20 append operation directly from the V4 split intent
+    /// Construct an ABI-21 append operation directly from the V4 split intent
     /// and selected V4 child statement.
     pub fn from_append_v4(
         split: &KagemushaRecursiveSpendSplitIntentV4,
@@ -1023,7 +1023,7 @@ impl KagemushaStepOperationVectorV4 {
         Ok(Self::from_fields(fields))
     }
 
-    /// Construct an ABI-20 partial-redemption operation directly from the V4
+    /// Construct an ABI-21 partial-redemption operation directly from the V4
     /// redemption intent and V4 change statement.
     pub fn from_redemption_change_v4(
         intent: &KagemushaRecursiveSpendRedemptionIntentV4,
@@ -1048,7 +1048,7 @@ impl KagemushaStepOperationVectorV4 {
         Self::from_redemption_change_public_v4(intent, statement)
     }
 
-    /// Reconstruct the exact public ABI-20 redemption-change operation at a
+    /// Reconstruct the exact public ABI-21 redemption-change operation at a
     /// terminal verifier. Confidential membership paths are proved inside the
     /// carried pair; no private witness is accepted or synthesized here.
     pub fn from_redemption_change_public_v4(
@@ -1812,6 +1812,7 @@ fn bind_digest_to_state_if<F: BigPrimeField>(
 pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
+    sha_jobs: &mut KagemushaSha256JobsV4<F>,
     parent_count: AssignedValue<F>,
     parent_states: [&[AssignedValue<F>]; 2],
     result_state: &[AssignedValue<F>],
@@ -2503,7 +2504,7 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         .map(|byte| ctx.load_constant(F::from(u64::from(byte))))
         .collect::<Vec<_>>();
     tag_preimage.extend(split_digest_bytes);
-    let expected_tag_words = KagemushaSha256Chip::digest(ctx, range, &tag_preimage);
+    let expected_tag_words = sha_jobs.digest(ctx, range, &tag_preimage)?;
     for index in 0..tag.len() {
         let expected = byte_swap_u32(ctx, range, expected_tag_words[index]);
         assert_equal_if(ctx, range, extends, tag[index], expected);
@@ -2965,9 +2966,11 @@ mod tests {
         let result_cells =
             ctx.assign_witnesses(result.iter().copied().map(|limb| F::from(u64::from(limb))));
         let parent_count = ctx.load_witness(F::from(u64::from(parent_count)));
+        let mut sha_jobs = KagemushaSha256JobsV4::default();
         let bindings = constrain_two_input_step_transition_v4(
             ctx,
             &range,
+            &mut sha_jobs,
             parent_count,
             [parent_cells[0].as_slice(), parent_cells[1].as_slice()],
             &result_cells,

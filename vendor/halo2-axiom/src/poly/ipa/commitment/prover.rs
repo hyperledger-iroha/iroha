@@ -3,11 +3,11 @@ use rand_core::RngCore;
 
 use super::ParamsIPA;
 use crate::arithmetic::{
-    best_multiexp_with_extra, compute_inner_product, eval_polynomial, parallelize, CurveAffine,
+    CurveAffine, best_multiexp_with_extra, compute_inner_product, eval_polynomial, parallelize,
 };
 
 use crate::poly::commitment::ParamsProver;
-use crate::poly::{commitment::Blind, Coeff, Polynomial};
+use crate::poly::{Coeff, Polynomial, commitment::Blind};
 use crate::transcript::{EncodedChallenge, TranscriptWrite};
 
 use group::Curve;
@@ -111,19 +111,13 @@ pub fn create_proof<
         let l_j = best_multiexp_with_extra(
             &p_prime[half..],
             &g_prime[0..half],
-            &[
-                (value_l_j * &z, params.u),
-                (l_j_randomness, params.w),
-            ],
+            &[(value_l_j * &z, params.u), (l_j_randomness, params.w)],
         )
         .to_affine();
         let r_j = best_multiexp_with_extra(
             &p_prime[0..half],
             &g_prime[half..],
-            &[
-                (value_r_j * &z, params.u),
-                (r_j_randomness, params.w),
-            ],
+            &[(value_r_j * &z, params.u), (r_j_randomness, params.w)],
         )
         .to_affine();
 

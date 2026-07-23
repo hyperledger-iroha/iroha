@@ -101,6 +101,24 @@ final class ConnectEnvelopeTests: XCTestCase {
         }
     }
 
+    func testDecodeRejectsMalformedPresentCloseReason() {
+        let payload: [String: Any] = [
+            "Close": [
+                "who": "app",
+                "code": 1000,
+                "reason": 7,
+                "retryable": false,
+            ],
+        ]
+
+        XCTAssertThrowsError(try ConnectEnvelopePayload(kind: "Control", payload: payload)) { error in
+            guard case ConnectEnvelopeError.invalidPayload = error else {
+                XCTFail("Expected invalidPayload, got \(error)")
+                return
+            }
+        }
+    }
+
     func testDecodeRejectsMultiplePayloadKinds() throws {
         let payload: [String: Any] = [
             "DisplayRequest": ["title": "Hello", "body": "World"],

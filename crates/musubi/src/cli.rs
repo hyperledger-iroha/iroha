@@ -1519,10 +1519,17 @@ fn parse_lockfile(body: &str) -> Result<MusubiLockfile> {
     let root = value
         .as_table()
         .ok_or_else(|| eyre!("Musubi.lock must be a TOML table"))?;
-    let version = root
-        .get("version")
-        .and_then(toml::Value::as_integer)
-        .unwrap_or(1);
+    let version = match root.get("version") {
+        Some(value) => value
+            .as_integer()
+            .ok_or_else(|| eyre!("`version` must be an integer"))?,
+        None => 1,
+    };
+    if !(1..=LOCKFILE_VERSION).contains(&version) {
+        bail!(
+            "unsupported Musubi.lock version {version}; supported versions are 1..={LOCKFILE_VERSION}"
+        );
+    }
     let packages = root
         .get("package")
         .and_then(toml::Value::as_array)
@@ -1542,20 +1549,28 @@ fn parse_lockfile(body: &str) -> Result<MusubiLockfile> {
         };
         let archive = parse_lockfile_archive(table)?;
         let source_plan = parse_lockfile_source_plan(table)?;
-        let cache_path = table
-            .get("cache_path")
-            .and_then(toml::Value::as_str)
-            .map(PathBuf::from);
+        let cache_path = match table.get("cache_path") {
+            Some(value) => Some(PathBuf::from(
+                value
+                    .as_str()
+                    .ok_or_else(|| eyre!("`cache_path` must be a string"))?,
+            )),
+            None => None,
+        };
         let exports = parse_name_array(table, "exports")?;
         let dependencies = parse_lockfile_dependency_array(table)?;
-        let direct = table
-            .get("direct")
-            .and_then(toml::Value::as_bool)
-            .unwrap_or(true);
-        let resolved = table
-            .get("resolved")
-            .and_then(toml::Value::as_bool)
-            .unwrap_or_else(|| archive.is_some());
+        let direct = match table.get("direct") {
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| eyre!("`direct` must be a boolean"))?,
+            None => true,
+        };
+        let resolved = match table.get("resolved") {
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| eyre!("`resolved` must be a boolean"))?,
+            None => archive.is_some(),
+        };
         locked.push(LockedPackage {
             alias,
             package: MusubiPackageRef::new(package_id, locked_version),
@@ -1573,12 +1588,12 @@ fn parse_lockfile(body: &str) -> Result<MusubiLockfile> {
 }
 
 fn parse_lockfile_archive(table: &toml::Table) -> Result<Option<MusubiArchiveRef>> {
-    let Some(digest) = table
-        .get("sorafs_manifest_digest")
-        .and_then(toml::Value::as_str)
-    else {
+    let Some(digest_value) = table.get("sorafs_manifest_digest") else {
         return Ok(None);
     };
+    let digest = digest_value
+        .as_str()
+        .ok_or_else(|| eyre!("`sorafs_manifest_digest` must be a string"))?;
     let archive_hash = required_string(table, "archive_hash_blake3_256")?;
     let source_bytes = table
         .get("source_bytes")
@@ -1597,12 +1612,12 @@ fn parse_lockfile_archive(table: &toml::Table) -> Result<Option<MusubiArchiveRef
 }
 
 fn parse_lockfile_source_plan(table: &toml::Table) -> Result<Option<MusubiSourceArchivePlan>> {
-    let Some(plan_hex) = table
-        .get("source_archive_plan_norito")
-        .and_then(toml::Value::as_str)
-    else {
+    let Some(plan_value) = table.get("source_archive_plan_norito") else {
         return Ok(None);
     };
+    let plan_hex = plan_value
+        .as_str()
+        .ok_or_else(|| eyre!("`source_archive_plan_norito` must be a string"))?;
     let bytes = hex::decode(plan_hex).wrap_err("source_archive_plan_norito is not valid hex")?;
     let mut cursor = bytes.as_slice();
     let plan = MusubiSourceArchivePlan::decode(&mut cursor)
@@ -3597,6 +3612,102 @@ mod tests {
         assert!(rendered.contains("name = \"std.universal/math\""));
         assert!(rendered.contains("requirement = \"1.0.0\""));
         assert!(rendered.contains("resolved = false"));
+    }
+
+    #[test]
+    fn lockfile_rejects_malformed_present_scalar_fields() {
+        let malformed_version = r#"
+            version = "3"
+
+            [[package]]
+            alias = "math"
+            name = "std.universal/math"
+            version = "1.0.0"
+            requirement = "1.0.0"
+        "#;
+        let error = parse_lockfile(malformed_version)
+            .expect_err("an explicitly present string version must not default to v1");
+        assert!(error.to_string().contains("`version` must be an integer"));
+
+        for (field, malformed_field) in [
+            ("cache_path", "cache_path = false"),
+            ("direct", "direct = \"false\""),
+            ("resolved", "resolved = \"true\""),
+        ] {
+            let body = format!(
+                r#"
+                version = 3
+
+                [[package]]
+                alias = "math"
+                name = "std.universal/math"
+                version = "1.0.0"
+                requirement = "1.0.0"
+                {malformed_field}
+                "#,
+            );
+            let error = parse_lockfile(&body).expect_err("malformed scalar field must be rejected");
+            assert!(
+                error.to_string().contains(&format!("`{field}` must be")),
+                "unexpected error for `{field}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn lockfile_rejects_unsupported_versions() {
+        for version in [-1, 0, LOCKFILE_VERSION + 1] {
+            let error = parse_lockfile(&format!("version = {version}"))
+                .expect_err("unsupported lockfile version must be rejected");
+            assert!(
+                error.to_string().contains(&format!(
+                    "unsupported Musubi.lock version {version}; supported versions are 1..={LOCKFILE_VERSION}"
+                )),
+                "unexpected error for version {version}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn lockfile_rejects_non_string_archive_digest() {
+        let body = r#"
+            version = 3
+
+            [[package]]
+            alias = "math"
+            name = "std.universal/math"
+            version = "1.0.0"
+            requirement = "1.0.0"
+            sorafs_manifest_digest = false
+        "#;
+        let error = parse_lockfile(body)
+            .expect_err("malformed-present archive metadata must not become absent");
+        assert!(
+            error
+                .to_string()
+                .contains("`sorafs_manifest_digest` must be a string")
+        );
+    }
+
+    #[test]
+    fn lockfile_rejects_non_string_source_archive_plan() {
+        let body = r#"
+            version = 3
+
+            [[package]]
+            alias = "math"
+            name = "std.universal/math"
+            version = "1.0.0"
+            requirement = "1.0.0"
+            source_archive_plan_norito = false
+        "#;
+        let error =
+            parse_lockfile(body).expect_err("malformed-present source plan must not become absent");
+        assert!(
+            error
+                .to_string()
+                .contains("`source_archive_plan_norito` must be a string")
+        );
     }
 
     #[test]

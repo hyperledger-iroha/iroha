@@ -2288,6 +2288,15 @@ impl HostExecutionArtifacts {
         grouped
     }
 
+    /// Preserve the global queue order together with the authority snapshot for
+    /// validation rules whose effect plan spans multiple source accounts.
+    pub(crate) fn queued_instructions_with_authority(&self) -> Vec<(AccountId, InstructionBox)> {
+        self.queued
+            .iter()
+            .map(|queued| (queued.authority.clone(), queued.instruction.clone()))
+            .collect()
+    }
+
     fn seed_queued_call_hash_if_missing(
         tx: &mut StateTransaction<'_, '_>,
         queued: &[QueuedInstruction],
@@ -11554,17 +11563,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_STATE_SET => {
                 let path_ptr = vm.register(10);
                 let val_ptr = vm.register(11);
-                let (path, path_len) = self.decode_durable_state_path(vm, path_ptr)?;
+                let (path, path_len) = self.decode_durable_state_path_payload(vm, path_ptr)?;
                 Self::ensure_contract_state_write_allowed(&path)?;
-                let val_tlv = Self::expect_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
-                ivm::host::validate_state_value_payload_len(val_tlv.payload.len())?;
-                ivm::host::validate_declared_state_value_payload(vm, &path, val_tlv.payload)?;
                 let key = self
                     .scoped_durable_state_path(&path)?
                     .unwrap_or_else(|| path.clone());
                 if crate::validation_fee::is_validation_fee_credit_state_key(&key) {
                     return Err(ivm::VMError::PermissionDenied);
                 }
+                ivm::host::validate_declared_state_path(vm, &path)?;
+                let val_tlv = Self::expect_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
+                ivm::host::validate_state_value_payload_len(val_tlv.payload.len())?;
+                ivm::host::validate_declared_state_value_payload(vm, &path, val_tlv.payload)?;
                 let gas = ivm::host::state_value_gas(path_len, val_tlv.payload.len());
                 if !self.try_reserve_durable_state_update(&key, val_tlv.payload.len()) {
                     return Ok(gas);
@@ -11575,13 +11585,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Ok(gas)
             }
             ivm::syscalls::SYSCALL_STATE_DEL => {
-                let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                let (path, path_len) =
+                    self.decode_durable_state_path_payload(vm, vm.register(10))?;
                 Self::ensure_contract_state_write_allowed(&path)?;
                 let scoped_path = self.scoped_durable_state_path(&path)?;
                 let effective_path = scoped_path.as_ref().unwrap_or(&path);
                 if crate::validation_fee::is_validation_fee_credit_state_key(effective_path) {
                     return Err(ivm::VMError::PermissionDenied);
                 }
+                ivm::host::validate_declared_state_path(vm, &path)?;
                 let key = effective_path.clone();
                 let gas = ivm::host::state_path_gas(path_len);
                 if !self.try_reserve_durable_state_update(&key, 0) {
@@ -26774,19 +26786,40 @@ seiyaku DurableOwner {
         );
 
         let source = r#"
-            state quantity AvailableValidationFeeCredit;
-            fn main() -> quantity {
-                return AvailableValidationFeeCredit;
+            seiyaku ValidationFeeCreditReader {
+                state quantity AvailableValidationFeeCredit;
+                hajimari() {
+                    let quantity zero = 0;
+                    AvailableValidationFeeCredit = zero;
+                }
+                view fn main() -> quantity {
+                    return AvailableValidationFeeCredit;
+                }
             }
         "#;
-        let code = ivm::kotodama::compiler::Compiler::new()
-            .compile_source(source)
+        let (code, _) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
             .expect("compile validation-fee credit reader");
+        let metadata = ivm::ProgramMetadata::parse(&code).expect("parse credit-reader metadata");
+        let main_entry_pc = metadata.prefix_len() as u64
+            + metadata
+                .contract_interface
+                .as_ref()
+                .expect("credit-reader CNTR interface")
+                .entrypoints
+                .iter()
+                .find(|entrypoint| entrypoint.name == "main")
+                .expect("credit-reader main entrypoint")
+                .entry_pc;
         let mut contract_host = CoreHost::from_state(authority.clone(), &state);
         contract_host.set_contract_runtime_context(Some(context.clone()));
         let mut contract_vm = IVM::new(u64::MAX);
         contract_vm.set_host(contract_host);
         contract_vm.load_program(&code).expect("load credit reader");
+        contract_vm.set_register(1, contract_vm.memory.code_len());
+        contract_vm
+            .set_program_counter(main_entry_pc)
+            .expect("select credit-reader main entrypoint");
         contract_vm.run().expect("read native consensus credit");
         let returned = contract_vm
             .validate_tlv(contract_vm.register(10))
@@ -26803,6 +26836,8 @@ seiyaku DurableOwner {
         let mut host = CoreHost::from_state(authority, &state);
         host.set_contract_runtime_context(Some(context));
         let mut vm = IVM::new(10_000);
+        vm.load_program(&code)
+            .expect("load credit-reader contract metadata for mutation checks");
         let value_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,

@@ -1,11 +1,11 @@
-use super::{construct_intermediate_sets, ChallengeV, Query};
+use super::{ChallengeV, Query, construct_intermediate_sets};
 use crate::arithmetic::{kate_division, powers};
 use crate::helpers::SerdeCurveAffine;
 use crate::poly::commitment::ParamsProver;
 use crate::poly::commitment::Prover;
 use crate::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
 use crate::poly::query::ProverQuery;
-use crate::poly::{commitment::Blind, Polynomial};
+use crate::poly::{Polynomial, commitment::Blind};
 use crate::transcript::{EncodedChallenge, TranscriptWrite};
 
 use group::Curve;

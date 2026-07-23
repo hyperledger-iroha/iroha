@@ -93,4 +93,44 @@ final class ComputeSimulatorTests: XCTestCase {
             XCTAssertTrue(message.contains("max_response_bytes"))
         }
     }
+
+    func testSimulateRejectsMalformedPresentPayloadHash() throws {
+        let fixtures = try fixtures()
+        var call = fixtures.call
+        call["request"] = ["payload_hash": 42]
+
+        XCTAssertThrowsError(
+            try ComputeSimulator.simulate(
+                manifest: fixtures.manifest,
+                call: call,
+                payload: fixtures.payload
+            )
+        ) { error in
+            guard case let ComputeSimulatorError.decodeFailure(message) = error else {
+                return XCTFail("expected decodeFailure, got \(error)")
+            }
+            XCTAssertTrue(message.contains("payload_hash"))
+        }
+    }
+
+    func testSimulateRejectsMalformedPresentEntrypoint() throws {
+        let fixtures = try fixtures()
+        var manifest = fixtures.manifest
+        var routes = try XCTUnwrap(manifest["routes"] as? [[String: Any]])
+        routes[0]["entrypoint"] = 7
+        manifest["routes"] = routes
+
+        XCTAssertThrowsError(
+            try ComputeSimulator.simulate(
+                manifest: manifest,
+                call: fixtures.call,
+                payload: fixtures.payload
+            )
+        ) { error in
+            guard case let ComputeSimulatorError.decodeFailure(message) = error else {
+                return XCTFail("expected decodeFailure, got \(error)")
+            }
+            XCTAssertTrue(message.contains("entrypoint"))
+        }
+    }
 }

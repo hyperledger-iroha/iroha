@@ -80,6 +80,14 @@ final class AccelerationSettingsTests: XCTestCase {
         XCTAssertNil(settings.preferCpuSha2MaxLeavesX86)
     }
 
+    func testLoadsEnableSimdOnlyFromIrohaConfigJSON() throws {
+        let settings = try AccelerationSettings.fromIrohaConfig(
+            Data(#"{"accel":{"enable_simd":false}}"#.utf8)
+        )
+
+        XCTAssertFalse(settings.enableSIMD)
+    }
+
     func testLoadsAccelerationFromNestedJSON() throws {
         let json = """
         {
@@ -134,5 +142,31 @@ final class AccelerationSettingsTests: XCTestCase {
         XCTAssertFalse(settings.enableCUDA)
         XCTAssertNil(settings.maxGPUs)
         XCTAssertNil(settings.merkleMinLeavesMetal)
+    }
+
+    func testIrohaConfigRejectsMalformedPresentAccelerationFields() {
+        for json in [
+            #"{"accel":{"max_gpus":"2"}}"#,
+            #"{"acceleration":false}"#,
+        ] {
+            XCTAssertThrowsError(
+                try AccelerationSettings.fromIrohaConfig(Data(json.utf8)),
+                json
+            )
+        }
+    }
+
+    func testIrohaConfigRejectsMalformedPresentTomlAccelerationValue() {
+        for key in ["max_gpus", "enable_simd"] {
+            let toml = """
+            [accel]
+            \(key) = []
+            """
+
+            XCTAssertThrowsError(
+                try AccelerationSettings.fromIrohaConfig(Data(toml.utf8)),
+                key
+            )
+        }
     }
 }

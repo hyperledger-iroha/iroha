@@ -61,7 +61,12 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
 
     let app = Router::new().route(
         "/v1/sumeragi/leader",
-        get(|| async move { iroha_torii::handle_v1_sumeragi_leader(None).await }),
+        get(|| async move {
+            iroha_torii::handle_v1_sumeragi_leader(Some(axum::http::HeaderValue::from_static(
+                "application/json",
+            )))
+            .await
+        }),
     );
     let response = app
         .oneshot(
@@ -89,10 +94,5 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
         .expect("round context");
     assert_eq!(round.get("height").and_then(|x| x.as_u64()), Some(123));
     assert_eq!(round.get("view").and_then(|x| x.as_u64()), Some(4));
-    assert_eq!(
-        round
-            .get("epoch_seed")
-            .and_then(norito::json::Value::as_str),
-        Some("a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
-    );
+    assert!(round.get("epoch_seed").is_none());
 }

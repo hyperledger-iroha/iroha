@@ -10,13 +10,13 @@ use halo2_proofs::arithmetic::Field;
 use halo2_proofs::circuit::{Cell, Layouter, SimpleFloorPlanner, Value};
 use halo2_proofs::dev::MockProver;
 use halo2_proofs::plonk::{
-    create_proof as create_plonk_proof, keygen_pk, keygen_vk, verify_proof as verify_plonk_proof,
     Advice, Assigned, Circuit, Column, ConstraintSystem, Error, Fixed, ProvingKey, TableColumn,
-    VerifyingKey,
+    VerifyingKey, create_proof as create_plonk_proof, keygen_pk, keygen_vk,
+    verify_proof as verify_plonk_proof,
 };
-use halo2_proofs::poly::commitment::{CommitmentScheme, ParamsProver, Prover, Verifier};
 use halo2_proofs::poly::Rotation;
 use halo2_proofs::poly::VerificationStrategy;
+use halo2_proofs::poly::commitment::{CommitmentScheme, ParamsProver, Prover, Verifier};
 use halo2_proofs::transcript::{
     Blake2bRead, Blake2bWrite, Challenge255, EncodedChallenge, TranscriptReadBuffer,
     TranscriptWriterBuffer,
@@ -554,40 +554,40 @@ fn plonk_api() {
     }
 
     /*
-        fn test_plonk_api_ipa() {
-            use halo2_proofs::poly::ipa::commitment::{IPACommitmentScheme, ParamsIPA};
-            use halo2_proofs::poly::ipa::multiopen::{ProverIPA, VerifierIPA};
-            use halo2_proofs::poly::ipa::strategy::AccumulatorStrategy;
-            use halo2curves::pasta::EqAffine;
+    fn test_plonk_api_ipa() {
+        use halo2_proofs::poly::ipa::commitment::{IPACommitmentScheme, ParamsIPA};
+        use halo2_proofs::poly::ipa::multiopen::{ProverIPA, VerifierIPA};
+        use halo2_proofs::poly::ipa::strategy::AccumulatorStrategy;
+        use halo2curves::pasta::EqAffine;
 
-            type Scheme = IPACommitmentScheme<EqAffine>;
-            //bad_keys!(Scheme);
+        type Scheme = IPACommitmentScheme<EqAffine>;
+        //bad_keys!(Scheme);
 
-            let params = ParamsIPA::<EqAffine>::new(K);
-            let rng = OsRng;
+        let params = ParamsIPA::<EqAffine>::new(K);
+        let rng = OsRng;
 
-            let pk = keygen::<IPACommitmentScheme<EqAffine>>(&params);
+        let pk = keygen::<IPACommitmentScheme<EqAffine>>(&params);
 
-            let proof = create_proof::<_, ProverIPA<_>, _, _, Blake2bWrite<_, _, Challenge255<_>>>(
-                rng, &params, &pk,
-            );
+        let proof = create_proof::<_, ProverIPA<_>, _, _, Blake2bWrite<_, _, Challenge255<_>>>(
+            rng, &params, &pk,
+        );
 
-            let verifier_params = params.verifier_params();
+        let verifier_params = params.verifier_params();
 
-            verify_proof::<
-                _,
-                VerifierIPA<_>,
-                _,
-                Blake2bRead<_, _, Challenge255<_>>,
-                AccumulatorStrategy<_>,
-            >(verifier_params, pk.get_vk(), &proof[..]);
+        verify_proof::<
+            _,
+            VerifierIPA<_>,
+            _,
+            Blake2bRead<_, _, Challenge255<_>>,
+            AccumulatorStrategy<_>,
+        >(verifier_params, pk.get_vk(), &proof[..]);
 
-            // Check that the verification key has not changed unexpectedly
-            {
-                //panic!("{:#?}", pk.get_vk().pinned());
-                assert_eq!(
-                    format!("{:#?}", pk.get_vk().pinned()),
-                    r#####"PinnedVerificationKey {
+        // Check that the verification key has not changed unexpectedly
+        {
+            //panic!("{:#?}", pk.get_vk().pinned());
+            assert_eq!(
+                format!("{:#?}", pk.get_vk().pinned()),
+                r#####"PinnedVerificationKey {
         base_modulus: "0x40000000000000000000000000000000224698fc0994a8dd8c46eb2100000001",
         scalar_modulus: "0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001",
         domain: PinnedEvaluationDomain {
@@ -981,9 +981,9 @@ fn plonk_api() {
             ],
         },
     }"#####
-                );
-            }
-        }*/
+            );
+        }
+    }*/
 
     //test_plonk_api_ipa();
     test_plonk_api_gwc();

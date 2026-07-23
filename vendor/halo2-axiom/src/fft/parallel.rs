@@ -1,7 +1,7 @@
 //! This module provides common utilities, traits and structures for group,
 //! field and polynomial arithmetic.
 
-use crate::arithmetic::{self, log2_floor, FftGroup};
+use crate::arithmetic::{self, FftGroup, log2_floor};
 
 use crate::multicore;
 pub use ff::Field;

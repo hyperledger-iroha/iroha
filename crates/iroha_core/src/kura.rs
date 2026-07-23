@@ -78,6 +78,7 @@ use iroha_data_model::{
     },
     peer::PeerId,
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    validation_fee::ValidationFeePolicyWitnessProofV1,
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
@@ -1645,6 +1646,8 @@ pub struct KagemushaActiveReceiverFinalitySidecarV1 {
     pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
     /// Fixed-key sparse-SMT proof and exact encoded receiver commitment.
     pub witness_proof: KagemushaActiveReceiverWitnessProofV1,
+    /// Fixed-key sparse-SMT proof and exact encoded validation-fee commitment.
+    pub validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
 }
 
 impl KagemushaActiveReceiverFinalitySidecarV1 {
@@ -1660,6 +1663,7 @@ struct StagedKagemushaActiveReceiverFinalitySidecarV1 {
     ordinary_writes_root: Hash,
     post_state_root: Hash,
     witness_proof: KagemushaActiveReceiverWitnessProofV1,
+    validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
 }
 
 impl CommitManifest {
@@ -14147,6 +14151,10 @@ impl Kura {
             .witness_proof
             .commitment()
             .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+        let validation_fee_snapshot = staged
+            .validation_fee_policy_witness
+            .commitment()
+            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
         if staged.version != KagemushaActiveReceiverFinalitySidecarV1::VERSION
             || staged.height != artifact.height
             || staged.block_hash != artifact.block_hash
@@ -14154,6 +14162,10 @@ impl Kura {
             || staged.post_state_root != commitment.post_state_root
             || snapshot.evaluated_height != staged.height
             || !staged.witness_proof.verify(commitment.ordinary_writes_root)
+            || validation_fee_snapshot.evaluated_height != staged.height
+            || !staged
+                .validation_fee_policy_witness
+                .verify(commitment.ordinary_writes_root)
         {
             return Err(Error::KagemushaActiveReceiverFinalitySidecar(
                 "active-receiver witness stage differs from the exact finality artifact".to_owned(),
@@ -14179,6 +14191,7 @@ impl Kura {
                 ordinary_writes_root: sidecar.ordinary_writes_root,
                 post_state_root: sidecar.post_state_root,
                 witness_proof: sidecar.witness_proof.clone(),
+                validation_fee_policy_witness: sidecar.validation_fee_policy_witness.clone(),
             },
             artifact,
         )?;
@@ -14262,8 +14275,13 @@ impl Kura {
         let (witness_proof, ordinary_writes_root) =
             crate::receiver_snapshot::active_receiver_witness_proof_v1(witness)
                 .map_err(Error::KagemushaActiveReceiverFinalitySidecar)?;
+        let (validation_fee_policy_witness, validation_fee_root) =
+            crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(witness)
+                .map_err(Error::KagemushaActiveReceiverFinalitySidecar)?;
         if ordinary_writes_root != expected.ordinary_writes_root
+            || validation_fee_root != ordinary_writes_root
             || !witness_proof.verify(expected.ordinary_writes_root)
+            || !validation_fee_policy_witness.verify(expected.ordinary_writes_root)
         {
             return Err(Error::KagemushaActiveReceiverFinalitySidecar(
                 "witness-derived active-receiver proof differs from the signed ordinary-write root"
@@ -14278,6 +14296,14 @@ impl Kura {
                 "active-receiver snapshot height differs from its block".to_owned(),
             ));
         }
+        let validation_fee_snapshot = validation_fee_policy_witness
+            .commitment()
+            .map_err(|error| Error::KagemushaActiveReceiverFinalitySidecar(error.to_owned()))?;
+        if validation_fee_snapshot.evaluated_height != height {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "validation-fee snapshot height differs from its block".to_owned(),
+            ));
+        }
         let staged = StagedKagemushaActiveReceiverFinalitySidecarV1 {
             version: KagemushaActiveReceiverFinalitySidecarV1::VERSION,
             height,
@@ -14285,6 +14311,7 @@ impl Kura {
             ordinary_writes_root,
             post_state_root: expected.post_state_root,
             witness_proof,
+            validation_fee_policy_witness,
         };
         let bytes = staged.encode();
         if bytes.len() > MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES {
@@ -14426,6 +14453,7 @@ impl Kura {
             post_state_root: staged.post_state_root,
             finality_artifact_hash: receipt.artifact_hash,
             witness_proof: staged.witness_proof,
+            validation_fee_policy_witness: staged.validation_fee_policy_witness,
         };
         Self::validate_kagemusha_active_receiver_finality_sidecar(&final_sidecar, artifact)?;
         let bytes = final_sidecar.encode();
@@ -14494,6 +14522,26 @@ impl Kura {
         };
         Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
         Ok(Some(sidecar.witness_proof))
+    }
+
+    /// Return the finalized fixed-key validation-fee registry witness proof for one block.
+    pub fn validation_fee_policy_witness_proof_v1(
+        &self,
+        height: u64,
+    ) -> Result<Option<ValidationFeePolicyWitnessProofV1>> {
+        let Some(artifact) = self.v2_finality_artifact(height)? else {
+            return Ok(None);
+        };
+        let _guard = self.sidecar_lock.lock();
+        let path = self.kagemusha_active_receiver_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_active_receiver_finality_sidecar(&path)?
+        else {
+            return Err(Error::KagemushaActiveReceiverFinalitySidecar(
+                "finality artifact has no validation-fee witness sidecar".to_owned(),
+            ));
+        };
+        Self::validate_kagemusha_active_receiver_finality_sidecar(&sidecar, &artifact)?;
+        Ok(Some(sidecar.validation_fee_policy_witness))
     }
 
     /// Durably stage the bounded top-up leaf/path projection before WSV commit.
@@ -39273,6 +39321,10 @@ mod tests {
                 b"Kura top-up fixture has no governed receiver policy",
             )
             .expect("valid unavailable receiver snapshot");
+        let validation_fee_snapshot =
+            iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
+                1, None,
+            );
         let witness = ExecWitness {
             reads: Vec::new(),
             writes: vec![
@@ -39285,6 +39337,12 @@ mod tests {
                         .to_vec(),
                     value: norito::to_bytes(&receiver_snapshot.commitment)
                         .expect("encode receiver snapshot commitment"),
+                },
+                ExecKv {
+                    key: iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
+                        .to_vec(),
+                    value: norito::to_bytes(&validation_fee_snapshot)
+                        .expect("encode validation-fee snapshot commitment"),
                 },
             ],
             fastpq_transcripts: Vec::new(),
@@ -39309,13 +39367,26 @@ mod tests {
                 b"Kura fixture has no governed receiver policy",
             )
             .expect("valid unavailable receiver snapshot");
+        let validation_fee_snapshot =
+            iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
+                height, None,
+            );
         let witness = ExecWitness {
             reads: Vec::new(),
-            writes: vec![ExecKv {
-                key: iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1.to_vec(),
-                value: norito::to_bytes(&receiver_snapshot.commitment)
-                    .expect("encode receiver snapshot commitment"),
-            }],
+            writes: vec![
+                ExecKv {
+                    key: iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1
+                        .to_vec(),
+                    value: norito::to_bytes(&receiver_snapshot.commitment)
+                        .expect("encode receiver snapshot commitment"),
+                },
+                ExecKv {
+                    key: iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
+                        .to_vec(),
+                    value: norito::to_bytes(&validation_fee_snapshot)
+                        .expect("encode validation-fee snapshot commitment"),
+                },
+            ],
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };

@@ -193,6 +193,8 @@ fn seed_referendum_and_proposal_with_kind(
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
         pipeline,
         parliament_snapshot: None,
+        finalization_evidence: None,
+        enacted_at_height: None,
     };
     stx.world.governance_proposals_mut().insert(pid, proposal);
     stx.apply();
@@ -249,6 +251,8 @@ fn seed_proposal_without_referendum(state: &mut State, pid: [u8; 32]) {
             status: iroha_core::state::GovernanceProposalStatus::Proposed,
             pipeline,
             parliament_snapshot: None,
+            finalization_evidence: None,
+            enacted_at_height: None,
         },
     );
     stx.apply();
@@ -486,6 +490,8 @@ fn seed_snapshot_proposal(
                 roster_root: roster_root_override.unwrap_or_else(|| roster_root(&bodies)),
                 bodies: bodies.clone(),
             }),
+            finalization_evidence: None,
+            enacted_at_height: None,
         },
     );
     stx.apply();

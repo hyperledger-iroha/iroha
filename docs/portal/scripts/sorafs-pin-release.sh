@@ -14,7 +14,7 @@ err() {
 
 split_list() {
   local raw="${1:-}"
-  local -n dest_ref="$2"
+  SPLIT_LIST_VALUES=()
   if [[ -z "${raw}" ]]; then
     return
   fi
@@ -22,7 +22,7 @@ split_list() {
   for token in ${raw//,/ }; do
     trimmed="${token#"${token%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-    [[ -n "${trimmed}" ]] && dest_ref+=("${trimmed}")
+    [[ -n "${trimmed}" ]] && SPLIT_LIST_VALUES+=("${trimmed}")
   done
 }
 
@@ -582,11 +582,27 @@ DNS_ZONEFILE_IPV6_VALUES=()
 DNS_ZONEFILE_SPKI_VALUES=()
 DNS_ZONEFILE_TXT_VALUES=()
 DNS_ZONEFILE_FREEZE_NOTES_VALUES=()
-split_list "${DNS_ZONEFILE_IPV4}" DNS_ZONEFILE_IPV4_VALUES
-split_list "${DNS_ZONEFILE_IPV6}" DNS_ZONEFILE_IPV6_VALUES
-split_list "${DNS_ZONEFILE_SPKI}" DNS_ZONEFILE_SPKI_VALUES
-split_list "${DNS_ZONEFILE_TXT}" DNS_ZONEFILE_TXT_VALUES
-split_list "${DNS_ZONEFILE_FREEZE_NOTES}" DNS_ZONEFILE_FREEZE_NOTES_VALUES
+SPLIT_LIST_VALUES=()
+split_list "${DNS_ZONEFILE_IPV4}"
+for split_value in "${SPLIT_LIST_VALUES[@]-}"; do
+  [[ -n "${split_value}" ]] && DNS_ZONEFILE_IPV4_VALUES+=("${split_value}")
+done
+split_list "${DNS_ZONEFILE_IPV6}"
+for split_value in "${SPLIT_LIST_VALUES[@]-}"; do
+  [[ -n "${split_value}" ]] && DNS_ZONEFILE_IPV6_VALUES+=("${split_value}")
+done
+split_list "${DNS_ZONEFILE_SPKI}"
+for split_value in "${SPLIT_LIST_VALUES[@]-}"; do
+  [[ -n "${split_value}" ]] && DNS_ZONEFILE_SPKI_VALUES+=("${split_value}")
+done
+split_list "${DNS_ZONEFILE_TXT}"
+for split_value in "${SPLIT_LIST_VALUES[@]-}"; do
+  [[ -n "${split_value}" ]] && DNS_ZONEFILE_TXT_VALUES+=("${split_value}")
+done
+split_list "${DNS_ZONEFILE_FREEZE_NOTES}"
+for split_value in "${SPLIT_LIST_VALUES[@]-}"; do
+  [[ -n "${split_value}" ]] && DNS_ZONEFILE_FREEZE_NOTES_VALUES+=("${split_value}")
+done
 ROUTE_ROLLBACK_MANIFEST_JSON="${ROUTE_ROLLBACK_MANIFEST_JSON:-}"
 ROUTE_ROLLBACK_LABEL="${ROUTE_ROLLBACK_LABEL:-}"
 ROUTE_ROLLBACK_RELEASE_TAG="${ROUTE_ROLLBACK_RELEASE_TAG:-}"

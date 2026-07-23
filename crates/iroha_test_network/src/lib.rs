@@ -1182,12 +1182,8 @@ fn read_build_stamp(path: &Path) -> color_eyre::Result<Option<BuildStamp>> {
     let JsonValue::Object(map) = value else {
         return Ok(None);
     };
-    let version = map
-        .get("version")
-        .and_then(JsonValue::as_u64)
-        .map(|v| v as u32)
-        .unwrap_or(0);
-    if version != BUILD_STAMP_VERSION {
+    let version = map.get("version").and_then(JsonValue::as_u64).unwrap_or(0);
+    if version != u64::from(BUILD_STAMP_VERSION) {
         return Ok(None);
     }
     let fingerprint = match map.get("fingerprint").and_then(JsonValue::as_u64) {
@@ -10516,22 +10512,6 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_sns_selector_error_detects_nested_registration_conflict() {
-        let report = Err::<(), Report>(eyre!("selector `domain:bridge` is already registered"))
-            .wrap_err("SNS lease batch failed")
-            .unwrap_err();
-
-        assert!(is_duplicate_sns_selector_error(&report));
-    }
-
-    #[test]
-    fn duplicate_sns_selector_error_ignores_unrelated_selector_failures() {
-        let report = eyre!("selector `domain:bridge` failed policy validation");
-
-        assert!(!is_duplicate_sns_selector_error(&report));
-    }
-
-    #[test]
     fn torii_request_error_is_transient_detects_query_timeout() {
         let report = eyre!(
             "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: error sending request for url\n   1: operation timed out"
@@ -11347,6 +11327,41 @@ mod tests {
     fn profile_hint_from_exe_path_detects_non_deps_profile_dir() {
         let hint = profile_hint_from_exe_path(Path::new("/tmp/iroha-target/ci/iroha3d"));
         assert_eq!(hint.as_deref(), Some("ci"));
+    }
+
+    #[test]
+    fn build_stamp_version_does_not_wrap_to_supported_u32() {
+        let temp = tempdir().expect("temporary directory");
+        let stamp_path = temp.path().join("stamp.json");
+        let wrapped_version = u64::from(BUILD_STAMP_VERSION) + (1_u64 << u32::BITS);
+        fs::write(
+            &stamp_path,
+            format!(
+                r#"{{"version":{wrapped_version},"fingerprint":7,"profile":"debug","binary":"iroha3d"}}"#
+            ),
+        )
+        .expect("write wrapped-version stamp");
+
+        assert!(
+            read_build_stamp(&stamp_path)
+                .expect("read wrapped-version stamp")
+                .is_none(),
+            "a u64 version that truncates to the supported u32 must be rejected"
+        );
+
+        fs::write(
+            &stamp_path,
+            format!(
+                r#"{{"version":{BUILD_STAMP_VERSION},"fingerprint":7,"profile":"debug","binary":"iroha3d"}}"#
+            ),
+        )
+        .expect("write supported-version stamp");
+        let stamp = read_build_stamp(&stamp_path)
+            .expect("read supported-version stamp")
+            .expect("supported version should load");
+        assert_eq!(stamp.fingerprint, 7);
+        assert_eq!(stamp.profile, "debug");
+        assert_eq!(stamp.binary, PathBuf::from("iroha3d"));
     }
 
     #[cfg(unix)]

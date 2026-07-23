@@ -1,19 +1,19 @@
 use ff::PrimeField;
 use group::{
-    ff::{BatchInvert, Field},
     Curve,
+    ff::{BatchInvert, Field},
 };
 use rand_core::RngCore;
 use std::iter::{self, ExactSizeIterator};
 
-use super::super::{circuit::Any, ChallengeBeta, ChallengeGamma, ChallengeX};
+use super::super::{ChallengeBeta, ChallengeGamma, ChallengeX, circuit::Any};
 use super::{Argument, ProvingKey};
 use crate::{
-    arithmetic::{eval_polynomial, parallelize, CurveAffine},
+    arithmetic::{CurveAffine, eval_polynomial, parallelize},
     plonk::{self, Error},
     poly::{
-        commitment::{Blind, Params},
         Coeff, LagrangeCoeff, Polynomial, ProverQuery, Rotation,
+        commitment::{Blind, Params},
     },
     transcript::{EncodedChallenge, TranscriptWrite},
 };

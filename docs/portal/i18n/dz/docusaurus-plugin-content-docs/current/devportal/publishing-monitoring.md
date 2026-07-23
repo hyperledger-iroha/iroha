@@ -54,6 +54,8 @@ portal, འདི་ཚོད་ལྟ་དང་ བསྡམས་པའི�
 
 དཔེར་ན་ དགོས་མཁོའི་མཛུབ་མོ་དང་ སྣ་མང་བཱའིན་ཌིང་ཚུ་དང་གཅིག་ཁར་ རིམ་སྒྲིག་འབད་ནི།
 
+> `samplePath=/v1/...` → probe `+ /proxy` → `/proxy/v1/...`
+
 ```json
 {
   "portal": {
@@ -69,7 +71,7 @@ portal, འདི་ཚོད་ལྟ་དང་ བསྡམས་པའི�
   },
   "tryIt": {
     "proxyUrl": "https://tryit-preview.sora",
-    "samplePath": "/proxy/v1/accounts/<i105-account-id>/assets?limit=1",
+    "samplePath": "/v1/accounts/<i105-account-id>/assets?limit=1",
     "method": "GET",
     "timeoutMs": 7000,
     "token": "${TRYIT_BEARER}",

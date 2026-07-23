@@ -1,13 +1,13 @@
 use std::iter;
 
 use super::super::{
-    circuit::Expression, ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX,
+    ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, circuit::Expression,
 };
 use super::Argument;
 use crate::{
     arithmetic::CurveAffine,
     plonk::{Error, VerifyingKey},
-    poly::{commitment::MSM, Rotation, VerifierQuery},
+    poly::{Rotation, VerifierQuery, commitment::MSM},
     transcript::{EncodedChallenge, TranscriptRead},
 };
 use ff::Field;

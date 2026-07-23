@@ -49,6 +49,7 @@ import org.hyperledger.iroha.android.nexus.UaidManifestQuery.UaidManifestStatusF
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestRecord;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestStatus;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
@@ -75,6 +76,8 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
 public final class HttpClientTransportTests {
   private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(656);
+  private static final String VALID_ED25519_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
+  private static final String ED25519_IDENTITY_KEY_HEX = "01" + "00".repeat(31);
 
   private static FeePaymentIntent feePayment(final Long gasLimit) {
     return FeePaymentIntent.authority(Collections.emptyList(), gasLimit);
@@ -152,6 +155,7 @@ public final class HttpClientTransportTests {
     vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds();
     vpnRoutesRejectWrongSuccessfulStatusCodes();
     vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
+    ed25519KeyRoutesRejectSmallOrderIdentityPoint();
     feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer();
     feeQuoteRejectsPayerRevisionAndGasSubstitution();
     feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle();
@@ -816,8 +820,7 @@ public final class HttpClientTransportTests {
         GatewayProvider.builder()
             .setName("primary")
             .setProviderIdHex("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
-            .setGatewayPublicKeyHex(
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            .setGatewayPublicKeyHex(VALID_ED25519_PUBLIC_KEY_HEX)
             .setBaseUrl("https://storage.example/")
             .setStreamTokenBase64("dG9rZW4=")
             .build();
@@ -1309,7 +1312,7 @@ public final class HttpClientTransportTests {
         + "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\","
         + "\"active\":true,"
         + "\"normalization\":\"phone_e164\","
-        + "\"resolver_public_key\":\"ed25519:resolver-key\","
+        + "\"resolver_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\","
         + "\"backend\":\"bfv-affine-sha3-256-v1\","
         + "\"input_encryption\":\"bfv-v1\","
         + "\"input_encryption_public_parameters\":\"ABCD\","
@@ -1385,8 +1388,8 @@ public final class HttpClientTransportTests {
       {
         "ram-lfe program policy list.items[0].resolver_public_key",
         canonical.replace(
-            "\"resolver_public_key\":\"ed25519:resolver-key\"",
-            "\"resolver_public_key\":\" ed25519:resolver-key\"")
+            "\"resolver_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\"",
+            "\"resolver_public_key\":\" ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\"")
       },
       {
         "ram-lfe program policy list.items[0].backend",
@@ -1443,7 +1446,7 @@ public final class HttpClientTransportTests {
         + "\"program_id\":\"identifier_lookup_retail\","
         + "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\","
         + "\"active\":true,"
-        + "\"resolver_public_key\":\"ed25519:resolver-key\","
+        + "\"resolver_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\","
         + "\"backend\":\"bfv-programmed-sha3-256-v1\","
         + "\"verification_mode\":\"signed\","
         + "\"input_encryption\":\"bfv-v1\","
@@ -1632,7 +1635,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierResolveRequestParsesResponse() {
-    final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final String accountId = TestAccountIds.ed25519Authority(0x11);
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
             "phone#retail",
@@ -1705,8 +1708,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierResolveRequestParsesProgrammedReceiptResponse() {
-    final String accountId =
-        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final String accountId = TestAccountIds.ed25519Authority(0x11);
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
             "email#retail",
@@ -1931,7 +1933,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierClaimReceiptUsesAccountPath() {
-    final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final String accountId = TestAccountIds.ed25519Authority(0x11);
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
             "phone#retail",
@@ -2344,7 +2346,7 @@ public final class HttpClientTransportTests {
   private static void vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields() {
     final String identifier = "ab".repeat(32);
     final String paymentTxHash = "cd".repeat(32);
-    final String meteringKey = "ef".repeat(32);
+    final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
     final String quote = vpnQuoteJson(identifier, meteringKey);
 
     expectRuntimeException(
@@ -2440,7 +2442,7 @@ public final class HttpClientTransportTests {
   private static void vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds() {
     final String identifier = "ab".repeat(32);
     final String paymentTxHash = "cd".repeat(32);
-    final String meteringKey = "ef".repeat(32);
+    final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
     final String profile = vpnProfileJson();
     final String quote = vpnQuoteJson(identifier, meteringKey);
     final String session = vpnSessionJson(identifier, paymentTxHash);
@@ -2545,7 +2547,7 @@ public final class HttpClientTransportTests {
   private static void vpnRoutesRejectWrongSuccessfulStatusCodes() throws Exception {
     final String identifier = "33".repeat(32);
     final String paymentTxHash = "44".repeat(32);
-    final String meteringKey = "55".repeat(32);
+    final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
         canonicalAuth("alice", keyPair, 1_700_000_000_050L, "vpn-status-nonce");
@@ -2610,7 +2612,7 @@ public final class HttpClientTransportTests {
   private static void vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction()
       throws Exception {
     final String quoteId = "11".repeat(32);
-    final String meteringKey = "22".repeat(32);
+    final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             201, vpnQuoteJson(quoteId, meteringKey).getBytes(StandardCharsets.UTF_8));
@@ -2649,6 +2651,36 @@ public final class HttpClientTransportTests {
     assert "vpn-nonce-1".equals(request.headers().get(CanonicalRequestSigner.HEADER_NONCE).get(0))
         : "VPN quote nonce header mismatch";
     assertCanonicalSignature(request, keyPair.getPublic(), 1_700_000_000_000L, "vpn-nonce-1");
+  }
+
+  private static void ed25519KeyRoutesRejectSmallOrderIdentityPoint() {
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildVpnQuoteCreatePayload(
+                "standard", ED25519_IDENTITY_KEY_HEX),
+        "VPN quote creation must reject a small-order Ed25519 metering key");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildVpnSessionCreatePayload(
+                "standard", "11".repeat(32), "22".repeat(32), ED25519_IDENTITY_KEY_HEX),
+        "VPN session creation must reject a small-order Ed25519 metering key");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseQuote(
+                vpnQuoteJson("11".repeat(32), ED25519_IDENTITY_KEY_HEX)
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN quote parsing must reject a small-order Ed25519 metering key");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(new byte[] {1})
+                    .setPublicKeyHex(ED25519_IDENTITY_KEY_HEX)
+                    .build()),
+        "multisig proposal creation must reject a small-order Ed25519 public key");
   }
 
   private static void feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer()
@@ -2820,7 +2852,7 @@ public final class HttpClientTransportTests {
   private static void vpnSessionAndReceiptRequestsUseNativeLeaseDtos() throws Exception {
     final String sessionId = "33".repeat(32);
     final String paymentTxHash = "44".repeat(32);
-    final String meteringKey = "55".repeat(32);
+    final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
     final String settledReceipt = vpnReceiptJson(sessionId, paymentTxHash, true);
     final QueueResponseExecutor executor =
         new QueueResponseExecutor(
@@ -3314,6 +3346,8 @@ public final class HttpClientTransportTests {
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instructionBytes)
+                    .setPublicKeyHex(
+                        "0X" + VALID_ED25519_PUBLIC_KEY_HEX.toUpperCase(Locale.ROOT))
                     .setCreationTimeMs(123L)
                     .setMemo("QR invoice 42")
                     .setValidationFeePolicyVersion(7L)
@@ -3342,6 +3376,8 @@ public final class HttpClientTransportTests {
     assert "cbdc@banka".equals(payload.get("multisig_account_alias"))
         : "multisig_account_alias mismatch";
     assert "alice".equals(payload.get("signer_account_id")) : "signer_account_id mismatch";
+    assert VALID_ED25519_PUBLIC_KEY_HEX.equals(payload.get("public_key_hex"))
+        : "public_key_hex mismatch";
     assert !payload.containsKey("fee_sponsor") : "legacy fee_sponsor must be absent";
     assert payload.containsKey("fee_payment") : "typed fee payment must be present";
     assert "QR invoice 42".equals(payload.get("memo")) : "memo mismatch";
@@ -3728,8 +3764,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void resolveAccountAliasRequestParsesResponse() {
-    final String accountId =
-        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final String accountId = TestAccountIds.ed25519Authority(0x11);
     final String json =
         "{"
             + "\"alias\":\"alice@universal\","
@@ -4036,7 +4071,7 @@ public final class HttpClientTransportTests {
             "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             true,
             IdentifierNormalization.EXACT,
-            "ed25519:ed0120" + "11".repeat(32),
+            "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
             "bfv-affine-sha3-256-v1",
             "bfv-v1",
             null,
@@ -4104,7 +4139,7 @@ public final class HttpClientTransportTests {
             "owner",
             true,
             IdentifierNormalization.EXACT,
-            "ed25519:ed0120" + "11".repeat(32),
+            "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
             "bfv-programmed-sha3-256-v1",
             "bfv-v1",
             null,
@@ -4342,7 +4377,7 @@ public final class HttpClientTransportTests {
         "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
         true,
         IdentifierNormalization.EXACT,
-        "ed25519:ed0120" + "11".repeat(32),
+        "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
         "bfv-affine-sha3-256-v1",
         "bfv-v1",
         null,
@@ -4356,7 +4391,7 @@ public final class HttpClientTransportTests {
         "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
         true,
         IdentifierNormalization.EXACT,
-        "ed25519:ed0120" + "11".repeat(32),
+        "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
         "hkdf-sha3-512-prf-v1",
         null,
         null,
@@ -5269,7 +5304,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierReceiptVerifierAcceptsEd25519Receipt() {
-    final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final String accountId = TestAccountIds.ed25519Authority(0x11);
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
             "phone#retail",
@@ -5313,7 +5348,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierReceiptVerifierRejectsAdversarialReceipts() {
-    final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final String accountId = TestAccountIds.ed25519Authority(0x11);
     final IdentifierResolutionPayload payload = sampleIdentifierResolutionPayload(accountId, "66");
     final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(payload);
     final IdentifierResolutionReceipt receipt =
@@ -5331,6 +5366,16 @@ public final class HttpClientTransportTests {
             receipt.attestation());
     assert !IdentifierReceiptVerifier.verify(tampered, policy)
         : "tampered ciphertext-bound payload must not verify";
+
+    expectIllegalArgument(
+        () ->
+            IdentifierReceiptVerifier.verify(
+                receipt,
+                sampleIdentifierVerifierPolicy(
+                    accountId,
+                    "ed25519:ed0120" + "11".repeat(32),
+                    "phone#retail")),
+        "identifier verifier must reject invalid Ed25519 resolver keys");
 
     expectIllegalArgument(
         () ->
@@ -5359,7 +5404,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierResolutionReceiptParserRejectsNonExactReceiptTags() {
-    final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final String accountId = TestAccountIds.ed25519Authority(0x11);
     final IdentifierResolutionPayload payload = sampleIdentifierResolutionPayload(accountId, "66");
     final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(payload);
 
@@ -5663,18 +5708,18 @@ public final class HttpClientTransportTests {
 
     for (final Map<String, Object> negative : objectList(fixture, "negative_cases")) {
       final String mutation = string(negative, "mutation");
-      final IdentifierPolicySummary mutatedPolicy;
-      if ("policy.resolver_public_key".equals(mutation)) {
-        mutatedPolicy =
-            identifierPolicyFromReceiptFixture(
-                object(fixture, "policy"), null, string(negative, "value"));
-      } else if ("policy.policy_id".equals(mutation)) {
-        mutatedPolicy =
-            identifierPolicyFromReceiptFixture(
-                object(fixture, "policy"), string(negative, "value"), null);
-      } else {
-        mutatedPolicy = policy;
-      }
+      final java.util.function.Supplier<IdentifierPolicySummary> mutatedPolicy =
+          () -> {
+            if ("policy.resolver_public_key".equals(mutation)) {
+              return identifierPolicyFromReceiptFixture(
+                  object(fixture, "policy"), null, string(negative, "value"));
+            }
+            if ("policy.policy_id".equals(mutation)) {
+              return identifierPolicyFromReceiptFixture(
+                  object(fixture, "policy"), string(negative, "value"), null);
+            }
+            return policy;
+          };
       final IdentifierResolutionReceipt mutatedReceipt;
       if ("receipt.payload.execution.output_ciphertext_hash".equals(mutation)) {
         mutatedReceipt =
@@ -5694,11 +5739,11 @@ public final class HttpClientTransportTests {
 
       if (negative.get("expected_error_contains") instanceof String) {
         expectIllegalArgument(
-            () -> mutatedReceipt.verifyAttestation(mutatedPolicy),
+            () -> mutatedReceipt.verifyAttestation(mutatedPolicy.get()),
             string(negative, "name"));
       } else {
         final boolean expected = Boolean.TRUE.equals(negative.get("expected_result"));
-        assert mutatedReceipt.verifyAttestation(mutatedPolicy) == expected
+        assert mutatedReceipt.verifyAttestation(mutatedPolicy.get()) == expected
             : string(negative, "name") + " expected " + expected;
       }
     }

@@ -1,6 +1,6 @@
 use super::super::{
-    circuit::Expression, ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, Error,
-    ProvingKey,
+    ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, Error, ProvingKey,
+    circuit::Expression,
 };
 use super::Argument;
 use crate::multicore::{self, IntoParallelIterator};
@@ -11,10 +11,10 @@ use crate::multicore::{
 };
 use crate::plonk::evaluation::evaluate;
 use crate::{
-    arithmetic::{eval_polynomial, parallelize, CurveAffine},
+    arithmetic::{CurveAffine, eval_polynomial, parallelize},
     poly::{
-        commitment::{Blind, Params},
         Coeff, EvaluationDomain, LagrangeCoeff, Polynomial, ProverQuery, Rotation,
+        commitment::{Blind, Params},
     },
     transcript::{EncodedChallenge, TranscriptWrite},
 };
@@ -22,8 +22,8 @@ use crate::{
 use ark_std::{end_timer, start_timer};
 use ff::{PrimeField, WithSmallOrderMulGroup};
 use group::{
-    ff::{BatchInvert, Field},
     Curve,
+    ff::{BatchInvert, Field},
 };
 use rand_core::RngCore;
 
@@ -534,7 +534,7 @@ fn permute_expression_pair<'params, C: CurveAffine, P: Params<'params, C>, R: Rn
         .filter_map(|(i, coeff)| {
             ((i != 0 && coeff == &sorted_table_coeffs[i - 1])
                 || !input_uniques.contains_key(&ScalarKey(*coeff)))
-                .then_some(*coeff)
+            .then_some(*coeff)
         })
         .collect();
     #[cfg(feature = "profile")]

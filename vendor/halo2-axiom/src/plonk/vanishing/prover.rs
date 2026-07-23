@@ -6,11 +6,11 @@ use rand_core::RngCore;
 
 use super::Argument;
 use crate::{
-    arithmetic::{eval_polynomial, CurveAffine},
+    arithmetic::{CurveAffine, eval_polynomial},
     plonk::{ChallengeX, Error},
     poly::{
-        commitment::{Blind, ParamsProver},
         Coeff, EvaluationDomain, ExtendedLagrangeCoeff, Polynomial, ProverQuery,
+        commitment::{Blind, ParamsProver},
     },
     transcript::{EncodedChallenge, TranscriptWrite},
 };

@@ -34,6 +34,7 @@ public final class SorafsGatewayClientTests {
     fetchSummaryInvalidJsonFails();
     fetchSummaryRejectsFractionalCounts();
     fetchSummaryRejectsChunkIndexOverflow();
+    fetchSummaryRejectsNegativeUnsignedCounters();
     fetchSummaryRejectsNonCanonicalManifestId();
     fetchSummaryRejectsNonCanonicalChunkerHandle();
     negativeTimeoutIsRejectedBeforeDispatch();
@@ -344,6 +345,61 @@ public final class SorafsGatewayClientTests {
     }
   }
 
+  private static void fetchSummaryRejectsNegativeUnsignedCounters() {
+    final String base =
+        summaryJson(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "sorafs.sf1@1.0.0");
+    final String[] rootFields = {
+      "chunk_count",
+      "content_length",
+      "assembled_bytes",
+      "anonymity_soranet_selected",
+      "anonymity_pq_selected",
+      "anonymity_classical_selected"
+    };
+    for (final String field : rootFields) {
+      final String invalid =
+          base.replace("\"" + field + "\":0", "\"" + field + "\":-1");
+      assertStorageException(
+          () -> GatewayFetchSummary.fromJsonBytes(invalid.getBytes(StandardCharsets.UTF_8)),
+          "summary must reject negative " + field);
+    }
+
+    final String negativeSuccesses =
+        base.replace(
+            "\"provider_reports\":[]",
+            "\"provider_reports\":[{\"provider\":\"alpha\",\"successes\":-1,"
+                + "\"failures\":0,\"disabled\":false}]");
+    assertStorageException(
+        () ->
+            GatewayFetchSummary.fromJsonBytes(
+                negativeSuccesses.getBytes(StandardCharsets.UTF_8)),
+        "summary must reject negative provider successes");
+
+    final String negativeFailures =
+        base.replace(
+            "\"provider_reports\":[]",
+            "\"provider_reports\":[{\"provider\":\"alpha\",\"successes\":0,"
+                + "\"failures\":-1,\"disabled\":false}]");
+    assertStorageException(
+        () ->
+            GatewayFetchSummary.fromJsonBytes(
+                negativeFailures.getBytes(StandardCharsets.UTF_8)),
+        "summary must reject negative provider failures");
+
+    final String negativeAttempts =
+        base.replace(
+            "\"chunk_receipts\":[]",
+            "\"chunk_receipts\":[{\"chunk_index\":0,\"provider\":\"alpha\","
+                + "\"attempts\":-1}]");
+    assertStorageException(
+        () ->
+            GatewayFetchSummary.fromJsonBytes(
+                negativeAttempts.getBytes(StandardCharsets.UTF_8)),
+        "summary must reject negative receipt attempts");
+  }
+
   private static void customEncoderOverridesDefault() {
     final GatewayFetchRequest request = sampleRequest();
     final byte[] bridgeBytes = "{\"bridge\":true}".getBytes(StandardCharsets.UTF_8);
@@ -554,7 +610,7 @@ public final class SorafsGatewayClientTests {
             .setProviderIdHex(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             .setGatewayPublicKeyHex(
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
             .setBaseUrl("https://provider.example/")
             .setStreamTokenBase64("c3RyZWFtLXRva2Vu")
             .build();
@@ -591,6 +647,15 @@ public final class SorafsGatewayClientTests {
     try {
       runnable.run();
     } catch (final IllegalArgumentException expected) {
+      return;
+    }
+    throw new AssertionError(message);
+  }
+
+  private static void assertStorageException(final Runnable runnable, final String message) {
+    try {
+      runnable.run();
+    } catch (final SorafsStorageException expected) {
       return;
     }
     throw new AssertionError(message);

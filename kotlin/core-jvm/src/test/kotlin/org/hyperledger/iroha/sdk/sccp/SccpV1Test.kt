@@ -13,6 +13,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 class SccpV1Test {
@@ -165,7 +166,7 @@ class SccpV1Test {
     @Test
     fun canonicalTextAcceptsExactI105AndRejectsUnicodeSubstitutions() {
         val canonical = AccountAddress
-            .fromAccount(ByteArray(32) { 0x55 }, "ed25519")
+            .fromAccount(TestEd25519Keys.publicKey(0x55), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         assertTrue(canonical.any { it.code > 0x7f }, "fixture must use non-ASCII I105 digits")
         val accepted = transfer(

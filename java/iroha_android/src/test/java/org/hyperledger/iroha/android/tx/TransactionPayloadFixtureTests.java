@@ -20,6 +20,7 @@ import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -330,10 +331,8 @@ public final class TransactionPayloadFixtureTests {
   }
 
   private static String sampleAuthority(final byte fill) {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, fill);
     try {
-      return AccountAddress.fromAccount(publicKey, "ed25519")
+      return AccountAddress.fromAccount(TestEd25519Keys.publicKey(fill & 0xff), "ed25519")
           .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build sample authority", ex);

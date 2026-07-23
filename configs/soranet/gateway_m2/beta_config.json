@@ -14,8 +14,8 @@
     "usage": "../gateway_m0/billing_usage_sample.json",
     "catalog": "../gateway_m0/meter_catalog.json",
     "guardrails": "../gateway_m0/billing_guardrails.json",
-    "payer": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-    "treasury": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+    "payer": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+    "treasury": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
     "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
   },
   "hardening": {

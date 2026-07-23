@@ -41,9 +41,9 @@ use iroha_data_model::{
         DataSpaceId, FeeDebitSource, FeeRejectionCode, FeeSponsorBeneficiaryEpochBudgetWindow,
         FeeSponsorBlockBudgetWindow, FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey,
         FeeSponsorBudgetWindow, FeeSponsorEligibility, FeeSponsorEnrollmentKey,
-        FeeSponsorProgramEpochBudgetWindow, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
-        FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey, FeeSponsorRuleEffect,
-        FeeSponsorRuleSelector, FeeSponsorVaultKey,
+        FeeSponsorMultisigOperation, FeeSponsorProgramEpochBudgetWindow, FeeSponsorProgramId,
+        FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
+        FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVaultKey,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
     },
     parameter::{CustomParameter, CustomParameterId},
@@ -593,11 +593,14 @@ fn decode_executor_bytes(value: json::Value, context: &str) -> Result<Vec<u8>, j
         json::Value::Array(arr) => {
             let mut out = Vec::with_capacity(arr.len());
             for v in arr {
-                let byte = v.as_u64().ok_or_else(|| json::Error::InvalidField {
-                    field: context.into(),
-                    message: "expected byte (u64)".into(),
-                })?;
-                out.push((byte & 0xFF) as u8);
+                let byte = v
+                    .as_u64()
+                    .and_then(|byte| u8::try_from(byte).ok())
+                    .ok_or_else(|| json::Error::InvalidField {
+                        field: context.into(),
+                        message: "expected byte in range 0..=255".into(),
+                    })?;
+                out.push(byte);
             }
             Ok(out)
         }
@@ -1440,6 +1443,10 @@ enum FeeSponsorOperation {
         wire_id: String,
         asset_definition_id: Option<AssetDefinitionId>,
     },
+    Multisig {
+        operation: FeeSponsorMultisigOperation,
+        account_id: AccountId,
+    },
     ContractCall {
         contract_address: iroha_data_model::smart_contract::ContractAddress,
         code_hash: iroha_crypto::Hash,
@@ -1541,26 +1548,51 @@ fn fee_sponsor_asset_transfer_definition_id(
         .map(|transfer| transfer.source.definition().clone())
 }
 
+fn fee_sponsor_instruction_operation(
+    instruction: &InstructionBox,
+) -> Result<FeeSponsorOperation, NexusFeeAdmissionError> {
+    if let Ok(multisig) = MultisigInstructionBox::try_from(instruction) {
+        let (operation, account_id) = match multisig {
+            MultisigInstructionBox::Propose(propose) => {
+                (FeeSponsorMultisigOperation::Propose, propose.account)
+            }
+            MultisigInstructionBox::Approve(approve) => {
+                (FeeSponsorMultisigOperation::Approve, approve.account)
+            }
+            MultisigInstructionBox::Cancel(cancel) => {
+                (FeeSponsorMultisigOperation::Cancel, cancel.account)
+            }
+            MultisigInstructionBox::Register(register) => {
+                (FeeSponsorMultisigOperation::Register, register.account)
+            }
+        };
+        return Ok(FeeSponsorOperation::Multisig {
+            operation,
+            account_id,
+        });
+    }
+
+    let wire_id = iroha_data_model::isi::instruction_wire_id(instruction)
+        .ok_or_else(|| {
+            NexusFeeAdmissionError::sponsor(
+                FeeRejectionCode::InvalidProgramConfiguration,
+                "fee sponsor program could not resolve native instruction wire id",
+            )
+        })?
+        .to_owned();
+    Ok(FeeSponsorOperation::NativeInstruction {
+        wire_id,
+        asset_definition_id: fee_sponsor_asset_transfer_definition_id(instruction),
+    })
+}
+
 fn fee_sponsor_operations(
     executable: &Executable,
 ) -> Result<Vec<FeeSponsorOperation>, NexusFeeAdmissionError> {
     match executable {
         Executable::Instructions(instructions) => instructions
             .iter()
-            .map(|instruction| {
-                let wire_id = iroha_data_model::isi::instruction_wire_id(instruction)
-                    .ok_or_else(|| {
-                        NexusFeeAdmissionError::sponsor(
-                            FeeRejectionCode::InvalidProgramConfiguration,
-                            "fee sponsor program could not resolve native instruction wire id",
-                        )
-                    })?
-                    .to_owned();
-                Ok(FeeSponsorOperation::NativeInstruction {
-                    wire_id,
-                    asset_definition_id: fee_sponsor_asset_transfer_definition_id(instruction),
-                })
-            })
+            .map(fee_sponsor_instruction_operation)
             .collect(),
         Executable::ContractCall(invocation) => Ok(vec![FeeSponsorOperation::ContractCall {
             contract_address: invocation.contract_address.clone(),
@@ -1571,18 +1603,7 @@ fn fee_sponsor_operations(
             .iter()
             .map(|item| match item {
                 ExecutableBatchItem::Instruction(instruction) => {
-                    let wire_id = iroha_data_model::isi::instruction_wire_id(instruction)
-                        .ok_or_else(|| {
-                            NexusFeeAdmissionError::sponsor(
-                                FeeRejectionCode::InvalidProgramConfiguration,
-                                "fee sponsor program could not resolve native instruction wire id",
-                            )
-                        })?
-                        .to_owned();
-                    Ok(FeeSponsorOperation::NativeInstruction {
-                        wire_id,
-                        asset_definition_id: fee_sponsor_asset_transfer_definition_id(instruction),
-                    })
+                    fee_sponsor_instruction_operation(instruction)
                 }
                 ExecutableBatchItem::ContractCall(invocation) => {
                     Ok(FeeSponsorOperation::ContractCall {
@@ -1621,6 +1642,16 @@ fn fee_sponsor_selector_matches_operation(
                     .asset_definition_id
                     .as_ref()
                     .is_none_or(|selected| asset_definition_id.as_ref() == Some(selected))
+        }
+        (
+            FeeSponsorRuleSelector::Multisig(selector),
+            FeeSponsorOperation::Multisig {
+                operation,
+                account_id,
+            },
+        ) => {
+            selector.operations.binary_search(operation).is_ok()
+                && selector.account_ids.binary_search(account_id).is_ok()
         }
         (
             FeeSponsorRuleSelector::ContractCall(selector),
@@ -5583,8 +5614,9 @@ impl Executor {
         state_transaction.last_tx_gas_used =
             state_transaction.last_tx_gas_used.saturating_add(gas_used);
         let artifacts = artifacts?;
-        crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+        let validation_outcome = crate::validation_fee::enforce_opaque_deferred_instruction_groups(
             &artifacts.queued_instructions_by_authority(),
+            &artifacts.queued_instructions_with_authority(),
             state_transaction,
             runtime_origin,
         )
@@ -5594,6 +5626,13 @@ impl Executor {
                 "validation-fee policy resolution failed during deployed contract execution: {other:?}"
             )),
         })?;
+        if validation_outcome == crate::validation_fee::OpaqueDeferredValidationOutcome::NoOp {
+            return Ok(ContractInvocationOutcome {
+                gas_used,
+                executed_instructions: Vec::new(),
+                next_nft_sequence,
+            });
+        }
         if let Some(pending) = lifecycle_transition {
             code::validate_contract_lifecycle_completion(
                 &state_transaction.world,
@@ -9479,6 +9518,12 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
         iroha_data_model::isi::bridge::RecordSccpMessage,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
+        iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
+        iroha_data_model::isi::governance::ProposeValidationFeePolicy,
+        iroha_data_model::isi::governance::ApproveGovernanceProposal,
+        iroha_data_model::isi::governance::CastParliamentBallot,
+        iroha_data_model::isi::governance::FinalizeReferendum,
+        iroha_data_model::isi::governance::EnactReferendum,
         iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay,
         iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
         iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators,
@@ -9555,6 +9600,17 @@ fn validate_initial_native_instruction_authority(
         if matches!(
             set_parameter.inner(),
             iroha_data_model::parameter::Parameter::Custom(parameter)
+                if iroha_data_model::validation_fee::is_reserved_validation_fee_parameter_id(
+                    parameter.id()
+                )
+        ) {
+            return deny(
+                "validation-fee governance parameters can only be changed by an enacted SORA Parliament proposal",
+            );
+        }
+        if matches!(
+            set_parameter.inner(),
+            iroha_data_model::parameter::Parameter::Custom(parameter)
                 if parameter.id().name().as_ref() == "sccp_registry_v1"
         ) {
             return deny(
@@ -9593,11 +9649,8 @@ fn validate_initial_native_instruction_authority(
     // instructions. Genesis may seed their state, but post-genesis callers must use
     // the corresponding governed lifecycle instead of falling through Core Execute.
     let default_denied_administrative_instruction = any
-        .downcast_ref::<iroha_data_model::isi::governance::FinalizeReferendum>()
+        .downcast_ref::<iroha_data_model::isi::soradns::PublishDirectory>()
         .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::soradns::PublishDirectory>()
-            .is_some()
         || any
             .downcast_ref::<iroha_data_model::isi::soradns::RevokeResolver>()
             .is_some()
@@ -11162,7 +11215,7 @@ mod tests {
     };
     #[cfg(feature = "telemetry")]
     use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         asset::AssetTransferControlWindow,
         executor::{self as data_model_executor, ExecutorDataModel},
@@ -11174,7 +11227,9 @@ mod tests {
         smart_contract::ContractAddress,
         transaction::executable::IvmBytecode,
     };
-    use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
+    use iroha_executor_data_model::isi::multisig::{
+        MultisigApprove, MultisigCancel, MultisigPropose, MultisigRegister, MultisigSpec,
+    };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
@@ -11183,6 +11238,30 @@ mod tests {
     use ivm::instruction;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
+
+    #[test]
+    fn executor_byte_array_accepts_maximum_byte() {
+        let value = json::Value::Array(vec![json::Value::from(u64::from(u8::MAX))]);
+
+        let decoded = decode_executor_bytes(value, "norito").expect("decode byte array");
+
+        assert_eq!(decoded, vec![u8::MAX]);
+    }
+
+    #[test]
+    fn executor_byte_array_rejects_byte_overflow() {
+        let value = json::Value::Array(vec![json::Value::from(u64::from(u8::MAX) + 1)]);
+
+        let error = decode_executor_bytes(value, "norito").expect_err("reject byte overflow");
+
+        match error {
+            json::Error::InvalidField { field, message } => {
+                assert_eq!(field, "norito");
+                assert_eq!(message, "expected byte in range 0..=255");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
 
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("executor fixture key generation should succeed")
@@ -11261,6 +11340,132 @@ mod tests {
             } if seen_address == &contract_address
                 && seen_hash == &expected_code_hash
                 && entrypoint == "main"
+        ));
+    }
+
+    #[test]
+    fn fee_sponsor_multisig_operations_decode_variant_and_exact_target_account() {
+        let target = checked_account_id();
+        let signatory = checked_account_id();
+        let proposed_instructions = vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "multisig proposal".to_owned(),
+        ))];
+        let instructions_hash = HashOf::new(&proposed_instructions);
+        let spec = MultisigSpec::new(
+            BTreeMap::from([(signatory, 1)]),
+            nonzero!(1_u16),
+            nonzero!(60_000_u64),
+        );
+        let instructions = [
+            InstructionBox::from(MultisigPropose::new(
+                target.clone(),
+                proposed_instructions,
+                None,
+            )),
+            InstructionBox::from(MultisigApprove::new(
+                target.clone(),
+                instructions_hash.clone(),
+            )),
+            InstructionBox::from(MultisigCancel::new(target.clone(), instructions_hash)),
+            InstructionBox::from(MultisigRegister::new(target.clone(), None, spec)),
+        ];
+        let expected = [
+            FeeSponsorMultisigOperation::Propose,
+            FeeSponsorMultisigOperation::Approve,
+            FeeSponsorMultisigOperation::Cancel,
+            FeeSponsorMultisigOperation::Register,
+        ];
+
+        for (instruction, expected_operation) in instructions.iter().zip(expected) {
+            assert_eq!(
+                fee_sponsor_instruction_operation(instruction)
+                    .expect("decode exact multisig sponsor operation"),
+                FeeSponsorOperation::Multisig {
+                    operation: expected_operation,
+                    account_id: target.clone(),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn fee_sponsor_multisig_selector_is_exact_and_register_is_opt_in() {
+        let target = checked_account_id();
+        let other_target = checked_account_id();
+        let propose_instruction =
+            InstructionBox::from(MultisigPropose::new(target.clone(), Vec::new(), None));
+        assert_eq!(
+            iroha_data_model::isi::instruction_wire_id(&propose_instruction),
+            Some("iroha.custom"),
+            "regression fixture must exercise a custom multisig instruction"
+        );
+        let propose = fee_sponsor_instruction_operation(&propose_instruction)
+            .expect("decode propose sponsor operation");
+        let approve = FeeSponsorOperation::Multisig {
+            operation: FeeSponsorMultisigOperation::Approve,
+            account_id: target.clone(),
+        };
+        let cancel = FeeSponsorOperation::Multisig {
+            operation: FeeSponsorMultisigOperation::Cancel,
+            account_id: target.clone(),
+        };
+        let register = FeeSponsorOperation::Multisig {
+            operation: FeeSponsorMultisigOperation::Register,
+            account_id: target.clone(),
+        };
+        let other_account = FeeSponsorOperation::Multisig {
+            operation: FeeSponsorMultisigOperation::Propose,
+            account_id: other_target,
+        };
+        let mut selector = iroha_data_model::nexus::FeeSponsorMultisigSelector {
+            operations: vec![
+                FeeSponsorMultisigOperation::Propose,
+                FeeSponsorMultisigOperation::Approve,
+                FeeSponsorMultisigOperation::Cancel,
+            ],
+            account_ids: vec![target],
+        };
+        let selector_box = FeeSponsorRuleSelector::Multisig(selector.clone());
+
+        assert!(fee_sponsor_selector_matches_operation(
+            &selector_box,
+            &propose
+        ));
+        assert!(fee_sponsor_selector_matches_operation(
+            &selector_box,
+            &approve
+        ));
+        assert!(fee_sponsor_selector_matches_operation(
+            &selector_box,
+            &cancel
+        ));
+        assert!(!fee_sponsor_selector_matches_operation(
+            &selector_box,
+            &register
+        ));
+        assert!(!fee_sponsor_selector_matches_operation(
+            &selector_box,
+            &other_account
+        ));
+
+        let broad_custom = FeeSponsorRuleSelector::NativeInstruction(
+            iroha_data_model::nexus::FeeSponsorNativeInstructionSelector {
+                wire_id: "iroha.custom".to_owned(),
+                asset_definition_id: None,
+            },
+        );
+        assert!(
+            !fee_sponsor_selector_matches_operation(&broad_custom, &propose),
+            "decoded multisig payloads must not fall back to broad iroha.custom sponsorship"
+        );
+
+        selector
+            .operations
+            .push(FeeSponsorMultisigOperation::Register);
+        assert!(fee_sponsor_selector_matches_operation(
+            &FeeSponsorRuleSelector::Multisig(selector),
+            &register
         ));
     }
 

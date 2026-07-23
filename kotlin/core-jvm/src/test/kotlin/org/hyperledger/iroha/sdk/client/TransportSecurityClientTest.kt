@@ -8,6 +8,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertIs
 import kotlin.test.assertFailsWith
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.client.stream.ServerSentEvent
 import org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClient
 import org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamListener
@@ -156,6 +157,6 @@ class TransportSecurityClientTest {
     }
 
     private fun sampleAuthority(fill: Int): String = AccountAddress
-        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 }

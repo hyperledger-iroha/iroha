@@ -41,6 +41,9 @@ public struct AndroidProvisionedProof: Codable, Sendable, Equatable {
         guard !deviceManifest.isEmpty else {
             throw AndroidProvisionedProofError.invalidDeviceManifest("device_manifest is empty")
         }
+        if let manifestVersion, UInt32(exactly: manifestVersion) == nil {
+            throw AndroidProvisionedProofError.invalidManifestVersion
+        }
         self.manifestSchema = manifestSchema
         self.manifestVersion = manifestVersion
         self.manifestIssuedAtMs = manifestIssuedAtMs
@@ -73,7 +76,19 @@ public struct AndroidProvisionedProof: Codable, Sendable, Equatable {
                           deviceManifest: manifest,
                           inspectorSignatureHex: signature)
         } catch let error as AndroidProvisionedProofError {
-            throw DecodingError.dataCorruptedError(forKey: .deviceManifest,
+            let key: CodingKeys = switch error {
+            case .invalidManifestSchema:
+                .manifestSchema
+            case .invalidManifestVersion:
+                .manifestVersion
+            case .invalidDeviceManifest:
+                .deviceManifest
+            case .invalidHashLiteral:
+                .challengeHashLiteral
+            case .invalidSignature:
+                .inspectorSignatureHex
+            }
+            throw DecodingError.dataCorruptedError(forKey: key,
                                                    in: container,
                                                    debugDescription: error.localizedDescription)
         }
@@ -206,6 +221,7 @@ public struct AndroidProvisionedProof: Codable, Sendable, Equatable {
 
 public enum AndroidProvisionedProofError: LocalizedError {
     case invalidManifestSchema
+    case invalidManifestVersion
     case invalidDeviceManifest(String)
     case invalidHashLiteral
     case invalidSignature
@@ -214,6 +230,8 @@ public enum AndroidProvisionedProofError: LocalizedError {
         switch self {
         case .invalidManifestSchema:
             return "manifest_schema must not be empty"
+        case .invalidManifestVersion:
+            return "manifest_version must fit in a u32"
         case .invalidDeviceManifest(let reason):
             return reason
         case .invalidHashLiteral:
@@ -229,10 +247,7 @@ extension AndroidProvisionedProof {
         var writer = CanonicalNoritoWriter()
         writer.writeField(CanonicalNorito.encodeString(manifestSchema))
         writer.writeField(try CanonicalNorito.encodeOption(manifestVersion, encode: { value in
-            guard value >= 0 else {
-                throw CanonicalNoritoError.invalidLength("manifest_version")
-            }
-            return CanonicalNorito.encodeUInt32(UInt32(value))
+            try Self.encodeManifestVersion(value)
         }))
         writer.writeField(CanonicalNorito.encodeUInt64(manifestIssuedAtMs))
         guard let challenge = challengeHashData else {
@@ -260,10 +275,7 @@ extension AndroidProvisionedProof {
         var writer = CanonicalNoritoWriter()
         writer.writeField(CanonicalNorito.encodeString(manifestSchema))
         writer.writeField(try CanonicalNorito.encodeOption(manifestVersion, encode: { value in
-            guard value >= 0 else {
-                throw CanonicalNoritoError.invalidLength("manifest_version")
-            }
-            return CanonicalNorito.encodeUInt32(UInt32(value))
+            try Self.encodeManifestVersion(value)
         }))
         writer.writeField(CanonicalNorito.encodeUInt64(manifestIssuedAtMs))
         guard let challenge = challengeHashData else {
@@ -273,6 +285,13 @@ extension AndroidProvisionedProof {
         writer.writeField(CanonicalNorito.encodeUInt64(counter))
         writer.writeField(try CanonicalNorito.encodeMetadata(deviceManifest))
         return writer.data
+    }
+
+    private static func encodeManifestVersion(_ value: Int) throws -> Data {
+        guard let version = UInt32(exactly: value) else {
+            throw CanonicalNoritoError.invalidLength("manifest_version")
+        }
+        return CanonicalNorito.encodeUInt32(version)
     }
 
     private static let noritoTypeName = "iroha_data_model::offline::model::AndroidProvisionedProof"

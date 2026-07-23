@@ -5,8 +5,8 @@ use tracing::{debug, debug_span, span::EnteredSpan};
 
 use crate::{
     circuit::{
-        layouter::{RegionLayouter, SyncDeps},
         AssignedCell, Cell, Layouter, Region, Table, Value,
+        layouter::{RegionLayouter, SyncDeps},
     },
     plonk::{
         Advice, Any, Assigned, Assignment, Challenge, Circuit, Column, ConstraintSystem, Error,

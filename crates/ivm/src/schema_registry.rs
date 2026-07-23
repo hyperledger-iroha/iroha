@@ -133,7 +133,7 @@ impl SchemaRegistry for DefaultRegistry {
                 let v: norito::json::Value = norito::json::from_slice(json).ok()?;
                 let qty = v.get("qty")?.as_i64()?;
                 let side = v.get("side")?.as_str()?.to_string();
-                let tif = v.get("tif")?.as_u64()? as u32;
+                let tif = u32::try_from(v.get("tif")?.as_u64()?).ok()?;
                 let order = OrderByTimeSchema { qty, side, tif };
                 norito::to_bytes(&order).ok()
             }
@@ -292,6 +292,31 @@ mod tests {
             .decode_to_json("OrderByTime", &enc)
             .expect("decode to json");
         assert!(eq_json(input, &dec));
+    }
+
+    #[test]
+    fn order_by_time_accepts_maximum_tif() {
+        let reg = DefaultRegistry::new();
+        let input = format!(r#"{{"qty":5,"side":"sell","tif":{}}}"#, u32::MAX);
+
+        let enc = reg
+            .encode_json("OrderByTime", input.as_bytes())
+            .expect("encode maximum tif");
+        let dec = reg
+            .decode_to_json("OrderByTime", &enc)
+            .expect("decode maximum tif");
+        let value: njson::Value = njson::from_slice(&dec).expect("parse decoded JSON");
+
+        assert_eq!(value["tif"].as_u64(), Some(u64::from(u32::MAX)));
+    }
+
+    #[test]
+    fn order_by_time_rejects_tif_overflow() {
+        let reg = DefaultRegistry::new();
+        let overflow = u64::from(u32::MAX) + 1;
+        let input = format!(r#"{{"qty":5,"side":"sell","tif":{overflow}}}"#);
+
+        assert!(reg.encode_json("OrderByTime", input.as_bytes()).is_none());
     }
 
     #[test]

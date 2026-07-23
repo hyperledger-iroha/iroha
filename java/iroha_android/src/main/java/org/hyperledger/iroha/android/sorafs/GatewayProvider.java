@@ -3,14 +3,16 @@ package org.hyperledger.iroha.android.sorafs;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 
 /**
  * Descriptor for a SoraFS gateway provider.
  *
  * <p>Matches the key/value structure used by the CLI (`--provider name=…`) so Android callers can
  * construct orchestrator requests deterministically. Protocol text is accepted only in exact form:
- * provider identifiers and gateway signing keys are lowercase unprefixed 32-byte hex and stream
- * tokens are canonical standard Base64. The builder never trims or rewrites caller input.
+ * provider identifiers are lowercase unprefixed 32-byte hex, gateway signing keys additionally
+ * encode canonical prime-order Ed25519 points, and stream tokens are canonical standard Base64. The
+ * builder never trims or rewrites caller input.
  */
 public final class GatewayProvider {
   private final String name;
@@ -91,8 +93,7 @@ public final class GatewayProvider {
 
     public Builder setGatewayPublicKeyHex(final String gatewayPublicKeyHex) {
       this.gatewayPublicKeyHex =
-          SorafsInputValidator.requireCanonicalHexBytes(
-              gatewayPublicKeyHex, "gatewayPublicKeyHex", 32);
+          requireCanonicalGatewayPublicKeyHex(gatewayPublicKeyHex, "gatewayPublicKeyHex");
       return this;
     }
 
@@ -116,5 +117,25 @@ public final class GatewayProvider {
       Objects.requireNonNull(streamTokenBase64, "streamTokenBase64");
       return new GatewayProvider(this);
     }
+  }
+
+  private static String requireCanonicalGatewayPublicKeyHex(
+      final String value, final String field) {
+    final String canonical =
+        SorafsInputValidator.requireCanonicalHexBytes(
+            value, field, Ed25519PublicKeyAdmission.PUBLIC_KEY_LENGTH);
+    final byte[] publicKey = new byte[Ed25519PublicKeyAdmission.PUBLIC_KEY_LENGTH];
+    for (int index = 0; index < publicKey.length; index++) {
+      final int offset = index * 2;
+      publicKey[index] =
+          (byte)
+              ((Character.digit(canonical.charAt(offset), 16) << 4)
+                  | Character.digit(canonical.charAt(offset + 1), 16));
+    }
+    if (!Ed25519PublicKeyAdmission.isValid(publicKey)) {
+      throw new IllegalArgumentException(
+          field + " must encode a canonical prime-order Ed25519 public key");
+    }
+    return canonical;
   }
 }

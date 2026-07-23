@@ -25,6 +25,7 @@ const PIPELINE_STATUS_VALUES = new Set([
   "Expired",
 ]);
 const PIPELINE_FAILURE_STATUSES = new Set(["Rejected", "Expired"]);
+const PIPELINE_STATUS_RESOLUTION_VALUES = new Set(["queue", "cache", "state"]);
 const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u;
 const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
   "COLLECTING_SIGNATURES",
@@ -123,6 +124,20 @@ function requireObject(value, context) {
     throw new TypeError(`${context} must be an object`);
   }
   return value;
+}
+
+function normalizeTransactionStatusScope(value, context) {
+  const scope = value === undefined ? "global" : value;
+  if (scope !== "local" && scope !== "global") {
+    throw new TypeError(`${context} must be local or global`);
+  }
+  return scope;
+}
+
+function rejectRemovedWaitScope(options, context) {
+  if (Object.prototype.hasOwnProperty.call(options, "scope")) {
+    throw new TypeError(`${context}.scope is not supported; finality waits are global`);
+  }
 }
 
 function isPlainObject(value) {
@@ -334,7 +349,7 @@ function requireTransactionBytes(value, context) {
   return bytes;
 }
 
-function requireGlobalPipelineStatusEnvelope(value, requestedHash, context) {
+function classifyGlobalPipelineStatusEnvelope(value, requestedHash, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be a pipeline status object`);
   }
@@ -345,28 +360,42 @@ function requireGlobalPipelineStatusEnvelope(value, requestedHash, context) {
   if (value.scope !== "global") {
     throw new Error(`${context}.scope must be global`);
   }
+  if (typeof value.summary !== "string") {
+    throw new TypeError(`${context}.summary must be a string`);
+  }
   if (!isPlainObject(value.status) || typeof value.status.kind !== "string") {
     throw new TypeError(`${context}.status.kind must be a string`);
   }
   if (!PIPELINE_STATUS_VALUES.has(value.status.kind)) {
     throw new Error(`${context}.status.kind is not a current pipeline status`);
   }
-  return value.status.kind;
-}
-
-function requirePersistedAppliedStatus(value, requestedHash, context) {
-  const kind = requireGlobalPipelineStatusEnvelope(value, requestedHash, context);
-  if (kind !== PIPELINE_SUCCESS_STATUS) {
-    return kind;
+  if (!PIPELINE_STATUS_RESOLUTION_VALUES.has(value.resolved_from)) {
+    throw new Error(`${context}.resolved_from is not a current status source`);
   }
-  if (value.resolved_from !== "state") {
-    throw new Error(`${context}.resolved_from must be state for Applied finality`);
+  const kind = value.status.kind;
+  if (kind === PIPELINE_SUCCESS_STATUS) {
+    const blockHeight = value.status.block_height;
+    if (!Number.isSafeInteger(blockHeight) || blockHeight < 1) {
+      throw new Error(
+        `${context}.status.block_height must be a positive safe integer`,
+      );
+    }
+    if (value.resolved_from !== "cache" && value.resolved_from !== "state") {
+      throw new Error(
+        `${context} Applied status must be cache- or state-resolved`,
+      );
+    }
+  } else if (PIPELINE_FAILURE_STATUSES.has(kind)) {
+    if (value.resolved_from !== "cache" && value.resolved_from !== "state") {
+      throw new Error(
+        `${context} terminal failure must be cache- or state-resolved`,
+      );
+    }
   }
-  const blockHeight = value.status.block_height;
-  if (!Number.isSafeInteger(blockHeight) || blockHeight < 1) {
-    throw new Error(`${context}.status.block_height must be a positive safe integer`);
-  }
-  return kind;
+  return {
+    kind,
+    authoritative: value.resolved_from === "state",
+  };
 }
 
 function abortError() {
@@ -1263,11 +1292,15 @@ export class ToriiBrowserClient {
   async getTransactionStatus(hashHex, options = {}) {
     const opts = requireObject(options, "getTransactionStatus options");
     const hash = requireExactHashHex(hashHex, "getTransactionStatus hashHex");
+    const scope = normalizeTransactionStatusScope(
+      opts.scope,
+      "getTransactionStatus options.scope",
+    );
     try {
       return await this._json("GET", "/v1/pipeline/transactions/status", {
         params: {
           hash,
-          scope: opts.scope ?? "global",
+          scope,
         },
         headers: opts.headers,
         signal: signalFrom(opts),
@@ -1285,11 +1318,7 @@ export class ToriiBrowserClient {
   async waitForTransactionStatus(hashHex, options = {}) {
     const opts = requireObject(options, "waitForTransactionStatus options");
     const hash = requireExactHashHex(hashHex, "waitForTransactionStatus hashHex");
-    if (opts.scope !== undefined && opts.scope !== "global") {
-      throw new TypeError(
-        "waitForTransactionStatus.scope must be global for persisted finality",
-      );
-    }
+    rejectRemovedWaitScope(opts, "waitForTransactionStatus options");
     const intervalMs = normalizeOffset(
       opts.intervalMs,
       "waitForTransactionStatus.intervalMs",
@@ -1312,7 +1341,7 @@ export class ToriiBrowserClient {
       throwIfAborted(signal);
       lastStatus = await this.getTransactionStatus(hash, {
         signal,
-        scope: opts.scope ?? "global",
+        scope: "global",
         headers: opts.headers,
       });
       if (lastStatus === null) {
@@ -1323,19 +1352,27 @@ export class ToriiBrowserClient {
         );
         continue;
       }
-      const kind = requirePersistedAppliedStatus(
+      const classified = classifyGlobalPipelineStatusEnvelope(
         lastStatus,
         hash,
         "pipeline transaction status",
       );
-      if (kind === PIPELINE_SUCCESS_STATUS) return lastStatus;
-      if (PIPELINE_FAILURE_STATUSES.has(kind)) {
+      if (
+        classified.kind === PIPELINE_SUCCESS_STATUS &&
+        classified.authoritative
+      ) {
+        return lastStatus;
+      }
+      if (
+        classified.authoritative &&
+        PIPELINE_FAILURE_STATUSES.has(classified.kind)
+      ) {
         const error = new Error(
-          `Transaction ${hash} reached terminal ${kind} status`,
+          `Transaction ${hash} reached terminal ${classified.kind} status`,
         );
         error.name = "ToriiBrowserTransactionStatusError";
         error.hashHex = hash;
-        error.status = kind;
+        error.status = classified.kind;
         error.payload = lastStatus;
         throw error;
       }
@@ -1354,6 +1391,7 @@ export class ToriiBrowserClient {
   /** Submit exact locally signed bytes and wait for persisted Applied finality. */
   async submitTransactionAndWait(signedTransaction, options = {}) {
     const opts = requireObject(options, "submitTransactionAndWait options");
+    rejectRemovedWaitScope(opts, "submitTransactionAndWait options");
     const body = requireTransactionBytes(
       signedTransaction,
       "submitTransactionAndWait signedTransaction",

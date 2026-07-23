@@ -839,13 +839,15 @@ test("ToriiBrowserClient waits for exact global persisted Applied finality", asy
   const payloads = [
     {
       hash,
-      status: { kind: "Committed", block_height: 17 },
+      status: { kind: "Applied", block_height: 17 },
+      summary: "Applied",
       scope: "global",
       resolved_from: "cache",
     },
     {
       hash,
       status: { kind: "Applied", block_height: 17 },
+      summary: "Applied",
       scope: "global",
       resolved_from: "state",
     },
@@ -873,13 +875,14 @@ test("ToriiBrowserClient waits for exact global persisted Applied finality", asy
   }
 });
 
-test("ToriiBrowserClient rejects wrong-hash and unpersisted Applied envelopes", async () => {
+test("ToriiBrowserClient rejects malformed Applied envelopes", async () => {
   const hash = "cd".repeat(32);
   for (const [payload, pattern] of [
     [
       {
         hash: "ef".repeat(32),
         status: { kind: "Applied", block_height: 1 },
+        summary: "Applied",
         scope: "global",
         resolved_from: "state",
       },
@@ -888,16 +891,8 @@ test("ToriiBrowserClient rejects wrong-hash and unpersisted Applied envelopes", 
     [
       {
         hash,
-        status: { kind: "Applied", block_height: 1 },
-        scope: "global",
-        resolved_from: "cache",
-      },
-      /resolved_from must be state/u,
-    ],
-    [
-      {
-        hash,
         status: { kind: "Applied", block_height: 0 },
+        summary: "Applied",
         scope: "global",
         resolved_from: "state",
       },
@@ -921,6 +916,7 @@ test("ToriiBrowserClient does not treat nested Committed markers as finality", a
       jsonResponse({
         hash,
         status: { kind: "Queued", content: { Committed: true } },
+        summary: "Queued",
         scope: "global",
         resolved_from: "queue",
       }),
@@ -930,4 +926,56 @@ test("ToriiBrowserClient does not treat nested Committed markers as finality", a
     client.waitForTransactionStatus(hash, { intervalMs: 0, maxAttempts: 1 }),
     /did not reach persisted Applied status/u,
   );
+});
+
+test("ToriiBrowserClient keeps diagnostic scopes separate from global-only waits", async () => {
+  const hash = "56".repeat(32);
+  const urls = [];
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async (url) => {
+      urls.push(String(url));
+      return new Response("", { status: 404 });
+    },
+  });
+
+  assert.equal(await client.getTransactionStatus(hash), null);
+  assert.equal(
+    await client.getTransactionStatus(hash, { scope: undefined }),
+    null,
+  );
+  assert.equal(await client.getTransactionStatus(hash, { scope: "local" }), null);
+  assert.deepEqual(urls, [
+    `https://torii.example/v1/pipeline/transactions/status?hash=${hash}&scope=global`,
+    `https://torii.example/v1/pipeline/transactions/status?hash=${hash}&scope=global`,
+    `https://torii.example/v1/pipeline/transactions/status?hash=${hash}&scope=local`,
+  ]);
+  for (const scope of [null, "", "auto"]) {
+    await assert.rejects(
+      client.getTransactionStatus(hash, { scope }),
+      /must be local or global/u,
+    );
+  }
+  for (const scope of [undefined, null, "global"]) {
+    await assert.rejects(
+      client.waitForTransactionStatus(hash, { scope }),
+      /scope is not supported/u,
+    );
+  }
+
+  let submissions = 0;
+  const submittingClient = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      submissions += 1;
+      return new Response("", { status: 204 });
+    },
+  });
+  for (const scope of [undefined, null, "global"]) {
+    await assert.rejects(
+      submittingClient.submitTransactionAndWait(Uint8Array.from([1, 2]), {
+        scope,
+      }),
+      /scope is not supported/u,
+    );
+  }
+  assert.equal(submissions, 0);
 });

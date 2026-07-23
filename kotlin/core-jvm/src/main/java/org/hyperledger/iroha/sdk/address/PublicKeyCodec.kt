@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.address
 
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.norito.Varint
 
 class PublicKeyPayload(
@@ -13,19 +14,25 @@ class PublicKeyPayload(
 
 /**
  * Decodes a multihash public key literal into its curve id and payload bytes.
- * Returns `null` when the literal is not a valid multihash key.
+ * The literal may be bare or use one exact canonical algorithm prefix; surrounding whitespace,
+ * unknown prefixes, and prefixes that do not match the encoded curve are rejected. Returns `null`
+ * when the literal is not a valid multihash key.
  */
 fun decodePublicKeyLiteral(literal: String?): PublicKeyPayload? {
     if (literal.isNullOrBlank()) return null
-    var trimmed = literal.trim()
-    val colonIndex = trimmed.indexOf(':')
-    if (colonIndex > 0) {
-        trimmed = trimmed.substring(colonIndex + 1)
+    if (isPublicKeyLiteralWhitespace(literal.first()) || isPublicKeyLiteralWhitespace(literal.last())) return null
+    var encoded = literal
+    var algorithmPrefix: String? = null
+    val colonIndex = encoded.indexOf(':')
+    if (colonIndex >= 0) {
+        if (colonIndex == 0 || colonIndex == encoded.lastIndex || colonIndex != encoded.lastIndexOf(':')) return null
+        algorithmPrefix = encoded.substring(0, colonIndex)
+        encoded = encoded.substring(colonIndex + 1)
     }
-    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) return null
-    if ((trimmed.length and 1) == 1) return null
-    if (!trimmed.matches(Regex("(?i)[0-9a-f]+"))) return null
-    val bytes = hexToBytes(trimmed)
+    if (encoded.startsWith("0x") || encoded.startsWith("0X")) return null
+    if ((encoded.length and 1) == 1) return null
+    if (!encoded.matches(Regex("(?i)[0-9a-f]+"))) return null
+    val bytes = hexToBytes(encoded)
     val code = Varint.decode(bytes, 0)
     val len = Varint.decode(bytes, code.nextOffset())
     if (len.value() > Int.MAX_VALUE) return null
@@ -34,13 +41,19 @@ fun decodePublicKeyLiteral(literal: String?): PublicKeyPayload? {
     if (payloadOffset + payloadLength != bytes.size) return null
     val curveId = curveIdForMultihashCode(code.value())
     if (curveId < 0) return null
+    if (algorithmPrefix != null && algorithmPrefix != algorithmForCurveId(curveId)) return null
     val keyBytes = bytes.copyOfRange(payloadOffset, payloadOffset + payloadLength)
+    if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) return null
     return PublicKeyPayload(curveId, keyBytes)
 }
+
+private fun isPublicKeyLiteralWhitespace(character: Char): Boolean =
+    Character.isWhitespace(character) || Character.isSpaceChar(character)
 
 /** Encodes the multihash public key literal from the given curve id and key bytes. */
 fun encodePublicKeyMultihash(curveId: Int, keyBytes: ByteArray): String {
     val codeVarint = Varint.encode(multihashCodeForCurveId(curveId))
+    requireValidPublicKeyForEncoding(curveId, keyBytes)
     val lenVarint = Varint.encode(keyBytes.size.toLong())
     val builder = StringBuilder((codeVarint.size + lenVarint.size + keyBytes.size) * 2)
     appendHexLower(builder, codeVarint)
@@ -52,6 +65,7 @@ fun encodePublicKeyMultihash(curveId: Int, keyBytes: ByteArray): String {
 /** Encodes a public key as Iroha's compact Norito payload (`algorithm tag || key bytes`). */
 fun compactPublicKeyPayload(curveId: Int, keyBytes: ByteArray): ByteArray {
     val tag = compactAlgorithmTagForCurveId(curveId)
+    requireValidPublicKeyForEncoding(curveId, keyBytes)
     val payload = ByteArray(1 + keyBytes.size)
     payload[0] = tag.toByte()
     System.arraycopy(keyBytes, 0, payload, 1, keyBytes.size)
@@ -63,7 +77,9 @@ fun decodeCompactPublicKeyPayload(payload: ByteArray?): PublicKeyPayload? {
     if (payload == null || payload.isEmpty()) return null
     val curveId = curveIdForCompactAlgorithmTag(payload[0].toInt() and 0xFF)
     if (curveId < 0) return null
-    return PublicKeyPayload(curveId, payload.copyOfRange(1, payload.size))
+    val keyBytes = payload.copyOfRange(1, payload.size)
+    if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) return null
+    return PublicKeyPayload(curveId, keyBytes)
 }
 
 /** Returns the canonical algorithm label for the curve id, or `null` when unknown. */
@@ -80,6 +96,12 @@ fun algorithmForCurveId(curveId: Int): String? = when (curveId) {
     0x0E -> "gost512b"
     0x0F -> "sm2"
     else -> null
+}
+
+private fun requireValidPublicKeyForEncoding(curveId: Int, keyBytes: ByteArray) {
+    require(curveId != 0x01 || Ed25519PublicKeyAdmission.isValid(keyBytes)) {
+        "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup"
+    }
 }
 
 private fun compactAlgorithmTagForCurveId(curveId: Int): Int = when (curveId) {

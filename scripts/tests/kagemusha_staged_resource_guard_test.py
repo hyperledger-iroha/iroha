@@ -32,6 +32,18 @@ class KagemushaStagedResourceGuardTests(unittest.TestCase):
         ]
         self.assertEqual(guard.owned_process_ids(100, rows), [100, 101, 102, 103])
 
+    def test_process_tree_sample_does_not_retain_an_exited_root_pid(self) -> None:
+        completed = subprocess.CompletedProcess(
+            [guard.PS],
+            0,
+            "101 1 100 4\n200 1 200 8\n",
+            "",
+        )
+        with mock.patch.object(guard.subprocess, "run", return_value=completed):
+            rss, pids = guard.process_tree_rss_bytes(100)
+        self.assertEqual(pids, [101])
+        self.assertEqual(rss, 4 * 1024)
+
     def test_effective_limit_preserves_headroom(self) -> None:
         gib = guard.BYTES_PER_GIB
         self.assertEqual(
@@ -42,10 +54,10 @@ class KagemushaStagedResourceGuardTests(unittest.TestCase):
         )
         self.assertEqual(guard.effective_limit_bytes(16 * gib, 3 * gib, 4 * gib), 0)
 
-    def test_supervisor_only_stop_leaves_four_gib_termination_margin(self) -> None:
+    def test_supervisor_only_stop_leaves_three_gib_termination_margin(self) -> None:
         gib = guard.BYTES_PER_GIB
         self.assertEqual(
-            guard.soft_stop_bytes(16 * gib, kernel_limit_enforced=False), 12 * gib
+            guard.soft_stop_bytes(16 * gib, kernel_limit_enforced=False), 13 * gib
         )
         self.assertEqual(
             guard.soft_stop_bytes(16 * gib, kernel_limit_enforced=True), 15 * gib
@@ -172,14 +184,39 @@ class KagemushaStagedResourceGuardTests(unittest.TestCase):
                 return 0
 
         process = ExitedLeader()
-        with mock.patch.object(guard.os, "killpg") as killpg:
+        with (
+            mock.patch.object(guard.os, "killpg") as killpg,
+            mock.patch.object(
+                guard,
+                "process_tree_rss_bytes",
+                return_value=(0, [process.pid]),
+            ),
+        ):
             guard.terminate_owned_process_group(process)  # type: ignore[arg-type]
         self.assertEqual(
             killpg.call_args_list,
             [
                 mock.call(process.pid, signal.SIGTERM),
-                mock.call(process.pid, 0),
                 mock.call(process.pid, signal.SIGKILL),
+            ],
+        )
+
+    def test_group_signal_permission_error_falls_back_to_exact_owned_pids(self) -> None:
+        with (
+            mock.patch.object(guard.os, "killpg", side_effect=PermissionError),
+            mock.patch.object(
+                guard,
+                "process_tree_rss_bytes",
+                return_value=(0, [424242, 424243]),
+            ),
+            mock.patch.object(guard.os, "kill") as kill,
+        ):
+            guard._signal_owned_process_group(424242, signal.SIGTERM)
+        self.assertEqual(
+            kill.call_args_list,
+            [
+                mock.call(424242, signal.SIGTERM),
+                mock.call(424243, signal.SIGTERM),
             ],
         )
 
@@ -226,6 +263,31 @@ class KagemushaStagedResourceGuardTests(unittest.TestCase):
             self.assertEqual(result.report["child_guard_handshake_received"], True)
             self.assertEqual(json.loads(report.read_text())["completed"], True)
             self.assertEqual(report.stat().st_mode & 0o777, 0o600)
+
+    def test_guard_bounds_release_compiler_codegen_memory(self) -> None:
+        program = (
+            "import os; fd=int(os.environ['IROHA_KAGEMUSHA_V4_GUARD_FD']); "
+            "units=os.environ['CARGO_PROFILE_RELEASE_CODEGEN_UNITS']; "
+            "build_units=os.environ["
+            "'CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS']; "
+            "os.write(fd, f'stage=release-codegen-{units}-{build_units}\\n'.encode())"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = guard.run_guarded_command(
+                [sys.executable, "-c", program],
+                report_path=root / "report.json",
+                max_memory_gib=0.25,
+                minimum_headroom_gib=0,
+                sample_interval_seconds=0.02,
+                footprint_interval_seconds=60,
+                enforce_address_space=False,
+                minimum_effective_bytes=1,
+                lock_path=root / "lock",
+            )
+        units = guard.MEMORY_BOUNDED_RELEASE_CODEGEN_UNITS
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.report["last_stage"], f"stage=release-codegen-{units}-{units}")
 
     def test_guard_rejects_unstructured_pipe_write_as_handshake(self) -> None:
         program = (
@@ -360,6 +422,90 @@ os.write(fd, f'stage=residual-worker-{worker.pid}\\n'.encode())
         self.assertEqual(completed.returncode, 2)
         self.assertIn("resource guard refused to start", completed.stderr)
         self.assertNotIn("Traceback", completed.stderr)
+
+    @unittest.skipUnless(
+        sys.platform.startswith(("linux", "darwin")), "POSIX RSS test"
+    )
+    def test_guard_distinguishes_released_from_cross_parity_retained_memory(
+        self,
+    ) -> None:
+        # This is a deliberately small stand-in for the Eq -> Ep generator
+        # handoff. One committed parity buffer fits below the supervisor-only
+        # soft stop; retaining the first owner while committing the second does
+        # not. This catches guards which only observe phase entry/exit markers
+        # while losing the actual allocation ownership.
+        program = r"""
+import gc
+import os
+import sys
+import time
+
+fd = int(os.environ['IROHA_KAGEMUSHA_V4_GUARD_FD'])
+retain_eq = sys.argv[1] == 'retain'
+parity_bytes = 48 * 1024 * 1024
+
+def committed_buffer(fill):
+    value = bytearray(parity_bytes)
+    for offset in range(0, len(value), 4096):
+        value[offset] = fill
+    return value
+
+eq = committed_buffer(0x45)
+os.write(fd, b'stage=synthetic-eq-resident\n')
+time.sleep(0.25)
+if not retain_eq:
+    eq = None
+    gc.collect()
+    os.write(fd, b'stage=synthetic-eq-released\n')
+    time.sleep(0.25)
+
+os.write(fd, b'stage=synthetic-ep-begin\n')
+ep = committed_buffer(0x50)
+os.write(fd, b'stage=synthetic-ep-resident\n')
+time.sleep(0.35)
+if len(ep) != parity_bytes:
+    raise AssertionError('Ep fixture changed')
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            common = {
+                "max_memory_gib": 0.15625,
+                "minimum_headroom_gib": 0,
+                "sample_interval_seconds": 0.02,
+                "footprint_interval_seconds": 60,
+                "enforce_address_space": False,
+                "minimum_effective_bytes": 1,
+            }
+            released = guard.run_guarded_command(
+                [sys.executable, "-c", program, "release"],
+                report_path=root / "released.json",
+                lock_path=root / "released.lock",
+                **common,
+            )
+            retained = guard.run_guarded_command(
+                [sys.executable, "-c", program, "retain"],
+                report_path=root / "retained.json",
+                lock_path=root / "retained.lock",
+                **common,
+            )
+
+        self.assertEqual(released.exit_code, 0)
+        self.assertEqual(released.report["termination_reason"], None)
+        self.assertEqual(
+            released.report["last_stage"], "stage=synthetic-ep-resident"
+        )
+        self.assertEqual(retained.exit_code, guard.GUARD_EXIT_CODE)
+        self.assertEqual(
+            retained.report["termination_reason"], "child_memory_soft_limit"
+        )
+        self.assertIn(
+            retained.report["last_stage"],
+            ("stage=synthetic-ep-begin", "stage=synthetic-ep-resident"),
+        )
+        self.assertGreaterEqual(
+            retained.report["guarded_peak_bytes"],
+            retained.report["soft_stop_bytes"],
+        )
 
     @unittest.skipUnless(sys.platform.startswith(("linux", "darwin")), "POSIX RSS test")
     def test_guard_stops_owned_allocator_at_soft_limit(self) -> None:

@@ -78,10 +78,16 @@ Start from a clean run directory so previous artifacts do not hide new issues. T
 - Use [`scripts/analyze_telemetry.sh`](../../scripts/analyze_telemetry.sh) after test execution to aggregate node metrics into timestamped Norito JSON snapshots.
 - When investigating networking issues, run [`scripts/run_iroha_monitor_demo.py`](../../scripts/run_iroha_monitor_demo.py) to stream Torii events into `monitor_output.norito.json`.
 - Integration test logs are stored under `integration_tests/target/`; compress them with [`scripts/profile_build.sh`](../../scripts/profile_build.sh) for sharing with other teams.
-- Python client logs are written to `pytests/.pytest_cache`. Export them alongside captured telemetry with:
+- Export Python client logs alongside captured telemetry with a dry-run report before filing an issue:
   ```bash
-  ./scripts/report_red_team_failures.py --tests pytests --artifacts out/logs
+  python3 scripts/report_red_team_failures.py \
+    --logs path/to/pytest.log monitor_output.norito.json \
+    --artifact-dir out/logs \
+    --surface "Python client tests" \
+    --mitigation "Inspect the archived logs and captured telemetry" \
+    --dry-run
   ```
+  Omit `--dry-run` in CI after setting `GITHUB_TOKEN` and `GITHUB_REPOSITORY` to file the issue.
 
 Collect a full bundle (integration, Python, telemetry) before opening an issue so the maintainers can replay the Norito traces.
 

@@ -18,6 +18,8 @@ pub mod offline_api;
 pub mod qr;
 /// Canonical Torii route metadata and projection helpers.
 pub mod route_catalog;
+/// Public Torii DTOs for Parliament-governed validation-fee policy state.
+pub mod validation_fee_api;
 
 /// Required WebSocket subprotocol for canonical Norito event and block streams.
 pub const NORITO_V1_WEBSOCKET_SUBPROTOCOL: &str = "iroha-norito-v1";
@@ -158,6 +160,18 @@ pub mod uri {
     pub const OFFLINE_TOP_UP: &str = crate::route_catalog::offline::TOP_UP_PATH;
     /// URI used to submit an offline redemption operation.
     pub const OFFLINE_REDEEM: &str = crate::route_catalog::offline::REDEEM_PATH;
+    /// URI used to fetch a finality-bound current validation-fee registry.
+    pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: &str =
+        crate::route_catalog::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH;
+    /// URI used to list typed validation-fee Parliament proposals.
+    pub const VALIDATION_FEE_PROPOSALS: &str =
+        crate::route_catalog::runtime_governance::VALIDATION_FEE_PROPOSALS_PATH;
+    /// URI template used to fetch one typed validation-fee Parliament proposal.
+    pub const VALIDATION_FEE_PROPOSAL_DETAIL: &str =
+        crate::route_catalog::runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL_PATH;
+    /// URI used to draft one strict native validation-fee Parliament proposal.
+    pub const VALIDATION_FEE_PROPOSAL_DRAFT: &str =
+        crate::route_catalog::runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT_PATH;
     /// URI used to fetch an offline operation by ID.
     pub const OFFLINE_OPERATION: &str = crate::route_catalog::offline::OPERATION_PATH;
     /// Transaction URI is used to handle incoming signed transaction requests.

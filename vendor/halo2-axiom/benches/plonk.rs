@@ -5,19 +5,19 @@ use group::ff::Field;
 use halo2_axiom as halo2_proofs;
 use halo2_proofs::circuit::{Cell, Layouter, SimpleFloorPlanner, Value};
 use halo2_proofs::plonk::*;
-use halo2_proofs::poly::{commitment::ParamsProver, Rotation};
+use halo2_proofs::poly::{Rotation, commitment::ParamsProver};
 use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
 use halo2curves::grumpkin::{Fr, G1Affine};
 use rand_core::OsRng;
 
 use halo2_proofs::{
     poly::{
+        VerificationStrategy,
         ipa::{
             commitment::{IPACommitmentScheme, ParamsIPA},
             multiopen::ProverIPA,
             strategy::SingleStrategy,
         },
-        VerificationStrategy,
     },
     transcript::{TranscriptReadBuffer, TranscriptWriterBuffer},
 };

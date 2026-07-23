@@ -2,19 +2,19 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use super::ChallengeY;
-use super::{construct_intermediate_sets, ChallengeU, ChallengeV};
+use super::{ChallengeU, ChallengeV, construct_intermediate_sets};
 use crate::arithmetic::{
     eval_polynomial, evaluate_vanishing_polynomial, lagrange_interpolate, powers,
 };
 use crate::helpers::SerdeCurveAffine;
-use crate::poly::commitment::Verifier;
+use crate::poly::Error;
 use crate::poly::commitment::MSM;
+use crate::poly::commitment::Verifier;
 use crate::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
 use crate::poly::kzg::msm::DualMSM;
-use crate::poly::kzg::msm::{PreMSM, MSMKZG};
+use crate::poly::kzg::msm::{MSMKZG, PreMSM};
 use crate::poly::kzg::strategy::GuardKZG;
 use crate::poly::query::{CommitmentReference, VerifierQuery};
-use crate::poly::Error;
 use crate::transcript::{EncodedChallenge, TranscriptRead};
 use ff::Field;
 use pairing::{Engine, MultiMillerLoop};

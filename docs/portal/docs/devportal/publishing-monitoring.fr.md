@@ -58,6 +58,8 @@ puissent suivre la sante du portail, Try it, bindings et DNS sans parser le bund
 
 Exemple de config avec les knobs requis et plusieurs bindings:
 
+> `samplePath=/v1/...` → probe `+ /proxy` → `/proxy/v1/...`
+
 ```json
 {
   "portal": {
@@ -73,7 +75,7 @@ Exemple de config avec les knobs requis et plusieurs bindings:
   },
   "tryIt": {
     "proxyUrl": "https://tryit-preview.sora",
-    "samplePath": "/proxy/v1/accounts/<i105-account-id>/assets?limit=1",
+    "samplePath": "/v1/accounts/<i105-account-id>/assets?limit=1",
     "method": "GET",
     "timeoutMs": 7000,
     "token": "${TRYIT_BEARER}",

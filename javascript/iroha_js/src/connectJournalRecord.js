@@ -106,13 +106,17 @@ function asUint8Array(value, name) {
 function normalizeByteArray(value, name) {
   const bytes = Array.from(value);
   const normalized = bytes.map((entry, index) => {
-    const numeric = Number(entry);
-    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+    if (
+      typeof entry !== "number"
+      || !Number.isInteger(entry)
+      || entry < 0
+      || entry > 0xff
+    ) {
       throw new ConnectJournalError(
         `${name ?? "data"}[${index}] must be a byte`,
       );
     }
-    return numeric;
+    return entry;
   });
   return new Uint8Array(normalized);
 }
@@ -173,14 +177,30 @@ function normalizeUint64(value, name) {
 }
 
 function normalizeTimestampMs(value, name) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric < 0) {
+  if (
+    typeof value !== "number"
+    || !Number.isFinite(value)
+    || !Number.isInteger(value)
+    || value < 0
+  ) {
     throw new ConnectJournalError(`${name} must be a non-negative integer`);
   }
-  if (!Number.isSafeInteger(numeric)) {
+  if (!Number.isSafeInteger(value)) {
     throw new ConnectJournalError(`${name} must be a safe integer`);
   }
-  return numeric;
+  return value;
+}
+
+function normalizePositiveInteger(value, name) {
+  if (
+    typeof value !== "number"
+    || !Number.isFinite(value)
+    || !Number.isSafeInteger(value)
+    || value <= 0
+  ) {
+    throw new ConnectJournalError(`${name} must be a positive safe integer`);
+  }
+  return value;
 }
 
 function ensurePayloadHash(bytes) {
@@ -217,8 +237,8 @@ export class ConnectJournalRecord {
   }
 
   static fromCiphertext(options) {
-    const retentionMs = Math.max(Number(options.retentionMs ?? 0), 1);
-    const receivedAtMs = Number(options.receivedAtMs ?? Date.now());
+    const retentionMs = normalizePositiveInteger(options.retentionMs ?? 1, "retentionMs");
+    const receivedAtMs = options.receivedAtMs ?? Date.now();
     const expiresAtMs = receivedAtMs + retentionMs;
     return new ConnectJournalRecord({
       direction: options.direction,

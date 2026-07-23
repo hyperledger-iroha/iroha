@@ -40,7 +40,7 @@ object SubscriptionJsonParser {
             subscriptionId = asString(obj["subscription_id"], "subscription_id"),
             billingTriggerId = asString(obj["billing_trigger_id"], "billing_trigger_id"),
             usageTriggerId = asOptionalString(obj["usage_trigger_id"], "usage_trigger_id"),
-            firstChargeMs = asLong(obj["first_charge_ms"], "first_charge_ms"),
+            firstChargeMs = asNonNegativeLong(obj["first_charge_ms"], "first_charge_ms"),
             txHashHex = asString(obj["tx_hash_hex"], "tx_hash_hex"),
         )
     }
@@ -92,8 +92,8 @@ object SubscriptionJsonParser {
         if (value == null) emptyList() else asArray(value, path)
 
     private fun asString(value: Any?, path: String): String {
-        checkNotNull(value) { "$path is missing" }
-        return if (value is String) value else value.toString()
+        check(value is String) { "$path must be a string" }
+        return value
     }
 
     private fun asOptionalString(value: Any?, path: String): String? {
@@ -111,8 +111,14 @@ object SubscriptionJsonParser {
         return JsonNumbers.asLongAllowingIntegralFloat(value, path)
     }
 
+    private fun asNonNegativeLong(value: Any?, path: String): Long {
+        val parsed = asLong(value, path)
+        check(parsed >= 0) { "$path must be non-negative" }
+        return parsed
+    }
+
     private fun asLongOrDefault(value: Any?, path: String, defaultValue: Long): Long =
-        if (value == null) defaultValue else asLong(value, path)
+        if (value == null) defaultValue else asNonNegativeLong(value, path)
 
     private fun parseSubscriptionRecord(value: Any?, path: String): SubscriptionListResponse.SubscriptionRecord {
         val entry = expectObject(value, path)

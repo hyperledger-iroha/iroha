@@ -54,7 +54,8 @@ public final class SoracloudPrivateUploadedModelJsonParser {
         asBoolean(root.get("has_more"), "soracloud private receipt list.has_more"),
         requiredString(root.get("count_mode"), "soracloud private receipt list.count_mode")
             .toLowerCase(Locale.ROOT),
-        optionalString(root.get("continue_cursor")));
+        optionalString(
+            root.get("continue_cursor"), "soracloud private receipt list.continue_cursor"));
   }
 
   public static SoracloudTxInstruction privateUploadedModelReceiptInstruction(
@@ -147,18 +148,21 @@ public final class SoracloudPrivateUploadedModelJsonParser {
   }
 
   private static String requiredString(final Object value, final String path) {
-    final String string = optionalString(value);
+    final String string = optionalString(value, path);
     if (string == null || string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     return string.trim();
   }
 
-  private static String optionalString(final Object value) {
+  private static String optionalString(final Object value, final String path) {
     if (value == null) {
       return null;
     }
-    return value instanceof String ? (String) value : String.valueOf(value);
+    if (!(value instanceof String)) {
+      throw new IllegalStateException(path + " must be a string");
+    }
+    return (String) value;
   }
 
   private static long asLong(final Object value, final String path) {

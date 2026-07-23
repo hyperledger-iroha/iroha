@@ -1,12 +1,12 @@
-use std::fmt;
+use std::{fmt, marker::PhantomData};
 
 use ff::Field;
 
 use crate::{
     circuit::{
+        AssignedCell, Cell, Layouter, Region, RegionStart, Table, Value,
         layouter::{RegionColumn, RegionLayouter, RegionShape, SyncDeps, TableLayouter},
-        table_layouter::{compute_table_lengths, SimpleTableLayouter},
-        Cell, Layouter, Region, RegionIndex, RegionStart, Table, Value,
+        table_layouter::{SimpleTableLayouter, compute_table_lengths},
     },
     plonk::{
         Advice, Any, Assigned, Assignment, Challenge, Circuit, Column, Error, Fixed, FloorPlanner,
@@ -66,7 +66,6 @@ impl FloorPlanner for V1 {
         let mut plan = V1Plan::new(cs)?;
 
         // First pass: measure the regions within the circuit.
-        println!("First pass: measure the regions within the circuit");
         let mut measure = MeasurementPass::new();
         {
             let pass = &mut measure;
@@ -110,7 +109,6 @@ impl FloorPlanner for V1 {
 
         // Second pass:
         // - Assign the regions.
-        println!("Second pass: assign the regions");
         let mut assign = AssignmentPass::new(&mut plan);
         {
             let pass = &mut assign;
@@ -124,18 +122,13 @@ impl FloorPlanner for V1 {
         for ((fixed_column, fixed_row), (value, advice)) in
             constant_positions().zip(plan.constants.into_iter())
         {
-            plan.cs.assign_fixed(
-                || format!("Constant({:?})", value.evaluate()),
-                fixed_column,
-                fixed_row,
-                || Value::known(value),
-            )?;
+            plan.cs.assign_fixed(fixed_column, fixed_row, value);
             plan.cs.copy(
                 fixed_column.into(),
                 fixed_row,
                 advice.column,
-                *plan.regions[*advice.region_index] + advice.row_offset,
-            )?;
+                advice.row_offset,
+            );
         }
 
         Ok(())
@@ -167,7 +160,7 @@ impl<'p, 'a, F: Field, CS: Assignment<F> + SyncDeps> Layouter<F> for V1Pass<'p, 
 
     fn assign_region<A, AR, N, NR>(&mut self, name: N, assignment: A) -> Result<AR, Error>
     where
-        A: FnMut(Region<'_, F>) -> Result<AR, Error>,
+        A: FnOnce(Region<'_, F>) -> Result<AR, Error>,
         N: Fn() -> NR,
         NR: Into<String>,
     {
@@ -189,15 +182,17 @@ impl<'p, 'a, F: Field, CS: Assignment<F> + SyncDeps> Layouter<F> for V1Pass<'p, 
         }
     }
 
-    fn constrain_instance(
-        &mut self,
-        cell: Cell,
-        instance: Column<Instance>,
-        row: usize,
-    ) -> Result<(), Error> {
+    fn constrain_instance(&mut self, cell: Cell, instance: Column<Instance>, row: usize) {
         match &mut self.0 {
-            Pass::Measurement(_) => Ok(()),
+            Pass::Measurement(_) => {}
             Pass::Assignment(pass) => pass.constrain_instance(cell, instance, row),
+        }
+    }
+
+    fn next_phase(&mut self) {
+        match &mut self.0 {
+            Pass::Measurement(_) => {}
+            Pass::Assignment(pass) => pass.plan.cs.next_phase(),
         }
     }
 
@@ -240,9 +235,9 @@ impl MeasurementPass {
         MeasurementPass { regions: vec![] }
     }
 
-    fn assign_region<F: Field, A, AR>(&mut self, mut assignment: A) -> Result<AR, Error>
+    fn assign_region<F: Field, A, AR>(&mut self, assignment: A) -> Result<AR, Error>
     where
-        A: FnMut(Region<'_, F>) -> Result<AR, Error>,
+        A: FnOnce(Region<'_, F>) -> Result<AR, Error>,
     {
         let region_index = self.regions.len();
 
@@ -274,9 +269,9 @@ impl<'p, 'a, F: Field, CS: Assignment<F> + SyncDeps> AssignmentPass<'p, 'a, F, C
         }
     }
 
-    fn assign_region<A, AR, N, NR>(&mut self, name: N, mut assignment: A) -> Result<AR, Error>
+    fn assign_region<A, AR, N, NR>(&mut self, name: N, assignment: A) -> Result<AR, Error>
     where
-        A: FnMut(Region<'_, F>) -> Result<AR, Error>,
+        A: FnOnce(Region<'_, F>) -> Result<AR, Error>,
         N: Fn() -> NR,
         NR: Into<String>,
     {
@@ -285,7 +280,7 @@ impl<'p, 'a, F: Field, CS: Assignment<F> + SyncDeps> AssignmentPass<'p, 'a, F, C
         self.region_index += 1;
 
         self.plan.cs.enter_region(name);
-        let mut region = V1Region::new(self.plan, region_index.into());
+        let mut region = V1Region::new(self.plan, region_index);
         let result = {
             let region: &mut dyn RegionLayouter<F> = &mut region;
             assignment(region.into())
@@ -334,38 +329,33 @@ impl<'p, 'a, F: Field, CS: Assignment<F> + SyncDeps> AssignmentPass<'p, 'a, F, C
         Ok(result)
     }
 
-    fn constrain_instance(
-        &mut self,
-        cell: Cell,
-        instance: Column<Instance>,
-        row: usize,
-    ) -> Result<(), Error> {
-        self.plan.cs.copy(
-            cell.column,
-            *self.plan.regions[*cell.region_index] + cell.row_offset,
-            instance.into(),
-            row,
-        )
+    fn constrain_instance(&mut self, cell: Cell, instance: Column<Instance>, row: usize) {
+        self.plan
+            .cs
+            .copy(cell.column, cell.row_offset, instance.into(), row);
     }
 }
 
 struct V1Region<'r, 'a, F: Field, CS: Assignment<F> + 'a> {
     plan: &'r mut V1Plan<'a, F, CS>,
-    region_index: RegionIndex,
+    region_start: RegionStart,
 }
 
 impl<'r, 'a, F: Field, CS: Assignment<F> + 'a> fmt::Debug for V1Region<'r, 'a, F, CS> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("V1Region")
             .field("plan", &self.plan)
-            .field("region_index", &self.region_index)
+            .field("region_start", &self.region_start)
             .finish()
     }
 }
 
 impl<'r, 'a, F: Field, CS: Assignment<F> + 'a> V1Region<'r, 'a, F, CS> {
-    fn new(plan: &'r mut V1Plan<'a, F, CS>, region_index: RegionIndex) -> Self {
-        V1Region { plan, region_index }
+    fn new(plan: &'r mut V1Plan<'a, F, CS>, region_index: usize) -> Self {
+        V1Region {
+            region_start: plan.regions[region_index],
+            plan,
+        }
     }
 }
 
@@ -376,43 +366,40 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + SyncDeps> RegionLayouter<F> for V1Reg
         selector: &Selector,
         offset: usize,
     ) -> Result<(), Error> {
-        self.plan.cs.enable_selector(
-            annotation,
-            selector,
-            *self.plan.regions[*self.region_index] + offset,
-        )
+        self.plan
+            .cs
+            .enable_selector(annotation, selector, *self.region_start + offset)
     }
 
     fn assign_advice<'v>(
-        &'v mut self,
-        annotation: &'v (dyn Fn() -> String + 'v),
+        &mut self,
         column: Column<Advice>,
         offset: usize,
-        to: &'v mut (dyn FnMut() -> Value<Assigned<F>> + 'v),
-    ) -> Result<Cell, Error> {
-        self.plan.cs.assign_advice(
-            annotation,
-            column,
-            *self.plan.regions[*self.region_index] + offset,
-            to,
-        )?;
+        to: Value<Assigned<F>>,
+    ) -> AssignedCell<&'v Assigned<F>, F> {
+        let row_offset = *self.region_start + offset;
+        let value = self.plan.cs.assign_advice(column, row_offset, to);
 
-        Ok(Cell {
-            region_index: self.region_index,
-            row_offset: offset,
-            column: column.into(),
-        })
+        AssignedCell {
+            value,
+            cell: Cell {
+                row_offset,
+                column: column.into(),
+            },
+            _marker: PhantomData,
+        }
     }
 
     fn assign_advice_from_constant<'v>(
         &'v mut self,
-        annotation: &'v (dyn Fn() -> String + 'v),
+        _annotation: &'v (dyn Fn() -> String + 'v),
         column: Column<Advice>,
         offset: usize,
         constant: Assigned<F>,
     ) -> Result<Cell, Error> {
-        let advice =
-            self.assign_advice(annotation, column, offset, &mut || Value::known(constant))?;
+        let advice = self
+            .assign_advice(column, offset, Value::known(constant))
+            .cell();
         self.constrain_constant(advice, constant)?;
 
         Ok(advice)
@@ -420,7 +407,7 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + SyncDeps> RegionLayouter<F> for V1Reg
 
     fn assign_advice_from_instance<'v>(
         &mut self,
-        annotation: &'v (dyn Fn() -> String + 'v),
+        _annotation: &'v (dyn Fn() -> String + 'v),
         instance: Column<Instance>,
         row: usize,
         advice: Column<Advice>,
@@ -428,14 +415,13 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + SyncDeps> RegionLayouter<F> for V1Reg
     ) -> Result<(Cell, Value<F>), Error> {
         let value = self.plan.cs.query_instance(instance, row)?;
 
-        let cell = self.assign_advice(annotation, advice, offset, &mut || value.to_field())?;
+        let cell = self
+            .assign_advice(advice, offset, value.map(Assigned::Trivial))
+            .cell();
 
-        self.plan.cs.copy(
-            cell.column,
-            *self.plan.regions[*cell.region_index] + cell.row_offset,
-            instance.into(),
-            row,
-        )?;
+        self.plan
+            .cs
+            .copy(cell.column, cell.row_offset, instance.into(), row);
 
         Ok((cell, value))
     }
@@ -448,25 +434,14 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + SyncDeps> RegionLayouter<F> for V1Reg
         self.plan.cs.query_instance(instance, row)
     }
 
-    fn assign_fixed<'v>(
-        &'v mut self,
-        annotation: &'v (dyn Fn() -> String + 'v),
-        column: Column<Fixed>,
-        offset: usize,
-        to: &'v mut (dyn FnMut() -> Value<Assigned<F>> + 'v),
-    ) -> Result<Cell, Error> {
-        self.plan.cs.assign_fixed(
-            annotation,
-            column,
-            *self.plan.regions[*self.region_index] + offset,
-            to,
-        )?;
+    fn assign_fixed(&mut self, column: Column<Fixed>, offset: usize, to: Assigned<F>) -> Cell {
+        let row_offset = *self.region_start + offset;
+        self.plan.cs.assign_fixed(column, row_offset, to);
 
-        Ok(Cell {
-            region_index: self.region_index,
-            row_offset: offset,
+        Cell {
+            row_offset,
             column: column.into(),
-        })
+        }
     }
 
     fn constrain_constant(&mut self, cell: Cell, constant: Assigned<F>) -> Result<(), Error> {
@@ -482,22 +457,17 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + SyncDeps> RegionLayouter<F> for V1Reg
         self.plan.cs.annotate_column(annotation, column)
     }
 
-    fn constrain_equal(&mut self, left: Cell, right: Cell) -> Result<(), Error> {
-        self.plan.cs.copy(
-            left.column,
-            *self.plan.regions[*left.region_index] + left.row_offset,
-            right.column,
-            *self.plan.regions[*right.region_index] + right.row_offset,
-        )?;
-
-        Ok(())
+    fn constrain_equal(&mut self, left: Cell, right: Cell) {
+        self.plan
+            .cs
+            .copy(left.column, left.row_offset, right.column, right.row_offset);
     }
 
     fn get_challenge(&self, challenge: Challenge) -> Value<F> {
         self.plan.cs.get_challenge(challenge)
     }
 
-    fn next_phase(&mut self) -> Result<(), Error> {
+    fn next_phase(&mut self) {
         self.plan.cs.next_phase()
     }
 }
@@ -507,8 +477,10 @@ mod tests {
     use halo2curves::pasta::vesta;
 
     use crate::{
+        circuit::{Layouter, Value},
         dev::MockProver,
-        plonk::{Advice, Circuit, Column, Error},
+        plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Expression, Selector},
+        poly::Rotation,
     };
 
     #[test]
@@ -541,7 +513,7 @@ mod tests {
                             || "one",
                             config,
                             0,
-                            vesta::Scalar::one(),
+                            vesta::Scalar::from(1),
                         )
                     },
                 )?;
@@ -555,5 +527,107 @@ mod tests {
             MockProver::run(3, &circuit, vec![]).unwrap_err(),
             Error::NotEnoughColumnsForConstants,
         ));
+    }
+
+    #[derive(Clone)]
+    struct RegionSeparationConfig {
+        shared: Column<Advice>,
+        copied: Column<Advice>,
+        first: Selector,
+        second: Selector,
+    }
+
+    struct RegionSeparationCircuit {
+        corrupt_copy: bool,
+    }
+
+    impl Circuit<vesta::Scalar> for RegionSeparationCircuit {
+        type Config = RegionSeparationConfig;
+        type FloorPlanner = super::V1;
+        #[cfg(feature = "circuit-params")]
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            Self {
+                corrupt_copy: self.corrupt_copy,
+            }
+        }
+
+        fn configure(meta: &mut ConstraintSystem<vesta::Scalar>) -> Self::Config {
+            let shared = meta.advice_column();
+            let copied = meta.advice_column();
+            let first = meta.selector();
+            let second = meta.selector();
+            meta.enable_equality(shared);
+            meta.enable_equality(copied);
+
+            meta.create_gate("first region value", |meta| {
+                let q = meta.query_selector(first);
+                let value = meta.query_advice(shared, Rotation::cur());
+                vec![q * (value - Expression::Constant(vesta::Scalar::from(1)))]
+            });
+            meta.create_gate("second region value", |meta| {
+                let q = meta.query_selector(second);
+                let value = meta.query_advice(shared, Rotation::cur());
+                vec![q * (value - Expression::Constant(vesta::Scalar::from(2)))]
+            });
+
+            RegionSeparationConfig {
+                shared,
+                copied,
+                first,
+                second,
+            }
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<vesta::Scalar>,
+        ) -> Result<(), Error> {
+            let first = layouter.assign_region(
+                || "first region",
+                |mut region| {
+                    config.first.enable(&mut region, 0)?;
+                    Ok(region
+                        .assign_advice(config.shared, 0, Value::known(vesta::Scalar::from(1)))
+                        .cell())
+                },
+            )?;
+
+            layouter.assign_region(
+                || "second region",
+                |mut region| {
+                    config.second.enable(&mut region, 0)?;
+                    region.assign_advice(config.shared, 0, Value::known(vesta::Scalar::from(2)));
+                    let copied = region.assign_advice(
+                        config.copied,
+                        0,
+                        Value::known(vesta::Scalar::from(if self.corrupt_copy { 2 } else { 1 })),
+                    );
+                    region.constrain_equal(first, copied.cell());
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn regions_are_disjoint_and_cross_region_equality_is_enforced() {
+        let valid = RegionSeparationCircuit {
+            corrupt_copy: false,
+        };
+        MockProver::run(4, &valid, vec![])
+            .expect("planner should synthesize two regions")
+            .assert_satisfied();
+
+        let corrupt = RegionSeparationCircuit { corrupt_copy: true };
+        assert!(
+            MockProver::run(4, &corrupt, vec![])
+                .expect("planner should synthesize the corrupt circuit")
+                .verify()
+                .is_err(),
+            "cross-region equality must reject a mismatched copy"
+        );
     }
 }

@@ -8559,6 +8559,8 @@ mod tests {
                 status: crate::state::GovernanceProposalStatus::Proposed,
                 pipeline: crate::state::GovernancePipeline::default(),
                 parliament_snapshot: None,
+                finalization_evidence: None,
+                enacted_at_height: None,
             },
         );
 
@@ -8948,6 +8950,8 @@ mod tests {
                         )]),
                     },
                 }),
+                finalization_evidence: None,
+                enacted_at_height: None,
             },
         );
 

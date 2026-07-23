@@ -168,7 +168,7 @@ test("buildPrivateKaigiFeeSpend delegates to native binding with registry vk byt
   }
 });
 
-test("submitTransactionEntrypoint waits for a terminal status", async () => {
+test("submitTransactionEntrypoint waits through Committed until Applied", async () => {
   const client = new ToriiClient("https://example.test");
   const submitted = [];
   const polled = [];
@@ -178,7 +178,11 @@ test("submitTransactionEntrypoint waits for a terminal status", async () => {
   };
   client.getTransactionStatus = async (hashHex, options = {}) => {
     polled.push({ hashHex, options });
-    return { status: polled.length > 1 ? "Committed" : "Pending" };
+    return authoritativePipelineStatus(
+      hashHex,
+      polled.length > 1 ? "Applied" : "Committed",
+      true,
+    );
   };
 
   const result = await submitTransactionEntrypoint(
@@ -194,108 +198,52 @@ test("submitTransactionEntrypoint waits for a terminal status", async () => {
 
   assert.deepEqual(Array.from(submitted[0]), [9, 8, 7]);
   assert.equal(polled[0].hashHex, "ab".repeat(32));
-  assert.equal(polled[0].options.scope, undefined);
+  assert.equal(polled[0].options.scope, "global");
   assert.equal(result.hash, "ab".repeat(32));
-  assert.equal(result.status.status, "Committed");
+  assert.equal(result.status.status.kind, "Applied");
+  assert.equal(polled.length, 2);
 });
 
-test("submitTransactionEntrypoint inherits client transaction status scope", async () => {
-  const seenUrls = [];
-  const hashHex = "ac".repeat(32);
-  const client = new ToriiClient("https://example.test", {
-    transactionStatusScope: "local",
-    fetchImpl: async (url) => {
-      seenUrls.push(url);
-      return createResponse({
-        status: 200,
-        jsonData: {
-          kind: "Transaction",
-          content: { hash: hashHex, status: { kind: "Committed", content: null } },
-        },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  client.submitTransaction = async () => ({ accepted: true });
+test("submitTransactionEntrypoint rejects removed scope before submission", async () => {
+  const client = new ToriiClient("https://example.test");
+  let submissions = 0;
+  client.submitTransaction = async () => {
+    submissions += 1;
+    throw new Error("removed scope must fail before submission");
+  };
 
-  await submitTransactionEntrypoint(client, Buffer.from([1]), {
-    hashHex,
-    waitForCommit: true,
-    pollIntervalMs: 0,
-    timeoutMs: 100,
-  });
-
-  assert.deepEqual(seenUrls, [
-    `https://example.test/v1/pipeline/transactions/status?hash=${hashHex}&scope=local`,
-  ]);
+  await assert.rejects(
+    () =>
+      submitTransactionEntrypoint(client, Buffer.from([1]), {
+        hashHex: "ac".repeat(32),
+        waitForCommit: true,
+        scope: "global",
+      }),
+    /scope is unsupported; finality waits always use global scope/u,
+  );
+  assert.equal(submissions, 0);
 });
 
-test("submitTransactionEntrypoint explicit scope overrides client configuration", async () => {
-  const seenUrls = [];
-  const hashHex = "ad".repeat(32);
-  const client = new ToriiClient("https://example.test", {
-    transactionStatusScope: "local",
-    fetchImpl: async (url) => {
-      seenUrls.push(url);
-      return createResponse({
-        status: 200,
-        jsonData: {
-          kind: "Transaction",
-          content: { hash: hashHex, status: { kind: "Committed", content: null } },
-        },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  client.submitTransaction = async () => ({ accepted: true });
-
-  await submitTransactionEntrypoint(client, Buffer.from([1]), {
-    hashHex,
-    waitForCommit: true,
-    pollIntervalMs: 0,
-    timeoutMs: 100,
+function authoritativePipelineStatus(hashHex, kind, normalized = false) {
+  const status =
+    kind === "Applied"
+      ? { kind, block_height: 7 }
+      : { kind };
+  const payload = {
+    kind: "Transaction",
+    hash: hashHex,
+    status,
+    summary: kind,
     scope: "global",
-  });
-
-  assert.deepEqual(seenUrls, [
-    `https://example.test/v1/pipeline/transactions/status?hash=${hashHex}&scope=global`,
-  ]);
-});
-
-test("submitTransactionEntrypoint null scope inherits client configuration", async () => {
-  const seenUrls = [];
-  const hashHex = "ae".repeat(32);
-  const client = new ToriiClient("https://example.test", {
-    transactionStatusScope: "auto",
-    fetchImpl: async (url) => {
-      seenUrls.push(url);
-      return createResponse({
-        status: 200,
-        jsonData: {
-          kind: "Transaction",
-          content: { hash: hashHex, status: { kind: "Committed", content: null } },
+    resolved_from: kind === "Applied" ? "state" : "cache",
+  };
+  return normalized
+    ? {
+        ...payload,
+        content: {
+          hash: hashHex,
+          status: { ...status, content: null },
         },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  client.submitTransaction = async () => ({ accepted: true });
-
-  await submitTransactionEntrypoint(client, Buffer.from([1]), {
-    hashHex,
-    waitForCommit: true,
-    pollIntervalMs: 0,
-    timeoutMs: 100,
-    scope: null,
-  });
-
-  assert.deepEqual(seenUrls, [
-    `https://example.test/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`,
-  ]);
-});
-
-function createResponse({ status, jsonData = {}, textBody, headers }) {
-  const body =
-    typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {});
-  return new Response(body, { status, headers });
+      }
+    : payload;
 }

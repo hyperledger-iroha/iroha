@@ -87,6 +87,21 @@ final class MultisigSpecBuilderTests: XCTestCase {
         XCTAssertEqual(preview.expiresAtMs, 30_000)
     }
 
+    func testProposalTtlPreviewSaturatesOutOfRangeClock() {
+        let payload = MultisigSpecPayload(
+            signatories: ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB": 1],
+            quorum: 1,
+            transactionTtlMs: 1
+        )
+
+        let preview = payload.previewProposalExpiry(
+            requestedTtlMs: nil,
+            now: Date(timeIntervalSince1970: Double(UInt64.max))
+        )
+
+        XCTAssertEqual(preview.expiresAtMs, UInt64.max)
+    }
+
     func testProposalTtlEnforcementRejectsAboveCap() throws {
         let payload = MultisigSpecPayload(
             signatories: ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB": 1],

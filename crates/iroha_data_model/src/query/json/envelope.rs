@@ -6,7 +6,6 @@
 //! with precise context.
 
 use std::{
-    borrow::ToOwned,
     format,
     num::NonZeroU64,
     str::FromStr,
@@ -1158,11 +1157,11 @@ impl IterableQueryParamsJson {
 
         for (key, value) in map {
             match key.as_str() {
-                "limit" => limit = value.as_u64(),
-                "offset" => offset = value.as_u64(),
-                "fetch_size" => fetch_size = value.as_u64(),
+                "limit" => limit = params_optional_u64(value, "limit")?,
+                "offset" => offset = params_optional_u64(value, "offset")?,
+                "fetch_size" => fetch_size = params_optional_u64(value, "fetch_size")?,
                 "sort_by_metadata_key" => {
-                    sort_by_metadata_key = value.as_str().map(ToOwned::to_owned);
+                    sort_by_metadata_key = params_optional_string(value, "sort_by_metadata_key")?;
                 }
                 "order" => {
                     order = Some(match value.as_str() {
@@ -1178,9 +1177,11 @@ impl IterableQueryParamsJson {
                         }
                     });
                 }
-                "ids_projection" => ids_projection = value.as_bool(),
-                "lane_id" => lane_id = value.as_u64(),
-                "dsid" => dsid = value.as_str().map(ToOwned::to_owned),
+                "ids_projection" => {
+                    ids_projection = params_optional_bool(value, "ids_projection")?;
+                }
+                "lane_id" => lane_id = params_optional_u64(value, "lane_id")?,
+                "dsid" => dsid = params_optional_string(value, "dsid")?,
                 other => {
                     return Err(QueryJsonError::UnknownField {
                         section: "params",
@@ -1243,6 +1244,38 @@ impl IterableQueryParamsJson {
             let fetch_size = FetchSize::new(fetch_size);
             Ok(QueryParams::new(pagination, sorting, fetch_size))
         }
+    }
+}
+
+fn params_optional_u64(value: &Value, field: &'static str) -> Result<Option<u64>, QueryJsonError> {
+    match value {
+        Value::Null => Ok(None),
+        _ => value
+            .as_u64()
+            .map(Some)
+            .ok_or(QueryJsonError::InvalidField("params", field)),
+    }
+}
+
+fn params_optional_bool(
+    value: &Value,
+    field: &'static str,
+) -> Result<Option<bool>, QueryJsonError> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Bool(value) => Ok(Some(*value)),
+        _ => Err(QueryJsonError::InvalidField("params", field)),
+    }
+}
+
+fn params_optional_string(
+    value: &Value,
+    field: &'static str,
+) -> Result<Option<String>, QueryJsonError> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(value) => Ok(Some(value.clone())),
+        _ => Err(QueryJsonError::InvalidField("params", field)),
     }
 }
 
@@ -1781,6 +1814,60 @@ mod tests {
                 field: "foo".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn iterable_params_absent_optional_fields_remain_optional() {
+        let parsed = IterableQueryParamsJson::from_value(&norito::json!({}))
+            .expect("empty params object should be accepted");
+
+        assert_eq!(parsed, IterableQueryParamsJson::default());
+    }
+
+    #[test]
+    fn iterable_params_null_optional_fields_equal_default() {
+        let value = norito::json!({
+            "limit": null,
+            "offset": null,
+            "fetch_size": null,
+            "sort_by_metadata_key": null,
+            "ids_projection": null,
+            "lane_id": null,
+            "dsid": null
+        });
+        let parsed = IterableQueryParamsJson::from_value(&value)
+            .expect("null optional params should be accepted as absent");
+
+        assert_eq!(parsed, IterableQueryParamsJson::default());
+    }
+
+    #[test]
+    fn iterable_params_reject_present_invalid_optional_fields() {
+        let invalid_values = [
+            ("limit", Value::from(-1_i64)),
+            ("limit", Value::from(1.5_f64)),
+            ("limit", Value::from("ten")),
+            ("offset", Value::from(-1_i64)),
+            ("offset", Value::from(1.5_f64)),
+            ("offset", Value::from(false)),
+            ("fetch_size", Value::from(-1_i64)),
+            ("fetch_size", Value::from(1.5_f64)),
+            ("fetch_size", Value::from("fifty")),
+            ("sort_by_metadata_key", Value::from(false)),
+            ("ids_projection", Value::from(1_u64)),
+            ("lane_id", Value::from(-1_i64)),
+            ("lane_id", Value::from(1.5_f64)),
+            ("lane_id", Value::from("zero")),
+            ("dsid", Value::from(false)),
+        ];
+
+        for (field, value) in invalid_values {
+            let mut map = Map::new();
+            map.insert(field.to_owned(), value);
+            let error = IterableQueryParamsJson::from_value(&Value::Object(map))
+                .expect_err("present invalid optional field must be rejected");
+            assert_eq!(error, QueryJsonError::InvalidField("params", field));
+        }
     }
 
     #[test]

@@ -90,6 +90,8 @@ fn referendum_open_and_close_by_height() {
                 &stx1.gov,
             ),
             parliament_snapshot: None,
+            finalization_evidence: None,
+            enacted_at_height: None,
         };
         stx1.world.governance_proposals_mut().insert(pid, proposal);
         let mut approvals = GovernanceStageApprovals::default();

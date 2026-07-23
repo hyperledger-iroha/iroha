@@ -1,23 +1,39 @@
 package org.hyperledger.iroha.android.address;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.client.IdentifierJsonParser;
+import org.hyperledger.iroha.android.client.IdentifierNormalization;
+import org.hyperledger.iroha.android.client.IdentifierPolicySummary;
+import org.hyperledger.iroha.android.client.RamLfeJsonParser;
+import org.hyperledger.iroha.android.client.RamLfeProgramPolicySummary;
+import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.testing.SimpleJson;
+import org.hyperledger.iroha.android.tx.MultisigSignature;
 
 public final class AccountAddressTests {
 
   private static final String FIXTURE_RELATIVE = "fixtures/account/address_vectors.json";
+  private static final String ED25519_ADMISSION_FIXTURE_RELATIVE =
+      "fixtures/crypto/ed25519_public_key_admission_v1.json";
+  private static final String VALID_ED25519_PUBLIC_KEY_HEX =
+      "3B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29";
+  private static final String VALID_ED25519_PUBLIC_KEY_LITERAL =
+      "ed0120" + VALID_ED25519_PUBLIC_KEY_HEX;
 
   private AccountAddressTests() {}
 
   public static void main(final String[] args) throws Exception {
     AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
+    strictEd25519AdmissionFixtureSuite();
     complianceFixtureSuite();
     goldenVectorsRoundTrip();
     mixedI105LiteralRoundTrip();
@@ -36,7 +52,7 @@ public final class AccountAddressTests {
   }
 
   private static void complianceFixtureSuite() throws Exception {
-    final Path fixturePath = resolveFixturePath();
+    final Path fixturePath = resolveFixturePath(FIXTURE_RELATIVE);
     final String json = Files.readString(fixturePath, StandardCharsets.UTF_8);
     final Map<String, Object> root = asMap(SimpleJson.parse(json), "root", "<root>");
 
@@ -56,6 +72,355 @@ public final class AccountAddressTests {
     for (Object entry : negatives) {
       validateNegativeCase(asMap(entry, "cases.negative[]", "<negative>"), defaultPrefix);
     }
+  }
+
+  private static void strictEd25519AdmissionFixtureSuite() throws Exception {
+    final Path fixturePath = resolveFixturePath(ED25519_ADMISSION_FIXTURE_RELATIVE);
+    final String json = new String(Files.readAllBytes(fixturePath), StandardCharsets.UTF_8);
+    final Map<String, Object> root = asMap(SimpleJson.parse(json), "root", "<root>");
+    assert asNumber(root.get("schema_version"), "schema_version", "<root>").intValue() == 1;
+
+    final List<?> vectors = asList(root.get("vectors"), "vectors", "<root>");
+    for (final Object entry : vectors) {
+      validateStrictEd25519AdmissionVector(asMap(entry, "vectors[]", "<vector>"));
+    }
+    validateOutputOpeningPublicKeyJsonTypes();
+
+    final byte[] secpKey = new byte[33];
+    for (int i = 0; i < secpKey.length; i++) {
+      secpKey[i] = (byte) (i + 1);
+    }
+    final String secpLiteral = PublicKeyCodec.encodePublicKeyMultihash(0x04, secpKey);
+    final PublicKeyCodec.PublicKeyPayload decodedSecp =
+        PublicKeyCodec.decodePublicKeyLiteral("secp256k1:" + secpLiteral);
+    assert decodedSecp != null && decodedSecp.curveId() == 0x04
+        : "canonical secp256k1 prefix must match its multihash";
+    assert PublicKeyCodec.decodePublicKeyLiteral("ed25519:" + secpLiteral) == null
+        : "mismatched canonical prefix must be rejected";
+  }
+
+  private static void validateStrictEd25519AdmissionVector(final Map<String, Object> vector)
+      throws Exception {
+    final String name = asString(vector.get("name"), "name", "<vector>");
+    final boolean valid = asBoolean(vector.get("valid"), "valid", name);
+    final byte[] key = decodeHex(asString(vector.get("key_hex"), "key_hex", name));
+    final byte[] canonical =
+        decodeHex(asString(vector.get("single_canonical_hex"), "single_canonical_hex", name));
+    final String i105 = asString(vector.get("single_i105"), "single_i105", name);
+
+    assert Ed25519PublicKeyAdmission.isValid(key) == valid : name + ": helper result mismatch";
+
+    final String literal = rawEd25519Literal(key);
+    final byte[] compact = new byte[1 + key.length];
+    System.arraycopy(key, 0, compact, 1, key.length);
+    final PublicKeyCodec.PublicKeyPayload decodedLiteral =
+        PublicKeyCodec.decodePublicKeyLiteral(literal);
+    final PublicKeyCodec.PublicKeyPayload decodedCompact =
+        PublicKeyCodec.decodeCompactPublicKeyPayload(compact);
+
+    if (valid) {
+      assert literal.equals(PublicKeyCodec.encodePublicKeyMultihash(0x01, key))
+          : name + ": multihash encoding mismatch";
+      assert Arrays.equals(compact, PublicKeyCodec.compactPublicKeyPayload(0x01, key))
+          : name + ": compact encoding mismatch";
+      assert PublicKeyCodec.decodePublicKeyLiteral("ed25519:" + literal) != null
+          : name + ": canonical algorithm prefix rejected";
+      assert PublicKeyCodec.decodePublicKeyLiteral("garbage:" + literal) == null
+          : name + ": unknown algorithm prefix accepted";
+      assert PublicKeyCodec.decodePublicKeyLiteral("secp256k1:" + literal) == null
+          : name + ": mismatched algorithm prefix accepted";
+      assert PublicKeyCodec.decodePublicKeyLiteral("ed25519:ed25519:" + literal) == null
+          : name + ": multiple algorithm prefixes accepted";
+      assert PublicKeyCodec.decodePublicKeyLiteral("ED25519:" + literal) == null
+          : name + ": noncanonical algorithm prefix accepted";
+      assert PublicKeyCodec.decodePublicKeyLiteral(" " + literal) == null
+          : name + ": leading whitespace accepted";
+      assert PublicKeyCodec.decodePublicKeyLiteral(literal + " ") == null
+          : name + ": trailing whitespace accepted";
+      assert PublicKeyCodec.decodePublicKeyLiteral("\u00A0" + literal) == null
+          : name + ": leading Unicode whitespace accepted";
+      assert Arrays.equals(
+          compact,
+          MultisigSignature.fromCurveId(0x01, key, new byte[64]).publicKeyNoritoPayload())
+          : name + ": multisig signature public-key encoding mismatch";
+      assert decodedLiteral != null : name + ": valid multihash key rejected";
+      assert decodedCompact != null : name + ": valid compact key rejected";
+      assert Arrays.equals(key, decodedLiteral.keyBytes()) : name + ": multihash key mismatch";
+      assert Arrays.equals(key, decodedCompact.keyBytes()) : name + ": compact key mismatch";
+      assert Arrays.equals(
+          canonical, AccountAddress.fromAccount(key, "ed25519").canonicalBytes());
+      assert Arrays.equals(canonical, AccountAddress.fromCanonicalBytes(canonical).canonicalBytes());
+      assert Arrays.equals(
+          canonical,
+          AccountAddress.fromI105(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT)
+              .canonicalBytes());
+      AccountAddress.parseEncodedIgnoringCurveSupport(
+          i105, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      AccountAddress.fromMultisigPolicy(multisigPolicy(key));
+      AccountAddress.fromCanonicalBytes(multisigCanonical(key));
+      identifierPolicy(literal);
+      ramLfePolicy(literal);
+      IdentifierJsonParser.parsePolicyList(identifierPolicyJson(literal));
+      RamLfeJsonParser.parsePolicyList(ramLfePolicyJson(literal));
+    } else {
+      expectInvalidPublicKeyEncoding(
+          name, () -> PublicKeyCodec.encodePublicKeyMultihash(0x01, key));
+      expectInvalidPublicKeyEncoding(
+          name, () -> PublicKeyCodec.compactPublicKeyPayload(0x01, key));
+      expectInvalidPublicKeyEncoding(
+          name, () -> MultisigSignature.fromCurveId(0x01, key, new byte[64]));
+      assert decodedLiteral == null : name + ": invalid multihash key accepted";
+      assert decodedCompact == null : name + ": invalid compact key accepted";
+      expectInvalidPublicKey(name, () -> AccountAddress.fromAccount(key, "ed25519"));
+      expectInvalidPublicKey(name, () -> AccountAddress.fromCanonicalBytes(canonical));
+      expectInvalidPublicKey(
+          name,
+          () -> AccountAddress.fromI105(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT));
+      expectInvalidPublicKey(
+          name,
+          () ->
+              AccountAddress.parseEncodedIgnoringCurveSupport(
+                  i105, AccountAddress.DEFAULT_I105_DISCRIMINANT));
+      expectInvalidPublicKey(name, () -> AccountAddress.fromMultisigPolicy(multisigPolicy(key)));
+      expectInvalidPublicKey(name, () -> AccountAddress.fromCanonicalBytes(multisigCanonical(key)));
+      expectInvalidPublicKeyLiteral(name, () -> identifierPolicy(literal));
+      expectInvalidPublicKeyLiteral(name, () -> ramLfePolicy(literal));
+      expectInvalidPublicKeyLiteral(
+          name, () -> identifierPolicy(VALID_ED25519_PUBLIC_KEY_LITERAL, literal));
+      expectInvalidPublicKeyLiteral(
+          name, () -> ramLfePolicy(VALID_ED25519_PUBLIC_KEY_LITERAL, literal));
+      expectInvalidPolicyJson(
+          name, () -> IdentifierJsonParser.parsePolicyList(identifierPolicyJson(literal)));
+      expectInvalidPolicyJson(
+          name,
+          () ->
+              IdentifierJsonParser.parsePolicyList(
+                  identifierPolicyJson(VALID_ED25519_PUBLIC_KEY_LITERAL, literal)));
+      expectInvalidPolicyJson(
+          name, () -> RamLfeJsonParser.parsePolicyList(ramLfePolicyJson(literal)));
+      expectInvalidPolicyJson(
+          name,
+          () ->
+              RamLfeJsonParser.parsePolicyList(
+                  ramLfePolicyJson(VALID_ED25519_PUBLIC_KEY_LITERAL, literal)));
+    }
+  }
+
+  private static AccountAddress.MultisigPolicyPayload multisigPolicy(final byte[] publicKey) {
+    return AccountAddress.MultisigPolicyPayload.of(
+        1,
+        1,
+        Collections.singletonList(AccountAddress.MultisigMemberPayload.of(0x01, 1, publicKey)));
+  }
+
+  private static byte[] multisigCanonical(final byte[] publicKey) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(0x0A);
+    out.write(0x01);
+    out.write(0x01);
+    out.write(0x00);
+    out.write(0x01);
+    out.write(0x00);
+    out.write(0x01);
+    out.write(0x01);
+    out.write(0x00);
+    out.write(0x01);
+    out.write((publicKey.length >>> 8) & 0xFF);
+    out.write(publicKey.length & 0xFF);
+    out.write(publicKey, 0, publicKey.length);
+    return out.toByteArray();
+  }
+
+  private static IdentifierPolicySummary identifierPolicy(final String publicKeyLiteral) {
+    return identifierPolicy(publicKeyLiteral, publicKeyLiteral);
+  }
+
+  private static IdentifierPolicySummary identifierPolicy(
+      final String resolverPublicKeyLiteral, final String outputOpeningPublicKeyLiteral) {
+    return new IdentifierPolicySummary(
+        "key-admission#fixture",
+        "key_admission_fixture",
+        "owner",
+        true,
+        IdentifierNormalization.EXACT,
+        resolverPublicKeyLiteral,
+        outputOpeningPublicKeyLiteral,
+        "signed",
+        null,
+        null,
+        null,
+        null,
+        null);
+  }
+
+  private static RamLfeProgramPolicySummary ramLfePolicy(final String publicKeyLiteral) {
+    return ramLfePolicy(publicKeyLiteral, publicKeyLiteral);
+  }
+
+  private static RamLfeProgramPolicySummary ramLfePolicy(
+      final String resolverPublicKeyLiteral, final String outputOpeningPublicKeyLiteral) {
+    return new RamLfeProgramPolicySummary(
+        "key_admission_fixture",
+        "owner",
+        true,
+        resolverPublicKeyLiteral,
+        outputOpeningPublicKeyLiteral,
+        "signed",
+        "signed",
+        null,
+        null,
+        null,
+        null,
+        null);
+  }
+
+  private static byte[] identifierPolicyJson(final String publicKeyLiteral) {
+    return identifierPolicyJson(publicKeyLiteral, publicKeyLiteral);
+  }
+
+  private static byte[] identifierPolicyJson(
+      final String resolverPublicKeyLiteral, final String outputOpeningPublicKeyLiteral) {
+    return identifierPolicyJsonWithOutputValue(
+        resolverPublicKeyLiteral, "\"" + outputOpeningPublicKeyLiteral + "\"");
+  }
+
+  private static byte[] identifierPolicyJsonWithOutputValue(
+      final String resolverPublicKeyLiteral, final String outputOpeningPublicKeyJson) {
+    return ("{\"items\":[{\"policy_id\":\"key-admission#fixture\",\"owner\":\"owner\","
+            + "\"active\":true,\"normalization\":\"exact\",\"resolver_public_key\":\""
+            + resolverPublicKeyLiteral
+            + "\",\"output_opening_public_key\":"
+            + outputOpeningPublicKeyJson
+            + ",\"backend\":\"signed\"}]}")
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] ramLfePolicyJson(final String publicKeyLiteral) {
+    return ramLfePolicyJson(publicKeyLiteral, publicKeyLiteral);
+  }
+
+  private static byte[] ramLfePolicyJson(
+      final String resolverPublicKeyLiteral, final String outputOpeningPublicKeyLiteral) {
+    return ramLfePolicyJsonWithOutputValue(
+        resolverPublicKeyLiteral, "\"" + outputOpeningPublicKeyLiteral + "\"");
+  }
+
+  private static byte[] ramLfePolicyJsonWithOutputValue(
+      final String resolverPublicKeyLiteral, final String outputOpeningPublicKeyJson) {
+    return ("{\"items\":[{\"program_id\":\"key_admission_fixture\",\"owner\":\"owner\","
+            + "\"active\":true,\"resolver_public_key\":\""
+            + resolverPublicKeyLiteral
+            + "\",\"output_opening_public_key\":"
+            + outputOpeningPublicKeyJson
+            + ",\"backend\":\"signed\",\"verification_mode\":\"signed\"}]}")
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static void validateOutputOpeningPublicKeyJsonTypes() throws Exception {
+    final String identifierWithoutOutput =
+        new String(
+                identifierPolicyJson(VALID_ED25519_PUBLIC_KEY_LITERAL), StandardCharsets.UTF_8)
+            .replace(
+                ",\"output_opening_public_key\":\""
+                    + VALID_ED25519_PUBLIC_KEY_LITERAL
+                    + "\"",
+                "");
+    final IdentifierPolicySummary identifierPolicy =
+        IdentifierJsonParser.parsePolicyList(
+                identifierWithoutOutput.getBytes(StandardCharsets.UTF_8))
+            .items()
+            .get(0);
+    assert VALID_ED25519_PUBLIC_KEY_LITERAL.equals(identifierPolicy.outputOpeningPublicKey())
+        : "missing identifier output-opening key must inherit the resolver key";
+
+    final String ramLfeWithoutOutput =
+        new String(ramLfePolicyJson(VALID_ED25519_PUBLIC_KEY_LITERAL), StandardCharsets.UTF_8)
+            .replace(
+                ",\"output_opening_public_key\":\""
+                    + VALID_ED25519_PUBLIC_KEY_LITERAL
+                    + "\"",
+                "");
+    final RamLfeProgramPolicySummary ramLfePolicy =
+        RamLfeJsonParser.parsePolicyList(ramLfeWithoutOutput.getBytes(StandardCharsets.UTF_8))
+            .items()
+            .get(0);
+    assert VALID_ED25519_PUBLIC_KEY_LITERAL.equals(ramLfePolicy.outputOpeningPublicKey())
+        : "missing RAM-LFE output-opening key must inherit the resolver key";
+
+    for (final String invalidJsonValue : new String[] {"null", "true"}) {
+      expectInvalidOutputOpeningPolicyJson(
+          "identifier output opening " + invalidJsonValue,
+          () ->
+              IdentifierJsonParser.parsePolicyList(
+                  identifierPolicyJsonWithOutputValue(
+                      VALID_ED25519_PUBLIC_KEY_LITERAL, invalidJsonValue)));
+      expectInvalidOutputOpeningPolicyJson(
+          "RAM-LFE output opening " + invalidJsonValue,
+          () ->
+              RamLfeJsonParser.parsePolicyList(
+                  ramLfePolicyJsonWithOutputValue(
+                      VALID_ED25519_PUBLIC_KEY_LITERAL, invalidJsonValue)));
+    }
+  }
+
+  private static void expectInvalidPublicKey(final String name, final CheckedRunnable action)
+      throws Exception {
+    try {
+      action.run();
+    } catch (final AccountAddress.AccountAddressException ex) {
+      assert ex.getCode() == AccountAddress.AccountAddressErrorCode.INVALID_PUBLIC_KEY
+          : name + ": unexpected error " + ex.getCode();
+      return;
+    }
+    throw new AssertionError(name + ": invalid Ed25519 public key was accepted");
+  }
+
+  private static void expectInvalidPublicKeyEncoding(
+      final String name, final CheckedRunnable action) throws Exception {
+    try {
+      action.run();
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("invalid Ed25519 public key")
+          : name + ": unexpected encoding error " + ex.getMessage();
+      return;
+    }
+    throw new AssertionError(name + ": invalid Ed25519 public key was encoded");
+  }
+
+  private static void expectInvalidPublicKeyLiteral(
+      final String name, final CheckedRunnable action) throws Exception {
+    try {
+      action.run();
+    } catch (final IllegalArgumentException ex) {
+      assert ex.getMessage().contains("not a valid public key literal")
+          : name + ": unexpected policy error " + ex.getMessage();
+      return;
+    }
+    throw new AssertionError(name + ": invalid Ed25519 policy key was accepted");
+  }
+
+  private static void expectInvalidPolicyJson(
+      final String name, final CheckedRunnable action) throws Exception {
+    try {
+      action.run();
+    } catch (final IllegalStateException ex) {
+      assert ex.getMessage().contains("must be a valid public key literal")
+          : name + ": unexpected policy JSON error " + ex.getMessage();
+      return;
+    }
+    throw new AssertionError(name + ": invalid Ed25519 policy JSON key was accepted");
+  }
+
+  private static void expectInvalidOutputOpeningPolicyJson(
+      final String name, final CheckedRunnable action) throws Exception {
+    try {
+      action.run();
+    } catch (final IllegalStateException ex) {
+      assert ex.getMessage().contains("output_opening_public_key")
+          : name + ": unexpected policy JSON error " + ex.getMessage();
+      return;
+    }
+    throw new AssertionError(name + ": invalid output-opening policy JSON key was accepted");
   }
 
   private static void validatePositiveCase(final Map<String, Object> vector) throws Exception {
@@ -121,15 +486,15 @@ public final class AccountAddressTests {
   }
 
   private static void goldenVectorsRoundTrip() throws Exception {
-    final byte[] key = new byte[32];
+    final byte[] key = validEd25519Key();
     final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
 
     final String canonical = address.canonicalHex();
     final String i105 = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
 
-    assert canonical.equals("0x020001200000000000000000000000000000000000000000000000000000000000000000")
+    assert canonical.equals("0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29")
         : "canonical encoding mismatch";
-    assert i105.equals("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6")
+    assert i105.equals("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
         : "i105 encoding mismatch";
 
     final AccountAddress.ParseResult i105Parsed =
@@ -152,8 +517,7 @@ public final class AccountAddressTests {
   }
 
   private static void i105PrefixMismatchThrows() throws Exception {
-    final byte[] key = new byte[32];
-    Arrays.fill(key, (byte) 1);
+    final byte[] key = validEd25519Key();
     final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final String i105 = address.toI105(5);
     boolean threw = false;
@@ -166,8 +530,7 @@ public final class AccountAddressTests {
   }
 
   private static void i105RejectsFullwidthSentinel() throws Exception {
-    final byte[] key = new byte[32];
-    Arrays.fill(key, (byte) 0x31);
+    final byte[] key = validEd25519Key();
     final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final String canonical = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final String noncanonical = canonical.replaceFirst("sora", "ｓｏｒａ");
@@ -204,10 +567,7 @@ public final class AccountAddressTests {
   }
 
   private static void singleKeyPayloadExtraction() throws Exception {
-    final byte[] key = new byte[32];
-    for (int i = 0; i < key.length; i++) {
-      key[i] = (byte) i;
-    }
+    final byte[] key = validEd25519Key();
     final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final java.util.Optional<AccountAddress.SingleKeyPayload> payload = address.singleKeyPayload();
     assert payload.isPresent() : "expected single-key payload";
@@ -217,7 +577,7 @@ public final class AccountAddressTests {
   }
 
   private static void i105RejectsInvalidCharacters() {
-    final byte[] key = new byte[32];
+    final byte[] key = validEd25519Key();
     final String literal;
     try {
       literal =
@@ -356,8 +716,8 @@ public final class AccountAddressTests {
     AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
   }
 
-  private static Path resolveFixturePath() {
-    final Path relative = Path.of(FIXTURE_RELATIVE);
+  private static Path resolveFixturePath(final String fixtureRelative) {
+    final Path relative = Path.of(fixtureRelative);
     if (Files.exists(relative)) {
       return relative;
     }
@@ -368,7 +728,7 @@ public final class AccountAddressTests {
         return candidate.normalize();
       }
     }
-    throw new IllegalStateException("Unable to locate fixture at or above: " + FIXTURE_RELATIVE);
+    throw new IllegalStateException("Unable to locate fixture at or above: " + fixtureRelative);
   }
 
   private static Map<String, Object> asMap(final Object value, final String field, final String context) {
@@ -392,6 +752,37 @@ public final class AccountAddressTests {
       throw new IllegalStateException(context + ": expected string for " + field);
     }
     return str;
+  }
+
+  private static boolean asBoolean(final Object value, final String field, final String context) {
+    if (!(value instanceof Boolean)) {
+      throw new IllegalStateException(context + ": expected boolean for " + field);
+    }
+    return ((Boolean) value).booleanValue();
+  }
+
+  private static byte[] validEd25519Key() {
+    return decodeHex(VALID_ED25519_PUBLIC_KEY_HEX);
+  }
+
+  private static byte[] decodeHex(final String hex) {
+    if ((hex.length() & 1) != 0) {
+      throw new IllegalArgumentException("hex string must have even length");
+    }
+    final byte[] bytes = new byte[hex.length() / 2];
+    for (int i = 0; i < bytes.length; i++) {
+      bytes[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+    }
+    return bytes;
+  }
+
+  private static String rawEd25519Literal(final byte[] key) {
+    final StringBuilder result = new StringBuilder(6 + key.length * 2);
+    result.append("ed01").append(String.format("%02x", key.length));
+    for (final byte value : key) {
+      result.append(String.format("%02X", value & 0xff));
+    }
+    return result.toString();
   }
 
   private static Number asNumber(final Object value, final String field, final String context) {

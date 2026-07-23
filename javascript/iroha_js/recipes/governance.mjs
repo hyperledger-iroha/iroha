@@ -11,7 +11,7 @@
  *
  * Every transaction is quoted before signing. By default the script only
  * prints the resulting hashes. Set
- *   GOV_SUBMIT=1 TORII_URL=http://localhost:8080 AUTHORITY=sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB PRIVATE_KEY_HEX=...
+ *   GOV_SUBMIT=1 TORII_URL=http://localhost:8080 AUTHORITY=sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV PRIVATE_KEY_HEX=...
  * to submit them to a Torii node (requires the account to hold the relevant permissions).
  */
 import { Buffer } from "node:buffer";
@@ -32,11 +32,14 @@ const SHOULD_FETCH = process.env.GOV_FETCH === "1";
 const CHAIN_ID = process.env.CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
 const AUTHORITY =
   process.env.AUTHORITY ??
-  "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+  "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const PRIVATE_KEY =
   process.env.PRIVATE_KEY_HEX != null
     ? Buffer.from(process.env.PRIVATE_KEY_HEX, "hex")
-    : Buffer.alloc(32, 0x11);
+    : Buffer.from(
+        "CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53",
+        "hex",
+      );
 const REQUESTED_FEE_PAYMENT = process.env.FEE_SPONSOR_PROGRAM
   ? {
       payer: "sponsor",

@@ -1,11 +1,11 @@
-import type {
-  IvmProvedContractCallInput,
-  IvmValidationFeePolicyIntent,
-  ValidationFeeIvmProvedContractCallInput,
-} from "../../../index.js";
+import type { IvmProvedContractCallInput } from "../../../index.js";
 
 const privateKey = new Uint8Array(32);
-const validationFeePolicy = {} as IvmValidationFeePolicyIntent;
+const feePayment = {
+  payer: "authority" as const,
+  chargeLimits: [],
+  gasLimit: 5_000,
+};
 
 const camel: IvmProvedContractCallInput = {
   chainId: "test-chain",
@@ -13,7 +13,7 @@ const camel: IvmProvedContractCallInput = {
   privateKey,
   vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
   contractAlias: "router::dex.universal",
-  gasLimit: 5_000,
+  feePayment,
   expectedCodeHashHex: "11".repeat(32),
   expectedArtifactSha256Hex: "22".repeat(32),
 };
@@ -24,19 +24,13 @@ const snake: IvmProvedContractCallInput = {
   private_key: privateKey,
   vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
   contract_address: "tairac1contract",
-  gas_limit: 5_000,
+  fee_payment: feePayment,
   expected_code_hash_hex: "11".repeat(32),
   expected_artifact_sha256_hex: "22".repeat(32),
 };
 
-const strict: ValidationFeeIvmProvedContractCallInput = {
-  ...camel,
-  validationFeePolicy,
-};
-
 void camel;
 void snake;
-void strict;
 
 // @ts-expect-error camel/snake aliases are mutually exclusive.
 const duplicateChain: IvmProvedContractCallInput = {
@@ -57,7 +51,7 @@ const missingArtifactHash: IvmProvedContractCallInput = {
   privateKey,
   vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
   contractAlias: "router::dex.universal",
-  gasLimit: 5_000,
+  feePayment,
   expectedCodeHashHex: "11".repeat(32),
 };
 

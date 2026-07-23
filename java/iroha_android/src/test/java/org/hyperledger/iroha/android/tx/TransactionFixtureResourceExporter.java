@@ -494,7 +494,7 @@ public final class TransactionFixtureResourceExporter {
     private final String authority;
     private final long creationTimeMs;
     private final Long timeToLiveMs;
-    private final Integer nonce;
+    private final Long nonce;
     private final byte[] payloadBytes;
     private final byte[] signedBytes;
     private final String payloadBase64;
@@ -508,7 +508,7 @@ public final class TransactionFixtureResourceExporter {
         final String authority,
         final long creationTimeMs,
         final Long timeToLiveMs,
-        final Integer nonce,
+        final Long nonce,
         final byte[] payloadBytes,
         final byte[] signedBytes,
         final String payloadBase64,

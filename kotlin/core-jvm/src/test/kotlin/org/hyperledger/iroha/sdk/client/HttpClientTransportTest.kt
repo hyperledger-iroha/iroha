@@ -38,16 +38,20 @@ import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class HttpClientTransportTest {
+    private val validEd25519PublicKeyHex = TestEd25519Keys.publicKeyHex(0x22)
+    private val ed25519IdentityKeyHex = "01" + "00".repeat(31)
+
     private fun testFeePayment(gasLimit: Long? = null): FeePaymentIntent =
         FeePaymentIntent.authority(emptyList(), gasLimit)
 
     private fun testMultisigAccountId(): String =
-        AccountAddress.fromAccount(ByteArray(32) { 0x37.toByte() }, "ed25519")
+        AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x37), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
     private fun noncanonicalStandardBase64PadBitAlias(encoded: String): String {
@@ -206,6 +210,12 @@ class HttpClientTransportTest {
             receipt.attestation,
         )
         assertFalse(tamperedReceipt.verifyAttestation(policy))
+
+        assertFailsWith<IllegalArgumentException> {
+            receipt.verifyAttestation(
+                sampleIdentifierVerifierPolicy("ed25519:ed0120${"11".repeat(32)}"),
+            )
+        }
 
         assertFailsWith<IllegalArgumentException> {
             IdentifierResolutionReceipt(
@@ -446,7 +456,7 @@ class HttpClientTransportTest {
                       "owner": "sorau1NpOwner",
                       "active": true,
                       "normalization": "phone_e164",
-                      "resolver_public_key": "ed25519:resolver-key",
+                      "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                       "backend": "bfv-affine-sha3-256-v1",
                       "input_encryption": "bfv-v1",
                       "input_encryption_public_parameters": "ABCD",
@@ -477,6 +487,7 @@ class HttpClientTransportTest {
             """.trimIndent()
 
         val response = IdentifierJsonParser.parsePolicyList(canonical.toByteArray(StandardCharsets.UTF_8))
+        assertEquals(response.items.first().resolverPublicKey, response.items.first().outputOpeningPublicKey)
         val proofVerifier = assertNotNull(response.items.first().proofVerifier)
         assertEquals("u64-v1", response.items.first().inputEncryptionPublicParametersDecoded?.noritoLengthEncoding)
         assertEquals("halo2-ipa", proofVerifier.proofBackend)
@@ -626,16 +637,18 @@ class HttpClientTransportTest {
 
         for (negative in listOfMaps(fixture, "negative_cases")) {
             val mutation = string(negative, "mutation")
-            val mutatedPolicy = when (mutation) {
-                "policy.resolver_public_key" -> identifierPolicyFromReceiptFixture(
-                    obj(fixture, "policy"),
-                    resolverPublicKeyOverride = string(negative, "value"),
-                )
-                "policy.policy_id" -> identifierPolicyFromReceiptFixture(
-                    obj(fixture, "policy"),
-                    policyIdOverride = string(negative, "value"),
-                )
-                else -> policy
+            val mutatedPolicy = {
+                when (mutation) {
+                    "policy.resolver_public_key" -> identifierPolicyFromReceiptFixture(
+                        obj(fixture, "policy"),
+                        resolverPublicKeyOverride = string(negative, "value"),
+                    )
+                    "policy.policy_id" -> identifierPolicyFromReceiptFixture(
+                        obj(fixture, "policy"),
+                        policyIdOverride = string(negative, "value"),
+                    )
+                    else -> policy
+                }
             }
             val mutatedReceipt = when (mutation) {
                 "receipt.payload.execution.output_ciphertext_hash" -> identifierReceiptFromFixture(
@@ -655,12 +668,12 @@ class HttpClientTransportTest {
 
             if (negative["expected_error_contains"] is String) {
                 assertFailsWith<IllegalArgumentException>(string(negative, "name")) {
-                    mutatedReceipt.verifyAttestation(mutatedPolicy)
+                    mutatedReceipt.verifyAttestation(mutatedPolicy())
                 }
             } else {
                 assertEquals(
                     negative["expected_result"],
-                    mutatedReceipt.verifyAttestation(mutatedPolicy),
+                    mutatedReceipt.verifyAttestation(mutatedPolicy()),
                     string(negative, "name"),
                 )
             }
@@ -708,7 +721,7 @@ class HttpClientTransportTest {
             owner = "owner",
             active = true,
             normalization = IdentifierNormalization.EXACT,
-            resolverPublicKey = "ed25519:ed0120" + "11".repeat(32),
+            resolverPublicKey = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
             backend = "bfv-programmed-sha3-256-v1",
             inputEncryption = "bfv-v1",
             inputEncryptionPublicParameters = null,
@@ -1063,6 +1076,7 @@ class HttpClientTransportTest {
                 multisigAccountAlias = "cbdc@banka",
                 signerAccountId = "alice",
                 instructions = listOf(instructionBytes),
+                publicKeyHex = "0X${validEd25519PublicKeyHex.uppercase()}",
                 creationTimeMs = 123,
                 memo = "QR invoice 42",
                 validationFeePolicyVersion = 7,
@@ -1086,6 +1100,7 @@ class HttpClientTransportTest {
         val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals("cbdc@banka", payload["multisig_account_alias"])
         assertEquals("alice", payload["signer_account_id"])
+        assertEquals(validEd25519PublicKeyHex, payload["public_key_hex"])
         assertFalse(payload.containsKey("fee_sponsor"))
         @Suppress("UNCHECKED_CAST")
         val feePayment = payload["fee_payment"] as Map<String, Any?>
@@ -1256,6 +1271,38 @@ class HttpClientTransportTest {
                     validationFeeInstructionIndex = 1,
                     validationFeeTransferEntryIndex = -2,
                 )
+            )
+        }
+    }
+
+    @Test
+    fun ed25519KeyRoutesRejectSmallOrderIdentityPoint() {
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildVpnQuoteCreatePayload("standard", ed25519IdentityKeyHex)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildVpnSessionCreatePayload(
+                "standard",
+                "11".repeat(32),
+                "22".repeat(32),
+                ed25519IdentityKeyHex,
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseQuote(
+                vpnQuoteJson("11".repeat(32), ed25519IdentityKeyHex)
+                    .toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    feePayment = testFeePayment(),
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(byteArrayOf(1)),
+                    publicKeyHex = ed25519IdentityKeyHex,
+                ),
             )
         }
     }
@@ -1472,6 +1519,7 @@ class HttpClientTransportTest {
         assertEquals("identifier_lookup_retail", item.programId)
         assertEquals("sorau1NpOwner", item.owner)
         assertTrue(item.active)
+        assertEquals(item.resolverPublicKey, item.outputOpeningPublicKey)
         assertEquals("signed", item.verificationMode)
         assertEquals("bfv-v1", item.inputEncryption)
         val decodedParameters = assertNotNull(item.inputEncryptionPublicParametersDecoded)
@@ -1499,8 +1547,8 @@ class HttpClientTransportTest {
                 "\"owner\": \"sorau1NpOwner \"",
             ),
             "ram-lfe program policy list.items[0].resolver_public_key" to canonical.replace(
-                "\"resolver_public_key\": \"ed25519:resolver-key\"",
-                "\"resolver_public_key\": \" ed25519:resolver-key\"",
+                "\"resolver_public_key\": \"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\"",
+                "\"resolver_public_key\": \" ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\"",
             ),
             "ram-lfe program policy list.items[0].backend" to canonical.replace(
                 "\"backend\": \"bfv-programmed-sha3-256-v1\"",
@@ -1555,7 +1603,7 @@ class HttpClientTransportTest {
                   "program_id": "identifier_lookup_retail",
                   "owner": "sorau1NpOwner",
                   "active": true,
-                  "resolver_public_key": "ed25519:resolver-key",
+                  "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                   "backend": "bfv-programmed-sha3-256-v1",
                   "verification_mode": "signed",
                   "input_encryption": "bfv-v1",
@@ -1869,7 +1917,7 @@ class HttpClientTransportTest {
     @Test
     fun createVpnQuoteSignsCanonicalBodyAndParsesOpenLeaseInstruction() {
         val quoteId = "11".repeat(32)
-        val meteringKey = "22".repeat(32)
+        val meteringKey = validEd25519PublicKeyHex
         val executor = StubResponseExecutor(
             statusCode = 201,
             body = vpnQuoteJson(quoteId, meteringKey).toByteArray(StandardCharsets.UTF_8),
@@ -2129,7 +2177,7 @@ class HttpClientTransportTest {
     fun vpnSessionAndReceiptMethodsUseNativeLeaseDtos() {
         val sessionId = "33".repeat(32)
         val paymentTxHash = "44".repeat(32)
-        val meteringKey = "55".repeat(32)
+        val meteringKey = validEd25519PublicKeyHex
         val receiptJson = vpnReceiptJson(sessionId, paymentTxHash, settled = true)
         val executor = QueueResponseExecutor(
             listOf(
@@ -2204,7 +2252,7 @@ class HttpClientTransportTest {
     fun vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields() {
         val identifier = "ab".repeat(32)
         val paymentTxHash = "cd".repeat(32)
-        val meteringKey = "ef".repeat(32)
+        val meteringKey = validEd25519PublicKeyHex
         fun bytes(value: String): ByteArray = value.toByteArray(StandardCharsets.UTF_8)
 
         val quote = vpnQuoteJson(identifier, meteringKey)
@@ -2253,7 +2301,7 @@ class HttpClientTransportTest {
     fun vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds() {
         val identifier = "ab".repeat(32)
         val paymentTxHash = "cd".repeat(32)
-        val meteringKey = "ef".repeat(32)
+        val meteringKey = validEd25519PublicKeyHex
         val profile = vpnProfileJson()
         val quote = vpnQuoteJson(identifier, meteringKey)
         val session = vpnSessionJson(identifier, paymentTxHash)
@@ -2342,7 +2390,7 @@ class HttpClientTransportTest {
     fun vpnRoutesRejectWrongSuccessfulStatusCodes() {
         val identifier = "33".repeat(32)
         val paymentTxHash = "44".repeat(32)
-        val meteringKey = "55".repeat(32)
+        val meteringKey = validEd25519PublicKeyHex
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_050L, "vpn-status-nonce")
         val config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build()
@@ -2595,7 +2643,7 @@ class HttpClientTransportTest {
 
     @Test
     fun aliasSetupPlanningIsCanonicalSignedReadOnlyAndParsesTypedPlan() {
-        val authority = AccountAddress.fromAccount(ByteArray(32) { 0x41 }, "ed25519")
+        val authority = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x41), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val assetBytes = ByteArray(16) { it.toByte() }.also {
             it[6] = 0x46
@@ -2678,9 +2726,9 @@ class HttpClientTransportTest {
 
     @Test
     fun lifecyclePlanningAndSponsoredOnboardingUseOnlySafePlannerRoutes() {
-        val authority = AccountAddress.fromAccount(ByteArray(32) { 0x41 }, "ed25519")
+        val authority = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x41), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
-        val targetAccount = AccountAddress.fromAccount(ByteArray(32) { 0x42 }, "ed25519")
+        val targetAccount = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x42), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val assetBytes = ByteArray(16) { it.toByte() }.also {
             it[6] = 0x46
@@ -2878,7 +2926,7 @@ class HttpClientTransportTest {
             201 to queuedBody,
             202 to unchangedBody,
             200 to onboardingApplyResponse(
-                AccountAddress.fromAccount(ByteArray(32) { 0x43.toByte() }, "ed25519")
+                AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x43), "ed25519")
                     .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT),
                 fixture.alias,
                 null,
@@ -2946,7 +2994,7 @@ class HttpClientTransportTest {
 
     @Test
     fun typedRestrictedAliasListsSendCanonicalRequestHeaders() {
-        val account = AccountAddress.fromAccount(ByteArray(32) { 0x45 }, "ed25519")
+        val account = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x45), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val executor = StubResponseExecutor(
             200,
@@ -2980,9 +3028,9 @@ class HttpClientTransportTest {
 
     @Test
     fun typedAliasReadsRejectSubstitutedSelectors() {
-        val account = AccountAddress.fromAccount(ByteArray(32) { 0x45 }, "ed25519")
+        val account = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x45), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
-        val otherAccount = AccountAddress.fromAccount(ByteArray(32) { 0x46 }, "ed25519")
+        val otherAccount = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x46), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
         val indexExecutor = StubResponseExecutor(
@@ -3170,15 +3218,26 @@ class HttpClientTransportTest {
             .waitForTransactionStatus(response.hashHex()!!, PipelineStatusOptions(intervalMillis = 0L))
             .join()
 
-        assertEquals("Committed", PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
+        assertEquals("Applied", PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
         assertTrue(executor.observedExpectedHash)
+        assertTrue(executor.observedCommittedAsPending)
+    }
+
+    @Test
+    fun pipelineSuccessStatusIsNotPubliclyConfigurable() {
+        val publicNames = PipelineStatusOptions::class.java.methods
+            .map { it.name }
+            .toSet()
+
+        assertFalse("getSuccessStatuses" in publicNames)
+        assertFalse("successStatuses" in publicNames)
     }
 
     @Test
     fun waitForTransactionStatusSaturatesOverflowingDeadline() {
         val executor = StubResponseExecutor(
             statusCode = 200,
-            body = """{"kind":"Transaction","content":{"status":{"kind":"Pending"}}}"""
+            body = """{"hash":"feed","status":{"kind":"Queued"},"summary":"Queued","scope":"global","resolved_from":"queue"}"""
                 .toByteArray(StandardCharsets.UTF_8),
         )
         val transport = HttpClientTransport.withExecutor(
@@ -3587,13 +3646,13 @@ class HttpClientTransportTest {
                 creationTimeMs = 1_700_000_000_000L + seed,
                 executable = Executable.instructions(emptyList()),
                 timeToLiveMs = 5_000L,
-                nonce = seed + 1,
+                nonce = seed.toLong() + 1L,
                 feePayment = testFeePayment(),
                 metadata = mapOf("note" to JsonValue.string("tx-$seed")),
             ),
         )
         val signature = ByteArray(64) { (seed + 1).toByte() }
-        val publicKey = ByteArray(32) { (seed + 2).toByte() }
+        val publicKey = TestEd25519Keys.publicKey(seed + 2)
         return SignedTransaction(
             encoded,
             signature,
@@ -3665,7 +3724,8 @@ class HttpClientTransportTest {
             opaqueId = "opaque:" + "11".repeat(32),
             receiptHash = "22".repeat(32),
             uaid = "uaid:" + "33".repeat(31) + "35",
-            accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            accountId = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x11), "ed25519")
+                .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT),
         )
 
     private fun sampleIdentifierVerifierPolicy(
@@ -3703,7 +3763,7 @@ class HttpClientTransportTest {
         val signer = Ed25519PrivateKeyParameters(ByteArray(32) { 0x53.toByte() }, 0)
         val authority = AccountAddress.fromAccount(signer.generatePublicKey().encoded, "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
-        val accountId = AccountAddress.fromAccount(ByteArray(32) { 0x42 }, "ed25519")
+        val accountId = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x42), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val alias = ResolvedAccountAliasV1(
             AccountAliasName.parse("merchant@banka.paynet"),
@@ -4324,7 +4384,7 @@ class HttpClientTransportTest {
             owner = "owner",
             active = true,
             normalization = IdentifierNormalization.EXACT,
-            resolverPublicKey = "ed25519:ed0120" + "11".repeat(32),
+            resolverPublicKey = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
             backend = "bfv-affine-sha3-256-v1",
             inputEncryption = "bfv-v1",
             inputEncryptionPublicParameters = null,
@@ -4338,7 +4398,7 @@ class HttpClientTransportTest {
             owner = "owner",
             active = true,
             normalization = IdentifierNormalization.EXACT,
-            resolverPublicKey = "ed25519:ed0120" + "11".repeat(32),
+            resolverPublicKey = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
             backend = "hkdf-sha3-512-prf-v1",
             inputEncryption = null,
             inputEncryptionPublicParameters = null,
@@ -4406,6 +4466,8 @@ class HttpClientTransportTest {
     ) : HttpTransportExecutor {
         var observedExpectedHash = false
             private set
+        var observedCommittedAsPending = false
+            private set
         private var pollCount = 0
 
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
@@ -4422,12 +4484,16 @@ class HttpClientTransportTest {
                 if (request.uri.query?.contains("hash=$expectedHash") == true) {
                     observedExpectedHash = true
                 }
-                val kind = if (pollCount++ == 0) "Pending" else "Committed"
+                val kind = when (pollCount++) {
+                    0 -> "Queued"
+                    1 -> "Committed".also { observedCommittedAsPending = true }
+                    else -> "Applied"
+                }
                 return CompletableFuture.completedFuture(
                     TransportResponse.builder()
                         .setStatusCode(200)
                         .setBody(
-                            """{"kind":"Transaction","content":{"status":{"kind":"$kind"}}}"""
+                            """{"hash":"$expectedHash","status":{"kind":"$kind"${if (kind == "Applied") ",\"block_height\":7" else ""}},"summary":"$kind","scope":"global","resolved_from":"${if (kind == "Applied") "state" else "cache"}"}"""
                                 .toByteArray(StandardCharsets.UTF_8),
                         )
                         .build(),

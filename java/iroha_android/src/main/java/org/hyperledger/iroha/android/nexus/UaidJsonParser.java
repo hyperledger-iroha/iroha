@@ -221,20 +221,20 @@ public final class UaidJsonParser {
   }
 
   private static String asString(final Object value, final String path) {
-    if (value == null) {
-      throw new IllegalStateException(path + " is missing");
+    if (!(value instanceof String string)) {
+      throw new IllegalStateException(path + " must be a string");
     }
-    if (value instanceof String string) {
-      return string;
-    }
-    return String.valueOf(value);
+    return string;
   }
 
   private static String asOptionalString(final Object value) {
     if (value == null) {
       return null;
     }
-    return value instanceof String string ? string : String.valueOf(value);
+    if (!(value instanceof String string)) {
+      throw new IllegalStateException("optional UAID response string field must be a string");
+    }
+    return string;
   }
 
   private static Object pick(final Map<String, Object> object, final String... keys) {
@@ -250,7 +250,11 @@ public final class UaidJsonParser {
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(path + " is not a number");
     }
-    return JsonNumbers.asLong(number, path);
+    final long parsed = JsonNumbers.asLong(number, path);
+    if (parsed < 0L) {
+      throw new IllegalStateException(path + " must be an unsigned integer");
+    }
+    return parsed;
   }
 
   private static Long asOptionalLong(final Object value, final String path) {
@@ -265,10 +269,10 @@ public final class UaidJsonParser {
     final List<String> strings = new ArrayList<>(items.size());
     for (int i = 0; i < items.size(); i++) {
       final Object entry = items.get(i);
-      if (entry == null) {
-        continue;
+      if (!(entry instanceof String string)) {
+        throw new IllegalStateException(path + "[" + i + "] must be a string");
       }
-      strings.add(entry instanceof String string ? string : String.valueOf(entry));
+      strings.add(string);
     }
     return List.copyOf(strings);
   }

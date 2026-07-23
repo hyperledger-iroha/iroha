@@ -10,11 +10,12 @@ import java.util.Set;
 
 /**
  * Configuration for polling Torii pipeline status endpoints.
+ *
+ * <p>Success is deliberately not configurable: exact canonical {@code Applied} is the only status
+ * that proves execution. {@code Approved} and {@code Committed} are progress.
  */
 public final class PipelineStatusOptions {
 
-  private static final List<String> DEFAULT_SUCCESS =
-      Collections.singletonList("Applied");
   private static final List<String> DEFAULT_FAILURE =
       Collections.unmodifiableList(Arrays.asList("Rejected", "Expired"));
 
@@ -25,7 +26,6 @@ public final class PipelineStatusOptions {
   private final long intervalMillis;
   private final Long timeoutMillis;
   private final Integer maxAttempts;
-  private final Set<String> successStatuses;
   private final Set<String> failureStatuses;
   private final StatusObserver observer;
 
@@ -33,7 +33,6 @@ public final class PipelineStatusOptions {
     this.intervalMillis = builder.intervalMillis;
     this.timeoutMillis = builder.timeoutMillis;
     this.maxAttempts = builder.maxAttempts;
-    this.successStatuses = Collections.unmodifiableSet(new HashSet<>(builder.successStatuses));
     this.failureStatuses = Collections.unmodifiableSet(new HashSet<>(builder.failureStatuses));
     this.observer = builder.observer;
   }
@@ -58,10 +57,6 @@ public final class PipelineStatusOptions {
     return maxAttempts;
   }
 
-  public Set<String> successStatuses() {
-    return successStatuses;
-  }
-
   public Set<String> failureStatuses() {
     return failureStatuses;
   }
@@ -74,12 +69,10 @@ public final class PipelineStatusOptions {
     private long intervalMillis = 1_000L;
     private Long timeoutMillis = 30_000L;
     private Integer maxAttempts = null;
-    private final Set<String> successStatuses = new HashSet<>();
     private final Set<String> failureStatuses = new HashSet<>();
     private StatusObserver observer = null;
 
     private Builder() {
-      this.successStatuses.addAll(DEFAULT_SUCCESS);
       this.failureStatuses.addAll(DEFAULT_FAILURE);
     }
 
@@ -108,18 +101,6 @@ public final class PipelineStatusOptions {
       return this;
     }
 
-    public Builder successStatuses(final Iterable<String> statuses) {
-      this.successStatuses.clear();
-      if (statuses != null) {
-        for (final String status : statuses) {
-          if (status != null) {
-            this.successStatuses.add(status);
-          }
-        }
-      }
-      return this;
-    }
-
     public Builder failureStatuses(final Iterable<String> statuses) {
       this.failureStatuses.clear();
       if (statuses != null) {
@@ -138,9 +119,6 @@ public final class PipelineStatusOptions {
     }
 
     public PipelineStatusOptions build() {
-      if (successStatuses.isEmpty()) {
-        throw new IllegalStateException("successStatuses must contain at least one entry");
-      }
       if (failureStatuses.isEmpty()) {
         throw new IllegalStateException("failureStatuses must contain at least one entry");
       }

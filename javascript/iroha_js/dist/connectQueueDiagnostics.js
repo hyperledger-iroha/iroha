@@ -48,11 +48,10 @@ function normalizeByteArray(value, context) {
     throw new TypeError(`${context} must be non-empty`);
   }
   const normalized = bytes.map((entry, index) => {
-    const numeric = Number(entry);
-    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+    if (!Number.isInteger(entry) || entry < 0 || entry > 0xff) {
       throw new TypeError(`${context}[${index}] must be a byte`);
     }
-    return numeric;
+    return entry;
   });
   return Buffer.from(normalized);
 }

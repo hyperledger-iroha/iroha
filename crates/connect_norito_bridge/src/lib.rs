@@ -6,7 +6,7 @@
 use core::ffi::c_void;
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
+    fs::{File, OpenOptions},
     io::{Read as _, Seek as _, SeekFrom, Write as _},
     num::{NonZeroU32, NonZeroU64},
     path::PathBuf,
@@ -67,7 +67,13 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
 use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_torii_shared::{connect as proto, connect_sdk};
+use iroha_torii_shared::{
+    connect as proto, connect_sdk,
+    validation_fee_api::{
+        VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+        ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
+    },
+};
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
 use libc::{c_char, c_int, c_uchar, c_ulong, free, malloc};
@@ -185,6 +191,7 @@ const ERR_ALIAS_INSTRUCTION: c_int = -409;
 const ERR_DETACHED_TRANSACTION_SCAFFOLD: c_int = -501;
 const ERR_DETACHED_TRANSACTION_SIGNATURE: c_int = -502;
 const ERR_CANONICAL_JSON: c_int = -503;
+const ERR_VALIDATION_FEE_POLICY_PROOF: c_int = -504;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -233,6 +240,7 @@ enum BridgeError {
     DetachedTransactionScaffold,
     DetachedTransactionSignature,
     CanonicalJson,
+    ValidationFeePolicyProof,
 }
 
 impl BridgeError {
@@ -286,6 +294,7 @@ impl BridgeError {
             BridgeError::DetachedTransactionScaffold => ERR_DETACHED_TRANSACTION_SCAFFOLD,
             BridgeError::DetachedTransactionSignature => ERR_DETACHED_TRANSACTION_SIGNATURE,
             BridgeError::CanonicalJson => ERR_CANONICAL_JSON,
+            BridgeError::ValidationFeePolicyProof => ERR_VALIDATION_FEE_POLICY_PROOF,
         }
     }
 }
@@ -6019,6 +6028,172 @@ pub unsafe extern "C" fn connect_norito_canonical_json_blake3_v1(
     bridge_result_to_code(result)
 }
 
+fn validation_fee_current_policy_proof_request_v1(
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id: [u8; 32],
+) -> BridgeResult<Vec<u8>> {
+    if trusted_checkpoint_height == 0 || trusted_checkpoint_context_id.iter().all(|byte| *byte == 0)
+    {
+        return Err(BridgeError::ValidationFeePolicyProof);
+    }
+    norito::to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
+        version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+        trusted_checkpoint_height,
+    })
+    .map_err(|_| BridgeError::ValidationFeePolicyProof)
+}
+
+fn validation_fee_current_policy_proof_verify_v1(
+    proof_archive: &[u8],
+    chain_id: ChainId,
+    bound_genesis_hash: [u8; 32],
+    policy_chain_genesis_hash: [u8; 32],
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id: [u8; 32],
+) -> BridgeResult<Vec<u8>> {
+    if proof_archive.is_empty()
+        || proof_archive.len() > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES
+    {
+        return Err(BridgeError::ValidationFeePolicyProof);
+    }
+    let proof: ValidationFeeCurrentPolicyProofV1 =
+        decode_from_bytes(proof_archive).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+    let canonical = norito::to_bytes(&proof).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+    if canonical != proof_archive {
+        return Err(BridgeError::ValidationFeePolicyProof);
+    }
+    let projection = proof
+        .verify_with_immutable_binding(
+            chain_id,
+            bound_genesis_hash,
+            policy_chain_genesis_hash,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )
+        .map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+    let json =
+        norito::json::to_vec(&projection).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+    if json.is_empty() || json.len() > DETACHED_TRANSACTION_JSON_MAX_BYTES {
+        return Err(BridgeError::ValidationFeePolicyProof);
+    }
+    Ok(json)
+}
+
+/// Encode the exact Norito request body for one bounded current-policy proof page.
+///
+/// The checkpoint context is validated here for API symmetry with the proof
+/// verifier but is intentionally not serialized: Torii's frozen V1 request
+/// contains only the layout version and checkpoint height.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_request_v1(
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id_ptr: *const c_uchar,
+    trusted_checkpoint_context_id_len: c_ulong,
+    out_request_ptr: *mut *mut c_uchar,
+    out_request_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_request_ptr, out_request_len);
+    let result = (|| {
+        clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
+        let trusted_checkpoint_context_id = unsafe {
+            read_fixed_array::<32>(
+                trusted_checkpoint_context_id_ptr,
+                trusted_checkpoint_context_id_len,
+                BridgeError::ValidationFeePolicyProof,
+            )
+        }?;
+        let request = validation_fee_current_policy_proof_request_v1(
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )?;
+        unsafe { write_bytes_bridge(out_request_ptr, out_request_len, &request) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Locally verify one canonical proof page and return bounded canonical JSON.
+///
+/// Verification binds the full registry to finality, the synthetic ordinary
+/// write, the exact chain id, every policy's deployment genesis, policy
+/// version one's hash, and the caller's durable checkpoint.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_verify_v1(
+    proof_norito_ptr: *const c_uchar,
+    proof_norito_len: c_ulong,
+    chain_id_ptr: *const c_uchar,
+    chain_id_len: c_ulong,
+    bound_genesis_hash_ptr: *const c_uchar,
+    bound_genesis_hash_len: c_ulong,
+    policy_chain_genesis_hash_ptr: *const c_uchar,
+    policy_chain_genesis_hash_len: c_ulong,
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id_ptr: *const c_uchar,
+    trusted_checkpoint_context_id_len: c_ulong,
+    out_projection_json_ptr: *mut *mut c_uchar,
+    out_projection_json_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_projection_json_ptr, out_projection_json_len);
+    let result = (|| {
+        clear_bridge_output_or_null(out_projection_json_ptr, out_projection_json_len)?;
+        let proof_len =
+            usize::try_from(proof_norito_len).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+        let chain_id_len =
+            usize::try_from(chain_id_len).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+        if proof_norito_ptr.is_null()
+            || proof_len == 0
+            || proof_len > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES
+            || chain_id_ptr.is_null()
+            || chain_id_len == 0
+            || chain_id_len > 256
+        {
+            return Err(BridgeError::ValidationFeePolicyProof);
+        }
+        let proof = unsafe { slice::from_raw_parts(proof_norito_ptr, proof_len) };
+        let chain_id_bytes = unsafe { slice::from_raw_parts(chain_id_ptr, chain_id_len) };
+        let chain_id = std::str::from_utf8(chain_id_bytes)
+            .map_err(|_| BridgeError::ValidationFeePolicyProof)?
+            .parse::<ChainId>()
+            .map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+        let bound_genesis_hash = unsafe {
+            read_fixed_array::<32>(
+                bound_genesis_hash_ptr,
+                bound_genesis_hash_len,
+                BridgeError::ValidationFeePolicyProof,
+            )
+        }?;
+        let policy_chain_genesis_hash = unsafe {
+            read_fixed_array::<32>(
+                policy_chain_genesis_hash_ptr,
+                policy_chain_genesis_hash_len,
+                BridgeError::ValidationFeePolicyProof,
+            )
+        }?;
+        let trusted_checkpoint_context_id = unsafe {
+            read_fixed_array::<32>(
+                trusted_checkpoint_context_id_ptr,
+                trusted_checkpoint_context_id_len,
+                BridgeError::ValidationFeePolicyProof,
+            )
+        }?;
+        let projection = validation_fee_current_policy_proof_verify_v1(
+            proof,
+            chain_id,
+            bound_genesis_hash,
+            policy_chain_genesis_hash,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )?;
+        unsafe {
+            write_bytes_bridge(
+                out_projection_json_ptr,
+                out_projection_json_len,
+                &projection,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
 fn signed_transaction_bridge_debug_json(tx: &SignedTransaction) -> JsonValue {
     use iroha_data_model::prelude::TransferBox;
 
@@ -7846,29 +8021,204 @@ struct KagemushaRecursiveSpendArtifactIngestV4 {
     manifest_sha256: [u8; 32],
     descriptor: iroha_data_model::offline::KagemushaPastaCycleArtifactV4,
     file: Option<File>,
+    /// POSIX-only O_RDONLY descriptor pinned to the same anonymous inode while
+    /// `file` remains the private writable streaming descriptor.
+    retained_read_only: Option<File>,
+    /// Non-POSIX fallback retained only until the writable descriptor can be
+    /// closed and the create-new path reopened read-only.
+    staging_path: Option<tempfile::TempPath>,
     framed_sha256: Sha256,
     written: u64,
     ready: bool,
     failed: bool,
+    sealed_read_only: bool,
+}
+
+/// One immutable, read-only installed artifact in canonical manifest order.
+struct KagemushaRecursiveSpendInstalledArtifactV4 {
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    descriptor: iroha_data_model::offline::KagemushaPastaCycleArtifactV4,
+    file: Arc<Mutex<File>>,
+}
+
+fn lock_kagemusha_recursive_spend_source_mutex_v4<T>(
+    mutex: &Mutex<T>,
+) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        // These mutexes serialize access to immutable, read-only artifacts.
+        // Every use rewinds and core reauthenticates the complete frame, so a
+        // worker panic must not permanently disable later offline cash.
+        Err(poisoned) => {
+            mutex.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
+/// Pinned source for one authenticated production release.
+///
+/// The bridge only selects and lends a complete framed file. Core remains the
+/// sole owner of KRV4 release binding, role checks, both digest passes, exact
+/// payload consumption, and trailing-byte rejection.
+struct KagemushaRecursiveSpendInstalledArtifactSourceV4 {
+    authenticated_release: iroha_data_model::offline::KagemushaAuthenticatedReleaseV4,
+    manifest_sha256: [u8; 32],
+    artifacts: Vec<KagemushaRecursiveSpendInstalledArtifactV4>,
+    access_permit: Mutex<()>,
+}
+
+impl KagemushaRecursiveSpendInstalledArtifactSourceV4 {
+    fn new(
+        authenticated_release: iroha_data_model::offline::KagemushaAuthenticatedReleaseV4,
+        artifacts: Vec<KagemushaRecursiveSpendInstalledArtifactV4>,
+    ) -> BridgeResult<Self> {
+        let manifest_sha256 = authenticated_release.manifest_sha256();
+        let expected = authenticated_release
+            .manifest()
+            .profiles
+            .iter()
+            .flat_map(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .map(move |descriptor| (profile.parity, descriptor))
+            })
+            .collect::<Vec<_>>();
+        if manifest_sha256 == [0; 32]
+            || expected.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
+            || artifacts.len() != expected.len()
+            || artifacts
+                .iter()
+                .zip(expected)
+                .any(|(artifact, (parity, descriptor))| {
+                    artifact.parity != parity || artifact.descriptor != *descriptor
+                })
+        {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        Ok(Self {
+            authenticated_release,
+            manifest_sha256,
+            artifacts,
+            access_permit: Mutex::new(()),
+        })
+    }
+
+    fn artifact(
+        &self,
+        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+        kind: iroha_data_model::offline::KagemushaPastaCycleArtifactKindV4,
+    ) -> Result<&KagemushaRecursiveSpendInstalledArtifactV4, String> {
+        let descriptor = iroha_core::zk::kagemusha_artifact_v4::kagemusha_artifact_descriptor_v4(
+            self.authenticated_release.manifest(),
+            parity,
+            kind,
+        )?;
+        self.artifacts
+            .iter()
+            .find(|artifact| {
+                artifact.parity == parity
+                    && artifact.descriptor.kind == kind
+                    && artifact.descriptor == *descriptor
+            })
+            .ok_or_else(|| "installed Kagemusha V4 artifact role is absent".to_owned())
+    }
+
+    fn with_selected_file<T>(
+        &self,
+        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+        kind: iroha_data_model::offline::KagemushaPastaCycleArtifactKindV4,
+        consume: impl FnOnce(&mut File) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _access = lock_kagemusha_recursive_spend_source_mutex_v4(&self.access_permit);
+        let artifact = self.artifact(parity, kind)?;
+        let mut file = lock_kagemusha_recursive_spend_source_mutex_v4(&artifact.file);
+        file.seek(SeekFrom::Start(0)).map_err(|error| {
+            format!("failed to rewind installed Kagemusha V4 artifact: {error}")
+        })?;
+        let outcome = consume(&mut file);
+        let rewind = file.seek(SeekFrom::Start(0)).map(|_| ()).map_err(|error| {
+            format!("failed to restore installed Kagemusha V4 artifact cursor: {error}")
+        });
+        match (outcome, rewind) {
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Ok(value), Ok(())) => Ok(value),
+        }
+    }
+
+    fn validate_snapshot(&self) -> BridgeResult<()> {
+        let expected = self
+            .authenticated_release
+            .manifest()
+            .profiles
+            .iter()
+            .flat_map(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .map(move |descriptor| (profile.parity, descriptor))
+            });
+        if self.manifest_sha256 != self.authenticated_release.manifest_sha256()
+            || self.artifacts.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
+        {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        for (artifact, (parity, descriptor)) in self.artifacts.iter().zip(expected) {
+            let file = lock_kagemusha_recursive_spend_source_mutex_v4(&artifact.file);
+            if artifact.parity != parity
+                || artifact.descriptor != *descriptor
+                || require_sealed_kagemusha_recursive_spend_artifact_v4(
+                    &file,
+                    descriptor.size_bytes,
+                )
+                .is_err()
+            {
+                return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl iroha_core::zk::kagemusha_artifact_source_v4::KagemushaAuthenticatedArtifactSourceV4
+    for KagemushaRecursiveSpendInstalledArtifactSourceV4
+{
+    fn authenticated_release(&self) -> &iroha_data_model::offline::KagemushaAuthenticatedReleaseV4 {
+        &self.authenticated_release
+    }
+
+    fn with_framed_artifact(
+        &self,
+        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+        kind: iroha_data_model::offline::KagemushaPastaCycleArtifactKindV4,
+        consume: &mut dyn FnMut(
+            &mut dyn iroha_core::zk::kagemusha_artifact_source_v4::KagemushaArtifactReadSeekV4,
+        ) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.with_selected_file(parity, kind, |file| consume(file))
+    }
 }
 
 /// One separately authenticated ABI-21 release retained in canonical
 /// Eq/role then Ep/role manifest order.
 struct KagemushaRecursiveSpendInstalledArtifactSetV4 {
     promotion_record: iroha_data_model::offline::KagemushaRecursiveSpendPromotedReleaseV4,
-    authenticated_release: iroha_data_model::offline::KagemushaAuthenticatedReleaseV4,
     manifest_sha256: [u8; 32],
-    artifacts: Vec<Arc<Mutex<KagemushaRecursiveSpendArtifactIngestV4>>>,
+    source: Arc<KagemushaRecursiveSpendInstalledArtifactSourceV4>,
+    qualified_source:
+        Arc<iroha_core::zk::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4>,
 }
 
 impl KagemushaRecursiveSpendInstalledArtifactSetV4 {
     fn manifest(&self) -> &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4 {
-        self.authenticated_release.manifest()
+        self.qualified_source.authenticated_release().manifest()
     }
 
     fn validate_live_inventory(&self) -> BridgeResult<()> {
         self.promotion_record
-            .validate_against_authenticated_release(&self.authenticated_release)
+            .validate_against_authenticated_release(self.qualified_source.authenticated_release())
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
         self.manifest()
             .validate()
@@ -7876,181 +8226,26 @@ impl KagemushaRecursiveSpendInstalledArtifactSetV4 {
         let manifest_bytes = norito::to_bytes(self.manifest())
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
         if self.manifest_sha256 == [0; 32]
-            || self.authenticated_release.manifest_sha256() != self.manifest_sha256
-            || self.authenticated_release.release_attestation_sha256() == [0; 32]
-            || self.authenticated_release.release_policy_sha256() == [0; 32]
+            || self
+                .qualified_source
+                .authenticated_release()
+                .manifest_sha256()
+                != self.manifest_sha256
+            || self
+                .qualified_source
+                .authenticated_release()
+                .release_attestation_sha256()
+                == [0; 32]
+            || self
+                .qualified_source
+                .authenticated_release()
+                .release_policy_sha256()
+                == [0; 32]
             || <[u8; 32]>::from(Sha256::digest(&manifest_bytes)) != self.manifest_sha256
         {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
         }
-        let descriptors = self
-            .manifest()
-            .profiles
-            .iter()
-            .flat_map(|profile| profile.artifacts.iter())
-            .collect::<Vec<_>>();
-        if descriptors.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
-            || self.artifacts.len() != descriptors.len()
-        {
-            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-        }
-        for (artifact, descriptor) in self.artifacts.iter().zip(descriptors) {
-            let artifact = artifact
-                .lock()
-                .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-            let file = artifact
-                .file
-                .as_ref()
-                .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-            if !artifact.ready
-                || artifact.failed
-                || artifact.manifest_sha256 != self.manifest_sha256
-                || &artifact.manifest != self.manifest()
-                || &artifact.descriptor != descriptor
-                || file
-                    .metadata()
-                    .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?
-                    .len()
-                    != descriptor.size_bytes
-            {
-                return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-            }
-        }
-        Ok(())
-    }
-
-    /// Authenticate the exact installed Eq/Ep role inventory without retaining
-    /// any release-sized payload. The artifact vector is already normalized to
-    /// manifest order by the installer, so this zip also preserves the role and
-    /// parity identity of every file.
-    fn stream_authenticate_live_inventory(&self) -> BridgeResult<()> {
-        self.validate_live_inventory()?;
-        let expected = self.manifest().profiles.iter().flat_map(|profile| {
-            profile
-                .artifacts
-                .iter()
-                .map(move |descriptor| (profile.parity, descriptor))
-        });
-        for (artifact, (parity, descriptor)) in self.artifacts.iter().zip(expected) {
-            let mut artifact = artifact
-                .lock()
-                .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-            if artifact.descriptor != *descriptor {
-                return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-            }
-            let file = artifact
-                .file
-                .as_mut()
-                .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-            let inspection =
-                iroha_core::zk::kagemusha_artifact_v4::inspect_kagemusha_pasta_cycle_artifact_v4(
-                    file,
-                    &self.authenticated_release,
-                    descriptor,
-                )
-                .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-            if inspection.header().parity != parity
-                || inspection.header().kind != descriptor.kind
-                || inspection.payload_size_bytes() != descriptor.payload_size_bytes
-                || inspection.header().payload_sha256 != descriptor.payload_sha256
-            {
-                return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-            }
-            file.seek(SeekFrom::Start(0))
-                .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        }
-        Ok(())
-    }
-
-    fn authenticated_payload(
-        &self,
-        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
-        kind: iroha_data_model::offline::KagemushaPastaCycleArtifactKindV4,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaValidatedArtifactPayloadV4>
-    {
-        self.validate_live_inventory()?;
-        let descriptor = iroha_core::zk::kagemusha_artifact_v4::kagemusha_artifact_descriptor_v4(
-            self.manifest(),
-            parity,
-            kind,
-        )
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        let artifact = self
-            .artifacts
-            .iter()
-            .find(|artifact| {
-                artifact
-                    .lock()
-                    .is_ok_and(|artifact| artifact.descriptor == *descriptor)
-            })
-            .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        let mut artifact = artifact
-            .lock()
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        let file = artifact
-            .file
-            .as_mut()
-            .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        file.seek(SeekFrom::Start(0))
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        iroha_core::zk::kagemusha_artifact_v4::read_kagemusha_pasta_cycle_artifact_v4(
-            file,
-            &self.authenticated_release,
-            descriptor,
-        )
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
-    }
-
-    fn authenticated_verifier_artifacts(
-        &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>
-    {
-        use iroha_data_model::offline::{
-            KagemushaPastaCycleArtifactKindV4 as Kind, KagemushaPastaCycleParityV1 as Parity,
-        };
-
-        let artifacts =
-            iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4::new(
-                &self.authenticated_release,
-                self.authenticated_payload(Parity::StepEq, Kind::ParamsIpa)?,
-                self.authenticated_payload(Parity::StepEq, Kind::VerifyingKey)?,
-                self.authenticated_payload(Parity::StepEq, Kind::BootstrapWitness)?,
-                self.authenticated_payload(Parity::StepEp, Kind::ParamsIpa)?,
-                self.authenticated_payload(Parity::StepEp, Kind::VerifyingKey)?,
-                self.authenticated_payload(Parity::StepEp, Kind::BootstrapWitness)?,
-            )
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        if artifacts.manifest_sha256() != self.manifest_sha256 {
-            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-        }
-        Ok(artifacts)
-    }
-
-    fn authenticated_prover_artifacts(
-        &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>
-    {
-        use iroha_data_model::offline::{
-            KagemushaPastaCycleArtifactKindV4 as Kind, KagemushaPastaCycleParityV1 as Parity,
-        };
-
-        let artifacts =
-            iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4::new(
-                &self.authenticated_release,
-                self.authenticated_payload(Parity::StepEq, Kind::ParamsIpa)?,
-                self.authenticated_payload(Parity::StepEq, Kind::ProvingKey)?,
-                self.authenticated_payload(Parity::StepEq, Kind::VerifyingKey)?,
-                self.authenticated_payload(Parity::StepEq, Kind::BootstrapWitness)?,
-                self.authenticated_payload(Parity::StepEp, Kind::ParamsIpa)?,
-                self.authenticated_payload(Parity::StepEp, Kind::ProvingKey)?,
-                self.authenticated_payload(Parity::StepEp, Kind::VerifyingKey)?,
-                self.authenticated_payload(Parity::StepEp, Kind::BootstrapWitness)?,
-            )
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        if artifacts.manifest_sha256() != self.manifest_sha256 {
-            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-        }
-        Ok(artifacts)
+        self.source.validate_snapshot()
     }
 }
 
@@ -8062,12 +8257,12 @@ trait KagemushaRecursiveSpendArtifactSetViewV4 {
     fn manifest(&self) -> &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4;
     fn manifest_sha256(&self) -> [u8; 32];
     fn validate_live_inventory(&self) -> BridgeResult<()>;
-    fn runtime_verifier_artifacts(
+    fn runtime_verifier(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>;
-    fn runtime_prover_artifacts(
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4>;
+    fn runtime_prover(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>;
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4>;
     fn verify_topup_roster_binding(
         &self,
         roster: &iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
@@ -8099,18 +8294,16 @@ impl<T: KagemushaRecursiveSpendArtifactSetViewV4> KagemushaRecursiveSpendArtifac
         self.as_ref().validate_live_inventory()
     }
 
-    fn runtime_verifier_artifacts(
+    fn runtime_verifier(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>
-    {
-        self.as_ref().runtime_verifier_artifacts()
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4> {
+        self.as_ref().runtime_verifier()
     }
 
-    fn runtime_prover_artifacts(
+    fn runtime_prover(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>
-    {
-        self.as_ref().runtime_prover_artifacts()
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4> {
+        self.as_ref().runtime_prover()
     }
 
     fn verify_topup_roster_binding(
@@ -8150,18 +8343,24 @@ impl KagemushaRecursiveSpendArtifactSetViewV4 for KagemushaRecursiveSpendInstall
         self.validate_live_inventory()
     }
 
-    fn runtime_verifier_artifacts(
+    fn runtime_verifier(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>
-    {
-        self.authenticated_verifier_artifacts()
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4> {
+        self.validate_live_inventory()?;
+        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_qualified_artifact_source(
+            Arc::clone(&self.qualified_source),
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 
-    fn runtime_prover_artifacts(
+    fn runtime_prover(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>
-    {
-        self.authenticated_prover_artifacts()
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4> {
+        self.validate_live_inventory()?;
+        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4::from_qualified_artifact_source(
+            Arc::clone(&self.qualified_source),
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 
     fn verify_topup_roster_binding(
@@ -8454,18 +8653,24 @@ impl KagemushaRecursiveSpendArtifactSetViewV4
         self.validate_live_inventory()
     }
 
-    fn runtime_verifier_artifacts(
+    fn runtime_verifier(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4>
-    {
-        self.candidate_verifier_artifacts()
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4> {
+        let artifacts = self.candidate_verifier_artifacts()?;
+        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(
+            &artifacts,
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 
-    fn runtime_prover_artifacts(
+    fn runtime_prover(
         &self,
-    ) -> BridgeResult<iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4>
-    {
-        self.candidate_prover_artifacts()
+    ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4> {
+        let artifacts = self.candidate_prover_artifacts()?;
+        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueProverV4::from_authenticated_artifacts(
+            &artifacts,
+        )
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
     }
 
     fn verify_topup_roster_binding(
@@ -10267,20 +10472,259 @@ fn validate_kagemusha_recursive_spend_release_context_v4(
     Ok(())
 }
 
-fn open_kagemusha_recursive_spend_artifact_v4() -> BridgeResult<File> {
-    // V4 spools are a separate set of immediately-unlinked mode-0600 files;
-    // no path can be replaced between streaming, finalization, and install.
+fn open_kagemusha_recursive_spend_artifact_v4()
+-> BridgeResult<(File, Option<File>, Option<tempfile::TempPath>)> {
+    // POSIX targets pin an O_RDONLY descriptor to this empty create-new inode
+    // and unlink its name before any caller can stream artifact bytes. The
+    // non-POSIX fallback retains the private path only until finalization.
+    let named = tempfile::Builder::new()
+        .prefix(".iroha-krv4-")
+        .tempfile()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    let (writable, staging_path) = named.into_parts();
+
+    #[cfg(unix)]
+    {
+        let (writable, read_only) =
+            pin_and_unlink_kagemusha_recursive_spend_artifact_v4(writable, staging_path, 0)?;
+        Ok((writable, Some(read_only), None))
+    }
+
+    #[cfg(not(unix))]
+    {
+        Ok((writable, None, Some(staging_path)))
+    }
+}
+
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+fn open_kagemusha_candidate_evidence_lab_artifact_v4() -> BridgeResult<File> {
     tempfile::tempfile().map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)
+}
+
+#[cfg(unix)]
+fn kagemusha_recursive_spend_file_is_read_only_v4(file: &File) -> bool {
+    use std::os::fd::AsRawFd as _;
+
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDONLY
+}
+
+#[cfg(not(unix))]
+fn kagemusha_recursive_spend_file_is_read_only_v4(_file: &File) -> bool {
+    // Non-POSIX finalization closes the writable handle before reopening the
+    // retained create-new path with read-only OpenOptions.
+    true
+}
+
+#[cfg(unix)]
+fn require_private_kagemusha_recursive_spend_artifact_inode_v4(
+    file: &File,
+    expected_size: u64,
+    expected_links: u64,
+) -> BridgeResult<std::fs::Metadata> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = file
+        .metadata()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    if !metadata.is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o7777 != 0o600
+        || metadata.nlink() != expected_links
+        || metadata.len() != expected_size
+    {
+        return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+    }
+    Ok(metadata)
+}
+
+fn require_sealed_kagemusha_recursive_spend_artifact_v4(
+    file: &File,
+    expected_size: u64,
+) -> BridgeResult<()> {
+    if !kagemusha_recursive_spend_file_is_read_only_v4(file) {
+        return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+    }
+    #[cfg(unix)]
+    {
+        require_private_kagemusha_recursive_spend_artifact_inode_v4(file, expected_size, 0)?;
+    }
+    #[cfg(not(unix))]
+    if file
+        .metadata()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?
+        .len()
+        != expected_size
+    {
+        return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn pin_and_unlink_kagemusha_recursive_spend_artifact_v4(
+    writable: File,
+    staging_path: tempfile::TempPath,
+    expected_size: u64,
+) -> BridgeResult<(File, File)> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    let original =
+        require_private_kagemusha_recursive_spend_artifact_inode_v4(&writable, expected_size, 1)?;
+    let read_only = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&staging_path)
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    let reopened =
+        require_private_kagemusha_recursive_spend_artifact_inode_v4(&read_only, expected_size, 1)?;
+    if original.dev() != reopened.dev()
+        || original.ino() != reopened.ino()
+        || !kagemusha_recursive_spend_file_is_read_only_v4(&read_only)
+    {
+        return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+    }
+
+    staging_path
+        .close()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    let anonymous_writable =
+        require_private_kagemusha_recursive_spend_artifact_inode_v4(&writable, expected_size, 0)?;
+    let anonymous_read_only =
+        require_private_kagemusha_recursive_spend_artifact_inode_v4(&read_only, expected_size, 0)?;
+    if anonymous_writable.dev() != original.dev()
+        || anonymous_writable.ino() != original.ino()
+        || anonymous_read_only.dev() != original.dev()
+        || anonymous_read_only.ino() != original.ino()
+    {
+        return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+    }
+    Ok((writable, read_only))
+}
+
+fn seal_kagemusha_recursive_spend_artifact_read_only_v4(
+    artifact: &mut KagemushaRecursiveSpendArtifactIngestV4,
+) -> BridgeResult<()> {
+    if artifact.ready || artifact.failed || artifact.sealed_read_only || artifact.file.is_none() {
+        return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+    }
+    #[cfg(unix)]
+    if artifact.retained_read_only.is_none() || artifact.staging_path.is_some() {
+        return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+    }
+    #[cfg(not(unix))]
+    if artifact.retained_read_only.is_some() || artifact.staging_path.is_none() {
+        return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+    }
+    let writable = artifact
+        .file
+        .take()
+        .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    let retained_read_only = artifact.retained_read_only.take();
+    let staging_path = artifact.staging_path.take();
+    let expected_size = artifact.descriptor.size_bytes;
+
+    let mut read_only = reopen_kagemusha_recursive_spend_artifact_read_only_v4(
+        writable,
+        retained_read_only,
+        staging_path,
+        expected_size,
+    )?;
+    read_only
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    artifact.file = Some(read_only);
+    artifact.sealed_read_only = true;
+    Ok(())
+}
+
+fn reopen_kagemusha_recursive_spend_artifact_read_only_v4(
+    writable: File,
+    retained_read_only: Option<File>,
+    staging_path: Option<tempfile::TempPath>,
+    expected_size: u64,
+) -> BridgeResult<File> {
+    #[cfg(unix)]
+    let read_only = {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if staging_path.is_some() {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        let read_only = retained_read_only.ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        let original = require_private_kagemusha_recursive_spend_artifact_inode_v4(
+            &writable,
+            expected_size,
+            0,
+        )?;
+        let reopened = require_private_kagemusha_recursive_spend_artifact_inode_v4(
+            &read_only,
+            expected_size,
+            0,
+        )?;
+        if original.dev() != reopened.dev()
+            || original.ino() != reopened.ino()
+            || !kagemusha_recursive_spend_file_is_read_only_v4(&read_only)
+        {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        drop(writable);
+        let retained = require_private_kagemusha_recursive_spend_artifact_inode_v4(
+            &read_only,
+            expected_size,
+            0,
+        )?;
+        if retained.dev() != original.dev() || retained.ino() != original.ino() {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        read_only
+    };
+
+    #[cfg(not(unix))]
+    let read_only = {
+        if retained_read_only.is_some() {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        let staging_path = staging_path.ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        // Windows does not allow reopening tempfile's exclusive writable
+        // handle. Close it first, then reopen the still-owned create-new path
+        // read-only and immediately remove the path.
+        drop(writable);
+        let read_only = OpenOptions::new()
+            .read(true)
+            .open(&staging_path)
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        if read_only
+            .metadata()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?
+            .len()
+            != expected_size
+        {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        staging_path
+            .close()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        read_only
+    };
+
+    Ok(read_only)
 }
 
 fn close_kagemusha_recursive_spend_artifact_v4(
     artifact: &Arc<Mutex<KagemushaRecursiveSpendArtifactIngestV4>>,
 ) {
     match artifact.lock() {
-        Ok(mut artifact) => drop(artifact.file.take()),
+        Ok(mut artifact) => {
+            drop(artifact.file.take());
+            drop(artifact.retained_read_only.take());
+            drop(artifact.staging_path.take());
+        }
         Err(poisoned) => {
             let mut artifact = poisoned.into_inner();
             drop(artifact.file.take());
+            drop(artifact.retained_read_only.take());
+            drop(artifact.staging_path.take());
         }
     }
 }
@@ -10322,9 +10766,26 @@ fn validate_kagemusha_recursive_spend_artifact_spool_v4(
         .file
         .as_mut()
         .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-    file.flush()
-        .and_then(|()| file.sync_all())
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    if artifact.sealed_read_only {
+        if artifact.retained_read_only.is_some()
+            || artifact.staging_path.is_some()
+            || require_sealed_kagemusha_recursive_spend_artifact_v4(file, expected_size).is_err()
+        {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+    } else {
+        #[cfg(unix)]
+        if artifact.retained_read_only.is_none() || artifact.staging_path.is_some() {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        #[cfg(not(unix))]
+        if artifact.retained_read_only.is_some() || artifact.staging_path.is_none() {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        file.flush()
+            .and_then(|()| file.sync_all())
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    }
     if file
         .metadata()
         .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?
@@ -10337,7 +10798,7 @@ fn validate_kagemusha_recursive_spend_artifact_spool_v4(
         .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
 
     // Finalization has no authenticated release envelope yet, so it only
-    // verifies the exact bytes retained by this anonymous spool. Installation
+    // verifies the exact bytes retained by this pinned spool. Installation
     // later performs the canonical KRV4 parse under the authenticated release
     // before consuming any handle or rotating the active generation.
     let mut framed_sha256 = Sha256::new();
@@ -11149,9 +11610,6 @@ fn execute_kagemusha_recursive_spend_init_v4(
     local: &KagemushaRecursiveSpendInitLocalRequestV4,
     installed: &impl KagemushaRecursiveSpendArtifactSetViewV4,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4> {
-    use iroha_core::zk::kagemusha_v2::{
-        KagemushaPastaCycleOpaqueProverV4, KagemushaPastaCycleOpaqueVerifierV4,
-    };
     use iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4;
 
     local.validate_shape()?;
@@ -11186,10 +11644,7 @@ fn execute_kagemusha_recursive_spend_init_v4(
         &statement,
         &output_membership,
     )?;
-    let prover_artifacts = installed.runtime_prover_artifacts()?;
-    let prover = KagemushaPastaCycleOpaqueProverV4::from_authenticated_artifacts(&prover_artifacts)
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-    drop(prover_artifacts);
+    let prover = installed.runtime_prover()?;
     let pair_bytes = prover
         .prove_init_v4(
             &local.request,
@@ -11208,11 +11663,7 @@ fn execute_kagemusha_recursive_spend_init_v4(
         &expected_operation,
         pair_bytes,
     )?;
-    let verifier_artifacts = installed.runtime_verifier_artifacts()?;
-    let verifier =
-        KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(&verifier_artifacts)
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-    drop(verifier_artifacts);
+    let verifier = installed.runtime_verifier()?;
     verifier
         .verify_bundle_operation_v4(&bundle, &expected_operation)
         .map_err(|_| BridgeError::KagemushaProve)?;
@@ -11251,10 +11702,7 @@ fn execute_kagemusha_recursive_spend_append_v4(
             ConfidentialTransferOutputV2, build_confidential_transfer_proof_v2_with_paths,
             confidential_transfer_v2_vk_box, parse_transfer_public_inputs,
         },
-        kagemusha_v2::{
-            KagemushaPastaCycleOpaqueProverV4, KagemushaPastaCycleOpaqueVerifierV4,
-            KagemushaStepOperationVectorV4, KagemushaStepTransferPublicV4,
-        },
+        kagemusha_v2::{KagemushaStepOperationVectorV4, KagemushaStepTransferPublicV4},
     };
     use iroha_data_model::offline::{
         KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2, KagemushaRecursiveSpendAppendRequestV4,
@@ -11526,22 +11974,16 @@ fn execute_kagemusha_recursive_spend_append_v4(
                 )
             })
             .collect::<BridgeResult<Vec<_>>>()?;
-        let verifier_artifacts = installed.runtime_verifier_artifacts()?;
-        let verifier =
-            KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(&verifier_artifacts)
-                .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        drop(verifier_artifacts);
-        for (_, index) in &ordered {
-            let parent = &local.previous_inputs[*index].previous_bundle;
-            verifier
-                .verify_bundle_v4(parent)
-                .map_err(|_| BridgeError::KagemushaProve)?;
+        {
+            let verifier = installed.runtime_verifier()?;
+            for (_, index) in &ordered {
+                let parent = &local.previous_inputs[*index].previous_bundle;
+                verifier
+                    .verify_bundle_v4(parent)
+                    .map_err(|_| BridgeError::KagemushaProve)?;
+            }
         }
-        let prover_artifacts = installed.runtime_prover_artifacts()?;
-        let prover =
-            KagemushaPastaCycleOpaqueProverV4::from_authenticated_artifacts(&prover_artifacts)
-                .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        drop(prover_artifacts);
+        let prover = installed.runtime_prover()?;
         let recipient_pair = prover
             .prove_append_v4(
                 &split,
@@ -11561,9 +12003,6 @@ fn execute_kagemusha_recursive_spend_append_v4(
             &recipient_operation,
             recipient_pair,
         )?;
-        verifier
-            .verify_bundle_operation_v4(&recipient_bundle, &recipient_operation)
-            .map_err(|_| BridgeError::KagemushaProve)?;
         let recipient_membership_witness = local.output_membership.note_membership_witness(
             local
                 .output_membership
@@ -11574,9 +12013,9 @@ fn execute_kagemusha_recursive_spend_append_v4(
         recipient_membership_witness
             .validate_for_root(recipient_bundle.statement.final_root)
             .map_err(|_| BridgeError::KagemushaProve)?;
-        let (change_bundle, change_membership_witness) =
+        let (change_bundle, change_membership_witness, change_operation) =
             match (change_statement, local.output_membership.change.as_ref()) {
-                (None, None) => (None, None),
+                (None, None) => (None, None, None),
                 (Some(statement), Some(paths)) => {
                     let operation = KagemushaStepOperationVectorV4::from_append_v4(
                         &split,
@@ -11601,18 +12040,29 @@ fn execute_kagemusha_recursive_spend_append_v4(
                     let bundle = build_kagemusha_recursive_spend_bundle_v4(
                         installed, statement, &operation, pair,
                     )?;
-                    verifier
-                        .verify_bundle_operation_v4(&bundle, &operation)
-                        .map_err(|_| BridgeError::KagemushaProve)?;
                     let witness = local.output_membership.note_membership_witness(paths)?;
                     witness
                         .validate_for_root(bundle.statement.final_root)
                         .map_err(|_| BridgeError::KagemushaProve)?;
-                    (Some(bundle), Some(witness))
+                    (Some(bundle), Some(witness), Some(operation))
                 }
                 _ => return Err(BridgeError::KagemushaProve),
             };
+        // Release the prover before reparsing the smaller terminal-verifier
+        // view for output acceptance; the two native sets must never overlap.
         drop(prover);
+        let verifier = installed.runtime_verifier()?;
+        verifier
+            .verify_bundle_operation_v4(&recipient_bundle, &recipient_operation)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        match (&change_bundle, &change_operation) {
+            (None, None) => {}
+            (Some(bundle), Some(operation)) => verifier
+                .verify_bundle_operation_v4(bundle, operation)
+                .map_err(|_| BridgeError::KagemushaProve)?,
+            _ => return Err(BridgeError::KagemushaProve),
+        }
+        drop(verifier);
         let split_binding_digest = split
             .binding_digest()
             .map_err(|_| BridgeError::KagemushaProve)?;
@@ -11650,10 +12100,7 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
             confidential_unshield_v3_vk_box, default_confidential_diversifier_v2,
             parse_unshield_public_inputs_v3,
         },
-        kagemusha_v2::{
-            KagemushaPastaCycleOpaqueProverV4, KagemushaPastaCycleOpaqueVerifierV4,
-            KagemushaStepOperationVectorV4,
-        },
+        kagemusha_v2::KagemushaStepOperationVectorV4,
     };
     use iroha_data_model::offline::{
         KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2, KagemushaRecursiveSpendRedeemBuildRequestV4,
@@ -11680,18 +12127,18 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
     if expected_input != statement.current_note
         || local.input_membership_witness.input_path.root != statement.final_root
         || local.input_membership_witness.dummy_input_path.root != statement.final_root
+    // Do not retain the parsed terminal verifier through unshield proving or
+    // a recursive change proof; source-backed runtimes reopen it when needed.
     {
         return Err(BridgeError::KagemushaProve);
     }
 
-    let verifier_artifacts = installed.runtime_verifier_artifacts()?;
-    let verifier =
-        KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(&verifier_artifacts)
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-    drop(verifier_artifacts);
-    verifier
-        .verify_bundle_v4(bundle)
-        .map_err(|_| BridgeError::KagemushaProve)?;
+    {
+        let verifier = installed.runtime_verifier()?;
+        verifier
+            .verify_bundle_v4(bundle)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+    }
 
     let input_amount = statement.current_note.amount.atomic_units;
     let change_amount = input_amount
@@ -11864,30 +12311,29 @@ fn execute_kagemusha_recursive_spend_redeem_v4(
             )
             .map_err(|_| BridgeError::KagemushaProve)?;
             let parent_pair = kagemusha_recursive_spend_pair_bytes_v4(bundle)?;
-            let prover_artifacts = installed.runtime_prover_artifacts()?;
-            let prover =
-                KagemushaPastaCycleOpaqueProverV4::from_authenticated_artifacts(&prover_artifacts)
-                    .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-            drop(prover_artifacts);
-            let pair = prover
-                .prove_redemption_change_v4(
-                    &redemption,
-                    &change_statement,
-                    &local.input_opening.spend_key,
-                    &input_paths,
-                    &inputs,
-                    &outputs,
-                    &output_membership,
-                    &[parent_pair],
-                )
-                .map_err(|_| BridgeError::KagemushaProve)?;
+            let pair = {
+                let prover = installed.runtime_prover()?;
+                prover
+                    .prove_redemption_change_v4(
+                        &redemption,
+                        &change_statement,
+                        &local.input_opening.spend_key,
+                        &input_paths,
+                        &inputs,
+                        &outputs,
+                        &output_membership,
+                        &[parent_pair],
+                    )
+                    .map_err(|_| BridgeError::KagemushaProve)?
+            };
             let change_bundle = build_kagemusha_recursive_spend_bundle_v4(
                 installed,
                 change_statement,
                 &change_operation,
                 pair,
             )?;
-            verifier
+            installed
+                .runtime_verifier()?
                 .verify_bundle_operation_v4(&change_bundle, &change_operation)
                 .map_err(|_| BridgeError::KagemushaProve)?;
             let membership = paths.note_membership_witness(
@@ -11946,7 +12392,6 @@ fn execute_kagemusha_recursive_spend_verify_v4(
     local: &KagemushaRecursiveSpendVerifyLocalRequestV4,
     installed: &impl KagemushaRecursiveSpendArtifactSetViewV4,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4> {
-    use iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4;
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KagemushaRecursiveSpendVerifyResultV4,
     };
@@ -11965,11 +12410,7 @@ fn execute_kagemusha_recursive_spend_verify_v4(
             &evidence.topup_anchor,
         )?;
     }
-    let verifier_artifacts = installed.runtime_verifier_artifacts()?;
-    let verifier =
-        KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(&verifier_artifacts)
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-    drop(verifier_artifacts);
+    let verifier = installed.runtime_verifier()?;
     verifier
         .verify_bundle_v4(&request.bundle)
         .map_err(|_| BridgeError::KagemushaProve)?;
@@ -13569,13 +14010,7 @@ fn validate_kagemusha_recursive_spend_branch_against_installed_v4(
         block_height,
         installed,
     )?;
-    let verifier_artifacts = installed.runtime_verifier_artifacts()?;
-    let verifier =
-        iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(
-            &verifier_artifacts,
-        )
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-    drop(verifier_artifacts);
+    let verifier = installed.runtime_verifier()?;
     verifier
         .verify_bundle_v4(bundle)
         .map_err(|_| BridgeError::KagemushaProve)?;
@@ -13793,7 +14228,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
 /// Return the exact ABI-21/V4 recursive-spend capability contract.
 ///
 /// Symbol presence is not a readiness signal. Availability requires one live
-/// authenticated eight-artifact release with both verifier and prover material.
+/// eight-role source whose authenticated release was fully qualified at install.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v4(
     out_capabilities_ptr: *mut *mut c_uchar,
@@ -13811,8 +14246,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v
         ) {
             (true, Some(installed)) => {
                 installed.validate_live_inventory()?;
-                installed.authenticated_verifier_artifacts()?;
-                installed.authenticated_prover_artifacts()?;
                 (installed.manifest().max_proof_bytes, true, Vec::new())
             }
             (true, None) => (
@@ -14149,7 +14582,7 @@ fn decode_kagemusha_recursive_spend_manifest_v4(
 ///
 /// The caller supplies an opaque `KRV4KEY` file. The canonical manifest and
 /// one unique framed-file digest are pinned before allocating an anonymous
-/// spool and a V4-namespaced handle.
+/// create-new private spool and a V4-namespaced handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_begin_v4(
     manifest_norito_ptr: *const c_uchar,
@@ -14236,15 +14669,20 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_begin
             }
         }
         let handle = handle.ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        let (file, retained_read_only, staging_path) =
+            open_kagemusha_recursive_spend_artifact_v4()?;
         let artifact = Arc::new(Mutex::new(KagemushaRecursiveSpendArtifactIngestV4 {
             manifest,
             manifest_sha256: expected_manifest_sha256,
             descriptor,
-            file: Some(open_kagemusha_recursive_spend_artifact_v4()?),
+            file: Some(file),
+            retained_read_only,
+            staging_path,
             framed_sha256: Sha256::new(),
             written: 0,
             ready: false,
             failed: false,
+            sealed_read_only: false,
         }));
         registry.insert(handle, artifact);
         unsafe { *out_handle = handle };
@@ -14253,7 +14691,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_begin
     bridge_result_to_code(result)
 }
 
-/// Append one package chunk directly to its held anonymous V4 spool.
+/// Append one package chunk directly to its held private V4 spool.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_write_v4(
     handle: u64,
@@ -14287,7 +14725,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_write
         let mut artifact = artifact
             .lock()
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        if artifact.ready || artifact.failed {
+        if artifact.ready || artifact.failed || artifact.sealed_read_only {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
         }
         let next = artifact
@@ -14341,7 +14779,16 @@ pub extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_finalize_v4(
         let streamed_digest: [u8; 32] = artifact_guard.framed_sha256.clone().finalize().into();
         let valid = artifact_guard.written == artifact_guard.descriptor.size_bytes
             && streamed_digest == artifact_guard.descriptor.sha256
-            && validate_kagemusha_recursive_spend_artifact_spool_v4(&mut artifact_guard).is_ok();
+            && validate_kagemusha_recursive_spend_artifact_spool_v4(&mut artifact_guard).is_ok()
+            && seal_kagemusha_recursive_spend_artifact_read_only_v4(&mut artifact_guard).is_ok()
+            && validate_kagemusha_recursive_spend_artifact_spool_v4(&mut artifact_guard).is_ok()
+            && artifact_guard.retained_read_only.is_none()
+            && artifact_guard.staging_path.is_none()
+            && artifact_guard.sealed_read_only
+            && artifact_guard
+                .file
+                .as_ref()
+                .is_some_and(kagemusha_recursive_spend_file_is_read_only_v4);
         if !valid {
             artifact_guard.failed = true;
             drop(artifact_guard);
@@ -14400,42 +14847,52 @@ fn install_authenticated_kagemusha_recursive_spend_artifact_set_v4(
         return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
     }
 
-    let expected_descriptor_order = manifest
+    let expected_artifact_order = manifest
         .profiles
         .iter()
-        .flat_map(|profile| profile.artifacts.iter())
-        .map(|artifact| artifact.sha256)
+        .flat_map(|profile| {
+            profile
+                .artifacts
+                .iter()
+                .cloned()
+                .map(move |descriptor| (profile.parity, descriptor))
+        })
         .collect::<Vec<_>>();
-    let expected_descriptors = expected_descriptor_order
+    let expected_descriptors = expected_artifact_order
         .iter()
-        .copied()
+        .map(|(_, descriptor)| descriptor.sha256)
         .collect::<HashSet<_>>();
-    if expected_descriptor_order.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
+    if expected_artifact_order.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
         || expected_descriptors.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
     {
         return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
     }
 
-    // Complete every fallible trust and content check while all handles still
-    // belong to the caller and the previously installed generation is intact.
-    let mut registry = kagemusha_recursive_spend_artifact_registry_v4()
-        .lock()
-        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-    let mut artifacts_by_descriptor =
-        HashMap::with_capacity(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4);
-    let mut observed_descriptors =
-        HashSet::with_capacity(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4);
-    for handle in &handles {
-        let artifact = registry
-            .get(handle)
-            .cloned()
-            .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-        let descriptor_sha256 = {
+    // Snapshot exact handle identities and independent read-only descriptors
+    // under the registry lock. Expensive source qualification runs after this
+    // lock is released; cancellation can win concurrently, in which case the
+    // identity recheck below fails without rotating the active release.
+    let (source_artifacts, snapshots) = {
+        let registry = kagemusha_recursive_spend_artifact_registry_v4()
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        let mut artifacts_by_descriptor =
+            HashMap::with_capacity(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4);
+        let mut observed_descriptors =
+            HashSet::with_capacity(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4);
+        for handle in &handles {
+            let artifact = registry
+                .get(handle)
+                .cloned()
+                .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
             let mut artifact_guard = artifact
                 .lock()
                 .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
             if !artifact_guard.ready
                 || artifact_guard.failed
+                || !artifact_guard.sealed_read_only
+                || artifact_guard.retained_read_only.is_some()
+                || artifact_guard.staging_path.is_some()
                 || artifact_guard.file.is_none()
                 || artifact_guard.manifest_sha256 != expected_manifest_sha256
                 || artifact_guard.manifest != manifest
@@ -14445,39 +14902,116 @@ fn install_authenticated_kagemusha_recursive_spend_artifact_set_v4(
                 return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
             }
             validate_kagemusha_recursive_spend_artifact_spool_v4(&mut artifact_guard)?;
-            artifact_guard.descriptor.sha256
-        };
-        artifacts_by_descriptor.insert(descriptor_sha256, artifact);
-    }
-    if observed_descriptors != expected_descriptors {
-        return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
-    }
-    let artifacts = expected_descriptor_order
-        .iter()
-        .map(|digest| {
-            artifacts_by_descriptor
-                .remove(digest)
-                .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)
-        })
-        .collect::<BridgeResult<Vec<_>>>()?;
+            let source_file = artifact_guard
+                .file
+                .as_ref()
+                .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?
+                .try_clone()
+                .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+            let descriptor = artifact_guard.descriptor.clone();
+            require_sealed_kagemusha_recursive_spend_artifact_v4(
+                &source_file,
+                descriptor.size_bytes,
+            )?;
+            let parity = expected_artifact_order
+                .iter()
+                .find(|(_, expected)| expected == &descriptor)
+                .map(|(parity, _)| *parity)
+                .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+            drop(artifact_guard);
+            artifacts_by_descriptor.insert(
+                descriptor.sha256,
+                (
+                    *handle,
+                    artifact,
+                    KagemushaRecursiveSpendInstalledArtifactV4 {
+                        parity,
+                        descriptor,
+                        file: Arc::new(Mutex::new(source_file)),
+                    },
+                ),
+            );
+        }
+        if observed_descriptors != expected_descriptors {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        let mut source_artifacts = Vec::with_capacity(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4);
+        let mut snapshots = Vec::with_capacity(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4);
+        for (_, descriptor) in &expected_artifact_order {
+            let (handle, artifact, source_artifact) = artifacts_by_descriptor
+                .remove(&descriptor.sha256)
+                .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+            snapshots.push((handle, artifact, descriptor.clone()));
+            source_artifacts.push(source_artifact);
+        }
+        (source_artifacts, snapshots)
+    };
 
+    let source = Arc::new(KagemushaRecursiveSpendInstalledArtifactSourceV4::new(
+        authenticated_release,
+        source_artifacts,
+    )?);
+    // Semantic qualification is deliberately outside the ingest-registry
+    // lock. Core owns both authentication passes, bounded key parsers, exact
+    // payload consumption, and one-parity-at-a-time material residency.
+    let qualification_source: Arc<
+        dyn iroha_core::zk::kagemusha_artifact_source_v4::KagemushaAuthenticatedArtifactSourceV4,
+    > = source.clone();
+    let qualified_source = Arc::new(
+        iroha_core::zk::kagemusha_artifact_source_v4::
+            qualify_kagemusha_authenticated_artifact_source_v4(qualification_source)
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?,
+    );
     let installed = Arc::new(KagemushaRecursiveSpendInstalledArtifactSetV4 {
         promotion_record,
-        authenticated_release,
         manifest_sha256: expected_manifest_sha256,
-        artifacts,
+        source,
+        qualified_source,
     });
-    // Stream-authenticate every exact manifest role under the signed release
-    // before the atomic swap. The inspector hashes each payload into a fixed
-    // scratch buffer and rejects malformed headers, tamper, truncation, and
-    // trailing bytes without constructing six- or eight-payload carriers.
-    installed.stream_authenticate_live_inventory()?;
+    installed.validate_live_inventory()?;
+
+    // Linearize consumption only if every handle still denotes the exact Arc
+    // qualified above. A cancellation or replacement leaves both the handles
+    // that remain and the previously active generation untouched.
+    let mut registry = kagemusha_recursive_spend_artifact_registry_v4()
+        .lock()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+    for (handle, snapshot, descriptor) in &snapshots {
+        let current = registry
+            .get(handle)
+            .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        if !Arc::ptr_eq(current, snapshot) {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+        let artifact = current
+            .lock()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        if !artifact.ready
+            || artifact.failed
+            || !artifact.sealed_read_only
+            || artifact.retained_read_only.is_some()
+            || artifact.staging_path.is_some()
+            || artifact.descriptor != *descriptor
+            || artifact.manifest_sha256 != expected_manifest_sha256
+            || artifact.manifest != manifest
+            || artifact.file.as_ref().is_none_or(|file| {
+                require_sealed_kagemusha_recursive_spend_artifact_v4(file, descriptor.size_bytes)
+                    .is_err()
+            })
+        {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
+    }
     let mut active = kagemusha_recursive_spend_installed_artifact_set_registry_v4()
         .lock()
         .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
-    for handle in &handles {
-        let removed = registry.remove(handle);
-        debug_assert!(removed.is_some());
+    for (handle, snapshot, _) in &snapshots {
+        let removed = registry
+            .remove(handle)
+            .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)?;
+        if !Arc::ptr_eq(&removed, snapshot) {
+            return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
+        }
     }
     *active = Some(installed);
     Ok(())
@@ -14982,7 +15516,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
                 candidate_sha256,
                 manifest_sha256,
                 descriptor,
-                file: Some(open_kagemusha_recursive_spend_artifact_v4()?),
+                file: Some(open_kagemusha_candidate_evidence_lab_artifact_v4()?),
                 framed_sha256: Sha256::new(),
                 written: 0,
                 ready: false,
@@ -16257,6 +16791,57 @@ pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
 }
 
 #[cfg(test)]
+mod validation_fee_policy_proof_bridge_tests {
+    use super::*;
+
+    #[test]
+    fn request_encoder_validates_context_without_serializing_it() {
+        let first_context = [1_u8; 32];
+        let mut second_context = [3_u8; 32];
+        second_context[0] = 9;
+        let first = validation_fee_current_policy_proof_request_v1(17, first_context)
+            .expect("encode first request");
+        let second = validation_fee_current_policy_proof_request_v1(17, second_context)
+            .expect("encode second request");
+        assert_eq!(first, second);
+        let decoded: ValidationFeeCurrentPolicyProofRequestV1 =
+            decode_from_bytes(&first).expect("decode request");
+        assert_eq!(
+            decoded,
+            ValidationFeeCurrentPolicyProofRequestV1 {
+                version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+                trusted_checkpoint_height: 17,
+            }
+        );
+        assert!(
+            validation_fee_current_policy_proof_request_v1(0, first_context).is_err(),
+            "zero height must fail closed"
+        );
+        assert!(
+            validation_fee_current_policy_proof_request_v1(17, [0; 32]).is_err(),
+            "zero context must fail closed"
+        );
+        validation_fee_current_policy_proof_request_v1(17, [2; 32])
+            .expect("Iroha context hashes have no parity validity bit");
+    }
+
+    #[test]
+    fn proof_verifier_rejects_malformed_archive() {
+        assert!(
+            validation_fee_current_policy_proof_verify_v1(
+                b"not norito",
+                ChainId::from("validation-fee-test"),
+                [1; 32],
+                [3; 32],
+                1,
+                [5; 32],
+            )
+            .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
 mod detached_transaction_scaffold_tests {
     use std::{num::NonZeroU32, ptr};
 
@@ -17017,6 +17602,19 @@ mod kagemusha_bridge_tests {
     }
 
     #[test]
+    fn recursive_spend_v4_source_mutex_recovers_after_worker_panic() {
+        let mutex = Mutex::new(());
+        let panicked = std::panic::catch_unwind(|| {
+            let _guard = lock_kagemusha_recursive_spend_source_mutex_v4(&mutex);
+            panic!("installed source mutex poison fixture");
+        });
+        assert!(panicked.is_err(), "fixture must poison the mutex once");
+
+        let _guard = lock_kagemusha_recursive_spend_source_mutex_v4(&mutex);
+        assert!(!mutex.is_poisoned());
+    }
+
+    #[test]
     fn recursive_spend_v4_worker_serializes_release_sized_lifecycles() {
         use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
@@ -17051,18 +17649,17 @@ mod kagemusha_bridge_tests {
             .expect("fixture seed must derive a valid keypair")
     }
 
-    fn lightweight_authenticated_inventory_v4() -> KagemushaRecursiveSpendInstalledArtifactSetV4 {
+    fn lightweight_authenticated_source_v4() -> Arc<KagemushaRecursiveSpendInstalledArtifactSourceV4>
+    {
         use iroha_crypto::SignatureOf;
         use iroha_data_model::offline::{
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
             KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4,
             KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V4,
             KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4,
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
@@ -17080,10 +17677,10 @@ mod kagemusha_bridge_tests {
             KagemushaRecursiveSpendCryptographicReviewApprovalV4,
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4,
             KagemushaRecursiveSpendCryptographicReviewPayloadV4,
-            KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseApprovalRoleV1,
-            KagemushaRecursiveSpendReleaseApprovalV4, KagemushaRecursiveSpendReleaseAttestationV4,
-            KagemushaRecursiveSpendReleasePolicyV1, KagemushaRecursiveSpendReleaseRolePolicyV1,
-            KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactReferenceV4,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1, KagemushaRecursiveSpendReleaseApprovalV4,
+            KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
+            KagemushaRecursiveSpendReleaseRolePolicyV1, KagemushaStepCircuitParamsV4,
+            KagemushaTopUpFinalityRosterArtifactReferenceV4,
         };
 
         fn digest(bytes: &[u8]) -> [u8; 32] {
@@ -17289,58 +17886,190 @@ mod kagemusha_bridge_tests {
             &cryptographic_review,
         )
         .expect("authenticate lightweight signed release");
-        let promotion_record = KagemushaRecursiveSpendPromotedReleaseV4 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
-            generation: generation.to_owned(),
-            candidate_sha256: candidate.sha256().expect("candidate digest"),
-            manifest_sha256: authenticated_release.manifest_sha256(),
-            release_attestation_sha256: authenticated_release.release_attestation_sha256(),
-            release_policy_sha256: authenticated_release.release_policy_sha256(),
-            approved_signers: authenticated_release.approved_signers().to_vec(),
-            artifact_inventory_verified: true,
-            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-            artifact_roles: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
-                .map(str::to_owned)
-                .to_vec(),
-            max_proof_bytes: manifest.max_proof_bytes,
-        };
         let manifest_sha256 = authenticated_release.manifest_sha256();
         let descriptors = manifest
             .profiles
             .iter()
-            .flat_map(|profile| profile.artifacts.iter())
+            .flat_map(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .map(move |descriptor| (profile.parity, descriptor))
+            })
             .collect::<Vec<_>>();
         assert_eq!(descriptors.len(), framed_artifacts.len());
         let artifacts = descriptors
             .into_iter()
             .zip(framed_artifacts)
-            .map(|(descriptor, framed)| {
-                let mut file = tempfile::tempfile().expect("open lightweight artifact spool");
+            .map(|((parity, descriptor), framed)| {
+                let (mut file, retained_read_only, staging_path) =
+                    open_kagemusha_recursive_spend_artifact_v4()
+                        .expect("open lightweight artifact spool");
                 file.write_all(&framed)
                     .expect("write lightweight artifact spool");
                 file.seek(SeekFrom::Start(0))
                     .expect("rewind lightweight artifact spool");
                 let mut framed_sha256 = Sha256::new();
                 framed_sha256.update(&framed);
-                Arc::new(Mutex::new(KagemushaRecursiveSpendArtifactIngestV4 {
+                let mut ingest = KagemushaRecursiveSpendArtifactIngestV4 {
                     manifest: manifest.clone(),
                     manifest_sha256,
                     descriptor: descriptor.clone(),
                     file: Some(file),
+                    retained_read_only,
+                    staging_path,
                     framed_sha256,
                     written: descriptor.size_bytes,
-                    ready: true,
+                    ready: false,
                     failed: false,
-                }))
+                    sealed_read_only: false,
+                };
+                validate_kagemusha_recursive_spend_artifact_spool_v4(&mut ingest)
+                    .expect("validate lightweight artifact spool");
+                seal_kagemusha_recursive_spend_artifact_read_only_v4(&mut ingest)
+                    .expect("seal lightweight artifact spool read-only");
+                validate_kagemusha_recursive_spend_artifact_spool_v4(&mut ingest)
+                    .expect("reauthenticate sealed lightweight artifact spool");
+                assert!(ingest.retained_read_only.is_none());
+                assert!(ingest.staging_path.is_none());
+                assert!(
+                    ingest
+                        .file
+                        .as_ref()
+                        .is_some_and(kagemusha_recursive_spend_file_is_read_only_v4)
+                );
+                KagemushaRecursiveSpendInstalledArtifactV4 {
+                    parity,
+                    descriptor: descriptor.clone(),
+                    file: Arc::new(Mutex::new(
+                        ingest.file.take().expect("sealed lightweight artifact"),
+                    )),
+                }
             })
             .collect();
-        KagemushaRecursiveSpendInstalledArtifactSetV4 {
-            promotion_record,
-            authenticated_release,
-            manifest_sha256,
-            artifacts,
+        Arc::new(
+            KagemushaRecursiveSpendInstalledArtifactSourceV4::new(authenticated_release, artifacts)
+                .expect("construct lightweight authenticated source"),
+        )
+    }
+
+    fn authenticate_lightweight_source_inventory_v4(
+        source: Arc<KagemushaRecursiveSpendInstalledArtifactSourceV4>,
+    ) -> Result<(), String> {
+        use iroha_core::zk::kagemusha_artifact_source_v4::{
+            KagemushaAuthenticatedArtifactSourceV4 as _,
+            with_kagemusha_authenticated_artifact_payload_from_source_v4,
+        };
+
+        let roles = source
+            .authenticated_release()
+            .manifest()
+            .profiles
+            .iter()
+            .flat_map(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .map(move |descriptor| (profile.parity, descriptor.kind))
+            })
+            .collect::<Vec<_>>();
+        if roles.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4 {
+            return Err("lightweight Kagemusha V4 source role count mismatch".to_owned());
         }
+        for (parity, kind) in roles {
+            with_kagemusha_authenticated_artifact_payload_from_source_v4(
+                source.as_ref(),
+                parity,
+                kind,
+                |reader, _| {
+                    std::io::copy(reader, &mut std::io::sink())
+                        .map_err(|error| error.to_string())?;
+                    Ok(())
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn lightweight_read_only_artifact_file_v4(bytes: &[u8]) -> File {
+        let (mut writable, retained_read_only, staging_path) =
+            open_kagemusha_recursive_spend_artifact_v4().expect("open adversarial artifact spool");
+        writable
+            .write_all(bytes)
+            .expect("write adversarial artifact bytes");
+        writable.flush().expect("flush adversarial artifact bytes");
+        writable
+            .sync_all()
+            .expect("sync adversarial artifact bytes");
+        let read_only = reopen_kagemusha_recursive_spend_artifact_read_only_v4(
+            writable,
+            retained_read_only,
+            staging_path,
+            bytes
+                .len()
+                .try_into()
+                .expect("artifact byte length fits u64"),
+        )
+        .expect("seal adversarial artifact read-only");
+        assert!(kagemusha_recursive_spend_file_is_read_only_v4(&read_only));
+        read_only
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_spend_v4_artifact_spool_is_anonymous_before_streaming() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let (writable, retained_read_only, staging_path) =
+            open_kagemusha_recursive_spend_artifact_v4()
+                .expect("open anonymous production artifact spool");
+        let read_only = retained_read_only.expect("retain pinned read-only descriptor");
+        assert!(staging_path.is_none());
+        assert_eq!(writable.metadata().expect("writable metadata").nlink(), 0);
+        assert_eq!(read_only.metadata().expect("read-only metadata").nlink(), 0);
+        assert!(kagemusha_recursive_spend_file_is_read_only_v4(&read_only));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_spend_v4_artifact_spool_rejects_surviving_hardlink() {
+        let temporary = tempfile::tempdir().expect("create hardlink adversarial directory");
+        let named = tempfile::Builder::new()
+            .prefix(".iroha-krv4-hardlink-")
+            .tempfile_in(temporary.path())
+            .expect("create hardlink adversarial spool");
+        let (writable, staging_path) = named.into_parts();
+        let staging_path_buf = staging_path.to_path_buf();
+        let surviving = temporary.path().join("surviving-hardlink");
+        std::fs::hard_link(&staging_path_buf, &surviving)
+            .expect("create deterministic surviving hardlink");
+
+        pin_and_unlink_kagemusha_recursive_spend_artifact_v4(writable, staging_path, 0)
+            .expect_err("a multiply linked spool must fail closed");
+        assert!(!staging_path_buf.exists());
+        assert!(surviving.is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_spend_v4_artifact_spool_rejects_symlink_swap() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("create symlink adversarial directory");
+        let named = tempfile::Builder::new()
+            .prefix(".iroha-krv4-symlink-")
+            .tempfile_in(temporary.path())
+            .expect("create symlink adversarial spool");
+        let (writable, staging_path) = named.into_parts();
+        let staging_path_buf = staging_path.to_path_buf();
+        let moved = temporary.path().join("moved-original");
+        std::fs::rename(&staging_path_buf, &moved).expect("move original staging inode");
+        symlink(&moved, &staging_path_buf).expect("replace staging name with symlink");
+
+        pin_and_unlink_kagemusha_recursive_spend_artifact_v4(writable, staging_path, 0)
+            .expect_err("a symlink-swapped spool must fail closed");
+        assert!(!staging_path_buf.exists());
+        assert!(moved.is_file());
     }
 
     fn request_authorization_preparation(
@@ -18958,7 +19687,7 @@ mod kagemusha_bridge_tests {
     }
 
     #[test]
-    fn recursive_spend_v4_availability_uses_the_installed_authenticated_release() {
+    fn recursive_spend_v4_availability_uses_the_qualified_installed_source() {
         let source = include_str!("lib.rs");
         let capabilities = source
             .split_once(
@@ -18980,8 +19709,8 @@ mod kagemusha_bridge_tests {
         for implementation in [capabilities, java_availability] {
             assert!(implementation.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE"));
             assert!(implementation.contains("validate_live_inventory"));
-            assert!(implementation.contains("authenticated_verifier_artifacts"));
-            assert!(implementation.contains("authenticated_prover_artifacts"));
+            assert!(!implementation.contains("authenticated_verifier_artifacts"));
+            assert!(!implementation.contains("authenticated_prover_artifacts"));
         }
         assert!(!capabilities.contains("production-release-not-promoted"));
         assert!(capabilities.contains("authenticated-v4-artifact-installation"));
@@ -19157,6 +19886,11 @@ mod kagemusha_bridge_tests {
     }
 
     #[cfg(feature = "privacy-production-enabled")]
+    struct ProductionReleaseFramedArtifactV4 {
+        file: Mutex<File>,
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
     struct ProductionReleaseFixtureV4 {
         manifest: iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
         policy: iroha_data_model::offline::KagemushaRecursiveSpendReleasePolicyV1,
@@ -19169,7 +19903,7 @@ mod kagemusha_bridge_tests {
         receiver_offer: iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
         fresh_recipient_request: iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
         fresh_recipient_opening: KagemushaNoteOpeningV2,
-        framed_artifacts: Vec<Vec<u8>>,
+        framed_artifacts: Vec<ProductionReleaseFramedArtifactV4>,
         live_pair: Vec<u8>,
     }
 
@@ -19233,55 +19967,30 @@ mod kagemusha_bridge_tests {
     }
 
     #[cfg(feature = "privacy-production-enabled")]
-    fn production_release_profile_and_frames_v4(
+    fn production_release_profile_v4(
         generation: &str,
-        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
-        generated: iroha_core::zk::kagemusha_v2::KagemushaGeneratedParityArtifactsV4,
-    ) -> (
-        iroha_data_model::offline::KagemushaPastaCycleProofProfileV4,
-        Vec<Vec<u8>>,
-    ) {
+        generated: &iroha_core::zk::kagemusha_v2::KagemushaGeneratedParityProfileV4,
+    ) -> iroha_data_model::offline::KagemushaPastaCycleProofProfileV4 {
         use iroha_data_model::offline::{
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-            KagemushaPastaCycleArtifactKindV4 as Kind, KagemushaPastaCycleParityV1 as Parity,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KagemushaPastaCycleParityV1 as Parity,
             KagemushaPastaCycleProofProfileV4,
         };
 
-        let circuit_id = match parity {
+        let circuit_id = match generated.parity {
             Parity::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
             Parity::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
         };
-        let mut profile = KagemushaPastaCycleProofProfileV4 {
-            parity,
+        KagemushaPastaCycleProofProfileV4 {
+            parity: generated.parity,
             circuit_id: circuit_id.to_owned(),
             parameter_generation: generation.to_owned(),
             ipa_k: generated.circuit_params.k,
-            circuit_params: generated.circuit_params,
+            circuit_params: generated.circuit_params.clone(),
             compiled_protocol_structure_sha256: generated.compiled_protocol_structure_sha256,
             step_proof_size_bytes: generated.step_proof_size_bytes,
             artifacts: Vec::new(),
-        };
-        let payloads = [
-            (Kind::ParamsIpa, generated.parameters),
-            (Kind::ProvingKey, generated.proving_key),
-            (Kind::VerifyingKey, generated.verifying_key),
-            (Kind::BootstrapWitness, generated.bootstrap_witness),
-        ];
-        let mut framed = Vec::with_capacity(payloads.len());
-        let mut descriptors = Vec::with_capacity(payloads.len());
-        for (kind, payload) in payloads {
-            let mut bytes = Vec::new();
-            let descriptor =
-                iroha_core::zk::kagemusha_artifact_v4::write_kagemusha_pasta_cycle_artifact_v4(
-                    &mut bytes, generation, &profile, kind, &payload,
-                )
-                .expect("frame genuine KRV4 release artifact");
-            descriptors.push(descriptor);
-            framed.push(bytes);
         }
-        profile.artifacts = descriptors;
-        (profile, framed)
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -19325,7 +20034,9 @@ mod kagemusha_bridge_tests {
     }
 
     #[cfg(feature = "privacy-production-enabled")]
-    fn production_release_fixture_v4() -> ProductionReleaseFixtureV4 {
+    fn production_release_fixture_v4(
+        resource_guard: &mut KagemushaV4GuardChannel,
+    ) -> ProductionReleaseFixtureV4 {
         use iroha_crypto::SignatureOf;
         use iroha_data_model::offline::{
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
@@ -19345,7 +20056,8 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4,
-            KagemushaRecursiveSpendArtifactManifestV4,
+            KagemushaPastaCycleArtifactKindV4 as ArtifactKind,
+            KagemushaPastaCycleParityV1 as Parity, KagemushaRecursiveSpendArtifactManifestV4,
             KagemushaRecursiveSpendCryptographicReviewApprovalV4,
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4,
             KagemushaRecursiveSpendCryptographicReviewPayloadV4,
@@ -19373,27 +20085,96 @@ mod kagemusha_bridge_tests {
             norito::to_bytes(&topup_roster).expect("encode production top-up finality roster");
 
         let params = production_release_circuit_params_v4();
-        let generated = iroha_core::zk::kagemusha_v2::generate_kagemusha_pasta_cycle_artifacts_v4(
-            params.clone(),
-            params,
-        )
-        .expect("generate and self-verify the genuine degree-20 Eq/Ep release");
+        let mut step_eq_profile = None;
+        let mut step_ep_profile = None;
+        let mut generated_frames = Vec::with_capacity(8);
+        let live_pair = iroha_core::zk::kagemusha_v2::generate_kagemusha_pasta_cycle_artifacts_streaming_with_progress_v4(
+                params.clone(),
+                params,
+                |generated_profile, kind, spool| {
+                    let profile = production_release_profile_v4(generation, generated_profile);
+                    let profile_slot = match generated_profile.parity {
+                        Parity::StepEq => &mut step_eq_profile,
+                        Parity::StepEp => &mut step_ep_profile,
+                    };
+                    if let Some(existing) = profile_slot.as_ref() {
+                        assert_eq!(existing, &profile, "streamed parity profile changed");
+                    } else {
+                        *profile_slot = Some(profile.clone());
+                    }
+
+                    let (mut file, retained_read_only, staging_path) =
+                        open_kagemusha_recursive_spend_artifact_v4()
+                            .expect("open genuine KRV4 release artifact spool");
+                    let descriptor = iroha_core::zk::kagemusha_artifact_v4::write_kagemusha_pasta_cycle_artifact_streaming_v4(
+                        &mut file,
+                        generation,
+                        &profile,
+                        kind,
+                        spool.size_bytes(),
+                        spool.sha256(),
+                        |writer| spool.copy_to(writer),
+                    )
+                    .expect("stream genuine KRV4 release artifact into its canonical frame");
+                    file.flush()
+                        .and_then(|()| file.sync_all())
+                        .expect("durably spool genuine KRV4 release artifact");
+                    let file = reopen_kagemusha_recursive_spend_artifact_read_only_v4(
+                        file,
+                        retained_read_only,
+                        staging_path,
+                        descriptor.size_bytes,
+                    )
+                    .expect("seal genuine KRV4 release artifact read-only");
+                    assert!(kagemusha_recursive_spend_file_is_read_only_v4(&file));
+                    generated_frames.push((
+                        generated_profile.parity,
+                        kind,
+                        descriptor,
+                        ProductionReleaseFramedArtifactV4 {
+                            file: Mutex::new(file),
+                        },
+                    ));
+                    Ok(())
+                },
+                |phase| {
+                    resource_guard
+                        .write_phase(phase)
+                        .map_err(|error| error.to_string())
+                },
+            )
+            .expect("generate and self-verify the genuine degree-20 Eq/Ep release");
         eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 fixture:artifacts-generated");
-        let live_pair = generated.measured_live_pair_bytes;
-        let (step_eq, mut framed_artifacts) = production_release_profile_and_frames_v4(
-            generation,
-            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
-            generated.step_eq,
-        );
-        let (step_ep, step_ep_framed) = production_release_profile_and_frames_v4(
-            generation,
-            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
-            generated.step_ep,
-        );
-        framed_artifacts.extend(step_ep_framed);
+        assert_eq!(generated_frames.len(), 8, "all exact release roles emitted");
+        generated_frames.sort_by_key(|(parity, kind, _, _)| {
+            let parity_rank = match parity {
+                Parity::StepEq => 0_u8,
+                Parity::StepEp => 1,
+            };
+            let kind_rank = match kind {
+                ArtifactKind::ParamsIpa => 0_u8,
+                ArtifactKind::ProvingKey => 1,
+                ArtifactKind::VerifyingKey => 2,
+                ArtifactKind::BootstrapWitness => 3,
+            };
+            (parity_rank, kind_rank)
+        });
+        let mut step_eq = step_eq_profile.expect("Eq release profile emitted");
+        let mut step_ep = step_ep_profile.expect("Ep release profile emitted");
+        let mut framed_artifacts = Vec::with_capacity(8);
+        for (parity, _, descriptor, framed) in generated_frames {
+            match parity {
+                Parity::StepEq => step_eq.artifacts.push(descriptor),
+                Parity::StepEp => step_ep.artifacts.push(descriptor),
+            }
+            framed_artifacts.push(framed);
+        }
+        step_eq.validate().expect("complete streamed Eq profile");
+        step_ep.validate().expect("complete streamed Ep profile");
 
         let benchmark_evidence =
-            b"signed physical-device KRV4 benchmark qualification evidence".to_vec();
+            b"resource-guarded KRV4 integration benchmark evidence; mobile acceptance is simulator-only"
+                .to_vec();
         let mut manifest = KagemushaRecursiveSpendArtifactManifestV4 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
@@ -19759,20 +20540,15 @@ mod kagemusha_bridge_tests {
             },
             hash_vk,
         };
-        use iroha_data_model::{
-            offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-                KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-                KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4, KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
-                KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2, KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-                KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2, KagemushaPastaCycleArtifactKindV4,
-                KagemushaPastaCycleParityV1,
-                kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4,
-                kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4,
-            },
-            proof::VerifyingKeyBox,
+        use iroha_data_model::offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
+            KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4, KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
+            KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2, KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+            kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4,
+            kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4,
         };
         use iroha_torii_shared::offline_api::{
             OfflineActiveTransferVerifier, OfflineAuthenticatedArtifactSet, OfflineReadiness,
@@ -19819,33 +20595,32 @@ mod kagemusha_bridge_tests {
             Hash::new(CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1).into(),
             CONFIDENTIAL_V2_MAX_PROOF_BYTES,
         );
-        let recursive =
-            |parity, role: &str, circuit_id: &str, public_inputs_schema_hash: [u8; 32]| {
-                let payload = installed
-                    .authenticated_payload(parity, KagemushaPastaCycleArtifactKindV4::VerifyingKey)
-                    .expect("authenticated recursive verifier payload");
-                let vk = VerifyingKeyBox::new(
-                    ZK_BACKEND_HALO2_IPA
-                        .parse()
-                        .expect("canonical recursive verifier backend"),
-                    payload.payload().to_vec(),
-                );
-                active(
-                    role,
-                    circuit_id,
-                    hash_vk(&vk),
-                    public_inputs_schema_hash,
-                    fixture.manifest.max_proof_bytes,
-                )
-            };
+        let recursive = |commitment: [u8; 32],
+                         role: &str,
+                         circuit_id: &str,
+                         public_inputs_schema_hash: [u8; 32]| {
+            active(
+                role,
+                circuit_id,
+                commitment,
+                public_inputs_schema_hash,
+                fixture.manifest.max_proof_bytes,
+            )
+        };
         let step_eq = recursive(
-            KagemushaPastaCycleParityV1::StepEq,
+            installed
+                .qualified_source
+                .step_eq()
+                .verifying_key_commitment(),
             KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
             kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4(),
         );
         let step_ep = recursive(
-            KagemushaPastaCycleParityV1::StepEp,
+            installed
+                .qualified_source
+                .step_ep()
+                .verifying_key_commitment(),
             KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
             kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4(),
@@ -19868,10 +20643,16 @@ mod kagemusha_bridge_tests {
                 generation: fixture.manifest.generation.clone(),
                 manifest_sha256: hex::encode(installed.manifest_sha256),
                 release_policy_sha256: hex::encode(
-                    installed.authenticated_release.release_policy_sha256(),
+                    installed
+                        .source
+                        .authenticated_release
+                        .release_policy_sha256(),
                 ),
                 release_attestation_sha256: hex::encode(
-                    installed.authenticated_release.release_attestation_sha256(),
+                    installed
+                        .source
+                        .authenticated_release
+                        .release_attestation_sha256(),
                 ),
                 activation_height: fixture.manifest.activation_height,
                 withdrawal_height: fixture.manifest.withdrawal_height,
@@ -19924,7 +20705,6 @@ mod kagemusha_bridge_tests {
             ZK_BACKEND_HALO2_IPA,
             confidential_v2::{confidential_transfer_v2_vk_box, kagemusha_topup_shield_v2_vk_box},
             hash_vk,
-            kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
         };
         use iroha_data_model::offline::{
             KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
@@ -20241,13 +21021,9 @@ mod kagemusha_bridge_tests {
             .validate_public_binding()
             .expect("production SBD verify result binding");
 
-        let verifier_artifacts = installed
-            .authenticated_verifier_artifacts()
-            .expect("load installed production verifier artifacts");
-        let terminal_verifier =
-            KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(&verifier_artifacts)
-                .expect("construct installed production terminal verifier");
-        drop(verifier_artifacts);
+        let terminal_verifier = installed
+            .runtime_verifier()
+            .expect("construct installed production terminal verifier");
         terminal_verifier
             .verify_bundle_v4(&init_result.bundle)
             .expect("terminally verify production SBD initialized branch");
@@ -20383,27 +21159,767 @@ mod kagemusha_bridge_tests {
         }
     }
 
+    fn production_sbd_acceptance_file_secret_v1(kind: &str, declared_secret: bool) -> bool {
+        if kind == "recursive_init_result_v4" {
+            assert!(
+                declared_secret,
+                "recursive_init_result_v4 embeds the private membership witness"
+            );
+        }
+        declared_secret
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct ProductionSbdAcceptanceExpectedFileV1 {
+        path: String,
+        size: u64,
+        sha256: [u8; 32],
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
+    impl ProductionSbdAcceptanceExpectedFileV1 {
+        fn from_bytes(path: &str, bytes: &[u8]) -> Self {
+            Self {
+                path: path.to_owned(),
+                size: bytes
+                    .len()
+                    .try_into()
+                    .expect("acceptance file size fits u64"),
+                sha256: Sha256::digest(bytes).into(),
+            }
+        }
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", unix))]
+    #[derive(Debug)]
+    struct ProductionSbdAcceptanceBundleRootV1 {
+        path: std::path::PathBuf,
+        directory: File,
+        device: u64,
+        inode: u64,
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", unix))]
+    impl ProductionSbdAcceptanceBundleRootV1 {
+        fn normalized_absolute_components(
+            path: &std::path::Path,
+        ) -> std::io::Result<Vec<std::ffi::OsString>> {
+            use std::os::unix::ffi::OsStrExt as _;
+            use std::path::Component;
+
+            if !path.is_absolute() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "acceptance bundle root must be absolute",
+                ));
+            }
+            let mut components = Vec::new();
+            let mut normalized = std::path::PathBuf::from("/");
+            for component in path.components() {
+                match component {
+                    Component::RootDir => {}
+                    Component::Normal(name) => {
+                        components.push(name.to_owned());
+                        normalized.push(name);
+                    }
+                    Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "acceptance bundle root must use normalized absolute components",
+                        ));
+                    }
+                }
+            }
+            if components.is_empty()
+                || path.as_os_str().as_bytes() != normalized.as_os_str().as_bytes()
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "acceptance bundle root must be a normalized absolute path below root",
+                ));
+            }
+            Ok(components)
+        }
+
+        fn normalized_relative_components(
+            relative: &str,
+        ) -> std::io::Result<Vec<std::ffi::OsString>> {
+            use std::os::unix::ffi::OsStrExt as _;
+            use std::path::Component;
+
+            let path = std::path::Path::new(relative);
+            if path.is_absolute() || relative.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "acceptance bundle file path must be non-empty and relative",
+                ));
+            }
+            let mut components = Vec::new();
+            let mut normalized = std::path::PathBuf::new();
+            for component in path.components() {
+                match component {
+                    Component::Normal(name) => {
+                        components.push(name.to_owned());
+                        normalized.push(name);
+                    }
+                    _ => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "acceptance bundle file path must use normalized components",
+                        ));
+                    }
+                }
+            }
+            if components.is_empty()
+                || path.as_os_str().as_bytes() != normalized.as_os_str().as_bytes()
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "acceptance bundle file path must be normalized",
+                ));
+            }
+            Ok(components)
+        }
+
+        fn component_c_string(name: &std::ffi::OsStr) -> std::io::Result<std::ffi::CString> {
+            use std::os::unix::ffi::OsStrExt as _;
+
+            std::ffi::CString::new(name.as_bytes()).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "acceptance bundle path contains NUL",
+                )
+            })
+        }
+
+        fn open_filesystem_root() -> std::io::Result<File> {
+            use std::os::fd::FromRawFd as _;
+
+            let descriptor = unsafe {
+                libc::open(
+                    c"/".as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if descriptor < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(unsafe { File::from_raw_fd(descriptor) })
+        }
+
+        fn open_child_directory(
+            parent: &File,
+            name: &std::ffi::OsStr,
+            create_missing: bool,
+        ) -> std::io::Result<File> {
+            use std::os::fd::{AsRawFd as _, FromRawFd as _};
+
+            let name = Self::component_c_string(name)?;
+            let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+            let mut descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+            if descriptor < 0
+                && create_missing
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound
+            {
+                let status = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) };
+                if status != 0
+                    && std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if status == 0 {
+                    // The child entry itself is not durable until its containing
+                    // directory is synced. This also covers a newly created
+                    // final bundle root and any newly created ancestors.
+                    parent.sync_all()?;
+                }
+                descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+            }
+            if descriptor < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(unsafe { File::from_raw_fd(descriptor) })
+        }
+
+        fn open_absolute_directory(
+            path: &std::path::Path,
+            create_missing: bool,
+        ) -> std::io::Result<File> {
+            let components = Self::normalized_absolute_components(path)?;
+            let mut directory = Self::open_filesystem_root()?;
+            for component in components {
+                directory = Self::open_child_directory(&directory, &component, create_missing)?;
+            }
+            Ok(directory)
+        }
+
+        fn exact_identity(file: &File) -> std::io::Result<(u64, u64)> {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let metadata = file.metadata()?;
+            Ok((metadata.dev(), metadata.ino()))
+        }
+
+        fn require_owned_directory(file: &File) -> std::io::Result<()> {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let metadata = file.metadata()?;
+            if metadata.uid() != unsafe { libc::geteuid() } {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "acceptance bundle directory must be owned by this process",
+                ));
+            }
+            Ok(())
+        }
+
+        fn require_owner_private_directory(file: &File) -> std::io::Result<()> {
+            use std::os::unix::fs::MetadataExt as _;
+
+            Self::require_owned_directory(file)?;
+            if file.metadata()?.mode() & 0o7777 != 0o700 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "acceptance bundle directory must have mode 0700",
+                ));
+            }
+            Ok(())
+        }
+
+        fn require_owner_private_file(file: &File) -> std::io::Result<()> {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let metadata = file.metadata()?;
+            if !metadata.is_file()
+                || metadata.uid() != unsafe { libc::geteuid() }
+                || metadata.nlink() != 1
+                || metadata.mode() & 0o7777 != 0o600
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "acceptance bundle file must be singly linked, owner-created, and mode 0600",
+                ));
+            }
+            Ok(())
+        }
+
+        fn require_empty(directory: &File) -> std::io::Result<()> {
+            use std::ffi::CStr;
+            use std::os::fd::AsRawFd as _;
+
+            let duplicate = unsafe { libc::dup(directory.as_raw_fd()) };
+            if duplicate < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let stream = unsafe { libc::fdopendir(duplicate) };
+            if stream.is_null() {
+                let error = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(duplicate);
+                }
+                return Err(error);
+            }
+            unsafe {
+                libc::rewinddir(stream);
+            }
+            let mut non_empty = false;
+            loop {
+                let entry = unsafe { libc::readdir(stream) };
+                if entry.is_null() {
+                    break;
+                }
+                let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+                if name != b"." && name != b".." {
+                    non_empty = true;
+                    break;
+                }
+            }
+            if unsafe { libc::closedir(stream) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if non_empty {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "acceptance bundle root must be absent or empty",
+                ));
+            }
+            Ok(())
+        }
+
+        fn create(path: std::path::PathBuf) -> std::io::Result<Self> {
+            use std::os::fd::AsRawFd as _;
+
+            let directory = Self::open_absolute_directory(&path, true)?;
+            Self::require_empty(&directory)?;
+            Self::require_owned_directory(&directory)?;
+            if unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Self::require_owner_private_directory(&directory)?;
+            Self::require_empty(&directory)?;
+            let (device, inode) = Self::exact_identity(&directory)?;
+            Ok(Self {
+                path,
+                directory,
+                device,
+                inode,
+            })
+        }
+
+        fn create_private_file(&self, relative: &str) -> std::io::Result<File> {
+            use std::os::fd::{AsRawFd as _, FromRawFd as _};
+
+            let mut components = Self::normalized_relative_components(relative)?;
+            let file_name = components.pop().expect("validated non-empty relative path");
+            let mut directory = self.directory.try_clone()?;
+            for component in components {
+                directory = Self::open_child_directory(&directory, &component, true)?;
+                Self::require_owned_directory(&directory)?;
+                if unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) } != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Self::require_owner_private_directory(&directory)?;
+            }
+            let file_name = Self::component_c_string(&file_name)?;
+            let descriptor = unsafe {
+                libc::openat(
+                    directory.as_raw_fd(),
+                    file_name.as_ptr(),
+                    libc::O_WRONLY
+                        | libc::O_CREAT
+                        | libc::O_EXCL
+                        | libc::O_NOFOLLOW
+                        | libc::O_CLOEXEC,
+                    0o600,
+                )
+            };
+            if descriptor < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let file = unsafe { File::from_raw_fd(descriptor) };
+            if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Self::require_owner_private_file(&file)?;
+            Ok(file)
+        }
+
+        fn write_private_file(&self, relative: &str, bytes: &[u8]) -> std::io::Result<()> {
+            use std::io::Write as _;
+
+            let mut file = self.create_private_file(relative)?;
+            file.write_all(bytes)?;
+            file.sync_all()
+        }
+
+        fn invalid_tree(message: &'static str) -> std::io::Error {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+        }
+
+        fn open_child_file(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+            use std::os::fd::{AsRawFd as _, FromRawFd as _};
+
+            let name = Self::component_c_string(name)?;
+            let descriptor = unsafe {
+                libc::openat(
+                    parent.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if descriptor < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(unsafe { File::from_raw_fd(descriptor) })
+        }
+
+        fn clear_readdir_errno() {
+            #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+            unsafe {
+                *libc::__error() = 0;
+            }
+            #[cfg(any(target_os = "android", target_os = "netbsd", target_os = "openbsd"))]
+            unsafe {
+                *libc::__errno() = 0;
+            }
+            #[cfg(any(target_os = "linux", target_os = "dragonfly"))]
+            unsafe {
+                *libc::__errno_location() = 0;
+            }
+        }
+
+        fn readdir_errno() -> Option<i32> {
+            #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+            unsafe {
+                return Some(*libc::__error());
+            }
+            #[cfg(any(target_os = "android", target_os = "netbsd", target_os = "openbsd"))]
+            unsafe {
+                return Some(*libc::__errno());
+            }
+            #[cfg(any(target_os = "linux", target_os = "dragonfly"))]
+            unsafe {
+                return Some(*libc::__errno_location());
+            }
+            #[allow(unreachable_code)]
+            None
+        }
+
+        fn directory_entry_names(
+            directory: &File,
+        ) -> std::io::Result<std::collections::BTreeSet<std::ffi::OsString>> {
+            use std::{ffi::CStr, os::fd::AsRawFd as _, os::unix::ffi::OsStringExt as _};
+
+            let duplicate = unsafe { libc::dup(directory.as_raw_fd()) };
+            if duplicate < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let stream = unsafe { libc::fdopendir(duplicate) };
+            if stream.is_null() {
+                let error = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(duplicate);
+                }
+                return Err(error);
+            }
+            unsafe {
+                libc::rewinddir(stream);
+            }
+            let mut names = std::collections::BTreeSet::new();
+            let mut read_error = None;
+            loop {
+                Self::clear_readdir_errno();
+                let entry = unsafe { libc::readdir(stream) };
+                if entry.is_null() {
+                    if let Some(errno) = Self::readdir_errno().filter(|errno| *errno != 0) {
+                        read_error = Some(std::io::Error::from_raw_os_error(errno));
+                    }
+                    break;
+                }
+                let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+                if name == b"." || name == b".." {
+                    continue;
+                }
+                if !names.insert(std::ffi::OsString::from_vec(name.to_vec())) {
+                    read_error = Some(Self::invalid_tree(
+                        "acceptance bundle directory repeated an entry name",
+                    ));
+                    break;
+                }
+            }
+            let close_status = unsafe { libc::closedir(stream) };
+            if let Some(error) = read_error {
+                return Err(error);
+            }
+            if close_status != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(names)
+        }
+
+        fn expected_inventory<'a>(
+            expected: &'a [ProductionSbdAcceptanceExpectedFileV1],
+        ) -> std::io::Result<(
+            std::collections::BTreeMap<
+                std::path::PathBuf,
+                &'a ProductionSbdAcceptanceExpectedFileV1,
+            >,
+            std::collections::BTreeSet<std::path::PathBuf>,
+        )> {
+            let mut files = std::collections::BTreeMap::new();
+            let mut directories = std::collections::BTreeSet::new();
+            for expected_file in expected {
+                let components = Self::normalized_relative_components(&expected_file.path)?;
+                let mut relative = std::path::PathBuf::new();
+                for (index, component) in components.iter().enumerate() {
+                    relative.push(component);
+                    if index + 1 != components.len() {
+                        directories.insert(relative.clone());
+                    }
+                }
+                if files.insert(relative, expected_file).is_some() {
+                    return Err(Self::invalid_tree(
+                        "acceptance bundle expected inventory contains a duplicate file",
+                    ));
+                }
+            }
+            if files.keys().any(|path| directories.contains(path)) {
+                return Err(Self::invalid_tree(
+                    "acceptance bundle expected inventory mixes file and directory paths",
+                ));
+            }
+            Ok((files, directories))
+        }
+
+        fn verify_expected_file(
+            directory: &File,
+            name: &std::ffi::OsStr,
+            expected: &ProductionSbdAcceptanceExpectedFileV1,
+        ) -> std::io::Result<()> {
+            use std::{io::Read as _, os::unix::fs::MetadataExt as _};
+
+            let mut file = Self::open_child_file(directory, name)?;
+            Self::require_owner_private_file(&file)?;
+            let before = file.metadata()?;
+            if before.len() != expected.size {
+                return Err(Self::invalid_tree(
+                    "acceptance bundle file has an unexpected size",
+                ));
+            }
+            let mut remaining = expected.size;
+            let mut digest = Sha256::new();
+            let mut chunk = [0_u8; 64 * 1024];
+            while remaining != 0 {
+                let take = usize::try_from(remaining.min(chunk.len() as u64))
+                    .map_err(|_| Self::invalid_tree("acceptance bundle file size overflow"))?;
+                file.read_exact(&mut chunk[..take])?;
+                digest.update(&chunk[..take]);
+                remaining -= take as u64;
+            }
+            let mut trailing = [0_u8; 1];
+            if file.read(&mut trailing)? != 0
+                || <[u8; 32]>::from(digest.finalize()) != expected.sha256
+            {
+                return Err(Self::invalid_tree(
+                    "acceptance bundle file digest does not match the completed inventory",
+                ));
+            }
+            Self::require_owner_private_file(&file)?;
+            let after = file.metadata()?;
+            if before.dev() != after.dev()
+                || before.ino() != after.ino()
+                || after.len() != expected.size
+            {
+                return Err(Self::invalid_tree(
+                    "acceptance bundle file changed while it was authenticated",
+                ));
+            }
+
+            let live = Self::open_child_file(directory, name)?;
+            Self::require_owner_private_file(&live)?;
+            let live_metadata = live.metadata()?;
+            if live_metadata.dev() != before.dev()
+                || live_metadata.ino() != before.ino()
+                || live_metadata.len() != expected.size
+            {
+                return Err(Self::invalid_tree(
+                    "acceptance bundle file path changed during finalization",
+                ));
+            }
+            Ok(())
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn verify_and_sync_directory(
+            directory: &File,
+            prefix: &std::path::Path,
+            expected_files: &std::collections::BTreeMap<
+                std::path::PathBuf,
+                &ProductionSbdAcceptanceExpectedFileV1,
+            >,
+            expected_directories: &std::collections::BTreeSet<std::path::PathBuf>,
+            seen_files: &mut std::collections::BTreeSet<std::path::PathBuf>,
+            seen_directories: &mut std::collections::BTreeSet<std::path::PathBuf>,
+        ) -> std::io::Result<()> {
+            Self::require_owner_private_directory(directory)?;
+            let names = Self::directory_entry_names(directory)?;
+            for name in &names {
+                let mut relative = prefix.to_path_buf();
+                relative.push(name);
+                if let Some(expected_file) = expected_files.get(&relative) {
+                    Self::verify_expected_file(directory, name, expected_file)?;
+                    if !seen_files.insert(relative) {
+                        return Err(Self::invalid_tree(
+                            "acceptance bundle file was visited more than once",
+                        ));
+                    }
+                } else if expected_directories.contains(&relative) {
+                    let child = Self::open_child_directory(directory, name, false)?;
+                    Self::require_owner_private_directory(&child)?;
+                    let child_identity = Self::exact_identity(&child)?;
+                    if !seen_directories.insert(relative.clone()) {
+                        return Err(Self::invalid_tree(
+                            "acceptance bundle directory was visited more than once",
+                        ));
+                    }
+                    Self::verify_and_sync_directory(
+                        &child,
+                        &relative,
+                        expected_files,
+                        expected_directories,
+                        seen_files,
+                        seen_directories,
+                    )?;
+                    let live_child = Self::open_child_directory(directory, name, false)?;
+                    Self::require_owner_private_directory(&live_child)?;
+                    if Self::exact_identity(&live_child)? != child_identity {
+                        return Err(Self::invalid_tree(
+                            "acceptance bundle directory path changed during finalization",
+                        ));
+                    }
+                } else {
+                    return Err(Self::invalid_tree(
+                        "acceptance bundle contains an unexpected file or directory",
+                    ));
+                }
+            }
+            if Self::directory_entry_names(directory)? != names {
+                return Err(Self::invalid_tree(
+                    "acceptance bundle directory changed during finalization",
+                ));
+            }
+            // Child recursion has already synced every descendant. Sync this
+            // directory last so its complete set of entries is crash-durable.
+            directory.sync_all()
+        }
+
+        fn finish(
+            &self,
+            expected: &[ProductionSbdAcceptanceExpectedFileV1],
+        ) -> std::io::Result<()> {
+            let (expected_files, expected_directories) = Self::expected_inventory(expected)?;
+            let mut seen_files = std::collections::BTreeSet::new();
+            let mut seen_directories = std::collections::BTreeSet::new();
+            Self::verify_and_sync_directory(
+                &self.directory,
+                std::path::Path::new(""),
+                &expected_files,
+                &expected_directories,
+                &mut seen_files,
+                &mut seen_directories,
+            )?;
+            if seen_files.len() != expected_files.len()
+                || expected_files.keys().any(|path| !seen_files.contains(path))
+                || seen_directories != expected_directories
+            {
+                return Err(Self::invalid_tree(
+                    "acceptance bundle is missing an expected file or directory",
+                ));
+            }
+            let live = Self::open_absolute_directory(&self.path, false)?;
+            if Self::exact_identity(&live)? != (self.device, self.inode) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "acceptance bundle root changed identity during export",
+                ));
+            }
+            Self::require_owner_private_directory(&live)?;
+            Ok(())
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", not(unix)))]
+    #[derive(Debug)]
+    struct ProductionSbdAcceptanceBundleRootV1 {
+        path: std::path::PathBuf,
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", not(unix)))]
+    impl ProductionSbdAcceptanceBundleRootV1 {
+        fn create(_path: std::path::PathBuf) -> std::io::Result<Self> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "acceptance bundle export requires POSIX descriptor-relative no-follow writes",
+            ))
+        }
+
+        fn create_private_file(&self, _relative: &str) -> std::io::Result<File> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "acceptance bundle export requires POSIX descriptor-relative no-follow writes",
+            ))
+        }
+
+        fn write_private_file(&self, _relative: &str, _bytes: &[u8]) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "acceptance bundle export requires POSIX descriptor-relative no-follow writes",
+            ))
+        }
+
+        fn finish(
+            &self,
+            _expected: &[ProductionSbdAcceptanceExpectedFileV1],
+        ) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "acceptance bundle export requires POSIX descriptor-relative no-follow writes",
+            ))
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
     #[cfg(feature = "privacy-production-enabled")]
     fn export_production_sbd_acceptance_bundle_v1(
         fixture: &ProductionReleaseFixtureV4,
         lifecycle: &ProductionSbdAcceptanceLifecycleV1,
     ) -> Option<std::path::PathBuf> {
-        #[cfg(unix)]
-        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
         use std::{
-            fs::{self, OpenOptions},
-            io::Write as _,
+            io::{Read as _, Seek as _, SeekFrom, Write as _},
             path::{Path, PathBuf},
         };
 
         const ENV: &str = "IROHA_KAGEMUSHA_SBD_ACCEPTANCE_BUNDLE_DIR";
 
-        struct FileEntry {
+        enum FilePayload<'a> {
+            Bytes(Vec<u8>),
+            Artifact(&'a Mutex<File>),
+        }
+
+        struct FileEntry<'a> {
             kind: String,
             use_class: &'static str,
             path: String,
-            bytes: Vec<u8>,
+            size: u64,
+            sha256: [u8; 32],
+            payload: FilePayload<'a>,
             secret: bool,
+        }
+
+        impl<'a> FileEntry<'a> {
+            fn bytes(
+                kind: &str,
+                use_class: &'static str,
+                path: &str,
+                bytes: Vec<u8>,
+                secret: bool,
+            ) -> Self {
+                Self {
+                    kind: kind.to_owned(),
+                    use_class,
+                    path: path.to_owned(),
+                    size: u64::try_from(bytes.len()).expect("acceptance file size fits u64"),
+                    sha256: Sha256::digest(&bytes).into(),
+                    payload: FilePayload::Bytes(bytes),
+                    secret: production_sbd_acceptance_file_secret_v1(kind, secret),
+                }
+            }
+
+            fn artifact(
+                kind: &str,
+                path: String,
+                size: u64,
+                sha256: [u8; 32],
+                file: &'a Mutex<File>,
+            ) -> Self {
+                Self {
+                    kind: kind.to_owned(),
+                    use_class: "input",
+                    path,
+                    size,
+                    sha256,
+                    payload: FilePayload::Artifact(file),
+                    secret: false,
+                }
+            }
         }
 
         fn json_string(value: &str) -> String {
@@ -20428,38 +21944,57 @@ mod kagemusha_bridge_tests {
             output
         }
 
-        fn create_private_directory(path: &Path) {
-            fs::create_dir_all(path).expect("create production SBD acceptance directory");
-            #[cfg(unix)]
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-                .expect("set private production SBD acceptance directory permissions");
-        }
-
-        fn write_private_file(root: &Path, relative: &str, bytes: &[u8]) {
-            let relative_path = Path::new(relative);
-            assert!(!relative_path.is_absolute());
-            assert!(
-                relative_path
-                    .components()
-                    .all(|component| matches!(component, std::path::Component::Normal(_)))
+        fn write_private_artifact_file(
+            root: &ProductionSbdAcceptanceBundleRootV1,
+            relative: &str,
+            source: &Mutex<File>,
+            expected_size: u64,
+            expected_sha256: [u8; 32],
+        ) {
+            let mut destination = root
+                .create_private_file(relative)
+                .expect("create unmixed production SBD acceptance artifact");
+            let mut source = source.lock().expect("production artifact file lock");
+            assert!(kagemusha_recursive_spend_file_is_read_only_v4(&source));
+            assert_eq!(
+                source
+                    .metadata()
+                    .expect("production artifact metadata")
+                    .len(),
+                expected_size
             );
-            let destination = root.join(relative_path);
-            create_private_directory(
+            source
+                .seek(SeekFrom::Start(0))
+                .expect("rewind production artifact for export");
+            let mut remaining = expected_size;
+            let mut digest = Sha256::new();
+            let mut chunk = [0_u8; 64 * 1024];
+            while remaining != 0 {
+                let take = usize::try_from(remaining.min(chunk.len() as u64))
+                    .expect("bounded production export chunk length");
+                source
+                    .read_exact(&mut chunk[..take])
+                    .expect("read production artifact for export");
                 destination
-                    .parent()
-                    .expect("acceptance file always has a parent"),
+                    .write_all(&chunk[..take])
+                    .expect("write production artifact export");
+                digest.update(&chunk[..take]);
+                remaining -= take as u64;
+            }
+            let mut trailing = [0_u8; 1];
+            assert_eq!(
+                source
+                    .read(&mut trailing)
+                    .expect("check production export trailing bytes"),
+                0
             );
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            options.mode(0o600);
-            let mut file = options
-                .open(&destination)
-                .expect("create unmixed production SBD acceptance file");
-            file.write_all(bytes)
-                .expect("write production SBD acceptance file");
-            file.sync_all()
-                .expect("durably write production SBD acceptance file");
+            assert_eq!(<[u8; 32]>::from(digest.finalize()), expected_sha256);
+            source
+                .seek(SeekFrom::Start(0))
+                .expect("restore production artifact export cursor");
+            destination
+                .sync_all()
+                .expect("durably write production SBD acceptance artifact");
         }
 
         let output = std::env::var_os(ENV).map(PathBuf::from)?;
@@ -20467,39 +22002,33 @@ mod kagemusha_bridge_tests {
             output.is_absolute(),
             "{ENV} must select an absolute owner-private directory"
         );
-        if output.exists() {
-            assert!(
-                output
-                    .read_dir()
-                    .expect("read production SBD acceptance directory")
-                    .next()
-                    .is_none(),
-                "{ENV} must be absent or empty so mixed bundle generations fail closed"
-            );
-        }
-        create_private_directory(&output);
+        let output = ProductionSbdAcceptanceBundleRootV1::create(output).unwrap_or_else(|error| {
+            panic!(
+                "{ENV} must be a normalized, symlink-free, absent-or-empty owner-private directory: {error}"
+            )
+        });
 
-        let mut files = Vec::<FileEntry>::new();
+        let mut files = Vec::<FileEntry<'_>>::new();
         macro_rules! archive {
             ($kind:literal, $use_class:literal, $path:literal, $value:expr, $secret:expr) => {
-                files.push(FileEntry {
-                    kind: $kind.to_owned(),
-                    use_class: $use_class,
-                    path: $path.to_owned(),
-                    bytes: norito::to_bytes($value).expect(concat!("encode ", $kind)),
-                    secret: $secret,
-                });
+                files.push(FileEntry::bytes(
+                    $kind,
+                    $use_class,
+                    $path,
+                    norito::to_bytes($value).expect(concat!("encode ", $kind)),
+                    $secret,
+                ));
             };
         }
         macro_rules! raw {
             ($kind:literal, $use_class:literal, $path:literal, $bytes:expr, $secret:expr) => {
-                files.push(FileEntry {
-                    kind: $kind.to_owned(),
-                    use_class: $use_class,
-                    path: $path.to_owned(),
-                    bytes: ($bytes).to_vec(),
-                    secret: $secret,
-                });
+                files.push(FileEntry::bytes(
+                    $kind,
+                    $use_class,
+                    $path,
+                    ($bytes).to_vec(),
+                    $secret,
+                ));
             };
         }
 
@@ -20571,7 +22100,7 @@ mod kagemusha_bridge_tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(descriptors.len(), fixture.framed_artifacts.len());
-        for ((parity, descriptor), bytes) in descriptors.iter().zip(&fixture.framed_artifacts) {
+        for ((parity, descriptor), artifact) in descriptors.iter().zip(&fixture.framed_artifacts) {
             use iroha_data_model::offline::{
                 KagemushaPastaCycleArtifactKindV4 as Kind, KagemushaPastaCycleParityV1 as Parity,
             };
@@ -20591,13 +22120,13 @@ mod kagemusha_bridge_tests {
                     "recursive_step_ep_bootstrap_witness_v4"
                 }
             };
-            files.push(FileEntry {
-                kind: kind.to_owned(),
-                use_class: "input",
-                path: format!("release/artifacts/{}", descriptor.file_name),
-                bytes: bytes.clone(),
-                secret: false,
-            });
+            files.push(FileEntry::artifact(
+                kind,
+                format!("release/artifacts/{}", descriptor.file_name),
+                descriptor.size_bytes,
+                descriptor.sha256,
+                &artifact.file,
+            ));
         }
 
         archive!(
@@ -20740,7 +22269,7 @@ mod kagemusha_bridge_tests {
             "input",
             "sender/init-result-v4.norito",
             &lifecycle.init_result,
-            false
+            true
         );
         archive!(
             "recursive_init_bundle_v4",
@@ -20847,7 +22376,6 @@ mod kagemusha_bridge_tests {
             if index != 0 {
                 inventory.push(',');
             }
-            let sha256 = hex::encode(Sha256::digest(&file.bytes));
             use std::fmt::Write as _;
             write!(
                 inventory,
@@ -20855,8 +22383,8 @@ mod kagemusha_bridge_tests {
                 json_string(&file.kind),
                 json_string(file.use_class),
                 json_string(&file.path),
-                file.bytes.len(),
-                sha256,
+                file.size,
+                hex::encode(file.sha256),
                 file.secret,
             )
             .expect("write production SBD acceptance inventory");
@@ -20894,6 +22422,9 @@ mod kagemusha_bridge_tests {
                 "{{",
                 "\"schema\":\"iroha.kagemusha-sbd-mobile-acceptance-bundle\",",
                 "\"bundle_version\":1,",
+                "\"trust_scope\":\"self-issued-deterministic-host-mobile-acceptance\",",
+                "\"shipping_release_provenance\":false,",
+                "\"physical_device_qualified\":false,",
                 "\"bridge_abi_version\":{},",
                 "\"wire_version\":4,",
                 "\"chain_id\":{},",
@@ -20986,16 +22517,47 @@ mod kagemusha_bridge_tests {
             hex::encode(fresh_request_digest),
             inventory,
         );
-        for file in &files {
-            write_private_file(&output, &file.path, &file.bytes);
-        }
-        write_private_file(&output, "bundle-v1.json", manifest.as_bytes());
         let manifest_sha256 = format!(
             "{}  bundle-v1.json\n",
             hex::encode(Sha256::digest(&manifest))
         );
-        write_private_file(&output, "bundle-v1.sha256", manifest_sha256.as_bytes());
-        Some(output)
+        let mut completed_inventory = files
+            .iter()
+            .map(|file| ProductionSbdAcceptanceExpectedFileV1 {
+                path: file.path.clone(),
+                size: file.size,
+                sha256: file.sha256,
+            })
+            .collect::<Vec<_>>();
+        completed_inventory.push(ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+            "bundle-v1.json",
+            manifest.as_bytes(),
+        ));
+        completed_inventory.push(ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+            "bundle-v1.sha256",
+            manifest_sha256.as_bytes(),
+        ));
+
+        for file in &files {
+            match &file.payload {
+                FilePayload::Bytes(bytes) => output
+                    .write_private_file(&file.path, bytes)
+                    .expect("write production SBD acceptance file"),
+                FilePayload::Artifact(source) => {
+                    write_private_artifact_file(&output, &file.path, source, file.size, file.sha256)
+                }
+            }
+        }
+        output
+            .write_private_file("bundle-v1.json", manifest.as_bytes())
+            .expect("write production SBD acceptance manifest");
+        output
+            .write_private_file("bundle-v1.sha256", manifest_sha256.as_bytes())
+            .expect("write production SBD acceptance manifest digest");
+        output
+            .finish(&completed_inventory)
+            .expect("finish symlink-free production SBD acceptance export");
+        Some(output.path().to_owned())
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -21024,7 +22586,7 @@ mod kagemusha_bridge_tests {
         resource_guard
             .write_phase("bridge.production-acceptance.artifact-generation.begin")
             .expect("write pre-generation resource-supervisor phase");
-        let fixture = production_release_fixture_v4();
+        let fixture = production_release_fixture_v4(&mut resource_guard);
         resource_guard
             .write_phase("bridge.production-acceptance.artifact-generation.complete")
             .expect("write post-generation resource-supervisor phase");
@@ -21050,8 +22612,15 @@ mod kagemusha_bridge_tests {
             .zip(&fixture.framed_artifacts)
             .zip(&mut handles)
         {
-            assert_eq!(descriptor.size_bytes, framed.len() as u64);
-            assert_eq!(descriptor.sha256, <[u8; 32]>::from(Sha256::digest(framed)));
+            let mut framed = framed.file.lock().expect("production artifact file lock");
+            assert!(kagemusha_recursive_spend_file_is_read_only_v4(&framed));
+            assert_eq!(
+                descriptor.size_bytes,
+                framed
+                    .metadata()
+                    .expect("production artifact metadata")
+                    .len()
+            );
             assert_eq!(
                 unsafe {
                     connect_norito_kagemusha_recursive_spend_artifact_begin_v4(
@@ -21067,18 +22636,43 @@ mod kagemusha_bridge_tests {
                 0,
                 "promoted bridge must admit an authenticated real artifact"
             );
-            for chunk in framed.chunks(64 * 1024) {
+            framed
+                .seek(SeekFrom::Start(0))
+                .expect("rewind production artifact for ingest");
+            let mut remaining = descriptor.size_bytes;
+            let mut digest = Sha256::new();
+            let mut chunk = [0_u8; 64 * 1024];
+            while remaining != 0 {
+                let take = usize::try_from(remaining.min(chunk.len() as u64))
+                    .expect("bounded production artifact chunk length");
+                framed
+                    .read_exact(&mut chunk[..take])
+                    .expect("read production artifact chunk");
+                digest.update(&chunk[..take]);
                 assert_eq!(
                     unsafe {
                         connect_norito_kagemusha_recursive_spend_artifact_write_v4(
                             *handle,
                             chunk.as_ptr(),
-                            chunk.len() as c_ulong,
+                            take as c_ulong,
                         )
                     },
                     0
                 );
+                remaining -= take as u64;
             }
+            let mut trailing = [0_u8; 1];
+            assert_eq!(
+                framed
+                    .read(&mut trailing)
+                    .expect("check production artifact trailing bytes"),
+                0
+            );
+            assert_eq!(descriptor.sha256, <[u8; 32]>::from(digest.finalize()));
+            framed
+                .seek(SeekFrom::Start(0))
+                .expect("restore production artifact cursor");
+            drop(framed);
             assert_eq!(
                 connect_norito_kagemusha_recursive_spend_artifact_finalize_v4(*handle),
                 0
@@ -21139,16 +22733,13 @@ mod kagemusha_bridge_tests {
 
         let installed = require_kagemusha_recursive_spend_installed_artifact_set_v4()
             .expect("require exact installed production release");
-        let verifier_artifacts = installed
-            .authenticated_verifier_artifacts()
-            .expect("load authenticated Eq/Ep verifier artifacts");
-        let verifier = iroha_core::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(
-            &verifier_artifacts,
-        )
-        .expect("construct the real terminal verifier from installed artifacts");
+        let verifier = installed
+            .runtime_verifier()
+            .expect("construct the real terminal verifier from installed artifacts");
         verifier
             .verify_release_qualification_pair_v4(&fixture.live_pair)
             .expect("execute and terminally verify both genuine Eq/Ep proof branches");
+        drop(verifier);
         eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 qualification-pair:verified");
 
         let lifecycle = production_sbd_acceptance_lifecycle_v1(&fixture, installed.as_ref());
@@ -21211,67 +22802,446 @@ mod kagemusha_bridge_tests {
     }
 
     #[test]
-    fn recursive_spend_v4_streaming_install_rejects_corrupt_or_incomplete_inventory() {
-        let valid = lightweight_authenticated_inventory_v4();
-        valid
-            .stream_authenticate_live_inventory()
+    fn recursive_spend_v4_raw_source_authentication_rejects_corrupt_or_incomplete_inventory() {
+        let valid = lightweight_authenticated_source_v4();
+        authenticate_lightweight_source_inventory_v4(valid)
             .expect("the exact signed eight-role fixture must authenticate");
 
-        let tampered = lightweight_authenticated_inventory_v4();
+        let mut tampered = lightweight_authenticated_source_v4();
         {
-            let mut artifact = tampered.artifacts[0].lock().expect("artifact lock");
-            let file = artifact.file.as_mut().expect("artifact file");
-            file.seek(SeekFrom::End(-1))
-                .expect("seek final payload byte");
-            let mut byte = [0_u8; 1];
-            file.read_exact(&mut byte).expect("read final payload byte");
-            byte[0] ^= 0x80;
-            file.seek(SeekFrom::End(-1))
-                .expect("rewind final payload byte");
-            file.write_all(&byte).expect("tamper artifact payload");
+            let source = Arc::get_mut(&mut tampered).expect("unique source");
+            let artifact = &mut source.artifacts[0];
+            let mut bytes = Vec::new();
+            artifact
+                .file
+                .lock()
+                .expect("artifact lock")
+                .read_to_end(&mut bytes)
+                .expect("read framed artifact");
+            *bytes.last_mut().expect("artifact is non-empty") ^= 0x80;
+            artifact.file = Arc::new(Mutex::new(lightweight_read_only_artifact_file_v4(&bytes)));
         }
         assert!(
-            tampered.stream_authenticate_live_inventory().is_err(),
+            authenticate_lightweight_source_inventory_v4(tampered).is_err(),
             "payload tamper must fail before installation"
         );
 
-        let trailing = lightweight_authenticated_inventory_v4();
+        let mut trailing = lightweight_authenticated_source_v4();
         {
-            let mut artifact = trailing.artifacts[0].lock().expect("artifact lock");
-            let file = artifact.file.as_mut().expect("artifact file");
-            file.seek(SeekFrom::End(0)).expect("seek artifact end");
-            file.write_all(&[0x55]).expect("append trailing byte");
+            let source = Arc::get_mut(&mut trailing).expect("unique source");
+            let artifact = &mut source.artifacts[0];
+            let mut bytes = Vec::new();
+            artifact
+                .file
+                .lock()
+                .expect("artifact lock")
+                .read_to_end(&mut bytes)
+                .expect("read framed artifact");
+            bytes.push(0x55);
+            artifact.file = Arc::new(Mutex::new(lightweight_read_only_artifact_file_v4(&bytes)));
         }
         assert!(
-            trailing.stream_authenticate_live_inventory().is_err(),
+            authenticate_lightweight_source_inventory_v4(trailing).is_err(),
             "trailing bytes must fail before installation"
         );
 
-        let mut wrong_role = lightweight_authenticated_inventory_v4();
-        wrong_role.artifacts.swap(0, 1);
+        let mut wrong_role = lightweight_authenticated_source_v4();
+        let artifacts = &mut Arc::get_mut(&mut wrong_role)
+            .expect("unique source")
+            .artifacts;
+        let (first, rest) = artifacts.split_at_mut(1);
+        std::mem::swap(&mut first[0].file, &mut rest[0].file);
         assert!(
-            wrong_role.stream_authenticate_live_inventory().is_err(),
-            "manifest role order cannot be substituted"
+            authenticate_lightweight_source_inventory_v4(wrong_role).is_err(),
+            "a pinned file cannot be substituted under another manifest role"
         );
 
-        let mut partial = lightweight_authenticated_inventory_v4();
-        partial.artifacts.pop();
+        let mut partial = lightweight_authenticated_source_v4();
+        Arc::get_mut(&mut partial)
+            .expect("unique source")
+            .artifacts
+            .pop();
         assert!(
-            partial.stream_authenticate_live_inventory().is_err(),
+            authenticate_lightweight_source_inventory_v4(partial).is_err(),
             "a partial seven-role inventory must fail"
         );
     }
 
     #[test]
+    fn recursive_spend_v4_installed_source_retains_only_read_only_files() {
+        let source = lightweight_authenticated_source_v4();
+        for artifact in &source.artifacts {
+            let mut file = artifact.file.lock().expect("installed artifact lock");
+            assert!(kagemusha_recursive_spend_file_is_read_only_v4(&file));
+            assert!(
+                file.write_all(b"forbidden post-finalization write")
+                    .is_err(),
+                "the OS capability itself must reject writes after finalization"
+            );
+        }
+        authenticate_lightweight_source_inventory_v4(Arc::clone(&source))
+            .expect("failed writes must not alter the qualified source");
+    }
+
+    #[test]
+    fn recursive_spend_v4_installed_source_serializes_file_access() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+        let source = lightweight_authenticated_source_v4();
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let source = Arc::clone(&source);
+                let active = Arc::clone(&active);
+                let peak = Arc::clone(&peak);
+                scope.spawn(move || {
+                    source
+                        .with_selected_file(
+                            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+                            iroha_data_model::offline::KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+                            |_| {
+                                let current = active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                                peak.fetch_max(current, AtomicOrdering::SeqCst);
+                                std::thread::sleep(Duration::from_millis(5));
+                                active.fetch_sub(1, AtomicOrdering::SeqCst);
+                                Ok(())
+                            },
+                        )
+                        .expect("serialized installed-source access");
+                });
+            }
+        });
+        assert_eq!(active.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(peak.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[test]
+    fn recursive_spend_v4_production_acceptance_streams_release_artifacts() {
+        let source = include_str!("lib.rs");
+        let fixture = source
+            .split_once("struct ProductionReleaseFramedArtifactV4")
+            .expect("production release artifact file fixture")
+            .1
+            .split_once("fn production_topup_finality_roster_v2")
+            .expect("end of production release fixture")
+            .0;
+        let exporter = source
+            .split_once("fn export_production_sbd_acceptance_bundle_v1")
+            .expect("production acceptance exporter")
+            .1
+            .split_once("fn run_large_stack_production_sbd_acceptance_test")
+            .expect("end of production acceptance exporter")
+            .0;
+
+        assert!(fixture.contains("file: Mutex<File>"));
+        assert!(!fixture.contains("Vec<Vec<u8>>"));
+        assert!(exporter.contains("write_private_artifact_file"));
+        assert!(exporter.contains("FilePayload::Artifact"));
+        assert!(exporter.contains("self-issued-deterministic-host-mobile-acceptance"));
+        assert!(exporter.contains("\\\"shipping_release_provenance\\\":false"));
+        assert!(exporter.contains("\\\"physical_device_qualified\\\":false"));
+        assert!(!exporter.contains("bytes: bytes.clone()"));
+    }
+
+    #[test]
+    fn recursive_spend_v4_acceptance_inventory_marks_init_result_secret() {
+        assert!(production_sbd_acceptance_file_secret_v1(
+            "recursive_init_result_v4",
+            true
+        ));
+        assert!(
+            std::panic::catch_unwind(|| production_sbd_acceptance_file_secret_v1(
+                "recursive_init_result_v4",
+                false
+            ))
+            .is_err(),
+            "the inventory builder must fail closed if the embedded membership witness is public"
+        );
+
+        let exporter = include_str!("lib.rs")
+            .split_once("fn export_production_sbd_acceptance_bundle_v1")
+            .expect("production acceptance exporter")
+            .1
+            .split_once("fn run_large_stack_production_sbd_acceptance_test")
+            .expect("end of production acceptance exporter")
+            .0;
+        let init_result_entry = exporter
+            .split_once("\"recursive_init_result_v4\"")
+            .expect("recursive init result inventory entry")
+            .1
+            .split_once(");")
+            .expect("end of recursive init result inventory entry")
+            .0;
+        assert!(init_result_entry.contains("&lifecycle.init_result"));
+        assert!(init_result_entry.trim_end().ends_with("true"));
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", unix))]
+    fn canonical_acceptance_export_test_root() -> (tempfile::TempDir, std::path::PathBuf) {
+        let temporary = tempfile::tempdir().expect("create acceptance export test directory");
+        let canonical = temporary
+            .path()
+            .canonicalize()
+            .expect("canonicalize acceptance export test directory");
+        (temporary, canonical)
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", unix))]
+    #[test]
+    fn recursive_spend_v4_acceptance_export_rejects_symlinked_final_root() {
+        use std::os::unix::fs::symlink;
+
+        let (_temporary, base) = canonical_acceptance_export_test_root();
+        let target = base.join("real-bundle");
+        std::fs::create_dir(&target).expect("create real bundle target");
+        let linked_root = base.join("linked-bundle");
+        symlink(&target, &linked_root).expect("create final-root symlink");
+
+        ProductionSbdAcceptanceBundleRootV1::create(linked_root)
+            .expect_err("the final acceptance bundle root must not be a symlink");
+        assert!(
+            target
+                .read_dir()
+                .expect("read untouched symlink target")
+                .next()
+                .is_none()
+        );
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", unix))]
+    #[test]
+    fn recursive_spend_v4_acceptance_export_rejects_symlinked_ancestor() {
+        use std::os::unix::fs::symlink;
+
+        let (_temporary, base) = canonical_acceptance_export_test_root();
+        let target_ancestor = base.join("real-ancestor");
+        std::fs::create_dir(&target_ancestor).expect("create real ancestor");
+        let linked_ancestor = base.join("linked-ancestor");
+        symlink(&target_ancestor, &linked_ancestor).expect("create ancestor symlink");
+
+        ProductionSbdAcceptanceBundleRootV1::create(linked_ancestor.join("bundle"))
+            .expect_err("every acceptance bundle ancestor must be symlink-free");
+        assert!(!target_ancestor.join("bundle").exists());
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", unix))]
+    #[test]
+    fn recursive_spend_v4_acceptance_export_enforces_normalized_private_tree() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_temporary, base) = canonical_acceptance_export_test_root();
+        let non_normalized =
+            std::path::PathBuf::from(format!("{}/./not-normalized", base.display()));
+        ProductionSbdAcceptanceBundleRootV1::create(non_normalized)
+            .expect_err("non-normalized output roots must fail closed");
+
+        let root_path = base.join("bundle");
+        let root = ProductionSbdAcceptanceBundleRootV1::create(root_path.clone())
+            .expect("create symlink-free acceptance root");
+        root.write_private_file("sender/payload.norito", b"private payload")
+            .expect("write descriptor-relative private payload");
+        root.finish(&[ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+            "sender/payload.norito",
+            b"private payload",
+        )])
+        .expect("finish acceptance export test");
+
+        assert_eq!(
+            std::fs::metadata(&root_path)
+                .expect("bundle root metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(root_path.join("sender"))
+                .expect("bundle child directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(root_path.join("sender/payload.norito"))
+                .expect("bundle payload metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", unix))]
+    fn assert_acceptance_finalization_rejects_v1(
+        case: &str,
+        mutate: impl FnOnce(&std::path::Path),
+    ) {
+        let (_temporary, base) = canonical_acceptance_export_test_root();
+        let root_path = base.join("bundle");
+        let root = ProductionSbdAcceptanceBundleRootV1::create(root_path.clone())
+            .expect("create adversarial acceptance root");
+        root.write_private_file("sender/payload.norito", b"private payload")
+            .expect("write adversarial acceptance payload");
+        mutate(&root_path);
+        let expected = [ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+            "sender/payload.norito",
+            b"private payload",
+        )];
+        assert!(root.finish(&expected).is_err(), "{case} must fail closed");
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", unix))]
+    #[test]
+    fn recursive_spend_v4_acceptance_export_rejects_post_write_content_and_link_mutation() {
+        use std::io::{Seek as _, Write as _};
+
+        assert_acceptance_finalization_rejects_v1("same-size content mutation", |root| {
+            let path = root.join("sender/payload.norito");
+            let mut changed = b"private payload".to_vec();
+            changed[0] ^= 1;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .open(path)
+                .expect("open payload for same-size mutation");
+            file.seek(SeekFrom::Start(0))
+                .expect("rewind payload for mutation");
+            file.write_all(&changed).expect("mutate payload bytes");
+            file.sync_all().expect("sync same-size mutation");
+        });
+        assert_acceptance_finalization_rejects_v1("truncation", |root| {
+            let file = OpenOptions::new()
+                .write(true)
+                .open(root.join("sender/payload.norito"))
+                .expect("open payload for truncation");
+            file.set_len(3).expect("truncate acceptance payload");
+            file.sync_all().expect("sync truncation");
+        });
+        assert_acceptance_finalization_rejects_v1("trailing bytes", |root| {
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(root.join("sender/payload.norito"))
+                .expect("open payload for append");
+            file.write_all(b"x").expect("append trailing byte");
+            file.sync_all().expect("sync appended byte");
+        });
+        assert_acceptance_finalization_rejects_v1("surviving hardlink", |root| {
+            let outside = root
+                .parent()
+                .expect("acceptance root parent")
+                .join("outside-hardlink");
+            std::fs::hard_link(root.join("sender/payload.norito"), outside)
+                .expect("create deterministic acceptance hardlink");
+        });
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", unix))]
+    #[test]
+    fn recursive_spend_v4_acceptance_export_rejects_exact_tree_mutation() {
+        use std::os::unix::fs::symlink;
+
+        assert_acceptance_finalization_rejects_v1("missing expected file", |root| {
+            std::fs::remove_file(root.join("sender/payload.norito"))
+                .expect("remove expected acceptance file");
+        });
+        assert_acceptance_finalization_rejects_v1("unexpected file", |root| {
+            std::fs::write(root.join("unexpected"), b"unexpected")
+                .expect("create unexpected acceptance file");
+        });
+        assert_acceptance_finalization_rejects_v1("unexpected directory", |root| {
+            std::fs::create_dir(root.join("unexpected-directory"))
+                .expect("create unexpected acceptance directory");
+        });
+        assert_acceptance_finalization_rejects_v1("leaf symlink swap", |root| {
+            let payload = root.join("sender/payload.norito");
+            let moved = root
+                .parent()
+                .expect("acceptance root parent")
+                .join("moved-payload");
+            std::fs::rename(&payload, &moved).expect("move expected acceptance payload");
+            symlink(&moved, &payload).expect("replace acceptance payload with symlink");
+        });
+        assert_acceptance_finalization_rejects_v1("intermediate symlink swap", |root| {
+            let sender = root.join("sender");
+            let moved = root
+                .parent()
+                .expect("acceptance root parent")
+                .join("moved-sender");
+            std::fs::rename(&sender, &moved).expect("move expected acceptance directory");
+            symlink(&moved, &sender).expect("replace acceptance directory with symlink");
+        });
+    }
+
+    #[cfg(all(feature = "privacy-production-enabled", unix))]
+    #[test]
+    fn recursive_spend_v4_acceptance_export_rejects_mode_and_root_identity_mutation() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert_acceptance_finalization_rejects_v1("file mode mutation", |root| {
+            std::fs::set_permissions(
+                root.join("sender/payload.norito"),
+                std::fs::Permissions::from_mode(0o640),
+            )
+            .expect("weaken acceptance payload mode");
+        });
+        assert_acceptance_finalization_rejects_v1("directory mode mutation", |root| {
+            std::fs::set_permissions(root.join("sender"), std::fs::Permissions::from_mode(0o750))
+                .expect("weaken acceptance directory mode");
+        });
+        assert_acceptance_finalization_rejects_v1("root identity replacement", |root| {
+            let moved = root
+                .parent()
+                .expect("acceptance root parent")
+                .join("moved-bundle");
+            std::fs::rename(root, &moved).expect("move original acceptance root");
+            std::fs::create_dir(root).expect("replace acceptance root directory");
+            std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
+                .expect("make replacement acceptance root private");
+        });
+    }
+
+    #[test]
+    fn recursive_spend_v4_prover_and_terminal_verifier_lifetimes_do_not_overlap() {
+        let source = include_str!("lib.rs");
+        let append = source
+            .split_once("fn execute_kagemusha_recursive_spend_append_v4")
+            .expect("recursive append lifecycle")
+            .1
+            .split_once("fn execute_kagemusha_recursive_spend_redeem_v4")
+            .expect("end of recursive append lifecycle")
+            .0;
+        let redeem = source
+            .split_once("fn execute_kagemusha_recursive_spend_redeem_v4")
+            .expect("recursive redemption lifecycle")
+            .1
+            .split_once("fn execute_kagemusha_recursive_spend_verify_v4")
+            .expect("end of recursive redemption lifecycle")
+            .0;
+
+        let assert_verifier_prover_verifier = |implementation: &str| {
+            let first_verifier = implementation
+                .find("runtime_verifier()?")
+                .expect("verify authenticated input before proving");
+            let prover = implementation
+                .find("runtime_prover()?")
+                .expect("construct the operation prover");
+            let final_verifier = implementation
+                .rfind("runtime_verifier()?")
+                .expect("terminally verify the produced output");
+            assert!(first_verifier < prover);
+            assert!(prover < final_verifier);
+        };
+        assert_verifier_prover_verifier(append);
+        assert_verifier_prover_verifier(redeem);
+        assert!(append.contains("drop(prover);"));
+        assert!(append.contains("drop(verifier);"));
+        assert!(redeem.contains("let pair = {\n                let prover"));
+    }
+
+    #[test]
     fn recursive_spend_v4_live_capability_requires_exact_eight_role_inventory() {
         let source = include_str!("lib.rs");
-        let streaming_inspection = source
-            .split_once("fn stream_authenticate_live_inventory")
-            .expect("streaming V4 inventory inspector")
-            .1
-            .split_once("fn authenticated_payload")
-            .expect("end of streaming V4 inventory inspector")
-            .0;
         let install = source
             .split_once("fn install_authenticated_kagemusha_recursive_spend_artifact_set_v4")
             .expect("V4 atomic installer")
@@ -21289,19 +23259,32 @@ mod kagemusha_bridge_tests {
             .expect("end of V4 capability entrypoint")
             .0;
 
-        assert!(streaming_inspection.contains("self.validate_live_inventory()?"));
-        assert!(streaming_inspection.contains("inspect_kagemusha_pasta_cycle_artifact_v4"));
-        assert!(streaming_inspection.contains("inspection.header().parity != parity"));
-        assert!(!streaming_inspection.contains("read_kagemusha_pasta_cycle_artifact_v4"));
-        assert!(!streaming_inspection.contains("authenticated_payload("));
         assert!(install.contains("KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4"));
         assert!(install.contains("observed_descriptors != expected_descriptors"));
-        assert!(install.contains("installed.stream_authenticate_live_inventory()?"));
+        assert!(install.contains("qualify_kagemusha_authenticated_artifact_source_v4"));
+        assert!(install.contains("Arc::ptr_eq(current, snapshot)"));
+        let snapshot = install
+            .find("let (source_artifacts, snapshots) = {")
+            .expect("snapshot ingest handles under the registry lock");
+        let qualification = install
+            .find("let qualified_source = Arc::new(")
+            .expect("core-qualify the pinned source");
+        let identity_recheck = install[qualification..]
+            .find("let mut registry = kagemusha_recursive_spend_artifact_registry_v4()")
+            .map(|offset| qualification + offset)
+            .expect("reacquire the registry for identity validation");
+        assert!(snapshot < qualification);
+        assert!(qualification < identity_recheck);
         assert!(!install.contains("installed.authenticated_payload("));
         assert!(!install.contains("installed.authenticated_verifier_artifacts()"));
         assert!(!install.contains("installed.authenticated_prover_artifacts()"));
-        assert!(capabilities.contains("installed.authenticated_verifier_artifacts()?"));
-        assert!(capabilities.contains("installed.authenticated_prover_artifacts()?"));
+        assert!(!source.contains("KagemushaRecursiveSpendSourceQualificationV4"));
+        assert!(!source.contains("fn authenticated_payload("));
+        assert!(!source.contains("fn authenticated_verifier_artifacts("));
+        assert!(!source.contains("fn authenticated_prover_artifacts("));
+        assert!(capabilities.contains("installed.validate_live_inventory()?"));
+        assert!(!capabilities.contains("installed.authenticated_verifier_artifacts()?"));
+        assert!(!capabilities.contains("installed.authenticated_prover_artifacts()?"));
 
         let exact = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.to_vec();
         let is_complete = |roles: &[&str]| {
@@ -29702,6 +31685,204 @@ fn read_java_byte_array_bounded(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_validation_fee_policy_proof_result(
+    env: &mut jni::JNIEnv<'_>,
+    body: impl FnOnce(&mut jni::JNIEnv<'_>) -> Result<Vec<u8>, String>,
+) -> jni::sys::jbyteArray {
+    match body(env).and_then(|bytes| {
+        env.byte_array_from_slice(&bytes)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, format!("validation-fee consensus proof: {message}"));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_validation_fee_current_policy_proof_request_v1(
+    env: &mut jni::JNIEnv<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_validation_fee_policy_proof_result(env, |env| {
+        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
+            .ok()
+            .filter(|height| *height != 0)
+            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
+        let trusted_checkpoint_context_id: [u8; 32] = read_java_byte_array_bounded(
+            env,
+            &trusted_checkpoint_context_id,
+            "trustedCheckpointContextId",
+            32,
+        )
+        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?
+        .try_into()
+        .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
+        validation_fee_current_policy_proof_request_v1(
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )
+        .map_err(|_| "trusted checkpoint was rejected".to_owned())
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::too_many_arguments)]
+fn java_native_validation_fee_current_policy_proof_verify_v1(
+    env: &mut jni::JNIEnv<'_>,
+    proof_norito: jni::objects::JByteArray<'_>,
+    chain_id: jni::objects::JByteArray<'_>,
+    bound_genesis_hash: jni::objects::JByteArray<'_>,
+    policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_validation_fee_policy_proof_result(env, |env| {
+        let proof = read_java_byte_array_bounded(
+            env,
+            &proof_norito,
+            "proofNorito",
+            VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+        )
+        .ok_or_else(|| "proofNorito must be a bounded nonempty archive".to_owned())?;
+        let chain_id = read_java_byte_array_bounded(env, &chain_id, "chainId", 256)
+            .ok_or_else(|| "chainId must be bounded nonempty UTF-8".to_owned())
+            .and_then(|bytes| {
+                String::from_utf8(bytes).map_err(|_| "chainId must be UTF-8".to_owned())
+            })?
+            .parse::<ChainId>()
+            .map_err(|_| "chainId is invalid".to_owned())?;
+        let bound_genesis_hash: [u8; 32] =
+            read_java_byte_array_bounded(env, &bound_genesis_hash, "boundGenesisHash", 32)
+                .ok_or_else(|| "boundGenesisHash must contain exactly 32 bytes".to_owned())?
+                .try_into()
+                .map_err(|_| "boundGenesisHash must contain exactly 32 bytes".to_owned())?;
+        let policy_chain_genesis_hash: [u8; 32] = read_java_byte_array_bounded(
+            env,
+            &policy_chain_genesis_hash,
+            "policyChainGenesisHash",
+            32,
+        )
+        .ok_or_else(|| "policyChainGenesisHash must contain exactly 32 bytes".to_owned())?
+        .try_into()
+        .map_err(|_| "policyChainGenesisHash must contain exactly 32 bytes".to_owned())?;
+        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
+            .ok()
+            .filter(|height| *height != 0)
+            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
+        let trusted_checkpoint_context_id: [u8; 32] = read_java_byte_array_bounded(
+            env,
+            &trusted_checkpoint_context_id,
+            "trustedCheckpointContextId",
+            32,
+        )
+        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?
+        .try_into()
+        .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
+        validation_fee_current_policy_proof_verify_v1(
+            &proof,
+            chain_id,
+            bound_genesis_hash,
+            policy_chain_genesis_hash,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )
+        .map_err(|_| {
+            "proof, finality, registry, or immutable deployment binding was rejected".to_owned()
+        })
+    })
+}
+
+/// Report the exact native ABI required by the validation-fee proof bridge.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+/// JNI projection of
+/// [`connect_norito_validation_fee_current_policy_proof_request_v1`].
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_validation_fee_current_policy_proof_request_v1(
+        &mut env,
+        trusted_checkpoint_height,
+        trusted_checkpoint_context_id,
+    )
+}
+
+/// JNI projection of
+/// [`connect_norito_validation_fee_current_policy_proof_verify_v1`].
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    proof_norito: jni::objects::JByteArray<'_>,
+    chain_id: jni::objects::JByteArray<'_>,
+    bound_genesis_hash: jni::objects::JByteArray<'_>,
+    policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_validation_fee_current_policy_proof_verify_v1(
+        &mut env,
+        proof_norito,
+        chain_id,
+        bound_genesis_hash,
+        policy_chain_genesis_hash,
+        trusted_checkpoint_height,
+        trusted_checkpoint_context_id,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_sorafs_reference_generated_at(generated_at: jni::sys::jlong) -> Result<u64, String> {
     u64::try_from(generated_at).map_err(|_| "generatedAtUnix must be non-negative".to_owned())
 }
@@ -30480,12 +32661,35 @@ fn java_sorafs_reference_validate_pdp_bundle_json(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_algorithm_from_code(algorithm_code: jni::sys::jint) -> Result<Algorithm, String> {
+    let checked_code = u8::try_from(algorithm_code)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    parse_algorithm_code(checked_code)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_zk_asset_mode_from_code(mode_code: jni::sys::jint) -> Result<zk::ZkAssetMode, String> {
+    let checked_code = u8::try_from(mode_code).map_err(|_| "invalid mode".to_owned())?;
+    parse_zk_asset_mode(checked_code).map_err(|_| "invalid mode".to_owned())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_public_key_from_private_bytes(
     algorithm_code: jni::sys::jint,
     private_key: &[u8],
 ) -> Result<Vec<u8>, String> {
-    let algorithm = parse_algorithm_code(algorithm_code as u8)
-        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let algorithm = java_algorithm_from_code(algorithm_code)?;
     let private_key = parse_private_key_with_algorithm(private_key, algorithm)
         .map_err(|_| "invalid private key bytes".to_string())?;
     let key_pair = KeyPair::from_private_key(private_key)
@@ -30507,8 +32711,7 @@ fn java_keypair_from_seed_bytes(
     algorithm_code: jni::sys::jint,
     seed: &[u8],
 ) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>), String> {
-    let algorithm = parse_algorithm_code(algorithm_code as u8)
-        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let algorithm = java_algorithm_from_code(algorithm_code)?;
     let key_pair = KeyPair::try_from_seed(seed.to_vec(), algorithm)
         .map_err(|err| format!("failed to derive key pair: {err}"))?;
     let (public_key, private_key) = key_pair.into_parts();
@@ -30530,8 +32733,7 @@ fn java_sign_detached_bytes(
     private_key: &[u8],
     message: &[u8],
 ) -> Result<Vec<u8>, String> {
-    let algorithm = parse_algorithm_code(algorithm_code as u8)
-        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let algorithm = java_algorithm_from_code(algorithm_code)?;
     let private_key = parse_private_key_with_algorithm(private_key, algorithm)
         .map_err(|_| "invalid private key bytes".to_string())?;
     Signature::try_new(&private_key, message)
@@ -30551,8 +32753,7 @@ fn java_verify_detached_bytes(
     message: &[u8],
     signature: &[u8],
 ) -> Result<bool, String> {
-    let algorithm = parse_algorithm_code(algorithm_code as u8)
-        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let algorithm = java_algorithm_from_code(algorithm_code)?;
     let public_key = PublicKey::from_bytes(algorithm, public_key)
         .map_err(|_| "invalid public key bytes".to_string())?;
     let signature = match connect_signature_from_algorithm_bytes(algorithm, signature) {
@@ -30883,8 +33084,7 @@ fn java_private_key(
     private_key: &jni::objects::JByteArray<'_>,
     env: &mut jni::JNIEnv<'_>,
 ) -> Result<PrivateKey, String> {
-    let algorithm = parse_algorithm_code(algorithm_code as u8)
-        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let algorithm = java_algorithm_from_code(algorithm_code)?;
     let mut private_bytes = read_java_byte_array(env, private_key, "privateKey")
         .ok_or_else(|| "invalid private key bytes".to_owned())?;
     let key = parse_private_key_with_algorithm(&private_bytes, algorithm)
@@ -31152,7 +33352,7 @@ fn java_native_encode_register_zk_asset_signed_transaction(
             .map_err(|_| "invalid authority".to_owned())?;
         let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
             .map_err(|_| "invalid asset".to_owned())?;
-        let mode = parse_zk_asset_mode(mode_code as u8).map_err(|_| "invalid mode".to_owned())?;
+        let mode = java_zk_asset_mode_from_code(mode_code)?;
         let vk_transfer = java_verifying_key_id(
             java_optional_text_array(
                 env,
@@ -31227,11 +33427,7 @@ fn java_native_kagemusha_pasta_cycle_v4_backend_available() -> jni::sys::jboolea
             .lock()
             .ok()
             .and_then(|installed| installed.clone())
-            .is_some_and(|installed| {
-                installed.validate_live_inventory().is_ok()
-                    && installed.authenticated_verifier_artifacts().is_ok()
-                    && installed.authenticated_prover_artifacts().is_ok()
-            });
+            .is_some_and(|installed| installed.validate_live_inventory().is_ok());
     if available {
         jni::sys::JNI_TRUE
     } else {
@@ -32912,66 +35108,6 @@ fn java_native_kagemusha_verify_recipient_request_v2(
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_native_kagemusha_verify_recipient_registration_lineage_v1(
-    env: &mut jni::JNIEnv<'_>,
-    request: jni::objects::JByteArray<'_>,
-    lineage: jni::objects::JByteArray<'_>,
-    verified_at_ms: jni::sys::jlong,
-    expected_evaluated_block_height: jni::sys::jlong,
-    expected_evaluated_block_hash: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_kagemusha_archive_array_result(env, "recipient registration lineage verification", |env| {
-        let request = read_java_byte_array_bounded(
-            env,
-            &request,
-            "request",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-        )
-        .ok_or_else(|| "request must be a bounded nonempty archive".to_owned())?;
-        let lineage = read_java_byte_array_bounded(
-            env,
-            &lineage,
-            "lineage",
-            iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES,
-        )
-        .ok_or_else(|| "lineage must be a bounded nonempty archive".to_owned())?;
-        let verified_at_ms = u64::try_from(verified_at_ms)
-            .ok()
-            .filter(|value| *value != 0)
-            .ok_or_else(|| "verifiedAtMilliseconds must be positive".to_owned())?;
-        let expected_evaluated_block_height = u64::try_from(expected_evaluated_block_height)
-            .ok()
-            .filter(|value| *value != 0)
-            .ok_or_else(|| "expectedEvaluatedBlockHeight must be positive".to_owned())?;
-        let expected_evaluated_block_hash: [u8; 32] = read_java_byte_array_bounded(
-            env,
-            &expected_evaluated_block_hash,
-            "expectedEvaluatedBlockHash",
-            32,
-        )
-        .ok_or_else(|| "expectedEvaluatedBlockHash must contain exactly 32 bytes".to_owned())?
-        .try_into()
-        .map_err(|_| "expectedEvaluatedBlockHash must contain exactly 32 bytes".to_owned())?;
-        if expected_evaluated_block_hash.iter().all(|byte| *byte == 0) {
-            return Err("expectedEvaluatedBlockHash must be non-zero".to_owned());
-        }
-        let _ = (
-            request,
-            lineage,
-            verified_at_ms,
-            expected_evaluated_block_height,
-            expected_evaluated_block_hash,
-        );
-        Err("receiver-lineage v1 is retired; use checkpoint-anchored v2 verification".to_owned())
-    })
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
 fn java_native_kagemusha_create_recipient_lineage_query_v2(
     env: &mut jni::JNIEnv<'_>,
     chain_id: jni::objects::JByteArray<'_>,
@@ -33052,10 +35188,8 @@ fn java_native_kagemusha_verify_recipient_registration_lineage_v2(
         .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?
         .try_into()
         .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
-        if trusted_checkpoint_context_id.iter().all(|byte| *byte == 0)
-            || trusted_checkpoint_context_id[31] & 1 == 0
-        {
-            return Err("trustedCheckpointContextId must be a canonical Iroha hash".to_owned());
+        if trusted_checkpoint_context_id.iter().all(|byte| *byte == 0) {
+            return Err("trustedCheckpointContextId must be a non-zero Iroha hash".to_owned());
         }
         let verified = kagemusha_recipient_registration_lineage_verify_v2(
             &request,
@@ -33209,10 +35343,8 @@ fn java_native_kagemusha_verify_recipient_receive_offer_v2(
         .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?
         .try_into()
         .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
-        if trusted_checkpoint_context_id.iter().all(|byte| *byte == 0)
-            || trusted_checkpoint_context_id[31] & 1 == 0
-        {
-            return Err("trustedCheckpointContextId must be a canonical Iroha hash".to_owned());
+        if trusted_checkpoint_context_id.iter().all(|byte| *byte == 0) {
+            return Err("trustedCheckpointContextId must be a non-zero Iroha hash".to_owned());
         }
         let (projected, verified) = kagemusha_recipient_receive_offer_verify_v2(
             &offer,
@@ -38626,33 +40758,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV1(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-    lineage: jni::objects::JByteArray<'_>,
-    verified_at_ms: jni::sys::jlong,
-    expected_evaluated_block_height: jni::sys::jlong,
-    expected_evaluated_block_hash: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_verify_recipient_registration_lineage_v1(
-        &mut env,
-        request,
-        lineage,
-        verified_at_ms,
-        expected_evaluated_block_height,
-        expected_evaluated_block_hash,
-    )
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipFrontierV4(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -39921,33 +42026,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         verified_at_ms,
         trusted_checkpoint_height,
         trusted_checkpoint_context_id,
-    )
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV1(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-    lineage: jni::objects::JByteArray<'_>,
-    verified_at_ms: jni::sys::jlong,
-    expected_evaluated_block_height: jni::sys::jlong,
-    expected_evaluated_block_hash: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_verify_recipient_registration_lineage_v1(
-        &mut env,
-        request,
-        lineage,
-        verified_at_ms,
-        expected_evaluated_block_height,
-        expected_evaluated_block_hash,
     )
 }
 
@@ -41601,11 +43679,15 @@ fn transport_hints_from_json(value: &JsonValue) -> Result<Vec<TransportHintInput
             .map(|value| u8::try_from(value).map_err(|_| ERR_FETCH_PROVIDERS_JSON))
             .transpose()?
             .ok_or(ERR_FETCH_PROVIDERS_JSON)?;
-        let priority = obj.get("priority").and_then(JsonValue::as_i64).unwrap_or(0);
+        let priority = obj
+            .get("priority")
+            .map(|value| value.as_u64().ok_or(ERR_FETCH_PROVIDERS_JSON))
+            .transpose()?
+            .unwrap_or(0);
         hints.push(TransportHintInput {
             protocol,
             protocol_id,
-            priority: priority as u8,
+            priority: u8::try_from(priority).map_err(|_| ERR_FETCH_PROVIDERS_JSON)?,
         });
     }
     Ok(hints)
@@ -49251,6 +51333,42 @@ mod tests {
         );
     }
 
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
+    #[test]
+    fn java_integer_codes_rejects_u8_wrapping() {
+        let algorithm = Algorithm::Ed25519 as jni::sys::jint;
+        assert!(matches!(
+            java_algorithm_from_code(algorithm),
+            Ok(Algorithm::Ed25519)
+        ));
+        for invalid in [-1, algorithm + 256] {
+            assert!(
+                java_algorithm_from_code(invalid).is_err(),
+                "algorithm code {invalid} must not alias through u8"
+            );
+        }
+
+        assert!(matches!(
+            java_zk_asset_mode_from_code(0),
+            Ok(zk::ZkAssetMode::ZkNative)
+        ));
+        assert!(matches!(
+            java_zk_asset_mode_from_code(1),
+            Ok(zk::ZkAssetMode::Hybrid)
+        ));
+        for invalid in [-1, 256, 257] {
+            assert!(
+                java_zk_asset_mode_from_code(invalid).is_err(),
+                "mode code {invalid} must not alias through u8"
+            );
+        }
+    }
+
     #[test]
     fn java_detached_verify_helper_rejects_malformed_mldsa_signature_lengths() {
         let keypair = KeyPair::try_from_seed(
@@ -50492,6 +52610,37 @@ mod sorafs_tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    fn transport_hint_json(priority: JsonValue) -> JsonValue {
+        let mut hint = JsonMap::new();
+        hint.insert("protocol".into(), JsonValue::from("quic"));
+        hint.insert("protocol_id".into(), JsonValue::from(1u64));
+        hint.insert("priority".into(), priority);
+        JsonValue::Array(vec![JsonValue::Object(hint)])
+    }
+
+    #[test]
+    fn transport_hint_priority_rejects_u8_wrapping() {
+        for (priority, expected) in [(0_u64, 0), (u64::from(u8::MAX), u8::MAX)] {
+            let hints = transport_hints_from_json(&transport_hint_json(JsonValue::from(priority)))
+                .expect("u8 priority boundary must parse");
+            assert_eq!(hints.len(), 1);
+            assert_eq!(hints[0].priority, expected);
+        }
+
+        for (label, priority) in [
+            ("negative", JsonValue::from(-1_i64)),
+            ("overflow", JsonValue::from(u64::from(u8::MAX) + 1)),
+        ] {
+            assert!(
+                matches!(
+                    transport_hints_from_json(&transport_hint_json(priority)),
+                    Err(ERR_FETCH_PROVIDERS_JSON)
+                ),
+                "{label} priority must not alias through u8"
+            );
+        }
+    }
 
     #[test]
     fn sorafs_local_fetch_via_ffi() {

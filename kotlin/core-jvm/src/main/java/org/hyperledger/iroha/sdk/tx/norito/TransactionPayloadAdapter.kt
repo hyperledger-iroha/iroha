@@ -44,7 +44,7 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs)
         encodeSizedField(encoder, EXECUTABLE_ADAPTER, value.executable)
         encodeSizedField(encoder, TTL_ADAPTER, Optional.ofNullable(value.timeToLiveMs))
-        encodeSizedField(encoder, NONCE_ADAPTER, Optional.ofNullable(value.nonce?.toLong()))
+        encodeSizedField(encoder, NONCE_ADAPTER, Optional.ofNullable(value.nonce))
         encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment)
         encodeSizedField(encoder, METADATA_ADAPTER, value.metadata)
     }
@@ -65,7 +65,7 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
             creationTimeMs = creationTimeMs,
             executable = executable,
             timeToLiveMs = ttl.orElse(null),
-            nonce = nonceRaw.map { Math.toIntExact(it) }.orElse(null),
+            nonce = nonceRaw.orElse(null),
             feePayment = feePayment,
             metadata = metadata,
         )

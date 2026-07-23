@@ -1,4 +1,4 @@
-//! Authenticated framing and role-safe carriers for Kagemusha ABI-20 artifacts.
+//! Authenticated framing and role-safe carriers for Kagemusha ABI-21 artifacts.
 //!
 //! V4 packages are selector-free and intentionally reject any pre-release
 //! format. Every release-sized allocation is preceded by a fixed upper-bound,
@@ -46,7 +46,7 @@ use iroha_data_model::offline::{
 };
 use sha2::{Digest as _, Sha256};
 
-/// Framing magic for a streamed ABI-20 artifact.
+/// Framing magic for a streamed ABI-21 artifact.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4: &[u8; 8] =
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4;
 /// Defensive limit checked before allocating an encoded V4 header.
@@ -412,11 +412,12 @@ fn validate_header_against_manifest_v4(
         .map_err(|error| error.to_string())
 }
 
-fn export_header_v4(
+fn export_header_identity_v4(
     generation: &str,
     profile: &KagemushaPastaCycleProofProfileV4,
     kind: KagemushaPastaCycleArtifactKindV4,
-    payload: &[u8],
+    payload_size_bytes: u64,
+    payload_sha256: [u8; 32],
 ) -> Result<KagemushaRecursiveSpendPastaCycleArtifactHeaderV4, String> {
     profile
         .circuit_params
@@ -425,10 +426,8 @@ fn export_header_v4(
     if profile.ipa_k != profile.circuit_params.k
         || profile.compiled_protocol_structure_sha256 == [0; 32]
         || profile.step_proof_size_bytes != profile.circuit_params.max_parent_proof_bytes
-        || payload.is_empty()
-        || u64::try_from(payload.len())
-            .ok()
-            .is_none_or(|len| len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4)
+        || payload_size_bytes == 0
+        || payload_size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
     {
         return Err("Kagemusha V4 export profile or payload is invalid".to_owned());
     }
@@ -450,28 +449,133 @@ fn export_header_v4(
         compiled_protocol_structure_sha256: profile.compiled_protocol_structure_sha256,
         step_proof_size_bytes: profile.step_proof_size_bytes,
         kind,
-        payload_size_bytes: u64::try_from(payload.len())
-            .map_err(|_| "Kagemusha V4 payload length does not fit u64".to_owned())?,
-        payload_sha256: Sha256::digest(payload).into(),
+        payload_size_bytes,
+        payload_sha256,
     };
     validate_header_v4(&header)?;
     Ok(header)
 }
 
-/// Stream one canonical KRV4 package and return its exact manifest descriptor.
-///
-/// The supplied profile is the measured profile being assembled; its inline
-/// circuit parameters are bound by the bounded header. The caller must insert
-/// the returned descriptor into that profile
-/// and validate the completed manifest before release signing.
-pub fn write_kagemusha_pasta_cycle_artifact_v4<W: Write>(
-    writer: &mut W,
+fn export_header_v4(
     generation: &str,
     profile: &KagemushaPastaCycleProofProfileV4,
     kind: KagemushaPastaCycleArtifactKindV4,
     payload: &[u8],
-) -> Result<KagemushaPastaCycleArtifactV4, String> {
-    let header = export_header_v4(generation, profile, kind, payload)?;
+) -> Result<KagemushaRecursiveSpendPastaCycleArtifactHeaderV4, String> {
+    export_header_identity_v4(
+        generation,
+        profile,
+        kind,
+        u64::try_from(payload.len())
+            .map_err(|_| "Kagemusha V4 payload length does not fit u64".to_owned())?,
+        Sha256::digest(payload).into(),
+    )
+}
+
+struct KagemushaStreamingArtifactPayloadWriterV4<'a, W> {
+    writer: &'a mut W,
+    remaining: u64,
+    payload_hasher: Sha256,
+    framed_hasher: Sha256,
+    failed: bool,
+}
+
+impl<W: Write> Write for KagemushaStreamingArtifactPayloadWriterV4<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.failed {
+            return Err(std::io::Error::other(
+                "Kagemusha V4 streaming artifact writer previously failed",
+            ));
+        }
+        let requested = u64::try_from(bytes.len()).map_err(|_| {
+            self.failed = true;
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Kagemusha V4 streaming write length does not fit u64",
+            )
+        })?;
+        if requested > self.remaining {
+            self.failed = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Kagemusha V4 streaming payload exceeds its authenticated length",
+            ));
+        }
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        match self.writer.write(bytes) {
+            Ok(0) => {
+                self.failed = true;
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "failed to write Kagemusha V4 streaming payload",
+                ))
+            }
+            Ok(written) if written <= bytes.len() => {
+                let written_u64 = u64::try_from(written).map_err(|_| {
+                    self.failed = true;
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Kagemusha V4 streaming write result does not fit u64",
+                    )
+                })?;
+                self.remaining -= written_u64;
+                self.payload_hasher.update(&bytes[..written]);
+                self.framed_hasher.update(&bytes[..written]);
+                Ok(written)
+            }
+            Ok(_) => {
+                self.failed = true;
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Kagemusha V4 streaming writer returned an invalid length",
+                ))
+            }
+            Err(error) => {
+                self.failed = true;
+                Err(error)
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.failed {
+            return Err(std::io::Error::other(
+                "Kagemusha V4 streaming artifact writer previously failed",
+            ));
+        }
+        self.writer.flush().inspect_err(|_| self.failed = true)
+    }
+}
+
+/// Stream one pre-authenticated payload into its canonical KRV4 frame.
+///
+/// `payload_size_bytes` and `payload_sha256` must describe the exact bytes
+/// emitted by `stream_payload`. The bounded writer rejects truncation, excess
+/// bytes, changed content, and swallowed I/O failures before returning a
+/// manifest descriptor. This permits release-sized parameters and proving keys
+/// to move directly from an authenticated spool without a heap-sized copy.
+pub fn write_kagemusha_pasta_cycle_artifact_streaming_v4<W, F>(
+    writer: &mut W,
+    generation: &str,
+    profile: &KagemushaPastaCycleProofProfileV4,
+    kind: KagemushaPastaCycleArtifactKindV4,
+    payload_size_bytes: u64,
+    payload_sha256: [u8; 32],
+    stream_payload: F,
+) -> Result<KagemushaPastaCycleArtifactV4, String>
+where
+    W: Write,
+    F: FnOnce(&mut dyn Write) -> Result<(), String>,
+{
+    let header = export_header_identity_v4(
+        generation,
+        profile,
+        kind,
+        payload_size_bytes,
+        payload_sha256,
+    )?;
     let header_bytes = norito::to_bytes(&header)
         .map_err(|error| format!("failed to encode Kagemusha V4 artifact header: {error}"))?;
     if header_bytes.is_empty()
@@ -500,23 +604,73 @@ pub fn write_kagemusha_pasta_cycle_artifact_v4<W: Write>(
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4.as_slice(),
         header_len_bytes.as_slice(),
         header_bytes.as_slice(),
-        payload,
     ] {
         writer
             .write_all(bytes)
             .map_err(|error| format!("failed to write Kagemusha V4 artifact: {error}"))?;
         framed_hasher.update(bytes);
     }
+    let mut payload_writer = KagemushaStreamingArtifactPayloadWriterV4 {
+        writer,
+        remaining: header.payload_size_bytes,
+        payload_hasher: Sha256::new(),
+        framed_hasher,
+        failed: false,
+    };
+    stream_payload(&mut payload_writer)?;
+    if payload_writer.failed {
+        return Err("Kagemusha V4 streaming payload writer failed".to_owned());
+    }
+    if payload_writer.remaining != 0 {
+        return Err(format!(
+            "Kagemusha V4 streaming payload is truncated by {} bytes",
+            payload_writer.remaining
+        ));
+    }
+    let actual_payload_sha256: [u8; 32] = payload_writer.payload_hasher.finalize().into();
+    if actual_payload_sha256 != header.payload_sha256 {
+        return Err("Kagemusha V4 streaming payload digest mismatch".to_owned());
+    }
+    let framed_sha256 = payload_writer.framed_hasher.finalize().into();
     let descriptor = KagemushaPastaCycleArtifactV4 {
         kind,
         file_name: kagemusha_artifact_file_name_v4(profile.parity, kind).to_owned(),
         size_bytes,
-        sha256: framed_hasher.finalize().into(),
+        sha256: framed_sha256,
         payload_size_bytes: header.payload_size_bytes,
         payload_sha256: header.payload_sha256,
     };
     descriptor.validate().map_err(|error| error.to_string())?;
     Ok(descriptor)
+}
+
+/// Stream one canonical KRV4 package and return its exact manifest descriptor.
+///
+/// The supplied profile is the measured profile being assembled; its inline
+/// circuit parameters are bound by the bounded header. The caller must insert
+/// the returned descriptor into that profile
+/// and validate the completed manifest before release signing.
+pub fn write_kagemusha_pasta_cycle_artifact_v4<W: Write>(
+    writer: &mut W,
+    generation: &str,
+    profile: &KagemushaPastaCycleProofProfileV4,
+    kind: KagemushaPastaCycleArtifactKindV4,
+    payload: &[u8],
+) -> Result<KagemushaPastaCycleArtifactV4, String> {
+    let header = export_header_v4(generation, profile, kind, payload)?;
+    write_kagemusha_pasta_cycle_artifact_streaming_v4(
+        writer,
+        generation,
+        profile,
+        kind,
+        header.payload_size_bytes,
+        header.payload_sha256,
+        |payload_writer| {
+            payload_writer
+                .write_all(payload)
+                .map_err(|error| format!("failed to write Kagemusha V4 artifact payload: {error}"))
+        },
+    )
 }
 
 /// One atomically published KRV4 file and its exact manifest descriptor.
@@ -673,7 +827,7 @@ pub struct KagemushaValidatedArtifactPayloadV4 {
     payload: Vec<u8>,
 }
 
-/// Trust mode attached to one parsed ABI-20 inventory.
+/// Trust mode attached to one parsed ABI-21 inventory.
 ///
 /// The candidate variant is compiled only into the explicitly requested
 /// non-shipping evidence harness. Keeping the mode in the carrier prevents a
@@ -1644,7 +1798,7 @@ impl KagemushaPastaCycleProverArtifactsV4 {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Read as _};
+    use std::io::{Cursor, Read as _, Write as _};
 
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_HEADER_MAX_BYTES_V4,
@@ -1857,6 +2011,110 @@ mod tests {
         )
         .expect("write framed artifact fixture");
         (bytes, descriptor)
+    }
+
+    #[derive(Default)]
+    struct ShortWriteSink {
+        bytes: Vec<u8>,
+        maximum_write: usize,
+    }
+
+    impl std::io::Write for ShortWriteSink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let written = bytes.len().min(self.maximum_write);
+            self.bytes.extend_from_slice(&bytes[..written]);
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn streaming_writer_matches_canonical_frame_and_rejects_inexact_payloads() {
+        let payload = b"streamed authenticated artifact payload";
+        let (expected_frame, expected_descriptor) = framed_fixture(payload);
+        let payload_size = u64::try_from(payload.len()).expect("small fixture");
+        let payload_sha256 = Sha256::digest(payload).into();
+        let mut streamed_frame = Vec::new();
+        let streamed_descriptor = write_kagemusha_pasta_cycle_artifact_streaming_v4(
+            &mut streamed_frame,
+            "test-generation-v4",
+            &profile(),
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            payload_size,
+            payload_sha256,
+            |writer| {
+                for chunk in payload.chunks(3) {
+                    writer.write_all(chunk).map_err(|error| error.to_string())?;
+                }
+                Ok(())
+            },
+        )
+        .expect("stream exact authenticated payload");
+        assert_eq!(streamed_frame, expected_frame);
+        assert_eq!(streamed_descriptor, expected_descriptor);
+
+        let mut short_sink = ShortWriteSink {
+            bytes: Vec::new(),
+            maximum_write: 3,
+        };
+        let short_write_descriptor = write_kagemusha_pasta_cycle_artifact_streaming_v4(
+            &mut short_sink,
+            "test-generation-v4",
+            &profile(),
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            payload_size,
+            payload_sha256,
+            |writer| writer.write_all(payload).map_err(|error| error.to_string()),
+        )
+        .expect("partial underlying writes must preserve exact framing");
+        assert_eq!(short_sink.bytes, expected_frame);
+        assert_eq!(short_write_descriptor, expected_descriptor);
+
+        let truncated = write_kagemusha_pasta_cycle_artifact_streaming_v4(
+            &mut Vec::new(),
+            "test-generation-v4",
+            &profile(),
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            payload_size,
+            payload_sha256,
+            |writer| {
+                writer
+                    .write_all(&payload[..payload.len() - 1])
+                    .map_err(|error| error.to_string())
+            },
+        )
+        .expect_err("truncated streaming payload must fail closed");
+        assert!(truncated.contains("truncated"));
+
+        let changed = write_kagemusha_pasta_cycle_artifact_streaming_v4(
+            &mut Vec::new(),
+            "test-generation-v4",
+            &profile(),
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            payload_size,
+            [0xA5; 32],
+            |writer| writer.write_all(payload).map_err(|error| error.to_string()),
+        )
+        .expect_err("changed streaming payload must fail authentication");
+        assert!(changed.contains("digest mismatch"));
+
+        let swallowed_excess = write_kagemusha_pasta_cycle_artifact_streaming_v4(
+            &mut Vec::new(),
+            "test-generation-v4",
+            &profile(),
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            payload_size,
+            payload_sha256,
+            |writer| {
+                let _ = writer.write_all(&[0_u8; 128]);
+                Ok(())
+            },
+        )
+        .expect_err("a swallowed excess-write error must still fail closed");
+        assert!(swallowed_excess.contains("writer failed"));
     }
 
     fn accept_test_binding(

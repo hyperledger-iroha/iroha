@@ -4,6 +4,13 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Made transaction finality polling global-only and state-authoritative across
+  the Node, browser, and Nexus clients. Raw status reads retain only explicit
+  `local`/`global` diagnostics, while the pre-release `auto` mode, configurable
+  polling scope, and cross-endpoint fallback list were removed. Cache-resolved
+  terminal hints are now retried until state resolution. Validation-fee policy
+  admission also rejects contract-address chain discriminants above `u16`
+  before account derivation, closing an untrusted-input CPU exhaustion path.
 - Added browser ledger evidence reads for headers, state roots, state QCs, and
   canonical Norito `BlockProofs`. The SDK validates the exact proof schema and
   frame checksum, decodes bounded entry/result audit paths plus FASTPQ

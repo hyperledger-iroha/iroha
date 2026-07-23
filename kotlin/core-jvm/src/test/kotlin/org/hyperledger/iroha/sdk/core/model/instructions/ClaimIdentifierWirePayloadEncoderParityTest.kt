@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.client.IdentifierReceiptAttestation
 import org.hyperledger.iroha.sdk.client.IdentifierReceiptCanonicalEncoder
 import org.hyperledger.iroha.sdk.client.IdentifierResolutionExecutionPayload
@@ -383,7 +384,7 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
         )
 
     private fun sampleAuthority(fill: Int): String = AccountAddress
-        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {

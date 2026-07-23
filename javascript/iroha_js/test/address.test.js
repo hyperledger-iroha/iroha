@@ -315,6 +315,36 @@ test("account address rejects extension flag", () => {
   );
 });
 
+test("canonical address bytes honor binary views without coercing array entries", () => {
+  const address = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY });
+  const canonical = address.canonicalBytes();
+  const arrayBuffer = canonical.buffer.slice(
+    canonical.byteOffset,
+    canonical.byteOffset + canonical.byteLength,
+  );
+  assert.equal(
+    AccountAddress.fromCanonicalBytes(arrayBuffer).canonicalHex(),
+    address.canonicalHex(),
+  );
+
+  const padded = new Uint8Array(canonical.length + 2);
+  padded.set(canonical, 1);
+  const view = new DataView(padded.buffer, 1, canonical.length);
+  assert.equal(
+    AccountAddress.fromCanonicalBytes(view).canonicalHex(),
+    address.canonicalHex(),
+  );
+
+  assert.throws(
+    () => AccountAddress.fromCanonicalBytes(Array.from(canonical, String)),
+    /byte array entries must be integers between 0 and 255/,
+  );
+  assert.throws(
+    () => AccountAddress.fromCanonicalBytes(address.canonicalHex()),
+    /canonical address bytes must be binary data/,
+  );
+});
+
 test("selector-prefixed noncanonical payloads are rejected", () => {
   const selectorFree = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
@@ -702,7 +732,7 @@ test("encodeI105AccountAddress rejects invalid options", () => {
 });
 
 test("i105 prefix mismatch raises", () => {
-  const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32).fill(1),
+  const address = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
   const i105 = address.toI105(5);
   assert.throws(

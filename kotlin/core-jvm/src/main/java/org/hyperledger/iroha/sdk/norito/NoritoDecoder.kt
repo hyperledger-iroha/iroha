@@ -59,8 +59,11 @@ class NoritoDecoder(
     }
 
     fun readLength(compact: Boolean): Long {
-        if (compact) return readVarint()
-        return readUInt(64)
+        val length = if (compact) readVarint() else readUInt(64)
+        require(length in 0..Int.MAX_VALUE.toLong()) {
+            "Norito length exceeds the supported JVM range"
+        }
+        return length
     }
 
     fun readVarint(): Long {

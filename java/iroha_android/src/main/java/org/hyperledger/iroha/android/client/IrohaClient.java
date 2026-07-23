@@ -183,7 +183,7 @@ public interface IrohaClient {
       final Signer signer,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
-      final Integer nonce)
+      final Long nonce)
       throws NoritoException, SigningException {
     return AliasPlanApply.signAndSubmit(
         this,
@@ -207,7 +207,7 @@ public interface IrohaClient {
       final Signer signer,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
-      final Integer nonce)
+      final Long nonce)
       throws NoritoException, SigningException {
     return AliasPlanApply.signAndSubmit(
         this,
@@ -231,7 +231,7 @@ public interface IrohaClient {
       final Signer signer,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
-      final Integer nonce)
+      final Long nonce)
       throws NoritoException, SigningException {
     return AliasLifecyclePlanApply.signAndSubmit(
         this,
@@ -255,7 +255,7 @@ public interface IrohaClient {
       final Signer signer,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
-      final Integer nonce)
+      final Long nonce)
       throws NoritoException, SigningException {
     return AliasLifecyclePlanApply.signAndSubmit(
         this,

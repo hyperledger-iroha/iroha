@@ -322,7 +322,7 @@ pub fn build_state(
 /// Bootstrap synthetic benchmark domains and their active SNS leases directly into state.
 pub fn seed_benchmark_domains(state: &mut State, domains: &[DomainId], owner_id: &AccountId) {
     for domain_id in domains {
-        state.world.domains.insert(
+        let _ = state.world.insert_domain_for_testing(
             domain_id.clone(),
             Domain::new(domain_id.clone()).build(owner_id),
         );

@@ -13,7 +13,8 @@ import org.hyperledger.iroha.android.address.AccountIdLiteral;
  * Representation of a transaction payload prior to Norito encoding.
  *
  * <p>The structure mirrors the Rust data model for encoding and signing native instructions,
- * deployed-contract calls, flat mixed batches, and IVM bytecode.
+ * deployed-contract calls, flat mixed batches, and IVM bytecode. The optional nonce uses a
+ * {@link Long} carrier so the full nonzero unsigned 32-bit wire range remains representable.
  */
 public final class TransactionPayload {
 
@@ -22,7 +23,7 @@ public final class TransactionPayload {
   private final long creationTimeMs;
   private final Executable executable;
   private final Optional<Long> timeToLiveMs;
-  private final Optional<Integer> nonce;
+  private final Optional<Long> nonce;
   private final FeePaymentIntent feePayment;
   private final Map<String, JsonValue> metadata;
 
@@ -57,7 +58,7 @@ public final class TransactionPayload {
     return timeToLiveMs;
   }
 
-  public Optional<Integer> nonce() {
+  public Optional<Long> nonce() {
     return nonce;
   }
 
@@ -87,13 +88,14 @@ public final class TransactionPayload {
 
   public static final class Builder {
     private static final String DEFAULT_AUTHORITY = buildDefaultAuthority();
+    private static final long MAX_U32 = 0xffff_ffffL;
 
     private String chainId = "00000000";
     private String authority = DEFAULT_AUTHORITY;
     private long creationTimeMs = System.currentTimeMillis();
     private Executable executable = Executable.ivm(new byte[0]);
     private Optional<Long> timeToLiveMs = Optional.empty();
-    private Optional<Integer> nonce = Optional.empty();
+    private Optional<Long> nonce = Optional.empty();
     private FeePaymentIntent feePayment;
     private final Map<String, JsonValue> metadata = new LinkedHashMap<>();
 
@@ -147,15 +149,21 @@ public final class TransactionPayload {
       return this;
     }
 
-    public Builder setNonce(final Integer nonce) {
+    /** Sets an optional transaction nonce in the exact nonzero unsigned 32-bit wire range. */
+    public Builder setNonce(final Long nonce) {
       if (nonce == null) {
         this.nonce = Optional.empty();
-      } else if (nonce <= 0) {
-        throw new IllegalArgumentException("nonce must be positive when present");
+      } else if (nonce <= 0 || nonce > MAX_U32) {
+        throw new IllegalArgumentException("nonce must fit in the nonzero u32 range");
       } else {
         this.nonce = Optional.of(nonce);
       }
       return this;
+    }
+
+    /** Convenience overload for callers whose nonce already fits in a signed {@code int}. */
+    public Builder setNonce(final int nonce) {
+      return setNonce((long) nonce);
     }
 
     public Builder setFeePayment(final FeePaymentIntent feePayment) {
@@ -241,7 +249,8 @@ public final class TransactionPayload {
 
     private static String buildDefaultAuthority() {
       try {
-        return AccountAddress.fromAccount(new byte[32], "ed25519")
+        return AccountAddress.fromCanonicalHex(
+                "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
       } catch (final AccountAddress.AccountAddressException ex) {
         throw new IllegalStateException("Failed to build default canonical authority", ex);

@@ -144,11 +144,13 @@ The review schema and native fail-closed validator do not substitute for that
 external review evidence. Until then, authoritative production availability
 stays false.
 The degree-20 release-generation workflow must also remain fail-closed outside
-the Kagemusha staged resource supervisor. The 2026-07-22 host incident proved
-that a structurally valid but uncalibrated single-column profile can build an
-enormous virtual trace before late layout rejection. Release generation now
-targets the reviewed `[8,1,1]` advice and `[1,0,0]` lookup profile and is capped
-at 16 GiB with reserved host headroom. Promotion remains blocked until a clean,
+the Kagemusha staged resource supervisor. The 2026-07-22 host incident exposed
+speculative second and third advice phases in a circuit with no
+challenge-dependent witness work: Halo2 re-synthesized phase-zero work and
+retained unused full-domain columns for those empty phases. Release generation
+now authenticates exactly one real phase with the reviewed `[8]` advice and
+`[1]` lookup profile and is capped at 16 GiB with reserved host headroom.
+Promotion remains blocked until a clean,
 signed-checkout run completes under that ceiling and produces a successful
 resource receipt; a cap stop is diagnostic evidence, not permission to raise
 the limit or publish partial artifacts.

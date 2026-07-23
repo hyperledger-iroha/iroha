@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import datetime as _dt
+import hashlib
 import json
 import os
 import shutil
@@ -18,14 +20,55 @@ from typing import Iterable, List
 
 def _copy_logs(logs: Iterable[Path], artifact_dir: Path) -> List[Path]:
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    copied: List[Path] = []
+    candidates: List[Path] = []
+    seen_sources: set[Path] = set()
     for path in logs:
         if not path:
             continue
+        resolved = path.resolve()
+        if resolved in seen_sources:
+            continue
+        seen_sources.add(resolved)
         if not path.exists():
             print(f"[report-red-team] log missing: {path}", file=sys.stderr)
             continue
-        dest = artifact_dir / path.name
+        candidates.append(path)
+
+    name_counts = collections.Counter(path.name for path in candidates)
+    used_archive_names = {path.name for path in artifact_dir.iterdir()}
+    archive_names: dict[Path, str] = {}
+    for path in candidates:
+        if name_counts[path.name] == 1 and path.name not in used_archive_names:
+            archive_names[path.resolve()] = path.name
+            used_archive_names.add(path.name)
+
+    disambiguated_paths = sorted(
+        (path for path in candidates if path.resolve() not in archive_names),
+        key=lambda path: str(path.resolve()),
+    )
+    for path in disambiguated_paths:
+        source_hash = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
+        archive_name = ""
+        for prefix_length in range(12, len(source_hash) + 1):
+            candidate_name = f"{source_hash[:prefix_length]}-{path.name}"
+            if candidate_name not in used_archive_names:
+                archive_name = candidate_name
+                break
+        if not archive_name:
+            disambiguator = 2
+            while True:
+                candidate_name = f"{source_hash}-{disambiguator}-{path.name}"
+                if candidate_name not in used_archive_names:
+                    archive_name = candidate_name
+                    break
+                disambiguator += 1
+        archive_names[path.resolve()] = archive_name
+        used_archive_names.add(archive_name)
+
+    copied: List[Path] = []
+    for path in candidates:
+        archive_name = archive_names[path.resolve()]
+        dest = artifact_dir / archive_name
         try:
             shutil.copy2(path, dest)
             copied.append(dest)
@@ -36,7 +79,7 @@ def _copy_logs(logs: Iterable[Path], artifact_dir: Path) -> List[Path]:
 
 
 def _default_due_date(days: int) -> str:
-    now = _dt.datetime.utcnow()
+    now = _dt.datetime.now(_dt.timezone.utc)
     due = now + _dt.timedelta(days=days)
     return due.strftime("%Y-%m-%d")
 
@@ -79,7 +122,7 @@ def _create_issue(
     title: str,
     body: str,
     labels: Iterable[str],
-) -> None:
+) -> bool:
     url = f"https://api.github.com/repos/{repo}/issues"
     payload = {
         "title": title,
@@ -99,19 +142,23 @@ def _create_issue(
         with urllib.request.urlopen(req) as resp:
             if 200 <= resp.status < 300:
                 print("[report-red-team] issue created successfully")
+                return True
             else:
                 print(
                     f"[report-red-team] unexpected response status {resp.status}",
                     file=sys.stderr,
                 )
+                return False
     except urllib.error.HTTPError as exc:
         message = exc.read().decode("utf-8", errors="replace")
         print(
             f"[report-red-team] failed to create issue: {exc.status} {exc.reason}: {message}",
             file=sys.stderr,
         )
+        return False
     except urllib.error.URLError as exc:
         print(f"[report-red-team] network error: {exc}", file=sys.stderr)
+        return False
 
 
 def main() -> int:
@@ -195,7 +242,7 @@ def main() -> int:
 
     title = args.issue_title
     if not title:
-        timestamp = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        timestamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         title = f"{args.surface} failure ({timestamp})"
 
     body = _issue_body(
@@ -215,16 +262,22 @@ def main() -> int:
         return 0
     if not token:
         print(
-            f"[report-red-team] token env `{args.token_env}` missing; skipping issue creation",
+            f"[report-red-team] token env `{args.token_env}` missing; cannot create issue",
             file=sys.stderr,
         )
-        return 0
+        return 1
     if not args.repo:
-        print("[report-red-team] repository not specified; skipping issue creation", file=sys.stderr)
-        return 0
+        print("[report-red-team] repository not specified; cannot create issue", file=sys.stderr)
+        return 1
 
-    _create_issue(token=token, repo=args.repo, title=title, body=body, labels=args.labels)
-    return 0
+    created = _create_issue(
+        token=token,
+        repo=args.repo,
+        title=title,
+        body=body,
+        labels=args.labels,
+    )
+    return 0 if created else 1
 
 
 if __name__ == "__main__":

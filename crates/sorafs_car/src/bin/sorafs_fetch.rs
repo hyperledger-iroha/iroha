@@ -399,19 +399,25 @@ fn run() -> Result<(), String> {
     };
 
     if expect_payload_digest.is_none() {
-        expect_payload_digest = expected_payload_digest_from_json(&plan_json).or_else(|| {
-            manifest_report
-                .as_ref()
-                .and_then(expected_payload_digest_from_json)
-        });
+        expect_payload_digest = expected_payload_digest_from_json(&plan_json)
+            .map_err(|err| format!("failed to parse expected payload digest: {err}"))?;
+        if expect_payload_digest.is_none()
+            && let Some(report) = manifest_report.as_ref()
+        {
+            expect_payload_digest = expected_payload_digest_from_json(report)
+                .map_err(|err| format!("failed to parse expected payload digest: {err}"))?;
+        }
     }
 
     if expect_payload_len.is_none() {
-        expect_payload_len = expected_payload_len_from_json(&plan_json).or_else(|| {
-            manifest_report
-                .as_ref()
-                .and_then(expected_payload_len_from_json)
-        });
+        expect_payload_len = expected_payload_len_from_json(&plan_json)
+            .map_err(|err| format!("failed to parse expected payload length: {err}"))?;
+        if expect_payload_len.is_none()
+            && let Some(report) = manifest_report.as_ref()
+        {
+            expect_payload_len = expected_payload_len_from_json(report)
+                .map_err(|err| format!("failed to parse expected payload length: {err}"))?;
+        }
     }
 
     let mut chunk_specs = chunk_fetch_specs_from_json(&plan_json)

@@ -59,10 +59,10 @@ while (($#)); do
   esac
 done
 
+[[ -d "$BUILD_DIR" ]] || die "build directory not found at $BUILD_DIR"
 BUILD_DIR="$(cd "$BUILD_DIR" >/dev/null 2>&1 && pwd)"
 CHECKSUM_MANIFEST="${BUILD_DIR}/checksums.sha256"
 
-[[ -d "$BUILD_DIR" ]] || die "build directory not found at $BUILD_DIR"
 [[ -f "$CHECKSUM_MANIFEST" ]] || die "missing checksum manifest at ${CHECKSUM_MANIFEST}"
 
 SHA_MODE=""
@@ -85,6 +85,98 @@ run_sha() {
 compute_sha() {
   run_sha "$1" | awk '{print $1}'
 }
+
+command -v node >/dev/null 2>&1 \
+  || die "node not found; install Node.js to validate the checksum inventory"
+info "checking checksum manifest file inventory"
+node - "$BUILD_DIR" "$CHECKSUM_MANIFEST" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const [buildDir, manifestPath] = process.argv.slice(2);
+
+function fail(message) {
+  console.error(`[preview-verify] error: ${message}`);
+  process.exit(1);
+}
+
+const manifestRelative = path.relative(buildDir, manifestPath).split(path.sep).join('/');
+if (
+  manifestRelative === '' ||
+  manifestRelative === '..' ||
+  manifestRelative.startsWith('../') ||
+  path.posix.isAbsolute(manifestRelative)
+) {
+  fail('checksum manifest must be a file inside the build directory');
+}
+if (!fs.lstatSync(manifestPath).isFile()) {
+  fail('checksum manifest must be a regular file');
+}
+
+function walk(root) {
+  const pending = [root];
+  const files = [];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const entry of fs.readdirSync(current, {withFileTypes: true})) {
+      const resolved = path.join(current, entry.name);
+      const relative = path.relative(root, resolved).split(path.sep).join('/');
+      if (entry.isDirectory()) {
+        pending.push(resolved);
+      } else if (entry.isFile()) {
+        if (relative !== manifestRelative && entry.name !== '.DS_Store') {
+          files.push(relative);
+        }
+      } else {
+        fail(`build contains non-regular entry: ${relative}`);
+      }
+    }
+  }
+  return files.sort();
+}
+
+const expected = [];
+const seen = new Set();
+const lines = fs.readFileSync(manifestPath, 'utf8').split(/\r?\n/);
+for (let index = 0; index < lines.length; index += 1) {
+  const line = lines[index];
+  if (!line) continue;
+  const match = line.match(/^[0-9a-f]{64}  (.+)$/);
+  if (!match) {
+    fail(`checksum manifest line ${index + 1} is malformed`);
+  }
+  const entry = match[1];
+  const segments = entry.split('/');
+  if (
+    path.posix.isAbsolute(entry) ||
+    entry.includes('\\') ||
+    segments.some((segment) => segment === '' || segment === '.' || segment === '..')
+  ) {
+    fail(`checksum manifest line ${index + 1} has an unsafe path`);
+  }
+  if (seen.has(entry)) {
+    fail(`checksum manifest contains duplicate path: ${entry}`);
+  }
+  seen.add(entry);
+  expected.push(entry);
+}
+expected.sort();
+
+const actual = walk(buildDir);
+const expectedSet = new Set(expected);
+const actualSet = new Set(actual);
+for (const entry of expected) {
+  if (!actualSet.has(entry)) {
+    fail(`checksum manifest references missing file: ${entry}`);
+  }
+}
+for (const entry of actual) {
+  if (!expectedSet.has(entry)) {
+    fail(`build contains file absent from checksum manifest: ${entry}`);
+  }
+}
+NODE
+info "checksum manifest file inventory verified"
 
 info "verifying ${CHECKSUM_MANIFEST}"
 (

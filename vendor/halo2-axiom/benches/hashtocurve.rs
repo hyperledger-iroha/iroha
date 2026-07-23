@@ -1,6 +1,6 @@
 //! Benchmarks for hashing to the Pasta curves.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 use halo2_axiom::arithmetic::CurveExt;
 use halo2curves::pasta::{pallas, vesta};

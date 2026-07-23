@@ -1,11 +1,14 @@
 package org.hyperledger.iroha.android.model;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.util.Arrays;
 import java.util.Collections;
+import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.junit.Test;
 
 /** Admission checks performed while authoring transaction payloads. */
@@ -51,6 +54,23 @@ public final class TransactionPayloadTests {
             .build());
   }
 
+  @Test
+  public void nonceSupportsTheFullNonzeroU32Range() throws NoritoException {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setInstructions(Collections.emptyList())
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
+            .setNonce(0xffff_ffffL)
+            .build();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final TransactionPayload decoded =
+        adapter.decodeTransaction(adapter.encodeTransaction(payload));
+
+    assertEquals(Long.valueOf(0xffff_ffffL), decoded.nonce().orElse(null));
+    assertIllegalArgument(() -> TransactionPayload.builder().setNonce(0L));
+    assertIllegalArgument(() -> TransactionPayload.builder().setNonce(0x1_0000_0000L));
+  }
+
   private static byte[] repeatedByte(final int value, final int length) {
     final byte[] bytes = new byte[length];
     Arrays.fill(bytes, (byte) value);
@@ -63,6 +83,15 @@ public final class TransactionPayloadTests {
       fail("Expected IllegalStateException");
     } catch (final IllegalStateException expected) {
       assertTrue(expected.getMessage().contains(messageFragment));
+    }
+  }
+
+  private static void assertIllegalArgument(final Runnable action) {
+    try {
+      action.run();
+      fail("Expected IllegalArgumentException");
+    } catch (final IllegalArgumentException expected) {
+      assertTrue(expected.getMessage().contains("nonzero u32"));
     }
   }
 }

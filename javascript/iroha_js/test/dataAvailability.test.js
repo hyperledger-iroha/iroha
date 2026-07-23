@@ -153,6 +153,18 @@ test("generateDaProofSummary rejects non-byte arrays", () => {
   );
 });
 
+test("generateDaProofSummary rejects coercible non-byte array entries", () => {
+  for (const entry of ["1", true, null]) {
+    assert.throws(
+      () =>
+        generateDaProofSummary([entry], [1], {
+          __nativeBinding: { daGenerateProofs: () => createNativeProofSummary() },
+        }),
+      (error) => error instanceof TypeError && /manifestBytes\[0\]/i.test(error.message),
+    );
+  }
+});
+
 test("emitDaProofSummaryArtifact writes JSON artifacts with normalized fields", async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "da-proof-"));
   const outputPath = path.join(tmpDir, "artifact.json");

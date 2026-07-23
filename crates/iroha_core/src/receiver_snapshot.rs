@@ -6,6 +6,9 @@ use iroha_crypto::Hash;
 use iroha_data_model::offline::{
     KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1, KagemushaActiveReceiverWitnessProofV1,
 };
+use iroha_data_model::validation_fee::{
+    VALIDATION_FEE_POLICY_WITNESS_KEY_V1, ValidationFeePolicyWitnessProofV1,
+};
 
 use crate::sumeragi::{
     consensus::ExecWitness,
@@ -51,6 +54,52 @@ pub(crate) fn active_receiver_witness_proof_v1(
     };
     if !proof.verify(ordinary_root) {
         return Err("constructed active-receiver witness proof does not reconstruct the ordinary-write root".to_owned());
+    }
+    Ok((proof, ordinary_root))
+}
+
+/// Construct the exact fixed-key validation-fee policy proof against the ordinary-write SMT.
+pub(crate) fn validation_fee_policy_witness_proof_v1(
+    witness: &ExecWitness,
+) -> Result<(ValidationFeePolicyWitnessProofV1, Hash), String> {
+    let target_count = witness
+        .writes
+        .iter()
+        .filter(|entry| entry.key.as_slice() == VALIDATION_FEE_POLICY_WITNESS_KEY_V1)
+        .count();
+    if target_count != 1 {
+        return Err(format!(
+            "execution witness contains {target_count} validation-fee synthetic writes; expected exactly one"
+        ));
+    }
+
+    let mut canonical = BTreeMap::<Vec<u8>, Vec<u8>>::new();
+    for entry in &witness.writes {
+        canonical.insert(entry.key.clone(), entry.value.clone());
+    }
+    let ordinary = canonical
+        .into_iter()
+        .filter(|(key, _)| key.first() != Some(&KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG))
+        .map(|(key, value)| KvPair::new(key, value))
+        .collect::<Vec<_>>();
+    let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
+    let target = ordinary
+        .iter()
+        .find(|pair| pair.key.as_slice() == VALIDATION_FEE_POLICY_WITNESS_KEY_V1)
+        .ok_or_else(|| {
+            "validation-fee synthetic write is absent from ordinary writes".to_owned()
+        })?;
+    let siblings = sparse_smt_siblings(&ordinary, target)?;
+    let proof = ValidationFeePolicyWitnessProofV1 {
+        key: target.key.clone(),
+        value: target.value.clone(),
+        siblings,
+    };
+    if !proof.verify(ordinary_root) {
+        return Err(
+            "constructed validation-fee witness proof does not reconstruct the ordinary-write root"
+                .to_owned(),
+        );
     }
     Ok((proof, ordinary_root))
 }

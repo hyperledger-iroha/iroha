@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Minimal JSON parser for Sora VPN Torii responses. */
@@ -114,7 +115,7 @@ public final class VpnJsonParser {
         exactInt(root.get("flow_label_bits"), "vpn quote response.flow_label_bits", 24),
         boundedInt(root.get("padding_budget_ms"), "vpn quote response.padding_budget_ms", 1, 65535),
         optionalHex32(root.get("relay_tls_spki_sha256_hex"), "relayTlsSpkiSha256Hex"),
-        hex32(root.get("metering_public_key_hex"), "meteringPublicKeyHex"),
+        ed25519PublicKeyHex(root.get("metering_public_key_hex"), "meteringPublicKeyHex"),
         optionalTxInstruction(root.get("open_lease_instruction"), "vpn quote response.open_lease_instruction"),
         txInstructionList(root.get("tx_instructions"), "vpn quote response.tx_instructions", 1, 1));
   }
@@ -446,6 +447,23 @@ public final class VpnJsonParser {
 
   private static String hex32(final Object value, final String field) {
     return canonicalHex(value, field, 64);
+  }
+
+  private static String ed25519PublicKeyHex(final Object value, final String field) {
+    final String canonical = hex32(value, field);
+    final byte[] publicKey = new byte[Ed25519PublicKeyAdmission.PUBLIC_KEY_LENGTH];
+    for (int index = 0; index < publicKey.length; index++) {
+      final int offset = index * 2;
+      publicKey[index] =
+          (byte)
+              ((Character.digit(canonical.charAt(offset), 16) << 4)
+                  | Character.digit(canonical.charAt(offset + 1), 16));
+    }
+    if (!Ed25519PublicKeyAdmission.isValid(publicKey)) {
+      throw new IllegalStateException(
+          field + " must encode a canonical prime-order Ed25519 public key");
+    }
+    return canonical;
   }
 
   private static String hex16(final Object value, final String field) {

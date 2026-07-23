@@ -44,6 +44,7 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingResponseVerifier;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
+import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
 import org.hyperledger.iroha.android.crypto.export.KeyExportException;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
@@ -1640,8 +1641,7 @@ public final class HttpClientTransport implements IrohaClient {
                     payload == null
                         ? null
                         : PipelineStatusExtractor.requireAuthoritativeStatus(payload, hashHex);
-                final boolean isSuccess =
-                    statusLiteral != null && options.successStatuses().contains(statusLiteral);
+                final boolean isSuccess = "Applied".equals(statusLiteral);
                 final boolean isFailure =
                     statusLiteral != null && options.failureStatuses().contains(statusLiteral);
                 emitPipelineStatusTelemetry(
@@ -2340,7 +2340,9 @@ public final class HttpClientTransport implements IrohaClient {
     final Map<String, Object> payload = new LinkedHashMap<>();
     final String normalizedExitClass = normalizeOptionalNonBlank(exitClass, "exitClass");
     payload.put("exit_class", normalizedExitClass == null ? "" : normalizedExitClass);
-    payload.put("metering_public_key_hex", normalizeHex32(meteringPublicKeyHex, "meteringPublicKeyHex"));
+    payload.put(
+        "metering_public_key_hex",
+        normalizeEd25519PublicKeyHex(meteringPublicKeyHex, "meteringPublicKeyHex"));
     return payload;
   }
 
@@ -2354,7 +2356,9 @@ public final class HttpClientTransport implements IrohaClient {
     payload.put("exit_class", normalizedExitClass == null ? "" : normalizedExitClass);
     payload.put("quote_id", normalizeHex32(quoteId, "quoteId"));
     payload.put("payment_tx_hash", normalizeHex32(paymentTxHash, "paymentTxHash"));
-    payload.put("metering_public_key_hex", normalizeHex32(meteringPublicKeyHex, "meteringPublicKeyHex"));
+    payload.put(
+        "metering_public_key_hex",
+        normalizeEd25519PublicKeyHex(meteringPublicKeyHex, "meteringPublicKeyHex"));
     return payload;
   }
 
@@ -2419,7 +2423,9 @@ public final class HttpClientTransport implements IrohaClient {
     }
     payload.put("signer_account_id", normalizeNonBlank(request.signerAccountId(), "signerAccountId"));
     if (request.publicKeyHex() != null) {
-      payload.put("public_key_hex", normalizeHex32(request.publicKeyHex(), "publicKeyHex"));
+      payload.put(
+          "public_key_hex",
+          normalizeEd25519PublicKeyHex(request.publicKeyHex(), "publicKeyHex"));
     }
     if (request.signatureB64() != null) {
       payload.put(
@@ -2888,6 +2894,23 @@ public final class HttpClientTransport implements IrohaClient {
     final String normalized = normalizeEvenLengthHex(value, field);
     if (normalized.length() != 64) {
       throw new IllegalArgumentException(field + " must contain 64 hex characters");
+    }
+    return normalized;
+  }
+
+  static String normalizeEd25519PublicKeyHex(final String value, final String field) {
+    final String normalized = normalizeHex32(value, field);
+    final byte[] publicKey = new byte[Ed25519PublicKeyAdmission.PUBLIC_KEY_LENGTH];
+    for (int index = 0; index < publicKey.length; index++) {
+      final int offset = index * 2;
+      publicKey[index] =
+          (byte)
+              ((Character.digit(normalized.charAt(offset), 16) << 4)
+                  | Character.digit(normalized.charAt(offset + 1), 16));
+    }
+    if (!Ed25519PublicKeyAdmission.isValid(publicKey)) {
+      throw new IllegalArgumentException(
+          field + " must encode a canonical prime-order Ed25519 public key");
     }
     return normalized;
   }

@@ -17,7 +17,47 @@ public final class UaidJsonParserTests {
     rejectsNoncanonicalPortfolioQuantities();
     rejectsInvalidUaidLsb();
     rejectsFractionalEpoch();
+    rejectsNegativeRustUnsignedFields();
+    rejectsMalformedPresentStringFields();
     System.out.println("[IrohaAndroid] UaidJsonParserTests passed.");
+  }
+
+  private static void rejectsNegativeRustUnsignedFields() {
+    expectInvalidResponse(
+        "{\"uaid\":\"" + UAID + "\",\"totals\":{\"accounts\":-1},\"dataspaces\":[]}",
+        UaidJsonParser::parsePortfolio);
+    expectInvalidResponse(
+        "{\"uaid\":\""
+            + UAID
+            + "\",\"dataspaces\":[{\"dataspace_id\":-1,\"accounts\":[]}]}",
+        UaidJsonParser::parseBindings);
+    expectInvalidResponse(
+        "{\"uaid\":\"" + UAID + "\",\"total\":-1,\"manifests\":[]}",
+        UaidJsonParser::parseManifests);
+  }
+
+  private static void rejectsMalformedPresentStringFields() {
+    expectInvalidResponse(
+        "{\"uaid\":\""
+            + UAID
+            + "\",\"dataspaces\":[{\"dataspace_id\":7,\"dataspace_alias\":9,"
+            + "\"accounts\":[]}]}",
+        UaidJsonParser::parsePortfolio);
+    expectInvalidResponse(
+        "{\"uaid\":\""
+            + UAID
+            + "\",\"dataspaces\":[{\"dataspace_id\":7,\"accounts\":[null]}]}",
+        UaidJsonParser::parseBindings);
+  }
+
+  private static void expectInvalidResponse(
+      final String json, final java.util.function.Consumer<byte[]> parser) {
+    try {
+      parser.accept(json.getBytes(StandardCharsets.UTF_8));
+    } catch (final IllegalStateException expected) {
+      return;
+    }
+    throw new AssertionError("invalid UAID response field was accepted");
   }
 
   private static void parsesPortfolioPayload() {
