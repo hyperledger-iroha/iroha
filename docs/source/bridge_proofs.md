@@ -32,7 +32,8 @@ unreferenced files fail closed.
 
 ## Closed network and lane identities
 
-[`SccpNetworkV1`] is a closed enum. The production external profiles are:
+[`SccpNetworkV1`] is a closed enum. The canonical production release-evidence
+corridor profiles are:
 
 | Profile | Domain | Canonical chain identity |
 |---|---:|---|
@@ -40,9 +41,11 @@ unreferenced files fail closed.
 | `bsc-mainnet` | 2 | EIP-155 chain id 56 |
 | `tron-mainnet` | 5 | mainnet network magic `0x2b6653dc` |
 
-Domains 3 and 4 are not part of the first-release wire/runtime surface.
-Solana and TON lane records, proofs, deployments, policies, and release
-evidence are rejected rather than reported as supported-but-unready.
+Domain 3 is the exact implemented Solana testnet runtime and SDK profile, but it
+is outside this production evidence corridor. Domain 4 and TON have no SCCP V1
+wire/runtime representation. The pinned release fixture and its evidence
+validators reject Solana and TON lane records, proofs, deployments, policies,
+and evidence rather than reporting them as supported-but-unready.
 
 The closed network enum represents `sora-taira` as its sole SORA endpoint;
 `sora-nexus` has no SCCP V1 representation. Every value-moving governed V1
@@ -249,9 +252,11 @@ First-release availability is explicit:
 | BSC mainnet | native proof verifier available |
 | TRON mainnet | native proof verifier available |
 
-Solana and TON inputs fail profile admission before proof verification. They
-cannot be converted to success by observer assertions, environment variables,
-or release flags.
+Solana entries are excluded from this three-profile production evidence table
+and pinned fixture; TON inputs fail profile admission before proof
+verification. Neither can be inserted into the release fixture by observer
+assertions, environment variables, or release flags. This fixture boundary
+does not remove the separately implemented Solana testnet runtime surface.
 
 Cryptographic finality is mandatory in every SCCP build. The crate has no
 consensus-changing BLS feature switch: it always compiles the same
@@ -343,6 +348,20 @@ reconstruction use this root-authenticated archive. They never require the
 historical block body and never treat a mutable WSV payload copy as proof
 material. Restart performs the same header, canonical-hash, archive, and root
 checks before serving history.
+
+Every V1 proof request exposes the governed policy as four required fields:
+`semantic_proof_profile`, `semantic_proof_profile_hash`,
+`sora_finality_anchor`, and `sora_finality_anchor_hash`. Core copies the two
+typed values from the destination deployment's `outbound_proof_policy`,
+recomputes both domain-separated hashes, and exposes all four on the request.
+The destination binding, route-configuration hash, and statement commit both
+hashes; the ordered public signals carry those governed commitments, with
+signal 10 equal to the Taira finality-anchor hash. Admission reconstructs the
+canonical request from the retained bundle and governed route and requires
+exact equality. An omitted, zero, aliased, or drifting value or hash, a hash
+that does not recompute from its typed value, or a request that no longer
+matches the live governed deployment is rejected; there is no client-selected
+fallback policy or legacy request decoder.
 
 WSV separates bulky pending data from permanent replay metadata. A newly
 committed message stores its canonical payload in the pending map and charges
@@ -621,9 +640,12 @@ fixture-key deny lists in `scripts/sccp_release_common.py` and
 validator from the exact source and lockfile that the evidence will bind:
 
 ```bash
-cargo build --locked -p iroha_sccp --bin sccp_release_evidence
+SCCP_VALIDATOR_TARGET=/absolute/operator/path/sccp-validator-target
+CARGO_TARGET_DIR="$SCCP_VALIDATOR_TARGET" \
+  cargo build --locked --offline --no-default-features \
+    -p iroha_sccp --bin sccp_release_evidence
 python3 scripts/sccp_release_fixture_reseal.py prepare \
-  --rust-validator "$PWD/target/debug/sccp_release_evidence" \
+  --rust-validator "$SCCP_VALIDATOR_TARGET/debug/sccp_release_evidence" \
   --session-dir /absolute/operator/path/sccp-reseal-session \
   --release-engineering-public-key-hex <64-lowercase-hex> \
   --release-security-public-key-hex <64-lowercase-hex>
@@ -643,7 +665,7 @@ Finalize with only the two canonical padded-base64 detached signatures:
 
 ```bash
 python3 scripts/sccp_release_fixture_reseal.py finalize \
-  --rust-validator "$PWD/target/debug/sccp_release_evidence" \
+  --rust-validator "$SCCP_VALIDATOR_TARGET/debug/sccp_release_evidence" \
   --session-dir /absolute/operator/path/sccp-reseal-session \
   --release-engineering-signature-b64 <signature> \
   --release-security-signature-b64 <signature>
@@ -662,10 +684,12 @@ required; the tool does not fall back to a partially atomic two-file update.
 
 ## Canonical release evidence
 
-Build the read-only validator with production features:
+Build the read-only validator without the optional fixture feature:
 
 ```bash
-cargo build -p iroha_sccp --bin sccp_release_evidence
+CARGO_TARGET_DIR=/absolute/operator/path/sccp-validator-target \
+  cargo build --release --locked --offline --no-default-features \
+    -p iroha_sccp --bin sccp_release_evidence
 ```
 
 Do not enable `test-fixtures` in production workflows or Make targets.

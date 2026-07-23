@@ -973,13 +973,15 @@ scan limited to repository policy text plus intentional guard-test fixtures.
 **Status:** exact V1 implementation and local release-fixture validation
 complete; audited live deployment evidence pending.
 
-The first release has exactly three production remote profiles: Ethereum
-mainnet, BNB Smart Chain mainnet, and TRON mainnet, each paired with SORA Taira
-Sumeragi-v2 chain id `fc56984b-2be7-431d-840e-21514d1883f0` and I105
-discriminant `369` (`0x0171`). The archived pre-v2 Taira chain is not a
-settlement target. Sepolia, BSC testnet, Nile, and Shasta remain exact test profiles.
-Solana, TON, generic proof backends, arbitrary assets, Nexus settlement, and
-compatibility manifests are not part of SCCP V1.
+The canonical production release-evidence corridor has exactly three remote
+profiles: Ethereum mainnet, BNB Smart Chain mainnet, and TRON mainnet, each
+paired with SORA Taira Sumeragi-v2 chain id
+`fc56984b-2be7-431d-840e-21514d1883f0` and I105 discriminant `369`
+(`0x0171`). The archived pre-v2 Taira chain is not a settlement target.
+Sepolia, BSC testnet, Nile, and Shasta remain exact test profiles. Solana
+testnet remains an implemented SCCP V1 runtime and SDK profile outside this
+production evidence corridor. TON, generic proof backends, arbitrary assets,
+Nexus settlement, and compatibility manifests are not part of SCCP V1.
 
 The live node admits only Sumeragi-v2 wire revision 3 and dispatches the worker
 to the serialized v2 height runner; the legacy actor is never selected under a
@@ -1091,9 +1093,11 @@ The remaining SCCP release work is external, independently verifiable evidence:
 No fixture key, signal-binding circuit, synthetic receipt, unavailable lane,
 or self-consistent proof-controlled roster counts as production evidence.
 
-SCCP V1 is only Taira↔Ethereum, Taira↔BSC, and Taira↔TRON. Solana, TON,
-generic proof jobs/artifacts, and retired route-manifest workflows are excluded
-from the first release and must not appear as launch blockers or evidence rows.
+The signed SCCP V1 production evidence corridor is only Taira↔Ethereum,
+Taira↔BSC, and Taira↔TRON. Solana testnet remains implemented outside that
+fixture and must not appear in its lane inventory, blockers, or evidence rows.
+TON, generic proof jobs/artifacts, and retired route-manifest workflows remain
+excluded from the first release.
 
 ## Release and Stabilization
 

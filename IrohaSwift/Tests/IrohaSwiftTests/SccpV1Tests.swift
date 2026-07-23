@@ -615,8 +615,13 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertEqual(registry.lanes[0].routes[0].routeId, "taira_bsc_xor")
         XCTAssertTrue(registry.lanes[0].nativeTrustAnchors.isEmpty)
         XCTAssertNil(registry.lanes[0].currentNativeTrustAnchorHash)
-        XCTAssertEqual(registry.lanes[0].routes[0].destination.semanticProofProfile.publicSignalSchemaHash, publicSignalSchemaHash())
-        let finalityAnchor = registry.lanes[0].routes[0].destination.soraFinalityAnchor
+        let outboundProofPolicy = registry.lanes[0].routes[0].destination.outboundProofPolicy
+        XCTAssertEqual(outboundProofPolicy.version, 1)
+        XCTAssertEqual(
+            outboundProofPolicy.semanticProfile.publicSignalSchemaHash,
+            publicSignalSchemaHash()
+        )
+        let finalityAnchor = outboundProofPolicy.soraFinalityAnchor
         XCTAssertEqual(finalityAnchor.protocolVersion, 3)
         XCTAssertEqual(finalityAnchor.checkpointContextId, Data(repeating: 0xa2, count: 32))
         XCTAssertEqual(finalityAnchor.checkpointFinalityArtifactHash, Data(repeating: 0xa3, count: 32))
@@ -834,7 +839,15 @@ final class SccpV1Tests: XCTestCase {
         let parsed = try SccpGroth16ProofRequestV1.parse(request)
         XCTAssertEqual(parsed.backend, .evmGroth16Bn254)
         XCTAssertEqual(parsed.targetNetwork, .bscMainnet)
+        XCTAssertEqual(
+            parsed.semanticProofProfileHash,
+            "0x\(parsed.semanticProofProfile.profileHash.hexEncodedString())"
+        )
         XCTAssertEqual(parsed.soraFinalityAnchor.anchorHash, finalityAnchor().hash)
+        XCTAssertEqual(
+            parsed.soraFinalityAnchorHash,
+            "0x\(parsed.soraFinalityAnchor.anchorHash.hexEncodedString())"
+        )
 
         var archivedIdentity = try jsonObject(request, mutableContainers: true)
         var archivedAnchor = archivedIdentity["sora_finality_anchor"] as! [String: Any]

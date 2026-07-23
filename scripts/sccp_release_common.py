@@ -246,6 +246,12 @@ FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
         "e61d512ed09e72e6d680872844ac1c3632f2bb4f676155eab5492a8439132232",
         "55e4ba52faa1a07a3e8630dcdd1c0472153d58497bb81e2c92dfcbf7d172f857",
         "bd463cf2379a295d6efdd6e3815d9f8724f5e4118a3a9e430192d3a0480e6f4e",
+        # Canonical ABI V1 closure ephemeral in-memory release-role seal.
+        "41bc028d4c26c0e813ad4e34be3107e6e24df9acc308062a571d1a7fa9faad6b",
+        "be17b849954015736c16fcfda8f4116c3afc8bf33aefd9205e3f016ce17b0e80",
+        # Canonical ABI V1 review-closure ephemeral in-memory release-role seal.
+        "0dbd733d77a26492584a6784c21197718eb5dcea70adc75e4b14a494394eb832",
+        "6009fe506d323c679d696d0660ef1218ef079a7782f82f7ac80730c9adf2fe86",
     )
 )
 
