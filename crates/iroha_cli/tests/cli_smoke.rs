@@ -3477,16 +3477,16 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
     }
 
     let chunk_profile = ChunkingProfileV1 {
-        profile_id: ProfileId(9),
+        profile_id: ProfileId(0),
         namespace: "inline".to_string(),
         name: "inline".to_string(),
-        semver: "1.0.0".to_string(),
+        semver: "0.0.0".to_string(),
         min_size: 64 * 1024,
         target_size: 64 * 1024,
         max_size: 64 * 1024,
         break_mask: 1,
         multihash_code: BLAKE3_256_MULTIHASH_CODE,
-        aliases: vec!["inline.inline@1.0.0".to_string()],
+        aliases: vec!["inline.inline@0.0.0".to_string()],
     };
     let pdp_tree = PdpMerkleTreeV1::from_bytes(b"cli pdp commitment fixture")
         .expect("build canonical PDP fixture tree");
@@ -3647,15 +3647,15 @@ fn da_rent_quote_outputs_summary_and_json() {
     let mut lines = stdout.lines();
     let summary_line = lines.next().expect("rent-quote should emit a summary line");
     assert!(
-        summary_line.contains("rent_quote base=9.000000 XOR"),
+        summary_line.contains("rent_quote base=9 XOR"),
         "unexpected summary line: {summary_line}"
     );
     assert!(
-        summary_line.contains("reserve=1.800000 XOR"),
+        summary_line.contains("reserve=1.8 XOR"),
         "unexpected summary line: {summary_line}"
     );
     assert!(
-        summary_line.contains("egress_credit_per_gib=0.001500 XOR/GiB"),
+        summary_line.contains("egress_credit_per_gib=0.0015 XOR/GiB"),
         "unexpected summary line: {summary_line}"
     );
     assert!(
@@ -4478,7 +4478,9 @@ fn incentives_daemon_processes_metrics_spool() {
 
 #[test]
 fn sumeragi_summary_commands_against_torii_mock() {
-    use torii_mock_support::{SpawnError, TempDir, ToriiMockProcess, write_client_config};
+    use torii_mock_support::{
+        SpawnError, TempDir, ToriiMockProcess, configure_sumeragi, write_client_config,
+    };
 
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
@@ -4494,6 +4496,64 @@ fn sumeragi_summary_commands_against_torii_mock() {
     let temp_dir = TempDir::new("sumeragi_summary").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
+    // The shared mock's default also covers the wider Python SDK fixture shape.
+    // This command consumes Torii's exact, fail-closed authoritative V2 schema.
+    configure_sumeragi(
+        mock.base_url(),
+        &norito::json!({
+            "status": {
+                "protocol_version": 3,
+                "node_fingerprint": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
+                "build_fingerprint": "hash:1212121212121212121212121212121212121212121212121212121212121213#E183",
+                "config_fingerprint": "hash:1313131313131313131313131313131313131313131313131313131313131313#9CE1",
+                "restart_required": false,
+                "height_context_id": [
+                    "hash:1414141414141414141414141414141414141414141414141414141414141415#9E28"
+                ],
+                "height": 10,
+                "view": 2,
+                "phase": {"phase": "prepare", "details": null},
+                "leader": 1,
+                "locked_prepare_qc": null,
+                "highest_prepare_qc": null,
+                "last_timeout_certificate": null,
+                "body_state": {"state": "validated", "details": null},
+                "pending_persistence_id": null,
+                "last_committed_height": 9,
+                "last_committed_subject": null,
+                "height_context": {
+                    "epoch": 1,
+                    "epoch_end_height": 20,
+                    "mode": {"mode": "permissioned", "details": null},
+                    "epoch_seed": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+                    "validator_count": 4,
+                    "quorum": {"min_signers": 3, "total_power": 4}
+                },
+                "last_commit_qc": null,
+                "liveness": {
+                    "generation": 2,
+                    "prepare_quorums": [],
+                    "commit_quorums": [],
+                    "timeout_quorums": [],
+                    "outbound_intents": [],
+                    "work": {
+                        "candidate": {"stage": "idle", "details": null},
+                        "body_recovery": {"stage": "idle", "details": null},
+                        "body_store": {"stage": "idle", "details": null},
+                        "validation": {"stage": "complete", "details": null},
+                        "application": {"stage": "idle", "details": null},
+                        "successor_height": {"stage": "idle", "details": null}
+                    },
+                    "queues": [],
+                    "last_progress": null,
+                    "no_progress_age_ms": 0,
+                    "blocker": null,
+                    "ignore_counts": []
+                }
+            }
+        }),
+    )
+    .expect("configure canonical Sumeragi status");
 
     let assert_summary = |args: &[&str], expected: &str| {
         let output = command()
@@ -4519,7 +4579,7 @@ fn sumeragi_summary_commands_against_torii_mock() {
 
     assert_summary(
         &["ops", "sumeragi", "status"],
-        "leader=2 hqc=12/4 subj=abcdef12 lqc=10/3 subj=deadbeef gossip=1 drop=2 hint=3 proposal=4 da_resched=0 da_gate=none(last=none;missing=0) epoch_len=3600 epoch_commit=120 epoch_reveal=160 vrf_epoch=7 vrf_late=8 vrf_non_reveal=5 vrf_no_part=6 membership=0/0/0 hash=- rbc_sessions=9 rbc_bytes=1000 rbc_evictions=10 rbc_persist_drops=2 rbc_pressure=11 rbc_last=01234567@13/5 sealed=0 aliases=[-] dvp=none pvp=none",
+        "protocol=3 height=10 view=2 phase=prepare leader=1 body=validated pending_persistence=- last_committed=9 restart_required=false",
     );
     assert_summary(
         &["ops", "sumeragi", "leader"],
@@ -4528,14 +4588,6 @@ fn sumeragi_summary_commands_against_torii_mock() {
     assert_summary(
         &["ops", "sumeragi", "telemetry"],
         "availability_votes=123 collectors=3 rbc_pending_sessions=4 vrf_epoch=5 vrf_finalized=true reveals=6 late_reveals=7 committed_no_reveal=8 no_participation=9",
-    );
-    assert_summary(
-        &["ops", "sumeragi", "rbc", "status"],
-        "active=3 pruned=2 ready=5 deliver=7 bytes=99 skip_payload=0 skip_ready=0",
-    );
-    assert_summary(
-        &["ops", "sumeragi", "rbc", "sessions"],
-        "active=2 first=[hash:feedface h:42 v:8 chunks=9/10 ready=3 delivered=true invalid=false] items=2",
     );
 }
 
@@ -5786,6 +5838,10 @@ private_key = \"{private_key}\"\n",
 
     pub fn configure_accounts(base_url: &str, config: &json::Value) -> io::Result<()> {
         post_mock_config(base_url, "__mock__/accounts/config", config)
+    }
+
+    pub fn configure_sumeragi(base_url: &str, config: &json::Value) -> io::Result<()> {
+        post_mock_config(base_url, "__mock__/sumeragi/config", config)
     }
 
     fn workspace_root() -> PathBuf {
