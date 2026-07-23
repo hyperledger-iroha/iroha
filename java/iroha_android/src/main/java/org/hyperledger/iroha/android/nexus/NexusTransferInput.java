@@ -18,7 +18,7 @@ public final class NexusTransferInput {
   private final byte[] signingPublicKey;
   private final Long creationTimeMs;
   private final Long ttlMs;
-  private final Integer nonce;
+  private final Long nonce;
   private final Map<String, String> metadata;
 
   public NexusTransferInput(
@@ -96,7 +96,7 @@ public final class NexusTransferInput {
     return ttlMs;
   }
 
-  public Integer nonce() {
+  public Long nonce() {
     return nonce;
   }
 
@@ -117,7 +117,7 @@ public final class NexusTransferInput {
     private byte[] signingPublicKey;
     private Long creationTimeMs;
     private Long ttlMs;
-    private Integer nonce;
+    private Long nonce;
     private Map<String, String> metadata = Collections.emptyMap();
 
     private Builder() {}
@@ -168,9 +168,14 @@ public final class NexusTransferInput {
       return this;
     }
 
-    public Builder nonce(final Integer nonce) {
+    public Builder nonce(final Long nonce) {
       this.nonce = nonce;
       return this;
+    }
+
+    /** Convenience overload for callers whose nonce already fits in a signed {@code int}. */
+    public Builder nonce(final int nonce) {
+      return nonce((long) nonce);
     }
 
     public Builder metadata(final Map<String, String> metadata) {

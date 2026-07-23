@@ -35,7 +35,7 @@ object SoracloudPrivateUploadedModelJsonParser {
             remainingItems = asNonNegativeLong(root["remaining_items"], "soracloud private receipt list.remaining_items"),
             hasMore = asBoolean(root["has_more"], "soracloud private receipt list.has_more"),
             countMode = requiredString(root["count_mode"], "soracloud private receipt list.count_mode").lowercase(),
-            continueCursor = optionalString(root["continue_cursor"]),
+            continueCursor = optionalString(root["continue_cursor"], "soracloud private receipt list.continue_cursor"),
         )
     }
 
@@ -116,14 +116,15 @@ object SoracloudPrivateUploadedModelJsonParser {
     }
 
     private fun requiredString(value: Any?, path: String): String {
-        val string = optionalString(value)
+        val string = optionalString(value, path)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
         return string.trim()
     }
 
-    private fun optionalString(value: Any?): String? {
+    private fun optionalString(value: Any?, path: String): String? {
         if (value == null) return null
-        return if (value is String) value else value.toString()
+        check(value is String) { "$path must be a string" }
+        return value
     }
 
     private fun asLong(value: Any?, path: String): Long = JsonNumbers.asLong(value, path)

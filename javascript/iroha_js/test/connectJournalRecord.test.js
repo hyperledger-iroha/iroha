@@ -73,19 +73,21 @@ test("ConnectJournalRecord accepts array-like ciphertext and payload hash", () =
 });
 
 test("ConnectJournalRecord rejects non-byte array payloads", () => {
-  assert.throws(
-    () =>
-      new ConnectJournalRecord({
-        direction: ConnectDirection.APP_TO_WALLET,
-        sequence: 5,
-        ciphertext: [256],
-        receivedAtMs: 10,
-        expiresAtMs: 20,
-      }),
-    (error) =>
-      error instanceof ConnectJournalError &&
-      /must be a byte/i.test(error.message),
-  );
+  for (const ciphertext of [[256], ["1"], [true], [null]]) {
+    assert.throws(
+      () =>
+        new ConnectJournalRecord({
+          direction: ConnectDirection.APP_TO_WALLET,
+          sequence: 5,
+          ciphertext,
+          receivedAtMs: 10,
+          expiresAtMs: 20,
+        }),
+      (error) =>
+        error instanceof ConnectJournalError &&
+        /must be a byte/i.test(error.message),
+    );
+  }
 });
 
 test("decode accepts array-like payloads", () => {
@@ -156,6 +158,46 @@ test("ConnectJournalRecord rejects uint64 overflow sequences", () => {
     (error) =>
       error instanceof ConnectJournalError &&
       /uint64/i.test(error.message),
+  );
+});
+
+test("fromCiphertext rejects coercible or non-positive timing inputs", () => {
+  const defaultRetention = ConnectJournalRecord.fromCiphertext({
+    direction: ConnectDirection.APP_TO_WALLET,
+    sequence: 1n,
+    ciphertext: new Uint8Array([0x01]),
+    receivedAtMs: 10,
+  });
+  assert.equal(defaultRetention.expiresAtMs, 11);
+
+  for (const retentionMs of [0, -1, "5", true]) {
+    assert.throws(
+      () =>
+        ConnectJournalRecord.fromCiphertext({
+          direction: ConnectDirection.APP_TO_WALLET,
+          sequence: 1n,
+          ciphertext: new Uint8Array([0x01]),
+          receivedAtMs: 10,
+          retentionMs,
+        }),
+      (error) =>
+        error instanceof ConnectJournalError &&
+        /retentionMs must be a positive safe integer/i.test(error.message),
+    );
+  }
+
+  assert.throws(
+    () =>
+      ConnectJournalRecord.fromCiphertext({
+        direction: ConnectDirection.APP_TO_WALLET,
+        sequence: 1n,
+        ciphertext: new Uint8Array([0x01]),
+        receivedAtMs: "10",
+        retentionMs: 5,
+      }),
+    (error) =>
+      error instanceof ConnectJournalError &&
+      /receivedAtMs must be a non-negative integer/i.test(error.message),
   );
 });
 

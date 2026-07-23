@@ -84,3 +84,92 @@ def test_explicit_symlink_is_rejected(source_fixture: Path) -> None:
 
     with pytest.raises(RuntimeError, match="explicit source-seal input is symlinked: Cargo.lock"):
         SOURCE_SEAL.listed_files(source_fixture, ["Cargo.lock", "Cargo.toml"])
+
+
+def test_nested_dependency_symlink_is_rejected(source_fixture: Path) -> None:
+    link = source_fixture / "bridge-src/external.rs"
+    link.symlink_to(source_fixture / "Cargo.toml")
+    _git(source_fixture, "add", "bridge-src/external.rs")
+
+    with pytest.raises(RuntimeError, match="source-seal input is symlinked"):
+        SOURCE_SEAL.fingerprint(source_fixture, ["Cargo.toml", "bridge-src"])
+
+
+def test_android_inputs_and_targets_are_platform_specific(
+    source_fixture: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    android_gradle = source_fixture / "kotlin/client-android/build.gradle.kts"
+    android_gradle.parent.mkdir(parents=True)
+    android_gradle.write_text("plugins {}\n", encoding="utf-8")
+    apple_package = source_fixture / "IrohaSwift/Package.swift"
+    apple_package.parent.mkdir(parents=True)
+    apple_package.write_text("// fixture\n", encoding="utf-8")
+    observed_targets: list[tuple[str, ...]] = []
+
+    def dependency_roots(_root: Path, targets: tuple[str, ...]) -> set[str]:
+        observed_targets.append(tuple(targets))
+        return {"bridge-src"}
+
+    monkeypatch.setattr(SOURCE_SEAL, "local_dependency_roots", dependency_roots)
+
+    android_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "android")
+    apple_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "apple")
+
+    assert "kotlin/client-android/build.gradle.kts" in android_inputs
+    assert "IrohaSwift/Package.swift" not in android_inputs
+    assert "IrohaSwift/Package.swift" in apple_inputs
+    assert "kotlin/client-android/build.gradle.kts" not in apple_inputs
+    assert observed_targets == [
+        SOURCE_SEAL.ANDROID_TARGETS,
+        SOURCE_SEAL.APPLE_TARGETS,
+    ]
+
+
+def test_android_native_cleanup_passes_each_target_set_in_one_delete_call() -> None:
+    """Guard Gradle DeleteSpec's replacement, rather than additive, path semantics."""
+
+    build_script = (ROOT / "kotlin/client-android/build.gradle.kts").read_text(
+        encoding="utf-8"
+    )
+
+    assert build_script.count("delete(outputRoot, stagingRoot, sealFile)") == 1
+    assert build_script.count("delete(outputRoot, provenanceRoot)") == 1
+    assert "delete(outputRoot)\n            delete(stagingRoot)" not in build_script
+    assert "delete(outputRoot)\n            delete(provenanceRoot)" not in build_script
+
+
+def test_android_snapshot_rejects_source_change_between_abi_builds(
+    source_fixture: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs = ["Cargo.lock", "Cargo.toml", "bridge-src"]
+    monkeypatch.setattr(
+        SOURCE_SEAL,
+        "seal_inputs",
+        lambda _root, platform="apple": inputs,
+    )
+    snapshot_path = source_fixture / "android-source-seal.json"
+    snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android"))
+
+    SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path)
+    (source_fixture / "bridge-src/lib.rs").write_text(
+        "pub fn changed_between_abis() {}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(RuntimeError, match="source changed after the build started"):
+        SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path)
+
+
+def test_android_snapshot_rejects_tampering(
+    source_fixture: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        SOURCE_SEAL,
+        "seal_inputs",
+        lambda _root, platform="apple": ["Cargo.lock", "Cargo.toml", "bridge-src"],
+    )
+    snapshot_path = source_fixture / "android-source-seal.json"
+    snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android"))
+    snapshot_path.write_bytes(snapshot_path.read_bytes().replace(b'"android"', b'"apple"'))
+
+    with pytest.raises(RuntimeError, match="source changed after the build started"):
+        SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path)

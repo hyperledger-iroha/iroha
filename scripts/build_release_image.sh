@@ -6,7 +6,7 @@ usage() {
 Usage: build_release_image.sh --profile <name> --config <config> [options]
 
 Options:
-  --profile <name>        Logical profile name (e.g. iroha2, iroha3). Required.
+  --profile <name>        Logical profile name: iroha2 or iroha3. Required.
   --config <config>       Configuration bundle to embed (single, nexus, or taira). Required.
   --features <list>       Optional comma-separated Cargo feature list passed to the Docker build.
   --cargo-build-jobs <n>  Optional Cargo parallelism limit passed as CARGO_BUILD_JOBS.
@@ -105,6 +105,20 @@ done
 
 if [[ -z "$profile" || -z "$config" ]]; then
     usage >&2
+    exit 1
+fi
+
+case "$profile" in
+    iroha2|iroha3)
+        ;;
+    *)
+        printf 'Unsupported profile value: %s (expected iroha2 or iroha3)\n' "$profile" >&2
+        exit 1
+        ;;
+esac
+
+if ! command -v python3 >/dev/null 2>&1; then
+    printf 'python3 is required to write the release manifest\n' >&2
     exit 1
 fi
 
@@ -295,35 +309,73 @@ fi
 
 image_id="$(docker image inspect "${image_tag}" --format '{{.Id}}')"
 
-python3 - <<PY
+python3 - \
+    "$manifest_out" \
+    "$profile" \
+    "$config" \
+    "$version" \
+    "$commit" \
+    "$timestamp" \
+    "$os_tag" \
+    "$arch" \
+    "$features" \
+    "$validator_lock_sha256" \
+    "$validator_source_tree_sha256" \
+    "$image_tag" \
+    "$image_id" \
+    "$tarball" \
+    "$checksum" \
+    "$sig_path" \
+    "$pub_path" <<'MANIFEST_PY'
 import json
+import sys
 from pathlib import Path
 
-manifest_path = Path("${manifest_out}")
+(
+    manifest_out,
+    profile,
+    config,
+    version,
+    commit,
+    timestamp,
+    os_tag,
+    arch,
+    features,
+    validator_lock_sha256,
+    validator_source_tree_sha256,
+    image_tag,
+    image_id,
+    tarball,
+    checksum,
+    sig_path,
+    pub_path,
+) = sys.argv[1:]
+
+manifest_path = Path(manifest_out)
 manifest_path.parent.mkdir(parents=True, exist_ok=True)
 manifest = {
-    "profile": "${profile}",
-    "config": "${config}",
-    "version": "${version}",
-    "commit": "${commit}",
-    "built_at": "${timestamp}",
-    "os": "${os_tag}",
-    "arch": "${arch}",
-    "features": "${features}",
-    "validator_lock_sha256": "${validator_lock_sha256}" if "${validator_lock_sha256}" else None,
-    "validator_source_tree_sha256": "${validator_source_tree_sha256}" if "${validator_source_tree_sha256}" else None,
-    "image_tag": "${image_tag}",
-    "image_id": "${image_id}",
+    "profile": profile,
+    "config": config,
+    "version": version,
+    "commit": commit,
+    "built_at": timestamp,
+    "os": os_tag,
+    "arch": arch,
+    "features": features,
+    "validator_lock_sha256": validator_lock_sha256 or None,
+    "validator_source_tree_sha256": validator_source_tree_sha256 or None,
+    "image_tag": image_tag,
+    "image_id": image_id,
     "artifacts": [
         {
-            "file": "${tarball}",
-            "sha256": "${checksum}",
-            "signature": "${sig_path}" if "${sig_path}" else None,
-            "public_key": "${pub_path}" if "${pub_path}" else None,
+            "file": tarball,
+            "sha256": checksum,
+            "signature": sig_path or None,
+            "public_key": pub_path or None,
         }
     ],
 }
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-PY
+MANIFEST_PY
 
 printf '%s\n' "$tarball"

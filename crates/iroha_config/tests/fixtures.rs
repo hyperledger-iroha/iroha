@@ -901,6 +901,27 @@ fn minimal_config_snapshot() {
                     max_parallel_fetches: 32,
                     max_pins: 10000,
                     por_sample_interval_secs: 600,
+                    pdp_sample_window: 64,
+                    pdp_tree_memory_limit_bytes: Bytes(
+                        536870912,
+                    ),
+                    pdp_provider: SorafsPdpProviderPolicy {
+                        max_pending_records: 4096,
+                        max_terminal_records: 65536,
+                        checkpoint_max_bytes: Bytes(
+                            134217728,
+                        ),
+                        challenge_max_bytes: Bytes(
+                            524288,
+                        ),
+                        proof_max_bytes: Bytes(
+                            16777216,
+                        ),
+                        min_response_window_secs: 240,
+                        max_response_window_secs: 600,
+                        max_future_skew_secs: 5,
+                        terminal_retention_secs: 86400,
+                    },
                     runtime: SorafsRuntimeRetention {
                         event_history_limit: 4096,
                         state_entry_limit: 65536,
@@ -976,10 +997,16 @@ fn minimal_config_snapshot() {
                         connect_timeout: 3s,
                         request_timeout: 15s,
                         dns_timeout: 2s,
-                        max_response_bytes: Bytes(4194304),
-                        max_request_bytes: Bytes(67108864),
+                        max_response_bytes: Bytes(
+                            4194304,
+                        ),
+                        max_request_bytes: Bytes(
+                            67108864,
+                        ),
                         mirror_max_entries: 65536,
-                        mirror_max_bytes: Bytes(536870912),
+                        mirror_max_bytes: Bytes(
+                            536870912,
+                        ),
                         max_head_age_secs: 900,
                         max_future_skew_secs: 60,
                         allow_insecure_http: false,
@@ -1372,7 +1399,9 @@ fn minimal_config_snapshot() {
                 ram_lfe: None,
                 tx_history: None,
                 recipient_lookup: ToriiRecipientLookup {
-                    policy_id: "cbuae_aed_sbp_pkr".parse().unwrap(),
+                    policy_id: Name(
+                        "cbuae_aed_sbp_pkr",
+                    ),
                     requests_per_minute: 30,
                     request_timeout: 4s,
                     routes: [],
@@ -1443,7 +1472,7 @@ fn minimal_config_snapshot() {
                     stop_grace: 10s,
                 },
                 submission: SoracloudRuntimeSubmission {
-                    fee_payer: SoracloudRuntimeFeePayer::Authority,
+                    fee_payer: Authority,
                 },
                 egress: SoracloudRuntimeEgress {
                     default_allow: false,
@@ -1604,12 +1633,22 @@ fn minimal_config_snapshot() {
                 staking: NexusStaking {
                     public_validator_mode: StakeElected,
                     restricted_validator_mode: AdminManaged,
-                    min_validator_stake: 1_u64.into(),
+                    min_validator_stake: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 0,
+                        },
+                    ),
                     max_validators: 32,
                     unbonding_delay: 0ns,
                     withdraw_grace: 0ns,
                     max_slash_bps: 10000,
-                    reward_dust_threshold: 0_u64.into(),
+                    reward_dust_threshold: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
                     stake_asset_id: "5tTiKE1CkjJoGHhmf5FxQoSg5hMt",
                     stake_escrow_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     slash_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -2142,7 +2181,7 @@ fn minimal_config_snapshot() {
             },
             norito: Norito {
                 allow_gpu_compression: true,
-                max_archive_len: 2147483648,
+                max_archive_len: 1073741824,
             },
             hijiri: Hijiri {
                 fee_policy: None,
@@ -2198,6 +2237,29 @@ fn minimal_config_snapshot() {
                     enabled: false,
                     max_envelope_bytes: 1048576,
                     max_proof_bytes: 1048576,
+                },
+                sccp: Sccp {
+                    max_pending_outbound_messages: 65536,
+                    max_pending_outbound_payload_bytes: 268435456,
+                    max_proofs_per_transaction: 1,
+                    max_proofs_per_block: 4,
+                    max_proof_bytes_per_proof: 8388608,
+                    max_proof_bytes_per_transaction: 8388608,
+                    max_proof_bytes_per_block: 33554432,
+                    max_native_headers_per_transaction: 1004,
+                    max_native_headers_per_block: 4016,
+                    max_ethereum_light_client_updates_per_transaction: 128,
+                    max_ethereum_light_client_updates_per_block: 512,
+                    max_native_header_bytes_per_transaction: 8388608,
+                    max_native_header_bytes_per_block: 33554432,
+                    max_secp256k1_recoveries_per_transaction: 1005,
+                    max_secp256k1_recoveries_per_block: 4020,
+                    max_bls_aggregate_checks_per_transaction: 1004,
+                    max_bls_aggregate_checks_per_block: 4016,
+                    max_bls_signer_contributions_per_transaction: 131713,
+                    max_bls_signer_contributions_per_block: 526852,
+                    max_bn254_pairing_checks_per_transaction: 1,
+                    max_bn254_pairing_checks_per_block: 4,
                 },
                 root_history_cap: 2048,
                 ballot_history_cap: 1024,
@@ -2287,15 +2349,30 @@ fn minimal_config_snapshot() {
                     ],
                     projection: None,
                 },
-                citizenship_bond_amount: 150_u64.into(),
+                citizenship_bond_amount: Quantity(
+                    Numeric {
+                        mantissa: 150,
+                        scale: 0,
+                    },
+                ),
                 citizenship_escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
-                min_bond_amount: 150_u64.into(),
+                min_bond_amount: Quantity(
+                    Numeric {
+                        mantissa: 150,
+                        scale: 0,
+                    },
+                ),
                 bond_escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 slash_receiver_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 slash_double_vote_bps: 2500,
                 slash_invalid_proof_bps: 5000,
                 slash_ineligible_proof_bps: 1500,
-                alias_teu_minimum: 0_u64.into(),
+                alias_teu_minimum: Quantity(
+                    Numeric {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                ),
                 alias_frontier_telemetry: true,
                 debug_trace_pipeline: false,
                 jdg_signature_schemes: {
@@ -2409,18 +2486,48 @@ fn minimal_config_snapshot() {
                     tiers: [
                         TierRate {
                             storage_class: Hot,
-                            storage_price_nano_per_gib_month: 500000000,
-                            egress_price_nano_per_gib: 50000000,
+                            storage_price_per_gib_month: Quantity(
+                                Numeric {
+                                    mantissa: 5,
+                                    scale: 1,
+                                },
+                            ),
+                            egress_price_per_gib: Quantity(
+                                Numeric {
+                                    mantissa: 5,
+                                    scale: 2,
+                                },
+                            ),
                         },
                         TierRate {
                             storage_class: Warm,
-                            storage_price_nano_per_gib_month: 200000000,
-                            egress_price_nano_per_gib: 20000000,
+                            storage_price_per_gib_month: Quantity(
+                                Numeric {
+                                    mantissa: 2,
+                                    scale: 1,
+                                },
+                            ),
+                            egress_price_per_gib: Quantity(
+                                Numeric {
+                                    mantissa: 2,
+                                    scale: 2,
+                                },
+                            ),
                         },
                         TierRate {
                             storage_class: Cold,
-                            storage_price_nano_per_gib_month: 50000000,
-                            egress_price_nano_per_gib: 10000000,
+                            storage_price_per_gib_month: Quantity(
+                                Numeric {
+                                    mantissa: 5,
+                                    scale: 2,
+                                },
+                            ),
+                            egress_price_per_gib: Quantity(
+                                Numeric {
+                                    mantissa: 1,
+                                    scale: 2,
+                                },
+                            ),
                         },
                     ],
                     collateral: CollateralPolicy {
@@ -2494,7 +2601,12 @@ fn minimal_config_snapshot() {
                 min_turnout: 0,
                 parliament_committee_size: 21,
                 parliament_term_blocks: 43200,
-                parliament_min_stake: 1_u64.into(),
+                parliament_min_stake: Quantity(
+                    Numeric {
+                        mantissa: 1,
+                        scale: 0,
+                    },
+                ),
                 parliament_eligibility_asset_id: AssetDefinitionId {
                     aid_bytes: [
                         131,
@@ -2619,10 +2731,6 @@ fn minimal_config_snapshot() {
                     collateral_substitution_matrix: {},
                 },
                 offline: Offline {
-                    hot_retention_blocks: 86400,
-                    archive_batch_size: 128,
-                    cold_retention_blocks: 0,
-                    prune_batch_size: 128,
                     escrow_required: false,
                     escrow_accounts: {},
                     kagemusha_release_policy_path: None,

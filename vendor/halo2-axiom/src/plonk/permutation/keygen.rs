@@ -3,11 +3,11 @@ use group::Curve;
 
 use super::{Argument, ProvingKey, VerifyingKey};
 use crate::{
-    arithmetic::{parallelize, CurveAffine},
+    arithmetic::{CurveAffine, parallelize},
     plonk::{Any, Column, Error},
     poly::{
-        commitment::{Blind, Params},
         EvaluationDomain,
+        commitment::{Blind, Params},
     },
 };
 

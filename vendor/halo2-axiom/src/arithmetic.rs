@@ -4,9 +4,9 @@
 use super::multicore;
 pub use ff::Field;
 use group::{
+    Curve, GroupOpsOwned, ScalarMulOwned,
     ff::{BatchInvert, PrimeField},
     prime::PrimeCurveAffine,
-    Curve, GroupOpsOwned, ScalarMulOwned,
 };
 use rayon::prelude::*;
 
@@ -397,8 +397,7 @@ mod tests {
             (Scalar::random(&mut rng), extras_slice[1]),
         ];
 
-        let combined =
-            best_multiexp_with_extra::<EqAffine>(&scalars, &bases, &extra_pairs);
+        let combined = best_multiexp_with_extra::<EqAffine>(&scalars, &bases, &extra_pairs);
 
         let extra_scalars = [extra_pairs[0].0, extra_pairs[1].0];
         let extra_bases = [extra_pairs[0].1, extra_pairs[1].1];

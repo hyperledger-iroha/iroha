@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.address;
 
 import java.util.Arrays;
 import java.util.Locale;
+import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.norito.Varint;
 
 /** Utilities for encoding and decoding canonical public key literals. */
@@ -29,30 +30,40 @@ public final class PublicKeyCodec {
 
   /**
    * Decodes a multihash public key literal into its curve id and payload bytes.
-   * Returns {@code null} when the literal is not a valid multihash key.
+   * The literal may be bare or use one exact canonical algorithm prefix; surrounding whitespace,
+   * unknown prefixes, and prefixes that do not match the encoded curve are rejected. Returns
+   * {@code null} when the literal is not a valid multihash key.
    */
   public static PublicKeyPayload decodePublicKeyLiteral(final String literal) {
-    if (literal == null) {
+    if (literal == null || literal.isEmpty()) {
       return null;
     }
-    String trimmed = literal.trim();
-    if (trimmed.isEmpty()) {
+    if (isPublicKeyLiteralWhitespace(literal.charAt(0))
+        || isPublicKeyLiteralWhitespace(literal.charAt(literal.length() - 1))) {
       return null;
     }
-    final int colonIndex = trimmed.indexOf(':');
-    if (colonIndex > 0) {
-      trimmed = trimmed.substring(colonIndex + 1);
+    String encoded = literal;
+    String algorithmPrefix = null;
+    final int colonIndex = encoded.indexOf(':');
+    if (colonIndex >= 0) {
+      if (colonIndex == 0
+          || colonIndex == encoded.length() - 1
+          || colonIndex != encoded.lastIndexOf(':')) {
+        return null;
+      }
+      algorithmPrefix = encoded.substring(0, colonIndex);
+      encoded = encoded.substring(colonIndex + 1);
     }
-    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+    if (encoded.startsWith("0x") || encoded.startsWith("0X")) {
       return null;
     }
-    if ((trimmed.length() & 1) == 1) {
+    if ((encoded.length() & 1) == 1) {
       return null;
     }
-    if (!trimmed.matches("(?i)[0-9a-f]+")) {
+    if (!encoded.matches("(?i)[0-9a-f]+")) {
       return null;
     }
-    final byte[] bytes = hexToBytes(trimmed);
+    final byte[] bytes = hexToBytes(encoded);
     final Varint.DecodeResult code = Varint.decode(bytes, 0);
     final Varint.DecodeResult len = Varint.decode(bytes, code.nextOffset());
     if (len.value() > Integer.MAX_VALUE) {
@@ -67,13 +78,24 @@ public final class PublicKeyCodec {
     if (curveId < 0) {
       return null;
     }
+    if (algorithmPrefix != null && !algorithmPrefix.equals(algorithmForCurveId(curveId))) {
+      return null;
+    }
     final byte[] keyBytes = Arrays.copyOfRange(bytes, payloadOffset, payloadOffset + payloadLength);
+    if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) {
+      return null;
+    }
     return new PublicKeyPayload(curveId, keyBytes);
+  }
+
+  private static boolean isPublicKeyLiteralWhitespace(final char character) {
+    return Character.isWhitespace(character) || Character.isSpaceChar(character);
   }
 
   /** Encodes the multihash public key literal from the given curve id and key bytes. */
   public static String encodePublicKeyMultihash(final int curveId, final byte[] keyBytes) {
     final long code = multihashCodeForCurveId(curveId);
+    requireValidPublicKeyForEncoding(curveId, keyBytes);
     final byte[] codeVarint = Varint.encode(code);
     final byte[] lenVarint = Varint.encode(keyBytes.length);
     final StringBuilder builder =
@@ -87,6 +109,7 @@ public final class PublicKeyCodec {
   /** Encodes a public key as Iroha's compact Norito payload: algorithm tag plus key bytes. */
   public static byte[] compactPublicKeyPayload(final int curveId, final byte[] keyBytes) {
     final int tag = compactAlgorithmTagForCurveId(curveId);
+    requireValidPublicKeyForEncoding(curveId, keyBytes);
     final byte[] payload = new byte[1 + keyBytes.length];
     payload[0] = (byte) tag;
     System.arraycopy(keyBytes, 0, payload, 1, keyBytes.length);
@@ -102,7 +125,11 @@ public final class PublicKeyCodec {
     if (curveId < 0) {
       return null;
     }
-    return new PublicKeyPayload(curveId, Arrays.copyOfRange(payload, 1, payload.length));
+    final byte[] keyBytes = Arrays.copyOfRange(payload, 1, payload.length);
+    if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) {
+      return null;
+    }
+    return new PublicKeyPayload(curveId, keyBytes);
   }
 
   /** Returns the canonical algorithm label for the curve id, or {@code null} when unknown. */
@@ -132,6 +159,14 @@ public final class PublicKeyCodec {
         return "sm2";
       default:
         return null;
+    }
+  }
+
+  private static void requireValidPublicKeyForEncoding(
+      final int curveId, final byte[] keyBytes) {
+    if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) {
+      throw new IllegalArgumentException(
+          "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup");
     }
   }
 

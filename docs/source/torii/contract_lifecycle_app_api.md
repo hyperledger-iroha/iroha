@@ -196,8 +196,11 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
 ### `POST /v1/contracts/call/multisig/propose`
 
 - Request type: `MultisigContractCallProposeDto`.
-- The multisig authority is selected by exactly one of
-  `multisig_account_id` or `multisig_account_alias`.
+- The selector wire shape contains exactly one of `multisig_account_id` or
+  `multisig_account_alias`, but this unsigned transaction-scaffold route accepts
+  only the canonical `multisig_account_id`. An alias selector is rejected with
+  `403 multisig_alias_signature_required`; body-asserted signer fields do not
+  authenticate alias resolution.
 - The contract target is selected by exactly one of `contract_address` or
   `contract_alias`.
 - `gas_limit` defaults to `1500000` when omitted and must be positive when
@@ -206,13 +209,17 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
   contract payload, wraps the call in `MultisigPropose`, and returns
   `MultisigContractCallResponseDto` with `proposal_id`, `instructions_hash`,
   `resolved_multisig_account_id`, and either `tx_hash_hex` or
-  `signing_message_b64`.
+  `signing_message_b64`. A signed proposal that reaches quorum immediately also
+  returns `executed_tx_hash_hex` equal to `tx_hash_hex`, because the proposal,
+  approval, and nested call execute atomically in that transaction. It remains
+  null when the proposal is only collecting signatures.
 
 ### `POST /v1/contracts/call/multisig/approve`
 
 - Request type: `MultisigContractCallApproveDto`.
 - Requires exactly one of `proposal_id` or `instructions_hash`.
-- The multisig selector rules match the propose route.
+- The multisig selector rules match the propose route: unsigned scaffold
+  preparation requires the canonical `multisig_account_id`.
 - Returns `MultisigContractCallResponseDto`, including
   `executed_tx_hash_hex` when the approval reached quorum and executed the
   proposal immediately.

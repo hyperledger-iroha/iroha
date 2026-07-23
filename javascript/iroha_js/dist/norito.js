@@ -5288,6 +5288,13 @@ function encodeAccountIdValue(value, context) {
   }
 }
 
+/** @internal Exact compact-length AccountId value encoding for typed policy codecs. */
+export function encodeAccountIdNoritoValue(value, context = "AccountId") {
+  return withNoritoCompactLengths(() =>
+    Uint8Array.from(encodeAccountIdValue(value, context)),
+  );
+}
+
 function decodeAccountIdValue(payload, context) {
   const reader = new BufferReader(payload, context);
   const kind = reader.readU32LE("kind");
@@ -5502,6 +5509,16 @@ function encodeAssetDefinitionIdValue(value, context) {
     throw new Error(`${context} checksum is invalid`);
   }
   return encodeFixedByteArrayArchiveValue(payload.subarray(1, 17), 16, context);
+}
+
+/** @internal Exact compact-length AssetDefinitionId value encoding for typed policy codecs. */
+export function encodeAssetDefinitionIdNoritoValue(
+  value,
+  context = "AssetDefinitionId",
+) {
+  return withNoritoCompactLengths(() =>
+    Uint8Array.from(encodeAssetDefinitionIdValue(value, context)),
+  );
 }
 
 function decodeAssetDefinitionIdValue(payload, context) {
@@ -7736,6 +7753,13 @@ function encodeNumericValue(value, context) {
     encodeNoritoField(mantissaPayload),
     encodeNoritoField(u32ToLittleEndianBuffer(scale)),
   ]);
+}
+
+/** @internal Exact compact-length Numeric value encoding for typed policy codecs. */
+export function encodeNumericNoritoValue(value, context = "Numeric") {
+  return withNoritoCompactLengths(() =>
+    Uint8Array.from(encodeNumericValue(value, context)),
+  );
 }
 
 function decodeNumericValue(payload, context) {

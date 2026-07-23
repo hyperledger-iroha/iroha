@@ -15,8 +15,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./gradlew :core-jvm:build --quiet
 ./gradlew :client-android:assembleRelease --quiet
 
-# Build native .so from Rust source
+# Build the default generated native .so files and provenance from Rust source
 ./gradlew :client-android:buildNativeLibs
+
+# Build the production-featured generated native artifacts
+./gradlew :client-android:buildNativeLibs -PprivacyProductionEnabled=true
 
 # Publish to local Maven
 ./gradlew publishToMavenLocal
@@ -74,7 +77,19 @@ All mutable collections and byte arrays are copied on construction and access. U
 ## Key Patterns
 - **Two instruction representations**: typed (structured fields) vs wire (opaque `ByteArray` + wire name); `InstructionBox` unifies both
 - **Source layout**: main sources under `src/main/java/` (Kotlin files, retained path from Java migration), tests under `src/test/kotlin/`
-- **Native libraries**: `.so` files built from Rust via `./gradlew :client-android:buildNativeLibs`, not tracked in git
+- **Native libraries**: `.so` files built from Rust via
+  `./gradlew :client-android:buildNativeLibs`, not tracked in git. Raw cargo-ndk
+  output is isolated under `client-android/build/native/cargo-ndk/<mode>/`;
+  compiler state is separately isolated under
+  `client-android/build/native/cargo-target/<mode>/` via `CARGO_TARGET_DIR`;
+  canonically stripped authoritative bytes live under
+  `client-android/build/generated/jniLibs/<mode>/`, with matching provenance in
+  `build/generated/nativeProvenance/<mode>/`. Cargo-ndk output first lands in a
+  transient per-ABI staging directory so unrelated workspace `cdylib` outputs
+  cannot enter the exact raw inventory. The build verifies its Android source
+  seal after every ABI and binds the dependency-closure fingerprint into
+  provenance. AGP packages those generated outputs and explicitly excludes
+  `src/main/jniLibs`.
 
 ## Testing
 

@@ -49,7 +49,9 @@ mod halo2_backend;
 /// Constant-depth Pasta IPA accumulation and terminal decisions for Kagemusha.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_accumulation;
-/// Authenticated KRV4 framing and role-safe ABI-20 artifact carriers.
+#[cfg(feature = "zk-halo2-ipa")]
+pub mod kagemusha_artifact_source_v4;
+/// Authenticated KRV4 framing and role-safe ABI-21 artifact carriers.
 #[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_artifact_v4;
 /// Fixed opposite-field Pasta instructions used by both Kagemusha step parities.
@@ -57,13 +59,18 @@ pub mod kagemusha_artifact_v4;
 pub(crate) mod kagemusha_cycle_loader;
 /// Offline-verifiable consensus finality for Kagemusha top-up anchors.
 pub mod kagemusha_finality;
-/// Fixed-shape ABI-20/V4 Eq/Ep recursive verifier and terminal IPA decisions.
+/// Fixed-shape ABI-21/V4 Eq/Ep recursive verifier and terminal IPA decisions.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_recursion_adapter;
+/// Exact row-bounded SHA-256 used by the composite Kagemusha Step circuit.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod kagemusha_sha256_v4;
+pub(crate) mod kagemusha_sha256_table16_v4;
+#[cfg(feature = "zk-halo2-ipa")]
 /// Exact field-neutral operation ABI and assigned two-parent Step transition.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_step_transition;
-/// ABI-20/V4 Kagemusha facade plus unchanged V2 amount, note, and membership primitives.
+/// ABI-21/V4 Kagemusha facade plus unchanged V2 amount, note, and membership primitives.
 #[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_v2;
 

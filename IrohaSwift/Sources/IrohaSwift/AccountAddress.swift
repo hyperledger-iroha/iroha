@@ -1401,7 +1401,13 @@ extension AccountAddress {
         return writer.data
     }
 
-    func compactNoritoAccountControllerPayload() throws -> Data {
+    /// Encode this address as the bare compact-Norito `AccountId` controller payload.
+    ///
+    /// `AccountId` is domainless in the first-release wire model. Exposing the
+    /// canonical controller encoder lets downstream SDK consumers embed typed
+    /// account identifiers in larger compact-Norito structures without
+    /// reimplementing single-key and multisig layouts.
+    public func compactNoritoAccountControllerPayload() throws -> Data {
         var writer = CompactNoritoWriter()
         switch controller {
         case .singleKey(let curve, let publicKey):

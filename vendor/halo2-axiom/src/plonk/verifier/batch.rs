@@ -3,12 +3,12 @@ use group::ff::Field;
 use halo2curves::CurveAffine;
 use rand_core::OsRng;
 
-use super::{verify_proof, VerificationStrategy};
+use super::{VerificationStrategy, verify_proof};
 use crate::{
     multicore::{IntoParallelIterator, TryFoldAndReduce},
     plonk::{Error, VerifyingKey},
     poly::{
-        commitment::{Params, MSM},
+        commitment::{MSM, Params},
         ipa::{
             commitment::{IPACommitmentScheme, ParamsVerifierIPA},
             msm::MSMIPA,

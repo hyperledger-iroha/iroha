@@ -3658,6 +3658,33 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "json")]
+    fn social_oracle_fixtures_preserve_observation_links() {
+        let observation = sample_social_observation();
+        let report = sample_social_report();
+        let event = sample_social_feed_event();
+        let observation_hash = observation.hash();
+        let report_entry = report
+            .body
+            .entries
+            .iter()
+            .find(|entry| entry.oracle_id == observation.body.provider_id)
+            .expect("social report must reference the fixture observation provider");
+
+        assert_eq!(report_entry.observation_hash, observation_hash);
+
+        let FeedEventOutcome::Success(success) = &event.outcome else {
+            panic!("social feed event must contain a successful aggregation");
+        };
+        let event_entry = success
+            .entries
+            .iter()
+            .find(|entry| entry.oracle_id == observation.body.provider_id)
+            .expect("social feed event must reference the fixture observation provider");
+        assert_eq!(event_entry, report_entry);
+    }
+
+    #[test]
     fn rejection_code_catalog_is_unique_and_descriptive() {
         use std::collections::BTreeSet;
 

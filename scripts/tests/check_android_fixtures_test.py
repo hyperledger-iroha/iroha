@@ -91,6 +91,33 @@ def test_decode_base64_rejects_noncanonical_encodings(encoded: str) -> None:
         MODULE.decode_base64(encoded, "adversarial fixture")
 
 
+@pytest.mark.parametrize("nonce", [None, 1, 0xFFFF_FFFF])
+def test_transaction_nonce_validator_accepts_nonzero_u32_range(
+    nonce: Optional[int],
+) -> None:
+    assert MODULE.is_valid_transaction_nonce(nonce)
+
+
+@pytest.mark.parametrize("nonce", [-1, 0, 0x1_0000_0000, True])
+def test_payload_loader_rejects_nonce_outside_nonzero_u32_range(
+    tmp_path: Path,
+    nonce: object,
+) -> None:
+    entry = {
+        "name": "invalid-nonce",
+        "encoded": base64.b64encode(b"payload").decode(),
+        "chain": "00000002",
+        "authority": "sorau-example",
+        "creation_time_ms": 1,
+        "time_to_live_ms": None,
+        "nonce": nonce,
+    }
+    path = _write_payloads(tmp_path / "transaction_payloads.json", [entry])
+
+    with pytest.raises(ValueError, match="invalid nonce"):
+        MODULE.load_payload_fixtures(path)
+
+
 def test_payload_loader_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
     entry = {
         "name": "duplicate",
@@ -163,6 +190,28 @@ def test_manifest_checker_rejects_renamed_cloned_payloads(tmp_path: Path) -> Non
     assert "manifest contains duplicate payload bytes: renamed-clone" in errors
     assert f"manifest contains duplicate signed_hash: {first['signed_hash']}" in errors
     assert "manifest contains duplicate signed bytes: renamed-clone" in errors
+
+
+@pytest.mark.parametrize("nonce", [-1, 0, 0x1_0000_0000, True])
+def test_manifest_checker_rejects_nonce_outside_nonzero_u32_range(
+    tmp_path: Path,
+    nonce: object,
+) -> None:
+    entry = _fixture_entry(
+        "invalid-nonce",
+        "invalid-nonce.norito",
+        b"payload",
+        b"signed",
+        1,
+        "00000002",
+        "sorau-example",
+        None,
+        nonce,  # type: ignore[arg-type]
+    )
+
+    errors = MODULE.compare(tmp_path, {"fixtures": [entry]}, {})
+
+    assert any("manifest fixture has invalid nonce" in error for error in errors)
 
 
 def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:

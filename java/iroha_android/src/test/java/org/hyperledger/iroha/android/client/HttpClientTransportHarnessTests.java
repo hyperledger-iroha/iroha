@@ -293,7 +293,7 @@ public final class HttpClientTransportHarnessTests {
             .setProviderIdHex(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             .setGatewayPublicKeyHex(
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
             .setBaseUrl("https://provider.example/")
             .setStreamTokenBase64("c3RyZWFtLXRva2Vu")
             .build();

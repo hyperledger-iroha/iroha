@@ -1,16 +1,16 @@
 use std::fmt::Debug;
 
-use super::{construct_intermediate_sets, ChallengeU, ChallengeV};
+use super::{ChallengeU, ChallengeV, construct_intermediate_sets};
 use crate::arithmetic::powers;
 use crate::helpers::SerdeCurveAffine;
-use crate::poly::commitment::Verifier;
+use crate::poly::Error;
 use crate::poly::commitment::MSM;
+use crate::poly::commitment::Verifier;
 use crate::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
 use crate::poly::kzg::msm::{DualMSM, MSMKZG};
 use crate::poly::kzg::strategy::GuardKZG;
 use crate::poly::query::Query;
 use crate::poly::query::{CommitmentReference, VerifierQuery};
-use crate::poly::Error;
 use crate::transcript::{EncodedChallenge, TranscriptRead};
 
 use ff::Field;

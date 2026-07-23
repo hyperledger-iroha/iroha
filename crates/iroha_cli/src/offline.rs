@@ -69,7 +69,7 @@ impl Run for Command {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum KagemushaCommand {
-    /// Activate an authenticated ABI-20 release and its exact Eq/Ep verifier pair.
+    /// Activate an authenticated ABI-21 release and its exact Eq/Ep verifier pair.
     ActivateReleaseV4(ActivateReleaseV4Args),
 }
 

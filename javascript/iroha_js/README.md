@@ -726,7 +726,7 @@ const spec = new MultisigSpecBuilder()
   .setQuorum(3)
   .setTransactionTtlMs(86_400_000)
   .addSignatory("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", 2)
-  .addSignatory("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", 1)
+  .addSignatory("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", 1)
   .build();
 
 // Preview the effective TTL (clamped to the policy cap) and expiry time
@@ -775,7 +775,7 @@ const args = buildMultisigTriggerArgs("lifecycle", {
   action: "create",
   requestId: "mr1",
   fiId: "banka",
-  toAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+  toAccountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
   amountI64: 10,
   createdAtMs: Date.now(),
   expiresAtMs: Date.now() + 60_000,
@@ -850,7 +850,7 @@ import {
 
 const { publicKey, privateKey } = generateKeyPair();
 const authorityInput =
-  "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+  "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 const newAccountIdInput =
   "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄocﾆﾁヰJaｱbg6sｾgｲﾖPfX7WAWRY";
 const authority = normalizeAccountId(authorityInput);
@@ -934,18 +934,19 @@ const receipt = await torii.submitTransaction(encoded);
 const sampleHashHex =
   receipt?.payload?.tx_hash ?? "ab".repeat(32); // 32-byte transaction hash as lowercase hex
 const status = await torii.getTransactionStatus(sampleHashHex);
-console.log(status?.content.status.kind); // e.g. "Committed"
+console.log(status?.content.status.kind); // e.g. "Applied"
 
 // Normalised helper exposes canonical fields (`kind`, `hashHex`, `status.kind`, etc.)
 const typedStatus = await torii.getTransactionStatusTyped(sampleHashHex);
-console.log(typedStatus?.status?.kind); // e.g. "Committed"
+console.log(typedStatus?.status?.kind); // e.g. "Applied"
 
 // The wait helpers also ship normalised variants if you prefer structured DTOs
 await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
 await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
 // Note: `getTransactionStatus` options support only { allowShortHash, signal }.
 // Polling helper options support only { signal, intervalMs, timeoutMs, maxAttempts,
-// successStatuses, failureStatuses, onStatus }.
+// failureStatuses, onStatus }. Success is fixed to exact canonical `Applied`;
+// `Approved` and `Committed` remain progress states.
 // intervalMs/timeoutMs must be non-negative integers (use timeoutMs: null to disable
 // the deadline), maxAttempts must be a positive integer when provided, and onStatus
 // must be a function.
@@ -1058,7 +1059,7 @@ const registerAccount = buildRegisterAccountInstruction({
 });
 const transfer = buildTransferAssetInstruction({
   sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+  destinationAccountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
   quantity: "5",
 });
 
@@ -1855,7 +1856,7 @@ const pinResult = await torii.pinSorafsManifest({
 console.log(`manifest=${pinResult.manifest_id_hex} digest=${pinResult.payload_digest_hex}`);
 
 const registerRequest = {
-  authority: process.env.SORAFS_OPERATOR_ID ?? "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: process.env.SORAFS_OPERATOR_ID ?? "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   private_key: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
   manifest_payload: fs.readFileSync("./manifest.norito").toString("base64"),
   submitted_epoch: Date.now(),
@@ -3913,7 +3914,7 @@ const deriveResponse = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+      accountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
       variant: "Normal",
       pk: validatorPublicKeyBytes,
       proof: validatorProofBytes,

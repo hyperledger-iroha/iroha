@@ -210,7 +210,15 @@ extension ConnectBalanceAsset {
         } catch {
             throw ConnectEnvelopeError.invalidPayload
         }
-        let definition = json["asset_definition_id"] as? String
+        let definition: String?
+        if let rawDefinition = json["asset_definition_id"], !(rawDefinition is NSNull) {
+            guard let parsed = rawDefinition as? String else {
+                throw ConnectEnvelopeError.invalidPayload
+            }
+            definition = parsed
+        } else {
+            definition = nil
+        }
         let precisionValue: Int?
         if let precisionRaw = json["precision"] {
             guard let parsed = StrictJSONNumber.int(from: precisionRaw), parsed >= 0 else {

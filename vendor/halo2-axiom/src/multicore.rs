@@ -8,8 +8,9 @@ compile_error!(
 );
 
 pub use maybe_rayon::{
+    Scope,
     iter::{IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator},
-    join, scope, Scope,
+    join, scope,
 };
 
 #[cfg(feature = "multicore")]

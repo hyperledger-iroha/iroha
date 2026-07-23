@@ -83,7 +83,7 @@ keys used by the rails you enable (replace only the human-readable strings):
 <string>Exchange an offline transfer over NFC.</string>
 <key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
 <array>
-    <string>F049524F48415045455201</string>
+    <string>F0504B45504B524E464301</string>
 </array>
 ```
 
@@ -108,7 +108,7 @@ device.
 <true/>
 <key>com.apple.developer.nfc.hce.iso7816.select-identifier-prefixes</key>
 <array>
-    <string>F049524F48415045455201</string>
+    <string>F0504B45504B524E464301</string>
 </array>
 ```
 
@@ -329,7 +329,7 @@ start with the zero bootstrap; it adopts the receiver's advertised nonzero
 request context before the `IPN1` certificate-bound P-256/HKDF/AES-GCM
 session. The adapter marks
 a BYTES send complete only after its terminal transfer update succeeds. NFC
-uses AID `F049524F48415045455201`, exact ISC1 sender checkpoints, 244-byte IPA1
+uses AID `F0504B45504B524E464301`, exact ISC1 sender checkpoints, 244-byte IPA1
 durable BEGIN records, IDA1 durable ACK records, min(local, peer) chunk
 negotiation, and GET_STATUS recovery after
 ambiguous RF loss. The complete reader runner applies a whole-exchange
@@ -403,7 +403,7 @@ byte whole-offer body ceiling (24,660 bytes with the IPM1 header). The
 independent ABI21 APIs remain
 `KagemushaQRStreamCodec`, `KagemushaNFCProtocol`, and
 `KagemushaNearbyExchange`, with distinct `PKK2*`/`PKKQ1`, the canonical
-`F049524F48415045455201` SDK NFC AID, and
+`F0504B45504B524E464301` SDK NFC AID, and
 Bonjour/Multipeer identifiers. They are never negotiated, reinterpreted, or
 used as fallback for Retail V1. Full QR, NFC, and native ABI21 archives up to
 32 MiB continue to use those rails; Kagemusha Nearby's JSON/text envelope has
@@ -945,12 +945,12 @@ if #available(iOS 15, macOS 12, *) {
 
 `IrohaSDK` exposes `submitAndWait` helpers (envelope + transfer/mint/burn variants) that
 POST to `/v1/pipeline/transactions` and poll `/v1/pipeline/transactions/status` until a
-terminal status (Approved/Committed/Applied or Rejected/Expired) is observed. Tune the
-behaviour via `PipelineStatusPollOptions` or by setting `sdk.pipelinePollOptions`:
+canonical `Applied` status or a failure (`Rejected`/`Expired`) is observed. `Approved` and
+`Committed` remain progress states. Tune timing and failure handling via
+`PipelineStatusPollOptions` or by setting `sdk.pipelinePollOptions`:
 
 ```swift
-var options = PipelineStatusPollOptions(successStates: Set([.approved, .committed]),
-                                       failureStates: Set([.rejected, .expired]))
+var options = PipelineStatusPollOptions()
 options.pollInterval = 0.25 // seconds between polls
 options.timeout = 20        // abort if no status within 20 seconds
 
@@ -965,7 +965,8 @@ if #available(iOS 15, macOS 12, *) {
 `.other("NAME")`.
 
 Completion-based variants return a `Task<Void, Never>` so callers can cancel outstanding
-polls. Failures bubble up as `PipelineStatusError.failure` (rejected/expired) or
+polls. The success state is intentionally not configurable: only exact `Applied` proves
+execution. Failures bubble up as `PipelineStatusError.failure` (rejected/expired) or
 `PipelineStatusError.timeout` when no terminal status arrives in time. When Torii includes
 `rejection_reason`, it is exposed via `PipelineStatusError.rejectionReason` and the localized
 error message.

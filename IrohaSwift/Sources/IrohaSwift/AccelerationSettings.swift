@@ -176,6 +176,7 @@ public extension AccelerationSettings {
 
 private extension AccelerationSettings {
     static let accelerationKeys: Set<String> = [
+        "enable_simd",
         "enable_metal",
         "enable_cuda",
         "max_gpus",
@@ -201,7 +202,7 @@ private extension AccelerationSettings {
         guard let text = String(data: data, encoding: .utf8) else {
             return nil
         }
-        guard let section = parseTomlAccelerationSection(text) else {
+        guard let section = try parseTomlAccelerationSection(text) else {
             return nil
         }
         return try decodeAccelerationDictionary(section, decoder: decoder)
@@ -210,11 +211,29 @@ private extension AccelerationSettings {
     static func searchAccelerationSection(in object: Any, decoder: JSONDecoder) throws -> AccelerationSettings? {
         if let dict = object as? [String: Any] {
             if let accel = dict["accel"] {
+                guard accel is [String: Any] else {
+                    throw DecodingError.typeMismatch(
+                        AccelerationSettings.self,
+                        DecodingError.Context(
+                            codingPath: [],
+                            debugDescription: "accel must be a configuration object"
+                        )
+                    )
+                }
                 if let found = try searchAccelerationSection(in: accel, decoder: decoder) {
                     return found
                 }
             }
             if let accel = dict["acceleration"] {
+                guard accel is [String: Any] else {
+                    throw DecodingError.typeMismatch(
+                        AccelerationSettings.self,
+                        DecodingError.Context(
+                            codingPath: [],
+                            debugDescription: "acceleration must be a configuration object"
+                        )
+                    )
+                }
                 if let found = try searchAccelerationSection(in: accel, decoder: decoder) {
                     return found
                 }
@@ -246,13 +265,11 @@ private extension AccelerationSettings {
         }
         let data = try JSONSerialization.data(withJSONObject: dict, options: [])
         decoder.keyDecodingStrategy = .useDefaultKeys
-        guard let decoded = try? decoder.decode(AccelerationSettings.self, from: data) else {
-            return nil
-        }
+        let decoded = try decoder.decode(AccelerationSettings.self, from: data)
         return decoded.normalizedForConfigSemantics()
     }
 
-    static func parseTomlAccelerationSection(_ text: String) -> [String: Any]? {
+    static func parseTomlAccelerationSection(_ text: String) throws -> [String: Any]? {
         var inAccelSection = false
         var result: [String: Any] = [:]
 
@@ -274,7 +291,13 @@ private extension AccelerationSettings {
             }
             let key = line[..<equalIndex].trimmingCharacters(in: .whitespacesAndNewlines)
             let valuePortion = line[line.index(after: equalIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty, !valuePortion.isEmpty else { continue }
+            guard !key.isEmpty else { continue }
+            guard !valuePortion.isEmpty else {
+                if accelerationKeys.contains(key) {
+                    throw invalidTomlAccelerationValue(key: key)
+                }
+                continue
+            }
 
             if valuePortion == "true" {
                 result[key] = true
@@ -285,10 +308,21 @@ private extension AccelerationSettings {
             } else if valuePortion.hasPrefix("\""), valuePortion.hasSuffix("\"") {
                 let trimmed = valuePortion.dropFirst().dropLast()
                 result[key] = String(trimmed)
+            } else if accelerationKeys.contains(key) {
+                throw invalidTomlAccelerationValue(key: key)
             }
         }
 
         return result.isEmpty ? nil : result
+    }
+
+    static func invalidTomlAccelerationValue(key: String) -> DecodingError {
+        DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: [],
+                debugDescription: "\(key) has an invalid TOML acceleration value"
+            )
+        )
     }
 
     static func parseTomlInteger(_ value: String) -> Int? {

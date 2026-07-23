@@ -7134,7 +7134,7 @@ impl Client {
             && readiness.active_recursive_step_ep_verifier.is_some();
         if readiness.recursive_lineage_supported != expected_recursive_lineage_supported {
             return Err(eyre!(
-                "offline readiness response has an inconsistent exact ABI-20 recursive lineage capability"
+                "offline readiness response has an inconsistent exact ABI-21 recursive lineage capability"
             ));
         }
         if readiness.recursive_lineage_supported == has_blocker("recursive_lineage_unavailable") {
@@ -7156,7 +7156,7 @@ impl Client {
             && readiness.blockers.is_empty();
         if readiness.ready != expected_ready {
             return Err(eyre!(
-                "offline readiness response has an inconsistent complete ABI-20 readiness claim"
+                "offline readiness response has an inconsistent complete ABI-21 readiness claim"
             ));
         }
         Ok(readiness)

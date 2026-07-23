@@ -126,7 +126,7 @@ const CHAIN_ID =
   process.env.IROHA_TORII_INTEGRATION_CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
 const AUTHORITY_ACCOUNT_ID =
   process.env.IROHA_TORII_INTEGRATION_ACCOUNT_ID ??
-  "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+  "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const PRIVATE_KEY_HEX =
   process.env.IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX ??
   "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
@@ -148,7 +148,7 @@ function parseBooleanEnv(value) {
   return normalized !== "0" && normalized !== "false";
 }
 
-const SUCCESS_STATUSES = new Set(["committed", "approved", "applied"]);
+const SUCCESS_STATUSES = new Set(["applied"]);
 const KAIGI_HEALTH_STATUSES = new Set(["healthy", "degraded", "unavailable"]);
 
 /**

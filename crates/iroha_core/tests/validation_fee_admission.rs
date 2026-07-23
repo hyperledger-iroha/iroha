@@ -163,6 +163,7 @@ fn validation_fee_policy(
         expires_after_height: Some(100),
         governance_keyset_id: "validation-fee-governance-v1".to_string(),
         exemption_classes: Vec::new(),
+        treasury_payout_binding: None,
     }
 }
 

@@ -28,7 +28,7 @@ const SIGMA = [
   [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
 ];
 
-function ensureUint8Array(value) {
+function ensureUint8Array(value, name) {
   if (value instanceof Uint8Array) {
     return value;
   }
@@ -38,7 +38,14 @@ function ensureUint8Array(value) {
   if (typeof value === "string") {
     return new TextEncoder().encode(value);
   }
-  return Uint8Array.from(value ?? []);
+  const entries = Array.from(value ?? []);
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!Number.isInteger(entry) || entry < 0 || entry > 0xff) {
+      throw new TypeError(`${name}[${index}] must be a byte`);
+    }
+  }
+  return Uint8Array.from(entries);
 }
 
 function rotateRight(value, shift) {
@@ -170,8 +177,8 @@ function blake2sDigest(message, key, outlen) {
 }
 
 export function blake2s(input, { key, outlen = 32 } = {}) {
-  const message = ensureUint8Array(input);
-  const keyBytes = key ? ensureUint8Array(key) : new Uint8Array();
+  const message = ensureUint8Array(input, "blake2s input");
+  const keyBytes = key ? ensureUint8Array(key, "blake2s key") : new Uint8Array();
   return blake2sDigest(message, keyBytes, outlen);
 }
 

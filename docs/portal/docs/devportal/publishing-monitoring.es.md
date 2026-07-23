@@ -58,6 +58,8 @@ puedan seguir la salud del portal, Try it, bindings y DNS sin parsear el bundle 
 
 Ejemplo de config con knobs requeridos y multiples bindings:
 
+> `samplePath=/v1/...` → probe `+ /proxy` → `/proxy/v1/...`
+
 ```json
 {
   "portal": {
@@ -73,7 +75,7 @@ Ejemplo de config con knobs requeridos y multiples bindings:
   },
   "tryIt": {
     "proxyUrl": "https://tryit-preview.sora",
-    "samplePath": "/proxy/v1/accounts/<i105-account-id>/assets?limit=1",
+    "samplePath": "/v1/accounts/<i105-account-id>/assets?limit=1",
     "method": "GET",
     "timeoutMs": 7000,
     "token": "${TRYIT_BEARER}",

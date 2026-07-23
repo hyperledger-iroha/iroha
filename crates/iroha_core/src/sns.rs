@@ -2826,8 +2826,7 @@ pub fn active_account_alias_selector(
     now_ms: u64,
 ) -> Result<NameSelectorV1, SnsError> {
     let literal = active_account_alias_literal(world, catalog, alias, now_ms)?;
-    NameSelectorV1::new(ACCOUNT_ALIAS_SUFFIX_ID, literal)
-        .map_err(|error| SnsError::BadRequest(error.to_string()))
+    selector_for_account_alias_literal(&literal, catalog)
 }
 
 /// Resolve an active dataspace alias to its canonical id.
@@ -3033,10 +3032,9 @@ mod tests {
     }
 
     fn another_owner() -> AccountId {
-        let public_key = "ed0120C70416DC2D60D9AB2F0C6CED829837F1006DDED2DE794E9D5091A60663FA8C11"
-            .parse()
-            .expect("public key");
-        AccountId::new(public_key)
+        let keypair = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("derive alternate SNS fixture owner");
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn dataspace_catalog() -> DataSpaceCatalog {
@@ -3122,6 +3120,67 @@ mod tests {
 
         assert_eq!(selector.suffix_id, ACCOUNT_ALIAS_SUFFIX_ID);
         assert_eq!(selector.label, "treasury@banking");
+    }
+
+    #[test]
+    fn active_account_alias_selector_resolves_canonical_domainful_literal() {
+        let catalog = dataspace_catalog();
+        let alias = AccountAlias::new(
+            "treasury".parse().expect("label"),
+            Some(AccountAliasDomain::new("banka".parse().expect("domain"))),
+            DataSpaceId::new(7),
+        );
+        let selector = selector_for_account_alias(&alias, &catalog).expect("selector");
+        let owner = owner();
+        let account = Account::new(owner.clone()).build(&owner);
+        let mut world = World::with([], [account], []);
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![controller(&owner)],
+            0,
+            0,
+            100,
+            200,
+            300,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+        world.account_aliases.insert(alias.clone(), owner.clone());
+        world.account_rekey_records.insert(
+            alias.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(alias.clone(), owner.clone()),
+        );
+
+        assert_eq!(selector.label, "treasury@banka.banking");
+        assert_eq!(
+            active_account_alias_selector(&world.view(), &catalog, &alias, 50)
+                .expect("active selector"),
+            selector,
+        );
+        assert_eq!(
+            resolve_active_account_alias(&world.view(), &catalog, &alias, 50),
+            Some(owner),
+        );
+    }
+
+    #[test]
+    fn account_alias_selector_rejects_malformed_reserved_separator_literals() {
+        let catalog = dataspace_catalog();
+        for literal in [
+            "treasury#banka.banking",
+            "treas$ury@banka.banking",
+            "treasury@@banka.banking",
+            "treasury@banka@banking",
+            "treasury@banka.banking.extra",
+        ] {
+            assert!(
+                selector_for_account_alias_literal(literal, &catalog).is_err(),
+                "malformed account-alias selector must be rejected: {literal}",
+            );
+        }
     }
 
     #[test]

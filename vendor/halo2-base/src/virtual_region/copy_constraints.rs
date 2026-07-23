@@ -54,6 +54,19 @@ impl<F: Field + Ord> CopyConstraintManager<F> {
         self.constant_equalities.iter().map(|(x, _)| x).sorted().dedup().count()
     }
 
+    /// Drops synthesis-local physical cells while retaining the virtual
+    /// equality graph.
+    ///
+    /// Physical [`Cell`] coordinates belong to one layouter invocation. A
+    /// deep-cloned or witness-stripped circuit must rebuild this map during
+    /// its own synthesis instead of inheriting coordinates from the source
+    /// circuit.
+    pub(crate) fn reset_physical_assignments(&mut self) {
+        self.assigned_advices.clear();
+        self.assigned_constants.clear();
+        self.assigned.take();
+    }
+
     /// Adds external raw [Halo2AssignedCell] to `self.assigned_advices` and returns a new virtual [AssignedValue]
     /// that can be used in any virtual region. No copy constraint is imposed, as the virtual cell "points" to the
     /// raw assigned cell. The returned [ContextCell] will have `type_id` the `TypeId::of::<Cell>()`.

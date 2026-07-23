@@ -13,22 +13,22 @@ use crate::multicore::{IntoParallelIterator, ParallelIterator};
 use std::{collections::HashMap, iter};
 
 use super::{
+    ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, ChallengeY, Error, ProvingKey,
     circuit::{
-        sealed::{self},
         Advice, Any, Assignment, Challenge, Circuit, Column, ConstraintSystem, Fixed, FloorPlanner,
         Instance, Selector,
+        sealed::{self},
     },
-    lookup, permutation, vanishing, ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX,
-    ChallengeY, Error, ProvingKey,
+    lookup, permutation, vanishing,
 };
 
 use crate::{
-    arithmetic::{eval_polynomial, CurveAffine},
+    arithmetic::{CurveAffine, eval_polynomial},
     circuit::Value,
     plonk::Assigned,
     poly::{
-        commitment::{Blind, CommitmentScheme, Params, Prover},
         Basis, Coeff, LagrangeCoeff, Polynomial, ProverQuery,
+        commitment::{Blind, CommitmentScheme, Params, Prover},
     },
 };
 use crate::{
@@ -140,6 +140,8 @@ where
     {
         params: &'params Scheme::ParamsProver,
         current_phase: sealed::Phase,
+        last_phase: sealed::Phase,
+        phases_complete: bool,
         advice: Vec<Polynomial<Assigned<C::Scalar>, LagrangeCoeff>>,
         challenges: &'b mut HashMap<usize, C::Scalar>,
         instances: &'b [&'a [C::Scalar]],
@@ -283,6 +285,10 @@ where
         }
 
         fn next_phase(&mut self) {
+            assert!(
+                !self.phases_complete,
+                "all configured advice phases are already committed"
+            );
             let phase = self.current_phase.to_u8() as usize;
             #[cfg(feature = "profile")]
             let start1 = start_timer!(|| format!("Phase {phase} inversion and MSM commitment"));
@@ -370,7 +376,14 @@ where
                 );
                 assert!(existing.is_none());
             }
-            self.current_phase = self.current_phase.next();
+            if self.current_phase == self.last_phase {
+                // `Phase` represents one of the three public advice phases,
+                // not a one-past-the-end cursor. Keep the final phase selected
+                // after committing it and track completion independently.
+                self.phases_complete = true;
+            } else {
+                self.current_phase = self.current_phase.next();
+            }
             #[cfg(feature = "profile")]
             end_timer!(start1);
         }
@@ -410,6 +423,8 @@ where
             let mut witness: WitnessCollection<Scheme, P, _, E, _, _> = WitnessCollection {
                 params,
                 current_phase: phases[0],
+                last_phase: *phases.last().expect("at least the first advice phase"),
+                phases_complete: false,
                 advice: vec![domain.empty_lagrange_assigned(); meta.num_advice_columns],
                 instances,
                 challenges: &mut challenges,
@@ -433,7 +448,7 @@ where
 
             // while loop is for compatibility with circuits that do not use the new `next_phase` API to manage phases
             // If the circuit uses the new API, then the while loop will only execute once
-            while witness.current_phase.to_u8() < num_phases as u8 {
+            while !witness.phases_complete {
                 #[cfg(feature = "profile")]
                 let syn_time = start_timer!(|| format!(
                     "Synthesize time starting from phase {} (synthesize may cross multiple phases)",
@@ -449,7 +464,7 @@ where
                 .unwrap();
                 #[cfg(feature = "profile")]
                 end_timer!(syn_time);
-                if witness.current_phase.to_u8() < num_phases as u8 {
+                if !witness.phases_complete {
                     witness.next_phase();
                 }
             }
@@ -830,4 +845,165 @@ fn test_create_proof() {
         &mut transcript,
     )
     .expect("proof generation should not fail");
+}
+
+#[test]
+fn three_phase_proof_commits_the_final_phase_exactly_once() {
+    use crate::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        plonk::{
+            Advice, Challenge, Column, ConstraintSystem, Expression, FirstPhase, SecondPhase,
+            Selector, ThirdPhase, keygen_pk, keygen_vk, verifier::verify_proof,
+        },
+        poly::kzg::{
+            commitment::{KZGCommitmentScheme, ParamsKZG},
+            multiopen::{ProverSHPLONK, VerifierSHPLONK},
+            strategy::SingleStrategy,
+        },
+        transcript::{
+            Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
+        },
+    };
+    use halo2curves::bn256::{Bn256, Fr};
+    use rand_core::OsRng;
+
+    #[derive(Clone, Debug)]
+    struct ThreePhaseConfig {
+        selector: Selector,
+        first: Column<Advice>,
+        second: Column<Advice>,
+        third: Column<Advice>,
+        after_first: Challenge,
+        after_second: Challenge,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct ThreePhaseCircuit {
+        commit_final_in_synthesize: bool,
+        advance_after_completion: bool,
+    }
+
+    impl Circuit<Fr> for ThreePhaseCircuit {
+        type Config = ThreePhaseConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+        #[cfg(feature = "circuit-params")]
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            *self
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fr>) -> Self::Config {
+            let selector = meta.selector();
+            let first = meta.advice_column_in(FirstPhase);
+            let after_first = meta.challenge_usable_after(FirstPhase);
+            let second = meta.advice_column_in(SecondPhase);
+            let after_second = meta.challenge_usable_after(SecondPhase);
+            let third = meta.advice_column_in(ThirdPhase);
+
+            meta.create_gate("three phase witness", |_| {
+                vec![
+                    selector.expr() * (first.cur() - Expression::Constant(Fr::ONE)),
+                    selector.expr() * (second.cur() - after_first.expr()),
+                    selector.expr() * (third.cur() - after_second.expr()),
+                ]
+            });
+
+            ThreePhaseConfig {
+                selector,
+                first,
+                second,
+                third,
+                after_first,
+                after_second,
+            }
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Fr>,
+        ) -> Result<(), Error> {
+            layouter.assign_region(
+                || "three phase witness",
+                |mut region| {
+                    config.selector.enable(&mut region, 0)?;
+                    region.assign_advice(config.first, 0, Value::known(Fr::ONE));
+
+                    region.next_phase();
+                    let after_first = region.get_challenge(config.after_first);
+                    region.assign_advice(config.second, 0, after_first);
+
+                    region.next_phase();
+                    let after_second = region.get_challenge(config.after_second);
+                    region.assign_advice(config.third, 0, after_second);
+
+                    if self.commit_final_in_synthesize {
+                        region.next_phase();
+                    }
+                    if self.advance_after_completion {
+                        region.next_phase();
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    let params = ParamsKZG::<Bn256>::setup(5, OsRng);
+    let key_circuit = ThreePhaseCircuit {
+        commit_final_in_synthesize: false,
+        advance_after_completion: false,
+    };
+    let vk = keygen_vk(&params, &key_circuit).expect("three-phase VK generation must succeed");
+    let pk = keygen_pk(&params, vk, &key_circuit).expect("three-phase PK generation must succeed");
+
+    for commit_final_in_synthesize in [false, true] {
+        let circuit = ThreePhaseCircuit {
+            commit_final_in_synthesize,
+            advance_after_completion: false,
+        };
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<KZGCommitmentScheme<Bn256>, ProverSHPLONK<Bn256>, _, _, _, _>(
+            &params,
+            &pk,
+            &[circuit],
+            &[&[]],
+            OsRng,
+            &mut transcript,
+        )
+        .expect("all three advice phases must be committed");
+        let proof = transcript.finalize();
+
+        let strategy = SingleStrategy::new(&params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        verify_proof::<KZGCommitmentScheme<Bn256>, VerifierSHPLONK<Bn256>, _, _, _>(
+            &params,
+            pk.get_vk(),
+            strategy,
+            &[&[]],
+            &mut transcript,
+        )
+        .expect("the three-phase proof must verify");
+    }
+
+    let overflow = ThreePhaseCircuit {
+        commit_final_in_synthesize: true,
+        advance_after_completion: true,
+    };
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        let _ = create_proof::<KZGCommitmentScheme<Bn256>, ProverSHPLONK<Bn256>, _, _, _, _>(
+            &params,
+            &pk,
+            &[overflow],
+            &[&[]],
+            OsRng,
+            &mut transcript,
+        );
+    }));
+    assert!(
+        rejected.is_err(),
+        "a fourth phase transition must be rejected before duplicate commitment"
+    );
 }

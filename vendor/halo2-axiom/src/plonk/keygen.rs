@@ -6,21 +6,21 @@ use ff::{Field, FromUniformBytes};
 use group::Curve;
 
 use super::{
+    Assigned, Challenge, Error, LagrangeCoeff, Polynomial, ProvingKey, VerifyingKey,
     circuit::{
         Advice, Any, Assignment, Circuit, Column, ConstraintSystem, Fixed, FloorPlanner, Instance,
         Selector,
     },
     evaluation::Evaluator,
-    permutation, Assigned, Challenge, Error, LagrangeCoeff, Polynomial, ProvingKey, VerifyingKey,
+    permutation,
 };
 use crate::{
-    arithmetic::{parallelize, CurveAffine},
+    arithmetic::{CurveAffine, parallelize},
     circuit::Value,
     multicore::{IntoParallelIterator, ParallelIterator},
     poly::{
-        batch_invert_assigned,
+        EvaluationDomain, batch_invert_assigned,
         commitment::{Blind, Params},
-        EvaluationDomain,
     },
 };
 
@@ -407,9 +407,10 @@ where
         let vk = match vk {
             Some(vk) => vk,
             None => {
-                let permutation_vk = assembly
-                    .permutation
-                    .build_vk(params, &domain, &cs.permutation);
+                let permutation_vk =
+                    assembly
+                        .permutation
+                        .build_vk(params, &domain, &cs.permutation);
 
                 let fixed_commitments = (&fixed)
                     .into_par_iter()

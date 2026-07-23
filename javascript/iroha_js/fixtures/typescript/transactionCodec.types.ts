@@ -57,8 +57,12 @@ const validated: Readonly<ValidatedBrowserTransactionSignable> =
   validateBrowserTransferSignable(signable);
 const waitOptions: NexusWaitFinalizeOptions = {
   wait: true,
-  successStatuses: new Set(["Committed"]),
   signal: new AbortController().signal,
+};
+const invalidSuccessOverride: NexusWaitFinalizeOptions = {
+  wait: true,
+  // @ts-expect-error the success state is immutable and exact Applied.
+  successStatuses: new Set(["Committed"]),
 };
 const noWaitOptions: NexusNoWaitFinalizeOptions = { wait: false };
 const finalizeOptions: readonly NexusFinalizeOptions[] = [

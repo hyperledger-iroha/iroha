@@ -5,13 +5,15 @@
 //! registry representation. Release policy comes from canonical configured
 //! Norito; consensus state can select material, but cannot select its signers.
 
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, io::Read, path::Path, sync::Arc};
 
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
 ))]
-use rustix::fs::{AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, open, openat, statat};
+use rustix::fs::{
+    AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, fcntl_getfl, open, openat, statat,
+};
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
@@ -20,9 +22,10 @@ use std::{
     collections::BTreeSet,
     ffi::OsStr,
     fs::{self, File},
-    io::Read,
+    io::{Seek as _, SeekFrom},
     os::unix::fs::MetadataExt as _,
     path::{Component, PathBuf},
+    sync::Mutex,
 };
 
 use iroha_crypto::Hash;
@@ -31,6 +34,7 @@ use iroha_data_model::{
     name::Name,
     offline::{
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
@@ -38,9 +42,10 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4, KAGEMUSHA_VERIFIER_NAMESPACE,
         KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactKindV4,
-        KagemushaPastaCycleParityV1, KagemushaRecursiveSpendArtifactBindingV4,
-        KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendReleaseActivationV4,
-        KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
+        KagemushaPastaCycleArtifactV4, KagemushaPastaCycleParityV1,
+        KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendArtifactManifestV4,
+        KagemushaRecursiveSpendReleaseActivationV4, KagemushaRecursiveSpendReleaseAttestationV4,
+        KagemushaRecursiveSpendReleasePolicyV1,
     },
     proof::{VerifyingKeyBox, VerifyingKeyRecord},
     zk::BackendTag,
@@ -49,10 +54,13 @@ use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 
 use crate::zk::{
-    kagemusha_artifact_v4::{
-        KagemushaPastaCycleVerifierArtifactsV4, KagemushaValidatedArtifactPayloadV4,
-        kagemusha_artifact_descriptor_v4, read_kagemusha_pasta_cycle_artifact_v4,
+    kagemusha_artifact_source_v4::{
+        KagemushaArtifactReadSeekV4, KagemushaAuthenticatedArtifactSourceV4,
+        KagemushaQualifiedArtifactSourceV4, KagemushaQualifiedParityMetadataV4,
+        qualify_kagemusha_authenticated_artifact_source_v4,
+        with_kagemusha_authenticated_artifact_payload_from_source_v4,
     },
+    kagemusha_artifact_v4::kagemusha_artifact_descriptor_v4,
     kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
 };
 
@@ -69,6 +77,8 @@ const MANIFEST_FILE_NAME_V4: &str = "manifest.norito";
 const MANIFEST_JSON_FILE_NAME_V4: &str = "manifest.json";
 const MANIFEST_SHA256_FILE_NAME_V4: &str = "manifest.norito.sha256";
 const PROMOTION_RECORD_FILE_NAME_V4: &str = "promotion-record-v4.norito";
+const KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4: usize =
+    KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len();
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
@@ -113,33 +123,28 @@ pub(crate) struct KagemushaAuthenticatedArtifactSetV4 {
     pub(crate) asset_scale: u32,
 }
 
-/// Authenticated verifier material from an exact-eight V4 release.
+/// Qualified exact-eight source and source-backed terminal verifier.
 ///
-/// The release binds four artifacts per parity, while the runtime resolver
-/// installs only the six verifier-side artifacts: parameters, verifying keys,
-/// and bootstrap witnesses. Circuit profiles stay inline in the authenticated
-/// manifest, and proving keys remain prover-only. The cryptographic parser is
-/// deliberately exposed as a fallible constructor: registry authentication and
-/// expensive Halo2 key/bootstrap parsing remain separate fail-closed stages,
-/// while production callers cannot obtain a V4 verifier without passing
-/// through both.
-#[derive(Debug)]
+/// No domain-sized Halo2 parameters or keys are retained here. The qualified
+/// source owns the pinned release and light per-parity identities; the opaque
+/// facade loads and drops one parity for each terminal decision.
 pub(crate) struct ResolvedKagemushaTerminalVerifierV4 {
-    release: KagemushaAuthenticatedReleaseV4,
-    artifacts: KagemushaPastaCycleVerifierArtifactsV4,
+    qualified_source: Arc<KagemushaQualifiedArtifactSourceV4>,
+    verifier: Arc<KagemushaPastaCycleOpaqueVerifierV4>,
 }
 
-/// One startup-authenticated ABI-20 release retained for consensus execution.
+/// One startup-authenticated ABI-21 release retained for consensus execution.
 pub(crate) struct KagemushaCachedReleaseV4 {
     release_record: iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4,
     resolved: ResolvedKagemushaTerminalVerifierV4,
-    verifier: Arc<KagemushaPastaCycleOpaqueVerifierV4>,
 }
 
 /// Immutable startup catalog keyed by canonical V4 manifest digest.
 ///
-/// The catalog owns parsed verifier-side material. Consensus execution only
-/// performs map lookups and never reaches the filesystem.
+/// The catalog owns qualified pinned read-only artifact handles and one
+/// source-backed verifier facade per release. Consensus execution performs map
+/// lookups and reads only those already-opened inodes; it never reopens an
+/// artifact by path or caches two-parity Halo2 material.
 #[derive(Default)]
 pub struct KagemushaReleaseCatalogV4 {
     configured_policy_sha256: Option<[u8; 32]>,
@@ -377,7 +382,7 @@ impl KagemushaCachedReleaseV4 {
     }
 
     pub(crate) fn verifier(&self) -> &KagemushaPastaCycleOpaqueVerifierV4 {
-        &self.verifier
+        self.resolved.verifier.as_ref()
     }
 
     pub(crate) fn issuance_active_at(&self, block_height: u64) -> bool {
@@ -394,19 +399,16 @@ impl KagemushaCachedReleaseV4 {
         let release = self.resolved.release();
         let manifest = release.manifest();
         let proof_profile = profile(manifest, parity)?;
-        let (curve, authenticated_vk) = match parity {
-            KagemushaPastaCycleParityV1::StepEq => (
-                STEP_EQ_VERIFIER_CURVE_V4,
-                self.resolved.artifacts().step_eq_verifying_key(),
-            ),
-            KagemushaPastaCycleParityV1::StepEp => (
-                STEP_EP_VERIFIER_CURVE_V4,
-                self.resolved.artifacts().step_ep_verifying_key(),
-            ),
+        let curve = match parity {
+            KagemushaPastaCycleParityV1::StepEq => STEP_EQ_VERIFIER_CURVE_V4,
+            KagemushaPastaCycleParityV1::StepEp => STEP_EP_VERIFIER_CURVE_V4,
         };
+        let authenticated_vk = self.resolved.authenticated_verifying_key(parity)?;
+        let vk_len = u32::try_from(authenticated_vk.len())
+            .map_err(|_| "Kagemusha V4 verifier key length exceeds u32".to_owned())?;
         let key = VerifyingKeyBox::new(
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
-            authenticated_vk.to_vec(),
+            authenticated_vk,
         );
         let commitment = crate::zk::hash_vk(&key);
         let mut record = VerifyingKeyRecord::new_with_owner(
@@ -419,8 +421,7 @@ impl KagemushaCachedReleaseV4 {
             verifier_public_inputs_schema_hash(manifest, parity)?,
             commitment,
         );
-        record.vk_len = u32::try_from(authenticated_vk.len())
-            .map_err(|_| "Kagemusha V4 verifier key length exceeds u32".to_owned())?;
+        record.vk_len = vk_len;
         record.max_proof_bytes = manifest.max_proof_bytes;
         record.activation_height = Some(manifest.activation_height);
         // Withdrawal closes issuance only. Historic notes must retain a live
@@ -433,7 +434,7 @@ impl KagemushaCachedReleaseV4 {
             binding,
             release,
             parity,
-            authenticated_vk,
+            self.resolved.parity_metadata(parity),
             manifest.activation_height,
         )?;
         Ok(record)
@@ -458,7 +459,8 @@ impl KagemushaCachedReleaseV4 {
             &binding,
             release,
             KagemushaPastaCycleParityV1::StepEq,
-            self.resolved.artifacts().step_eq_verifying_key(),
+            self.resolved
+                .parity_metadata(KagemushaPastaCycleParityV1::StepEq),
             release.manifest().activation_height,
         )?;
         ensure_activation_record(
@@ -466,7 +468,8 @@ impl KagemushaCachedReleaseV4 {
             &binding,
             release,
             KagemushaPastaCycleParityV1::StepEp,
-            self.resolved.artifacts().step_ep_verifying_key(),
+            self.resolved
+                .parity_metadata(KagemushaPastaCycleParityV1::StepEp),
             release.manifest().activation_height,
         )?;
         if step_eq_record.commitment == step_ep_record.commitment {
@@ -1012,6 +1015,314 @@ impl CatalogOpenedFile<'_> {
     }
 }
 
+/// One exact manifest role retained as the descriptor-relative inode opened at
+/// catalog startup.  The descriptor is kept beside the handle so role lookup
+/// cannot be redirected by a later path replacement.
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+#[derive(Debug)]
+struct KagemushaCatalogPinnedArtifactV4 {
+    parity: KagemushaPastaCycleParityV1,
+    descriptor: KagemushaPastaCycleArtifactV4,
+    file: Mutex<File>,
+    snapshot: CatalogFileSnapshot,
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+impl KagemushaCatalogPinnedArtifactV4 {
+    fn validate_locked_file(&self, file: &File) -> Result<(), String> {
+        let metadata = file.metadata().map_err(|error| {
+            format!(
+                "failed to inspect pinned Kagemusha V4 artifact `{}`: {error}",
+                self.descriptor.file_name
+            )
+        })?;
+        let flags = fcntl_getfl(file).map_err(|error| {
+            format!(
+                "failed to inspect pinned Kagemusha V4 artifact access mode `{}`: {error}",
+                self.descriptor.file_name
+            )
+        })?;
+        if CatalogFileSnapshot::from_metadata(&metadata) != Some(self.snapshot)
+            || self.snapshot.identity != CatalogFileIdentity::from_metadata(&metadata)
+            || self.snapshot.length != self.descriptor.size_bytes
+            || flags & OFlags::ACCMODE != OFlags::RDONLY
+        {
+            return Err(format!(
+                "pinned Kagemusha V4 artifact `{}` changed identity, bytes, or read-only access mode",
+                self.descriptor.file_name
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+fn lock_kagemusha_catalog_source_mutex_v4<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        // These mutexes serialize immutable, read-only pinned artifacts. Every
+        // use rewinds, validates the descriptor snapshot, and is fully
+        // reauthenticated by core, so a caught panic must not brick the source.
+        Err(poisoned) => {
+            mutex.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
+/// Exact-eight, read-only source retained by one authenticated catalog release.
+///
+/// Every handle is opened relative to the already pinned release directory and
+/// is never reopened by path. A source-wide permit prevents Eq/Ep or role
+/// readers from overlapping; each file also owns its cursor mutex so clones of
+/// the source cannot race a rewind. Core remains responsible for authenticating
+/// the complete KRV4 frame and its payload on every use.
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+#[derive(Debug)]
+pub(crate) struct KagemushaCatalogPinnedArtifactSourceV4 {
+    release: KagemushaAuthenticatedReleaseV4,
+    manifest_sha256: [u8; 32],
+    artifacts: Vec<KagemushaCatalogPinnedArtifactV4>,
+    access_permit: Mutex<()>,
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+impl KagemushaCatalogPinnedArtifactSourceV4 {
+    fn open(
+        directory: &CatalogDirectory,
+        release: KagemushaAuthenticatedReleaseV4,
+    ) -> Result<Self, String> {
+        release
+            .manifest()
+            .validate()
+            .map_err(|error| error.to_string())?;
+        let manifest_sha256 = release.manifest_sha256();
+        let expected = release
+            .manifest()
+            .profiles
+            .iter()
+            .flat_map(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .map(move |descriptor| (profile.parity, descriptor))
+            })
+            .collect::<Vec<_>>();
+        let unique_roles = expected
+            .iter()
+            .map(|(parity, descriptor)| (*parity, descriptor.kind))
+            .collect::<BTreeSet<_>>();
+        let unique_descriptors = expected
+            .iter()
+            .map(|(parity, descriptor)| (*parity, (*descriptor).clone()))
+            .collect::<BTreeSet<_>>();
+        let unique_file_names = expected
+            .iter()
+            .map(|(_, descriptor)| descriptor.file_name.as_str())
+            .collect::<BTreeSet<_>>();
+        if manifest_sha256 == [0; 32]
+            || expected.len() != KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4
+            || unique_roles.len() != KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4
+            || unique_descriptors.len() != KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4
+            || unique_file_names.len() != KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4
+        {
+            return Err(
+                "Kagemusha V4 pinned catalog source requires one exact-eight authenticated release"
+                    .to_owned(),
+            );
+        }
+
+        let mut artifacts = Vec::with_capacity(expected.len());
+        for (parity, descriptor) in expected {
+            let opened = directory.open_file(
+                &descriptor.file_name,
+                &format!("artifact `{}`", descriptor.file_name),
+            )?;
+            opened.verify_unchanged()?;
+            let artifact = KagemushaCatalogPinnedArtifactV4 {
+                parity,
+                descriptor: descriptor.clone(),
+                snapshot: opened.snapshot,
+                file: Mutex::new(opened.file),
+            };
+            {
+                let file = lock_kagemusha_catalog_source_mutex_v4(&artifact.file);
+                artifact.validate_locked_file(&file)?;
+            }
+            artifacts.push(artifact);
+        }
+
+        let source = Self {
+            release,
+            manifest_sha256,
+            artifacts,
+            access_permit: Mutex::new(()),
+        };
+        source.validate_snapshot()?;
+        Ok(source)
+    }
+
+    fn artifact(
+        &self,
+        parity: KagemushaPastaCycleParityV1,
+        kind: KagemushaPastaCycleArtifactKindV4,
+    ) -> Result<&KagemushaCatalogPinnedArtifactV4, String> {
+        let descriptor = kagemusha_artifact_descriptor_v4(self.release.manifest(), parity, kind)?;
+        self.artifacts
+            .iter()
+            .find(|artifact| {
+                artifact.parity == parity
+                    && artifact.descriptor.kind == kind
+                    && artifact.descriptor == *descriptor
+            })
+            .ok_or_else(|| {
+                "pinned Kagemusha V4 catalog source returned no exact artifact role".to_owned()
+            })
+    }
+
+    fn validate_snapshot(&self) -> Result<(), String> {
+        let expected = self.release.manifest().profiles.iter().flat_map(|profile| {
+            profile
+                .artifacts
+                .iter()
+                .map(move |descriptor| (profile.parity, descriptor))
+        });
+        if self.manifest_sha256 != self.release.manifest_sha256()
+            || self.artifacts.len() != KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4
+        {
+            return Err("pinned Kagemusha V4 catalog source identity changed".to_owned());
+        }
+        for (artifact, (parity, descriptor)) in self.artifacts.iter().zip(expected) {
+            if artifact.parity != parity || artifact.descriptor != *descriptor {
+                return Err("pinned Kagemusha V4 catalog source role inventory changed".to_owned());
+            }
+            let file = lock_kagemusha_catalog_source_mutex_v4(&artifact.file);
+            artifact.validate_locked_file(&file)?;
+        }
+        Ok(())
+    }
+
+    fn authenticate_inventory(&self) -> Result<(), String> {
+        self.validate_snapshot()?;
+        let roles = self
+            .release
+            .manifest()
+            .profiles
+            .iter()
+            .flat_map(|profile| {
+                profile
+                    .artifacts
+                    .iter()
+                    .map(move |descriptor| (profile.parity, descriptor.kind))
+            })
+            .collect::<Vec<_>>();
+        if roles.len() != KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4 {
+            return Err("pinned Kagemusha V4 catalog source role count changed".to_owned());
+        }
+        for (parity, kind) in roles {
+            let descriptor =
+                kagemusha_artifact_descriptor_v4(self.release.manifest(), parity, kind)?;
+            let consumed = with_kagemusha_authenticated_artifact_payload_from_source_v4(
+                self,
+                parity,
+                kind,
+                |payload, header| {
+                    if header.parity != parity
+                        || header.kind != kind
+                        || header.payload_size_bytes != descriptor.payload_size_bytes
+                        || header.payload_sha256 != descriptor.payload_sha256
+                    {
+                        return Err(
+                            "pinned Kagemusha V4 catalog source returned the wrong role".to_owned()
+                        );
+                    }
+                    let mut consumed = 0_u64;
+                    let mut scratch = [0_u8; 64 * 1024];
+                    loop {
+                        let read = payload.read(&mut scratch).map_err(|error| {
+                            format!("failed to consume pinned Kagemusha V4 artifact: {error}")
+                        })?;
+                        if read == 0 {
+                            break;
+                        }
+                        consumed = consumed
+                            .checked_add(u64::try_from(read).map_err(|_| {
+                                "pinned Kagemusha V4 artifact read length does not fit u64"
+                                    .to_owned()
+                            })?)
+                            .ok_or_else(|| {
+                                "pinned Kagemusha V4 artifact read length overflowed".to_owned()
+                            })?;
+                    }
+                    Ok(consumed)
+                },
+            )?;
+            if consumed != descriptor.payload_size_bytes {
+                return Err("pinned Kagemusha V4 catalog source payload length mismatch".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    fn with_selected_file<T>(
+        &self,
+        parity: KagemushaPastaCycleParityV1,
+        kind: KagemushaPastaCycleArtifactKindV4,
+        consume: impl FnOnce(&mut File) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _access = lock_kagemusha_catalog_source_mutex_v4(&self.access_permit);
+        let artifact = self.artifact(parity, kind)?;
+        let mut file = lock_kagemusha_catalog_source_mutex_v4(&artifact.file);
+        artifact.validate_locked_file(&file)?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| format!("failed to rewind pinned Kagemusha V4 artifact: {error}"))?;
+        let outcome = consume(&mut file);
+        let rewind = file.seek(SeekFrom::Start(0)).map(|_| ()).map_err(|error| {
+            format!("failed to restore pinned Kagemusha V4 artifact cursor: {error}")
+        });
+        let snapshot = artifact.validate_locked_file(&file);
+        match (outcome, rewind, snapshot) {
+            (Err(error), _, _) => Err(error),
+            (Ok(_), Err(error), _) | (Ok(_), Ok(()), Err(error)) => Err(error),
+            (Ok(value), Ok(()), Ok(())) => Ok(value),
+        }
+    }
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+impl KagemushaAuthenticatedArtifactSourceV4 for KagemushaCatalogPinnedArtifactSourceV4 {
+    fn authenticated_release(&self) -> &KagemushaAuthenticatedReleaseV4 {
+        &self.release
+    }
+
+    fn with_framed_artifact(
+        &self,
+        parity: KagemushaPastaCycleParityV1,
+        kind: KagemushaPastaCycleArtifactKindV4,
+        consume: &mut dyn FnMut(&mut dyn KagemushaArtifactReadSeekV4) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.with_selected_file(parity, kind, |file| consume(file))
+    }
+}
+
 #[cfg(all(
     test,
     unix,
@@ -1216,26 +1527,6 @@ fn verify_exact_release_inventory_v4(
     Ok(aggregate_bytes)
 }
 
-#[cfg(all(
-    unix,
-    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
-))]
-fn read_release_role(
-    directory: &CatalogDirectory,
-    release: &KagemushaAuthenticatedReleaseV4,
-    parity: KagemushaPastaCycleParityV1,
-    kind: KagemushaPastaCycleArtifactKindV4,
-) -> Result<KagemushaValidatedArtifactPayloadV4, String> {
-    let descriptor = kagemusha_artifact_descriptor_v4(release.manifest(), parity, kind)?;
-    let mut opened = directory.open_file(
-        &descriptor.file_name,
-        &format!("artifact `{}`", descriptor.file_name),
-    )?;
-    let payload = read_kagemusha_pasta_cycle_artifact_v4(&mut opened.file, release, descriptor)?;
-    opened.verify_unchanged()?;
-    Ok(payload)
-}
-
 #[allow(clippy::too_many_lines)]
 #[cfg(all(
     unix,
@@ -1339,7 +1630,7 @@ fn load_release_directory(
         .iter()
         .flat_map(|profile| profile.artifacts.iter())
         .collect::<Vec<_>>();
-    if descriptors.len() != 8 {
+    if descriptors.len() != KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4 {
         return Err("Kagemusha V4 manifest does not contain exactly eight artifacts".to_owned());
     }
     for descriptor in descriptors {
@@ -1362,56 +1653,25 @@ fn load_release_directory(
         "top-up finality roster",
     )?;
 
-    let step_eq_parameters = read_release_role(
+    // Retain every exact descriptor-relative inode. The qualified wrapper is
+    // the sole production owner and the source-backed facade loads only one
+    // parity's heavy verifier material at a time.
+    let source = Arc::new(KagemushaCatalogPinnedArtifactSourceV4::open(
         directory,
-        &authenticated,
-        KagemushaPastaCycleParityV1::StepEq,
-        KagemushaPastaCycleArtifactKindV4::ParamsIpa,
-    )?;
-    let step_eq_verifying_key = read_release_role(
-        directory,
-        &authenticated,
-        KagemushaPastaCycleParityV1::StepEq,
-        KagemushaPastaCycleArtifactKindV4::VerifyingKey,
-    )?;
-    let step_eq_bootstrap_witness = read_release_role(
-        directory,
-        &authenticated,
-        KagemushaPastaCycleParityV1::StepEq,
-        KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
-    )?;
-    let step_ep_parameters = read_release_role(
-        directory,
-        &authenticated,
-        KagemushaPastaCycleParityV1::StepEp,
-        KagemushaPastaCycleArtifactKindV4::ParamsIpa,
-    )?;
-    let step_ep_verifying_key = read_release_role(
-        directory,
-        &authenticated,
-        KagemushaPastaCycleParityV1::StepEp,
-        KagemushaPastaCycleArtifactKindV4::VerifyingKey,
-    )?;
-    let step_ep_bootstrap_witness = read_release_role(
-        directory,
-        &authenticated,
-        KagemushaPastaCycleParityV1::StepEp,
-        KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
-    )?;
-    let artifacts = KagemushaPastaCycleVerifierArtifactsV4::new(
-        &authenticated,
-        step_eq_parameters,
-        step_eq_verifying_key,
-        step_eq_bootstrap_witness,
-        step_ep_parameters,
-        step_ep_verifying_key,
-        step_ep_bootstrap_witness,
-    )?;
+        authenticated.clone(),
+    )?);
+    source.authenticate_inventory()?;
+    let source: Arc<dyn KagemushaAuthenticatedArtifactSourceV4> = source;
+    let qualified_source = Arc::new(qualify_kagemusha_authenticated_artifact_source_v4(source)?);
+    let verifier = Arc::new(
+        KagemushaPastaCycleOpaqueVerifierV4::from_qualified_artifact_source(Arc::clone(
+            &qualified_source,
+        ))?,
+    );
     let resolved = ResolvedKagemushaTerminalVerifierV4 {
-        release: authenticated,
-        artifacts,
+        qualified_source,
+        verifier,
     };
-    let verifier = Arc::new(resolved.verifier()?);
     if verify_exact_release_inventory_v4(directory, &manifest)? != inventory_bytes {
         return Err("Kagemusha V4 release inventory byte count changed while loading".to_owned());
     }
@@ -1425,7 +1685,6 @@ fn load_release_directory(
                 promotion_record,
             },
             resolved,
-            verifier,
         },
         inventory_bytes,
     ))
@@ -1433,58 +1692,82 @@ fn load_release_directory(
 
 impl ResolvedKagemushaTerminalVerifierV4 {
     pub(crate) fn release(&self) -> &KagemushaAuthenticatedReleaseV4 {
-        &self.release
+        self.qualified_source.authenticated_release()
     }
 
-    pub(crate) fn artifacts(&self) -> &KagemushaPastaCycleVerifierArtifactsV4 {
-        &self.artifacts
+    fn parity_metadata(
+        &self,
+        parity: KagemushaPastaCycleParityV1,
+    ) -> &KagemushaQualifiedParityMetadataV4 {
+        match parity {
+            KagemushaPastaCycleParityV1::StepEq => self.qualified_source.step_eq(),
+            KagemushaPastaCycleParityV1::StepEp => self.qualified_source.step_ep(),
+        }
+    }
+
+    fn authenticated_verifying_key(
+        &self,
+        parity: KagemushaPastaCycleParityV1,
+    ) -> Result<Vec<u8>, String> {
+        let metadata = self.parity_metadata(parity);
+        if metadata.parity() != parity
+            || metadata.processed_verifying_key_len() == 0
+            || metadata.processed_verifying_key_len()
+                > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+        {
+            return Err("qualified Kagemusha V4 verifier-key metadata is invalid".to_owned());
+        }
+        self.qualified_source
+            .with_authenticated_processed_verifying_key(parity, |reader, expected_len| {
+                if expected_len != metadata.processed_verifying_key_len() {
+                    return Err(
+                        "qualified Kagemusha V4 verifier-key length changed during projection"
+                            .to_owned(),
+                    );
+                }
+                let capacity = usize::try_from(expected_len).map_err(|_| {
+                    "Kagemusha V4 verifier-key length does not fit usize".to_owned()
+                })?;
+                let mut bytes = Vec::with_capacity(capacity);
+                reader
+                    .take(expected_len.saturating_add(1))
+                    .read_to_end(&mut bytes)
+                    .map_err(|error| {
+                        format!("failed to read qualified Kagemusha V4 verifier key: {error}")
+                    })?;
+                if bytes.len() != capacity
+                    || <[u8; 32]>::from(Sha256::digest(&bytes))
+                        != metadata.processed_verifying_key_sha256()
+                {
+                    return Err(
+                        "qualified Kagemusha V4 verifier-key payload identity changed".to_owned(),
+                    );
+                }
+                let key = VerifyingKeyBox::new(
+                    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+                    bytes,
+                );
+                if crate::zk::hash_vk(&key) != metadata.verifying_key_commitment() {
+                    return Err("qualified Kagemusha V4 verifier-key commitment changed".to_owned());
+                }
+                Ok(key.bytes)
+            })
     }
 
     pub(crate) fn artifact_set(&self) -> KagemushaAuthenticatedArtifactSetV4 {
-        let manifest = self.release.manifest();
+        let release = self.release();
+        let manifest = release.manifest();
         KagemushaAuthenticatedArtifactSetV4 {
             generation: manifest.generation.clone(),
-            manifest_sha256: self.release.manifest_sha256(),
-            release_policy_sha256: self.release.release_policy_sha256(),
-            release_attestation_sha256: self.release.release_attestation_sha256(),
+            manifest_sha256: release.manifest_sha256(),
+            release_policy_sha256: release.release_policy_sha256(),
+            release_attestation_sha256: release.release_attestation_sha256(),
             activation_height: manifest.activation_height,
             withdrawal_height: manifest.withdrawal_height,
             max_proof_bytes: manifest.max_proof_bytes,
             asset_scale: manifest.asset_scale,
         }
     }
-
-    pub(crate) fn verifier(&self) -> Result<KagemushaPastaCycleOpaqueVerifierV4, String> {
-        ensure_serialized_parameter_degree(
-            self.artifacts.step_eq_parameters(),
-            self.artifacts.step_eq_profile().ipa_k,
-            "Eq",
-        )?;
-        ensure_serialized_parameter_degree(
-            self.artifacts.step_ep_parameters(),
-            self.artifacts.step_ep_profile().ipa_k,
-            "Ep",
-        )?;
-        KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifacts(&self.artifacts)
-    }
-}
-
-fn ensure_serialized_parameter_degree(
-    bytes: &[u8],
-    expected_k: u32,
-    role: &str,
-) -> Result<(), String> {
-    let encoded_k = bytes
-        .get(..4)
-        .and_then(|bytes| bytes.try_into().ok())
-        .map(u32::from_le_bytes)
-        .ok_or_else(|| format!("Kagemusha V4 {role} parameter payload is truncated"))?;
-    if encoded_k != expected_k {
-        return Err(format!(
-            "Kagemusha V4 {role} parameter payload degree does not equal the authenticated profile"
-        ));
-    }
-    Ok(())
 }
 
 /// Deterministic V4-only state key for an authenticated release record.
@@ -1576,7 +1859,7 @@ fn ensure_activation_record(
     binding: &KagemushaRecursiveSpendArtifactBindingV4,
     release: &KagemushaAuthenticatedReleaseV4,
     parity: KagemushaPastaCycleParityV1,
-    authenticated_vk: &[u8],
+    qualified: &KagemushaQualifiedParityMetadataV4,
     block_height: u64,
 ) -> Result<(), String> {
     let manifest = release.manifest();
@@ -1594,7 +1877,10 @@ fn ensure_activation_record(
         || record.backend != BackendTag::Halo2IpaPasta
         || record.curve != expected_curve
         || record.public_inputs_schema_hash != expected_schema_hash
-        || record.commitment == [0; 32]
+        || qualified.parity() != parity
+        || qualified.circuit_params() != &profile.circuit_params
+        || record.commitment != qualified.verifying_key_commitment()
+        || u64::from(record.vk_len) != qualified.processed_verifying_key_len()
         || record.max_proof_bytes != manifest.max_proof_bytes
         || record.activation_height != Some(manifest.activation_height)
         // Release withdrawal ends issuance, not terminal verification. Keeping
@@ -1613,9 +1899,10 @@ fn ensure_activation_record(
         .ok_or_else(|| format!("Kagemusha V4 {role} verifier key is not available inline"))?;
     if state_vk.backend.as_str() != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
         || state_vk.bytes.is_empty()
-        || state_vk.bytes.as_slice() != authenticated_vk
-        || u32::try_from(authenticated_vk.len()).ok() != Some(record.vk_len)
-        || crate::zk::hash_vk(state_vk) != record.commitment
+        || u64::try_from(state_vk.bytes.len()).ok() != Some(qualified.processed_verifying_key_len())
+        || <[u8; 32]>::from(Sha256::digest(&state_vk.bytes))
+            != qualified.processed_verifying_key_sha256()
+        || crate::zk::hash_vk(state_vk) != qualified.verifying_key_commitment()
     {
         return Err(format!(
             "Kagemusha V4 {role} state verifier key does not equal the authenticated release payload"
@@ -1672,6 +1959,23 @@ mod tests {
 
     use super::*;
 
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn catalog_source_mutex_recovers_after_caught_panic() {
+        let mutex = Mutex::new(());
+        let panicked = std::panic::catch_unwind(|| {
+            let _guard = lock_kagemusha_catalog_source_mutex_v4(&mutex);
+            panic!("catalog source mutex poison fixture");
+        });
+        assert!(panicked.is_err(), "fixture must poison the mutex once");
+
+        let _guard = lock_kagemusha_catalog_source_mutex_v4(&mutex);
+        assert!(!mutex.is_poisoned());
+    }
+
     fn candidate_binding_artifact(
         kind: KagemushaPastaCycleArtifactKindV4,
         file_name: &str,
@@ -1717,8 +2021,8 @@ mod tests {
         let circuit_params = KagemushaStepCircuitParamsV4 {
             version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             k,
-            num_advice_per_phase: vec![8, 1, 1],
-            num_lookup_advice_per_phase: vec![1, 0, 0],
+            num_advice_per_phase: vec![8],
+            num_lookup_advice_per_phase: vec![1],
             num_fixed: 1,
             lookup_bits: k - 1,
             num_instance_columns: 1,
@@ -1919,6 +2223,44 @@ mod tests {
         unix,
         not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
     ))]
+    fn pinned_source_fixture() -> (
+        tempfile::TempDir,
+        PathBuf,
+        KagemushaCatalogPinnedArtifactSourceV4,
+    ) {
+        let temporary = tempfile::tempdir().expect("temporary pinned-source root");
+        let root = canonical_temporary_root(&temporary);
+        let release_directory = root.join("release");
+        std::fs::create_dir(&release_directory).expect("create pinned-source release directory");
+        let (authenticated, _) = authenticated_candidate_binding_release();
+        for (index, descriptor) in authenticated
+            .manifest()
+            .profiles
+            .iter()
+            .flat_map(|profile| profile.artifacts.iter())
+            .enumerate()
+        {
+            let length = usize::try_from(descriptor.size_bytes)
+                .expect("test artifact length must fit usize");
+            let tag = u8::try_from(index + 1).expect("test artifact tag");
+            std::fs::write(
+                release_directory.join(&descriptor.file_name),
+                vec![tag; length],
+            )
+            .expect("write pinned-source artifact");
+        }
+        let pinned_directory =
+            CatalogDirectory::open_path(&release_directory, "pinned-source release")
+                .expect("pin source release directory");
+        let source = KagemushaCatalogPinnedArtifactSourceV4::open(&pinned_directory, authenticated)
+            .expect("open exact-eight pinned source");
+        (temporary, release_directory, source)
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     fn write_test_policy(root: &Path) -> std::path::PathBuf {
         use iroha_data_model::offline::{
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
@@ -1985,6 +2327,192 @@ mod tests {
         assert!(!catalog.is_configured());
         assert_eq!(catalog.configured_policy_sha256(), None);
         assert!(catalog.is_empty());
+    }
+
+    #[test]
+    fn production_catalog_has_no_eager_artifact_materializer_path() {
+        let module = include_str!("kagemusha_terminal_registry_v4.rs");
+        let owner_body = |name: &str| {
+            let start = module
+                .find(name)
+                .unwrap_or_else(|| panic!("missing production owner `{name}`"));
+            let tail = &module[start..];
+            let end = tail
+                .find("\n}")
+                .unwrap_or_else(|| panic!("unterminated production owner `{name}`"));
+            &tail[..end]
+        };
+        let resolved = owner_body("pub(crate) struct ResolvedKagemushaTerminalVerifierV4");
+        let cached = owner_body("pub(crate) struct KagemushaCachedReleaseV4");
+        let catalog = owner_body("pub struct KagemushaReleaseCatalogV4");
+        for owner in [resolved, cached, catalog] {
+            assert!(!owner.contains(concat!("KagemushaPastaCycleVerifier", "ArtifactsV4")));
+        }
+        assert!(resolved.contains("qualified_source: Arc<KagemushaQualifiedArtifactSourceV4>"));
+        assert!(resolved.contains("verifier: Arc<KagemushaPastaCycleOpaqueVerifierV4>"));
+        assert!(module.contains("from_qualified_artifact_source"));
+        for forbidden in [
+            concat!("KagemushaPastaCycleVerifier", "ArtifactsV4"),
+            concat!("KagemushaValidatedArtifact", "PayloadV4"),
+            concat!("read_kagemusha_pasta_cycle_", "artifact_v4"),
+            concat!("from_", "authenticated_artifacts"),
+        ] {
+            assert!(
+                !module.contains(forbidden),
+                "production catalog contains forbidden eager symbol `{forbidden}`"
+            );
+        }
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn pinned_source_is_exact_read_only_and_rewinds_once_per_callback() {
+        let (_temporary, _release_directory, source) = pinned_source_fixture();
+        assert_eq!(source.artifacts.len(), KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4);
+        source
+            .validate_snapshot()
+            .expect("all exact handles remain read-only");
+
+        let mut callback_count = 0_u8;
+        for _ in 0..2 {
+            let mut callback = |reader: &mut dyn KagemushaArtifactReadSeekV4| {
+                callback_count = callback_count.saturating_add(1);
+                let mut bytes = Vec::new();
+                reader
+                    .read_to_end(&mut bytes)
+                    .map_err(|error| error.to_string())?;
+                if bytes.len() != 128 || bytes.iter().any(|byte| *byte != 1) {
+                    return Err("pinned source did not rewind to the original Eq params".to_owned());
+                }
+                Ok(())
+            };
+            source
+                .with_framed_artifact(
+                    KagemushaPastaCycleParityV1::StepEq,
+                    KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+                    &mut callback,
+                )
+                .expect("lend one exact pinned file");
+        }
+        assert_eq!(callback_count, 2);
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn pinned_source_rejects_wrong_role_without_invoking_callback() {
+        let (_temporary, _release_directory, mut source) = pinned_source_fixture();
+        source.artifacts[0].parity = KagemushaPastaCycleParityV1::StepEp;
+        let mut invoked = false;
+        let mut callback = |_reader: &mut dyn KagemushaArtifactReadSeekV4| {
+            invoked = true;
+            Ok(())
+        };
+        let error = source
+            .with_framed_artifact(
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+                &mut callback,
+            )
+            .expect_err("a role-substituted source must fail closed");
+        assert!(error.contains("no exact artifact role"));
+        assert!(!invoked);
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn pinned_source_rejects_in_place_tamper_and_trailing_growth() {
+        use std::io::Write as _;
+
+        let (_temporary, release_directory, source) = pinned_source_fixture();
+        let file_name = source.artifacts[0].descriptor.file_name.clone();
+        std::fs::write(release_directory.join(&file_name), vec![0xa5; 128])
+            .expect("tamper pinned artifact in place");
+        let mut invoked = false;
+        let tamper_error = source
+            .with_selected_file(
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+                |_file| {
+                    invoked = true;
+                    Ok(())
+                },
+            )
+            .expect_err("in-place tamper must invalidate the pinned snapshot");
+        assert!(tamper_error.contains("changed identity, bytes, or read-only"));
+        assert!(!invoked);
+
+        let (_temporary, release_directory, source) = pinned_source_fixture();
+        let file_name = source.artifacts[0].descriptor.file_name.clone();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(release_directory.join(&file_name))
+            .and_then(|mut file| file.write_all(b"trailing"))
+            .expect("append trailing bytes to pinned artifact");
+        let trailing_error = source
+            .with_selected_file(
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+                |_file| Ok(()),
+            )
+            .expect_err("trailing growth must invalidate the pinned snapshot");
+        assert!(trailing_error.contains("changed identity, bytes, or read-only"));
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn pinned_source_global_permit_serializes_all_roles() {
+        use std::{
+            sync::{
+                Barrier,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Duration,
+        };
+
+        let (_temporary, _release_directory, source) = pinned_source_fixture();
+        let source = Arc::new(source);
+        let barrier = Arc::new(Barrier::new(3));
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let mut threads = Vec::new();
+        for kind in [
+            KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+            KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+        ] {
+            let source = Arc::clone(&source);
+            let barrier = Arc::clone(&barrier);
+            let active = Arc::clone(&active);
+            let maximum = Arc::clone(&maximum);
+            threads.push(std::thread::spawn(move || {
+                barrier.wait();
+                source
+                    .with_selected_file(KagemushaPastaCycleParityV1::StepEq, kind, |_file| {
+                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        maximum.fetch_max(now, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(25));
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                    .expect("serialized pinned source access");
+            }));
+        }
+        barrier.wait();
+        for thread in threads {
+            thread.join().expect("pinned-source worker");
+        }
+        assert_eq!(maximum.load(Ordering::SeqCst), 1);
     }
 
     #[test]

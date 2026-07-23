@@ -5,9 +5,9 @@ import java.io.ByteArrayOutputStream
 /** Transport-neutral NFC V1 constants. No legacy AID or codec negotiation is supported. */
 object IrohaPeerNfcV1 {
     private val applicationIdentifierBytes = byteArrayOf(
-        0xf0.toByte(), 0x49, 0x52, 0x4f, 0x48, 0x41, 0x50, 0x45, 0x45, 0x52, 0x01,
+        0xf0.toByte(), 0x50, 0x4b, 0x45, 0x50, 0x4b, 0x52, 0x4e, 0x46, 0x43, 0x01,
     )
-    const val APPLICATION_IDENTIFIER_HEX = "F049524F48415045455201"
+    const val APPLICATION_IDENTIFIER_HEX = "F0504B45504B524E464301"
     const val APPLICATION_IDENTIFIER_SIZE = 11
     const val COMMAND_CLASS = 0x80
     const val WIRE_VERSION = 1

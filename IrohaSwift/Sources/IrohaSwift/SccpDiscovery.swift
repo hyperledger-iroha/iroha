@@ -1457,7 +1457,9 @@ private enum SccpExactParser {
     private static func prefixedHash(_ item: [String: Any], _ field: String) throws -> String {
         let value = try SccpStrictJSON.text(item, field)
         guard value.count == 66, value.hasPrefix("0x"),
-              value.dropFirst(2).allSatisfy({ $0.isNumber || ("a"..."f").contains(String($0)) }),
+              value.dropFirst(2).utf8.allSatisfy({
+                  (48...57).contains($0) || (97...102).contains($0)
+              }),
               value.dropFirst(2).contains(where: { $0 != "0" })
         else { throw SccpV1Error.invalid("\(field) must be canonical lowercase nonzero 0x-prefixed hash") }
         return value
@@ -1495,7 +1497,9 @@ private enum SccpExactParser {
 
     private static func decimalText(_ item: [String: Any], _ field: String, minimum: UInt64) throws -> String {
         let value = try SccpStrictJSON.text(item, field)
-        guard value.allSatisfy(\.isNumber), value == "0" || value.first != "0",
+        guard !value.isEmpty,
+              value.utf8.allSatisfy({ (48...57).contains($0) }),
+              value == "0" || value.first != "0",
               value != "0" || minimum == 0
         else { throw SccpV1Error.invalid("\(field) must be canonical unsigned decimal") }
         return value

@@ -5912,7 +5912,6 @@ export interface TransactionStatusPollOptions {
   intervalMs?: number;
   timeoutMs?: number | null;
   maxAttempts?: number | null;
-  successStatuses?: Iterable<string>;
   failureStatuses?: Iterable<string>;
   onStatus?: (
     status: string | null,
@@ -8545,6 +8544,25 @@ export type ValidationFeePolicyByteSource =
   | readonly number[]
   | string;
 
+export interface ValidationFeeTreasuryPayoutRecipientV1 {
+  account_id: string;
+  share: string;
+}
+
+export interface ValidationFeeTreasuryPayoutBindingV1 {
+  contract_address: string;
+  code_hash: ValidationFeePolicyByteSource;
+  entrypoint: "autonomous_validation_fee_tick";
+  treasury_account_id: string;
+  sbd_asset_id: string;
+  xor_asset_id: string;
+  pool_vault_account_id: string;
+  batch_sbd: string;
+  min_xor_out: string;
+  max_xor_out: string;
+  recipients: readonly ValidationFeeTreasuryPayoutRecipientV1[];
+}
+
 export interface ValidationFeePolicyV1 {
   schema_version: number;
   network_id: string;
@@ -8560,6 +8578,7 @@ export interface ValidationFeePolicyV1 {
   expires_after_height: NumericLike | null;
   governance_keyset_id: string;
   exemption_classes: readonly string[];
+  treasury_payout_binding: ValidationFeeTreasuryPayoutBindingV1 | null;
 }
 
 export interface ValidationFeePolicySignatureV1 {

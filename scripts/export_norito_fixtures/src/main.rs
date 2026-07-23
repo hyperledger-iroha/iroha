@@ -578,7 +578,7 @@ fn parse_fixture(value: &Value) -> Result<RawFixture> {
         .map(str::to_owned);
     let creation_time_ms_hint = obj.get("creation_time_ms").and_then(|v| v.as_u64());
     let ttl_ms_hint = obj.get("time_to_live_ms").and_then(|v| v.as_u64());
-    let nonce_hint = obj.get("nonce").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let nonce_hint = parse_optional_u32(obj, "nonce").context("invalid nonce hint")?;
     let payload_hash_hint = obj
         .get("payload_hash")
         .and_then(|v| v.as_str())
@@ -1338,6 +1338,50 @@ mod tests {
         assert!(
             raw.into_fixture(&keypair, true, true).is_err(),
             "payload_hash mismatch should fail"
+        );
+    }
+
+    #[test]
+    fn fixture_nonce_hint_rejects_u32_overflow() {
+        let mut executable = Map::new();
+        executable.insert(
+            "Ivm".to_owned(),
+            Value::String(BASE64.encode([1_u8, 2, 3, 4])),
+        );
+
+        let mut payload = Map::new();
+        payload.insert("chain".to_owned(), Value::String("00000002".to_owned()));
+        payload.insert(
+            "authority".to_owned(),
+            Value::String(sample_authority_literal()),
+        );
+        payload.insert(
+            "creation_time_ms".to_owned(),
+            Value::Number(Number::U64(1_735_000_000_000)),
+        );
+        payload.insert("executable".to_owned(), Value::Object(executable));
+        payload.insert("nonce".to_owned(), Value::Number(Number::U64(1)));
+        payload.insert(
+            "fee_payment".to_owned(),
+            json::to_value(&FeePaymentIntent::authority(Vec::new(), None))
+                .expect("serialize fee payment"),
+        );
+
+        let mut fixture = Map::new();
+        fixture.insert("name".to_owned(), Value::String("overflow".to_owned()));
+        fixture.insert("payload".to_owned(), Value::Object(payload));
+        fixture.insert(
+            "nonce".to_owned(),
+            Value::Number(Number::U64(u64::from(u32::MAX) + 1)),
+        );
+
+        let err = parse_fixture(&Value::Object(fixture))
+            .err()
+            .expect("overflowing nonce hint must be rejected");
+        let error_chain = format!("{err:#}");
+        assert!(
+            error_chain.contains("must fit in u32"),
+            "unexpected error: {error_chain}"
         );
     }
 

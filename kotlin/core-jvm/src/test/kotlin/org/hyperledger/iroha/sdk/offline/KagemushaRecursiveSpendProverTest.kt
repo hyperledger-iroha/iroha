@@ -1394,7 +1394,7 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue(commands.size > 3)
         assertEquals("8022040000", commands.last().toHex())
         assertEquals(
-            "F049524F48415045455201",
+            "F0504B45504B524E464301",
             KagemushaNfcProtocol.applicationIdentifierHex(
                 KagemushaNfcProtocol.defaultApplicationIdentifier(),
             ),

@@ -89,7 +89,8 @@ unauthenticated transport. Android 37+ consumers must request
 
 Concretely, the AAR merges `NFC`, legacy `ACCESS_WIFI_STATE` /
 `CHANGE_WIFI_STATE`, legacy `BLUETOOTH` / `BLUETOOTH_ADMIN`,
-`ACCESS_COARSE_LOCATION` through API 28, `ACCESS_FINE_LOCATION` on APIs 29–31,
+`ACCESS_COARSE_LOCATION` through API 31, `ACCESS_FINE_LOCATION` on APIs 29–31
+(requested together with coarse location on Android 12),
 `BLUETOOTH_ADVERTISE` / `BLUETOOTH_CONNECT` / `BLUETOOTH_SCAN` from API 31,
 `NEARBY_WIFI_DEVICES` from API 32, and `ACCESS_LOCAL_NETWORK` from API 37.
 Before starting a rail, request the permissions from that list that are both
@@ -170,7 +171,7 @@ QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStreamCodec`, `KagemushaNfcProtocol`, and
 `KagemushaNearbyEnvelopeCodec` rails. Kagemusha retains its distinct
 `PKK2*`/`PKKQ1` text and Bonjour identifiers, while NFC uses the sole canonical
-AID `F049524F48415045455201`. Nearby uses the authenticated binary `PKNB1`
+AID `F0504B45504B524E464301`. Nearby uses the authenticated binary `PKNB1`
 envelope and its own smaller bound. Those rails are never negotiated,
 reinterpreted, or used as fallback for Retail Offline Peer V1. Only
 `IrohaPeer*V1` has no unauthenticated Nearby, raw-text, or alternate profile-2
@@ -338,13 +339,15 @@ exposed as `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and
 | Android NDK | 28+ | Native `.so` build |
 | `cargo-ndk` | any | Native `.so` build |
 
-### Step 1: Build core-jvm and client-android
+### Step 1: Build core-jvm
 
-These modules have no native dependencies — they build immediately.
+The pure JVM module has no native dependency and builds immediately. Android
+variant assembly is covered in the next step because AGP is causally wired to
+the generated native bridge task.
 
 ```bash
 # Build and run tests
-./gradlew :core-jvm:build :client-android:assembleRelease --quiet
+./gradlew :core-jvm:build --quiet
 
 # Run core-jvm unit tests
 ./gradlew :core-jvm:test --console=plain
@@ -377,16 +380,41 @@ echo $ANDROID_NDK_HOME  # must point to NDK 28+
 ./gradlew :client-android:buildNativeLibs -PprivacyProductionEnabled=true
 ```
 
-This Gradle task:
+This Gradle task (and every `client-android` release assembly):
 1. Reads `iroha.dir` from `local.properties`
-2. Runs `cargo ndk` for `arm64-v8a` and `x86_64` targets
-3. Canonically strips both libraries with the selected Android NDK's
+2. Captures the exact Android-target dependency-closure source seal, then runs
+   locked `cargo ndk` separately for `arm64-v8a` and `x86_64`, checking that
+   seal after every ABI build. Each cargo-ndk destination is transient because
+   Cargo can copy unrelated workspace `cdylib` outputs there; only the exact
+   `libconnect_norito_bridge.so` name is promoted into the authoritative raw
+   directory under `client-android/build/native/cargo-ndk/<mode>/`. Compiler
+   state remains isolated in `client-android/build/native/cargo-target/<mode>/`
+   through a mode-specific `CARGO_TARGET_DIR`.
+3. Copies the raw libraries to a distinct generated directory, then canonically
+   strips only those copies with the selected Android NDK's
    `llvm-strip --strip-unneeded`
-4. Writes `libconnect_norito_bridge.so` into `client-android/src/main/jniLibs/`
+4. Writes the authoritative libraries under
+   `client-android/build/generated/jniLibs/<mode>/`
+5. Generates `client-android/build/generated/nativeProvenance/<mode>/iroha/native-build-provenance-v1.json`
+   with the ABI, feature state, source commit/scoped dirty bit, dependency-
+   closure `source_fingerprint_sha256`, toolchain identity, and raw/stripped
+   sizes and hashes
 
-The release AAR preserves those exact staged bytes. The mobile artifact checker
-rejects an unstripped library or any hash difference between `jniLibs` and the
-AAR.
+AGP 9.0.1 registers both generated directories through
+`addGeneratedSourceDirectory`, so the release AAR preserves those exact bytes
+and embeds the provenance at
+`assets/iroha/native-build-provenance-v1.json`. `src/main/jniLibs` is excluded;
+ignored or hand-copied source-tree `.so` files cannot enter an AAR. The mobile
+artifact checker rejects an unstripped library, stale source fingerprint,
+malformed provenance, extra native file (including another Rust `cdylib`), or
+any size/hash difference among raw cargo-ndk output, generated stripped output,
+provenance, and the AAR.
+
+Debug/JVM unit-test compilation deliberately does not register the shipping JNI
+and provenance directories, so it never launches Cargo/NDK merely to compile
+tests. An unchanged raw build is reusable only while its saved source seal still
+matches the live checkout; release packaging always re-runs the inexpensive
+strip/provenance phase and its final seal check.
 
 The production-gated form passes `--features privacy-production-enabled` to
 `connect_norito_bridge`; the default form intentionally omits that feature so
@@ -398,8 +426,12 @@ First build takes ~5-10 minutes (compiles all Rust dependencies). Incremental bu
 
 | ABI | File |
 |-----|------|
-| arm64-v8a | `client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so` |
-| x86_64 | `client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so` |
+| arm64-v8a | `client-android/build/generated/jniLibs/<mode>/arm64-v8a/libconnect_norito_bridge.so` |
+| x86_64 | `client-android/build/generated/jniLibs/<mode>/x86_64/libconnect_norito_bridge.so` |
+
+`<mode>` is `default` unless the property is exactly
+`-PprivacyProductionEnabled=true`, in which case it is `production`. Any value
+other than the exact strings `true` and `false` is rejected.
 
 > **Note:** `armeabi-v7a` (32-bit ARM) is not supported due to an upstream `rkyv` crate incompatibility with 32-bit targets.
 

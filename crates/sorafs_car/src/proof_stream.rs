@@ -215,6 +215,24 @@ pub struct ProofStreamItem {
     pub recorded_at_ms: Option<u64>,
 }
 
+fn optional_u32_field(obj: &Map, keys: &[&str]) -> Result<Option<u32>, String> {
+    let Some((key, value)) = keys
+        .iter()
+        .find_map(|key| obj.get(*key).map(|value| (*key, value)))
+    else {
+        return Ok(None);
+    };
+    if matches!(value, Value::Null) {
+        return Ok(None);
+    }
+    let value = value
+        .as_u64()
+        .ok_or_else(|| format!("`{key}` must be an unsigned 32-bit integer or null"))?;
+    u32::try_from(value)
+        .map(Some)
+        .map_err(|_| format!("`{key}` must fit in u32 (got {value})"))
+}
+
 impl ProofStreamItem {
     /// Parses an item from a Norito JSON value.
     pub fn from_json(value: &Value) -> Result<Self, String> {
@@ -241,15 +259,8 @@ impl ProofStreamItem {
             .map(|reason| reason.trim().to_string())
             .filter(|reason| !reason.is_empty());
 
-        let latency_ms = obj
-            .get("latency_ms")
-            .or_else(|| obj.get("latency"))
-            .and_then(Value::as_u64)
-            .map(|value| value as u32);
-        let deadline_ms = obj
-            .get("deadline_ms")
-            .and_then(Value::as_u64)
-            .map(|value| value as u32);
+        let latency_ms = optional_u32_field(obj, &["latency_ms", "latency"])?;
+        let deadline_ms = optional_u32_field(obj, &["deadline_ms"])?;
 
         let tier = obj
             .get("tier")
@@ -278,23 +289,10 @@ impl ProofStreamItem {
             failure_reason,
             latency_ms,
             deadline_ms,
-            sample_index: obj
-                .get("leaf_index_flat")
-                .or_else(|| obj.get("sample_index"))
-                .and_then(Value::as_u64)
-                .map(|value| value as u32),
-            chunk_index: obj
-                .get("chunk_index")
-                .and_then(Value::as_u64)
-                .map(|value| value as u32),
-            segment_index: obj
-                .get("segment_index")
-                .and_then(Value::as_u64)
-                .map(|value| value as u32),
-            leaf_index: obj
-                .get("leaf_index")
-                .and_then(Value::as_u64)
-                .map(|value| value as u32),
+            sample_index: optional_u32_field(obj, &["leaf_index_flat", "sample_index"])?,
+            chunk_index: optional_u32_field(obj, &["chunk_index"])?,
+            segment_index: optional_u32_field(obj, &["segment_index"])?,
+            leaf_index: optional_u32_field(obj, &["leaf_index"])?,
             tier,
             trace_id: obj
                 .get("trace_id")
@@ -611,6 +609,74 @@ mod tests {
         assert!(item.por_proof.is_some());
         assert_eq!(item.deadline_ms, Some(90_000));
         assert_eq!(item.recorded_at_ms, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn item_rejects_u32_field_overflow_instead_of_wrapping() {
+        for field in [
+            "latency_ms",
+            "latency",
+            "deadline_ms",
+            "leaf_index_flat",
+            "sample_index",
+            "chunk_index",
+            "segment_index",
+            "leaf_index",
+        ] {
+            let mut map = Map::new();
+            map.insert("result".into(), Value::from("success"));
+            map.insert(field.into(), Value::from(u64::from(u32::MAX) + 1));
+
+            let error = ProofStreamItem::from_json(&Value::Object(map))
+                .expect_err("overflowing u32 field must be rejected");
+            assert!(
+                error.contains(field) && error.contains("must fit in u32"),
+                "unexpected error for {field}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn item_accepts_u32_max_for_every_bounded_field() {
+        for field in [
+            "latency_ms",
+            "latency",
+            "deadline_ms",
+            "leaf_index_flat",
+            "sample_index",
+            "chunk_index",
+            "segment_index",
+            "leaf_index",
+        ] {
+            let mut map = Map::new();
+            map.insert("result".into(), Value::from("success"));
+            map.insert(field.into(), Value::from(u32::MAX));
+
+            let item = ProofStreamItem::from_json(&Value::Object(map))
+                .expect("u32::MAX must remain representable");
+            let parsed = match field {
+                "latency_ms" | "latency" => item.latency_ms,
+                "deadline_ms" => item.deadline_ms,
+                "leaf_index_flat" | "sample_index" => item.sample_index,
+                "chunk_index" => item.chunk_index,
+                "segment_index" => item.segment_index,
+                "leaf_index" => item.leaf_index,
+                _ => unreachable!("field list is exhaustive"),
+            };
+            assert_eq!(parsed, Some(u32::MAX), "wrong value for {field}");
+        }
+    }
+
+    #[test]
+    fn item_rejects_present_non_integer_u32_field() {
+        let map = norito::json!({
+            "result": "success",
+            "latency_ms": "42",
+        });
+
+        let error = ProofStreamItem::from_json(&map)
+            .expect_err("present non-integer bounded field must be rejected");
+        assert!(error.contains("`latency_ms` must be an unsigned 32-bit integer"));
     }
 
     #[test]

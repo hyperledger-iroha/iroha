@@ -3,6 +3,7 @@ import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import {fileURLToPath} from 'node:url';
 
 import {
   parseLabelOverrides,
@@ -12,6 +13,33 @@ import {
   ProbeError,
   verifyMetricsEndpoint,
 } from '../tryit-proxy-probe.mjs';
+
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../..',
+);
+const PUBLISHING_MONITOR_LOCALES = Object.freeze([
+  'am',
+  'ar',
+  'az',
+  'ba',
+  'dz',
+  'es',
+  'fr',
+  'he',
+  'hy',
+  'ja',
+  'ka',
+  'kk',
+  'mn',
+  'my',
+  'pt',
+  'ru',
+  'ur',
+  'uz',
+  'zh-hans',
+  'zh-hant',
+]);
 
 test('parseLabelOverrides keeps valid key/value pairs', () => {
   const overrides = parseLabelOverrides('job=prod,env=qa,invalid,1bad=value');
@@ -67,8 +95,79 @@ test('runProbe succeeds when health and sample endpoints return 200', async () =
   });
 
   assert.equal(calls.length, 2);
-  assert.ok(calls[0].url.endsWith('/healthz'));
-  assert.ok(calls[1].url.endsWith('/proxy/v1/status'));
+  assert.equal(calls[0].url, 'https://proxy.test/healthz');
+  assert.equal(calls[1].url, 'https://proxy.test/proxy/v1/status');
+});
+
+test('checked-in monitor sample path receives exactly one proxy prefix', async () => {
+  const configPath = path.join(REPO_ROOT, 'configs', 'docs_monitor.json');
+  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  const calls = [];
+  const fetchStub = async (url) => {
+    calls.push(url);
+    return createResponse(200, 'ok');
+  };
+
+  await runProbe({
+    proxyUrl: config.tryIt.proxyUrl,
+    samplePath: config.tryIt.samplePath,
+    method: config.tryIt.method,
+    timeoutMs: config.tryIt.timeoutMs,
+    token: '',
+    fetchImpl: fetchStub,
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1], `${config.tryIt.proxyUrl}/proxy${config.tryIt.samplePath}`);
+  const proxySegments = new URL(calls[1]).pathname
+    .split('/')
+    .filter((segment) => segment === 'proxy');
+  assert.equal(proxySegments.length, 1);
+});
+
+test('publishing monitor docs keep the sample path contract synchronized', async () => {
+  const sourceDirectory = path.join(REPO_ROOT, 'docs', 'portal', 'docs', 'devportal');
+  const i18nDirectory = path.join(REPO_ROOT, 'docs', 'portal', 'i18n');
+  const sourcePaths = [
+    path.join(sourceDirectory, 'publishing-monitoring.md'),
+    ...PUBLISHING_MONITOR_LOCALES.map((locale) =>
+      path.join(sourceDirectory, `publishing-monitoring.${locale}.md`),
+    ),
+    ...PUBLISHING_MONITOR_LOCALES.map((locale) =>
+      path.join(
+        i18nDirectory,
+        locale,
+        'docusaurus-plugin-content-docs',
+        'current',
+        'devportal',
+        'publishing-monitoring.md',
+      ),
+    ),
+  ];
+  const expectedSamplePath =
+    '"samplePath": "/v1/accounts/<i105-account-id>/assets?limit=1"';
+  const expectedContract =
+    '> `samplePath=/v1/...` → probe `+ /proxy` → `/proxy/v1/...`';
+
+  for (const sourcePath of sourcePaths) {
+    const source = await readFile(sourcePath, 'utf8');
+    const relativePath = path.relative(REPO_ROOT, sourcePath);
+    assert.equal(
+      source.split(expectedSamplePath).length - 1,
+      1,
+      `${relativePath}: expected one Torii-relative samplePath`,
+    );
+    assert.equal(
+      source.split(expectedContract).length - 1,
+      1,
+      `${relativePath}: expected one proxy-prefix contract note`,
+    );
+    assert.doesNotMatch(
+      source,
+      /"samplePath": "\/proxy\//u,
+      `${relativePath}: samplePath must omit the proxy prefix`,
+    );
+  }
 });
 
 test('runProbe throws ProbeError when the sample request fails', async () => {

@@ -361,7 +361,7 @@ sleep 5
 
 echo "[6/6] Asset flow (transfer, query)"
 ASSET="rose#wonderland"
-SENDER="sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+SENDER="sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 RECIP="34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD"
 
 CLIENT_CONFIG="$BASE/client.toml"

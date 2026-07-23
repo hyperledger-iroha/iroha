@@ -6,11 +6,13 @@ import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
+import org.hyperledger.iroha.sdk.client.TransactionFinality
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -76,7 +78,7 @@ data class NexusTransferInput @JvmOverloads constructor(
     @JvmField val signingPublicKey: ByteArray? = null,
     @JvmField val creationTimeMs: Long? = null,
     @JvmField val ttlMs: Long? = null,
-    @JvmField val nonce: Int? = null,
+    @JvmField val nonce: Long? = null,
     @JvmField val metadata: Map<String, String> = emptyMap(),
 ) {
     init {
@@ -280,6 +282,17 @@ class NexusAppClient @JvmOverloads constructor(
         } else {
             null
         }
+        if (finalStatus != null) {
+            try {
+                TransactionFinality.requireApplied(finalStatus, transactionHashHex)
+            } catch (error: IllegalStateException) {
+                throw NexusAppError(
+                    "status_wait_non_applied",
+                    "Torii status waiter returned without authoritative Applied execution finality",
+                    error,
+                )
+            }
+        }
         return NexusTransferReceipt(transactionHashHex, signed, submission, finalStatus)
     }
 
@@ -329,10 +342,10 @@ private fun ensureEd25519(algorithm: String) {
 }
 
 private fun validateEd25519PublicKey(publicKey: ByteArray) {
-    if (publicKey.size != 32) {
+    if (!Ed25519PublicKeyAdmission.isValid(publicKey)) {
         throw NexusAppError(
             "invalid_signing_public_key",
-            "Ed25519 signing public key must be 32 bytes",
+            "Ed25519 signing public key must be a canonical point in the prime-order subgroup",
         )
     }
 }

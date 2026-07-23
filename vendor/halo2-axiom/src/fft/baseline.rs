@@ -4,7 +4,7 @@ use ff::Field;
 
 use super::recursive::FFTData;
 use crate::{
-    arithmetic::{self, log2_floor, FftGroup},
+    arithmetic::{self, FftGroup, log2_floor},
     multicore,
 };
 

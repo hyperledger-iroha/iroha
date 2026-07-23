@@ -27,7 +27,7 @@ public final class RegisterOfflineDeviceAttestation {
   private final DeviceAttestationRegistration registration;
   private final long creationTimeMs;
   private final Long timeToLiveMs;
-  private final Integer nonce;
+  private final Long nonce;
   private final FeePaymentIntent feePayment;
   private final Map<String, JsonValue> metadata;
 
@@ -37,7 +37,7 @@ public final class RegisterOfflineDeviceAttestation {
       final DeviceAttestationRegistration registration,
       final long creationTimeMs,
       final Long timeToLiveMs,
-      final Integer nonce,
+      final Long nonce,
       final FeePaymentIntent feePayment,
       final Map<String, JsonValue> metadata) {
     this.chainId = requireExactText(chainId, "chainId");
@@ -48,9 +48,6 @@ public final class RegisterOfflineDeviceAttestation {
     }
     if (timeToLiveMs != null && timeToLiveMs <= 0) {
       throw new IllegalArgumentException("timeToLiveMs must be positive when present");
-    }
-    if (nonce != null && nonce <= 0) {
-      throw new IllegalArgumentException("nonce must be positive when present");
     }
     if (timeToLiveMs != null) {
       final long validUntil;

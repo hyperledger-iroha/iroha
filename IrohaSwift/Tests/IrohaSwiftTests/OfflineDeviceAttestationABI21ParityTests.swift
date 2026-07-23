@@ -4,7 +4,7 @@ import XCTest
 @testable import IrohaSwift
 
 /// Exact Rust/Swift golden coverage for the ABI-21 device-registration model.
-final class OfflineDeviceAttestationABI20ParityTests: XCTestCase {
+final class OfflineDeviceAttestationABI21ParityTests: XCTestCase {
     func testRegistrationAndChallengeMatchRustCurrentModel() throws {
         let rust = try rustFixture()
         XCTAssertEqual(rust.count, 5)
@@ -83,7 +83,7 @@ final class OfflineDeviceAttestationABI20ParityTests: XCTestCase {
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw NSError(
-                domain: "OfflineDeviceAttestationABI20ParityTests",
+                domain: "OfflineDeviceAttestationABI21ParityTests",
                 code: Int(process.terminationStatus),
                 userInfo: [
                     NSLocalizedDescriptionKey:

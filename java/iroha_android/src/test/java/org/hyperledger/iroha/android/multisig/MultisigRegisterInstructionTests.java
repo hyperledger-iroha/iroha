@@ -1,12 +1,12 @@
 package org.hyperledger.iroha.android.multisig;
 
-import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.MultisigRegisterInstruction;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 
 /** Sanity checks for the multisig registration builder and argument schema. */
 public final class MultisigRegisterInstructionTests {
@@ -73,8 +73,7 @@ public final class MultisigRegisterInstructionTests {
   }
 
   private static void testDerivedControllerIsRejected() {
-    final byte[] signerKey = new byte[32];
-    Arrays.fill(signerKey, (byte) 0x11);
+    final byte[] signerKey = TestEd25519Keys.publicKey(0x11);
     final String signerId;
     try {
       signerId = AccountAddress.fromAccount(signerKey, "ed25519")
@@ -112,9 +111,7 @@ public final class MultisigRegisterInstructionTests {
 
   private static String sampleI105(final byte fill) {
     try {
-      final byte[] publicKey = new byte[32];
-      Arrays.fill(publicKey, fill);
-      return AccountAddress.fromAccount(publicKey, "ed25519")
+      return AccountAddress.fromAccount(TestEd25519Keys.publicKey(fill & 0xff), "ed25519")
           .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build canonical account fixture", ex);

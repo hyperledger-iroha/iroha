@@ -4,8 +4,9 @@ import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 
 private const val DEFAULT_CHAIN_ID = "00000000"
+private const val MAX_U32 = 0xffff_ffffL
 private val DEFAULT_AUTHORITY = AccountAddress
-    .fromAccount(ByteArray(32), "ed25519")
+    .fromCanonicalHex("0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29")
     .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
 /**
@@ -13,7 +14,8 @@ private val DEFAULT_AUTHORITY = AccountAddress
  *
  * The structure mirrors the Rust data model sufficiently for encoding and signing, including
  * instruction lists, by-reference contract calls, IVM bytecode, and flat mixed batches. `authority`
- * must use the canonical I105 account literal.
+ * must use the canonical I105 account literal. `nonce` uses a [Long] carrier for the full nonzero
+ * unsigned 32-bit wire range.
  */
 class TransactionPayload(
     val chainId: String = DEFAULT_CHAIN_ID,
@@ -21,7 +23,7 @@ class TransactionPayload(
     val creationTimeMs: Long = System.currentTimeMillis(),
     val executable: Executable = Executable.ivm(byteArrayOf()),
     val timeToLiveMs: Long? = null,
-    val nonce: Int? = null,
+    val nonce: Long? = null,
     val feePayment: FeePaymentIntent,
     metadata: Map<String, JsonValue> = emptyMap(),
 ) {
@@ -38,7 +40,7 @@ class TransactionPayload(
             require(timeToLiveMs > 0) { "timeToLiveMs must be positive when present" }
         }
         if (nonce != null) {
-            require(nonce > 0) { "nonce must be positive when present" }
+            require(nonce in 1..MAX_U32) { "nonce must fit in the nonzero u32 range" }
         }
         _metadata.keys.forEach { key ->
             require(key.isNotBlank()) { "metadata key must not be blank" }
@@ -51,7 +53,7 @@ class TransactionPayload(
         creationTimeMs: Long = this.creationTimeMs,
         executable: Executable = this.executable,
         timeToLiveMs: Long? = this.timeToLiveMs,
-        nonce: Int? = this.nonce,
+        nonce: Long? = this.nonce,
         feePayment: FeePaymentIntent = this.feePayment,
         metadata: Map<String, JsonValue> = this.metadata,
     ): TransactionPayload = TransactionPayload(

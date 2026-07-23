@@ -74,6 +74,20 @@ const unsupportedSignatureAlgorithms = [
   ["ed25519"],
 ];
 
+function authoritativeAppliedStatus(
+  hash = fixtureSignedTransactionHashHex,
+  blockHeight = 1,
+) {
+  return {
+    hash,
+    status: { kind: "Applied", block_height: blockHeight },
+    summary: "Applied",
+    diagnostics: [],
+    scope: "global",
+    resolved_from: "state",
+  };
+}
+
 function fixtureSignable(overrides = {}) {
   return {
     payloadBytes: Buffer.from(fixturePayloadBytes),
@@ -113,7 +127,7 @@ function finalizationHarness(finalizedResult, submission = { accepted: true }) {
       },
       async waitForTransactionStatus() {
         calls.waited += 1;
-        return { status: "Applied" };
+        return authoritativeAppliedStatus();
       },
     },
   });
@@ -517,7 +531,7 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
       },
       async waitForTransactionStatus(txHashHex) {
         waited.push(txHashHex);
-        return { status: "Applied" };
+        return authoritativeAppliedStatus(txHashHex);
       },
     },
   });
@@ -1779,7 +1793,7 @@ test("NexusAppClient reads the submit callback once before its final abort check
       return async function waitForTransactionStatus() {
         assert.equal(this, toriiClient);
         waits += 1;
-        return { status: "Committed" };
+        return authoritativeAppliedStatus();
       };
     },
   });
@@ -1840,7 +1854,7 @@ test("NexusAppClient honors aborts from Torii capability getters before dispatch
         }
         return async function waitForTransactionStatus() {
           waits += 1;
-          return { status: "Committed" };
+          return authoritativeAppliedStatus();
         };
       },
     });
@@ -1915,7 +1929,7 @@ test("NexusAppClient requires and snapshots wait capabilities before submission"
         return { hashHex: fixtureSignedTransactionHashHex };
       },
       async waitForTransactionStatus() {
-        return { status: "Committed" };
+        return authoritativeAppliedStatus();
       },
     };
     Object.defineProperty(toriiClient, field, {
@@ -1980,7 +1994,7 @@ test("NexusAppClient checks cancellation between finalizer and capability access
       return async () => ({ hashHex: fixtureSignedTransactionHashHex });
     },
     async waitForTransactionStatus() {
-      return { status: "Committed" };
+      return authoritativeAppliedStatus();
     },
   };
   const client = new NexusAppClient({
@@ -2103,7 +2117,7 @@ test("NexusAppClient reports cancellation during submission as already submitted
       },
       async waitForTransactionStatus() {
         waits += 1;
-        return { status: "Committed" };
+        return authoritativeAppliedStatus();
       },
     },
   });
@@ -2355,7 +2369,7 @@ test("NexusAppClient prevalidates all wait options before Torii side effects", a
   const invalidOptions = [
     { successStatuses: new Array(33).fill("Committed") },
     { failureStatuses: new Array(33).fill("Rejected") },
-    { successStatuses: ["Done"], failureStatuses: ["Done"] },
+    { failureStatuses: ["Applied"] },
     { intervalMs: -1 },
     { timeoutMs: Number.MAX_SAFE_INTEGER + 1 },
     { maxAttempts: 0 },
@@ -2404,7 +2418,7 @@ test("NexusAppClient prevalidates all wait options before Torii side effects", a
       },
       async waitForTransactionStatus(_hashHex, options) {
         observedOptions = options;
-        return { status: "Committed" };
+        return authoritativeAppliedStatus();
       },
     },
   });
@@ -2412,14 +2426,43 @@ test("NexusAppClient prevalidates all wait options before Torii side effects", a
     fixtureSignable(),
     fixtureWalletSignature,
     {
-      successStatuses: ["Committed", "Applied"],
       failureStatuses: ["Rejected"],
     },
   );
-  assert.ok(Array.isArray(observedOptions.successStatuses));
   assert.ok(Array.isArray(observedOptions.failureStatuses));
-  assert.ok(Object.isFrozen(observedOptions.successStatuses));
   assert.ok(Object.isFrozen(observedOptions.failureStatuses));
-  assert.deepEqual(observedOptions.successStatuses, ["Committed", "Applied"]);
+  assert.equal("successStatuses" in observedOptions, false);
   assert.deepEqual(observedOptions.failureStatuses, ["Rejected"]);
+});
+
+test("NexusAppClient rejects a delegated waiter that returns before Applied", async () => {
+  const client = new NexusAppClient({
+    signingPublicKey: fixturePublicKey,
+    transactionCodec: {
+      finalizeSignedTransaction() {
+        return {
+          signedTransaction: fixtureSignedTransaction,
+          hashHex: fixtureSignedTransactionHashHex,
+        };
+      },
+    },
+    toriiClient: {
+      async submitTransaction() {
+        return { hashHex: fixtureSignedTransactionHashHex };
+      },
+      async waitForTransactionStatus() {
+        return { status: "Committed" };
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => client.finalizeAndSubmit(fixtureSignable(), fixtureWalletSignature),
+    (error) => {
+      assert.ok(error instanceof NexusAppError);
+      assert.equal(error.code, "status_wait_non_applied");
+      assert.equal(error.submissionState, "submitted");
+      return true;
+    },
+  );
 });

@@ -64,8 +64,8 @@ class GatewayFetchSummary private constructor(
                 val map = item as Map<String, Any>
                 ProviderReport(
                     provider = requireString(map, "provider"),
-                    successes = requireLong(map, "successes"),
-                    failures = requireLong(map, "failures"),
+                    successes = requireNonNegativeLong(map, "successes"),
+                    failures = requireNonNegativeLong(map, "failures"),
                     disabled = requireBoolean(map, "disabled"),
                 )
             }
@@ -75,7 +75,7 @@ class GatewayFetchSummary private constructor(
                 ChunkReceipt(
                     chunkIndex = requireInt(map, "chunk_index"),
                     provider = requireString(map, "provider"),
-                    attempts = requireLong(map, "attempts"),
+                    attempts = requireNonNegativeLong(map, "attempts"),
                 )
             }
             return GatewayFetchSummary(
@@ -86,17 +86,17 @@ class GatewayFetchSummary private constructor(
                     "chunker_handle",
                 ),
                 clientId = optionalString(root, "client_id"),
-                chunkCount = requireLong(root, "chunk_count"),
-                contentLength = requireLong(root, "content_length"),
-                assembledBytes = requireLong(root, "assembled_bytes"),
+                chunkCount = requireNonNegativeLong(root, "chunk_count"),
+                contentLength = requireNonNegativeLong(root, "content_length"),
+                assembledBytes = requireNonNegativeLong(root, "assembled_bytes"),
                 providerReports = providerReports,
                 chunkReceipts = chunkReceipts,
                 anonymityPolicy = requireString(root, "anonymity_policy"),
                 anonymityStatus = requireString(root, "anonymity_status"),
                 anonymityReason = optionalString(root, "anonymity_reason"),
-                anonymitySoranetSelected = requireLong(root, "anonymity_soranet_selected"),
-                anonymityPqSelected = requireLong(root, "anonymity_pq_selected"),
-                anonymityClassicalSelected = requireLong(root, "anonymity_classical_selected"),
+                anonymitySoranetSelected = requireNonNegativeLong(root, "anonymity_soranet_selected"),
+                anonymityPqSelected = requireNonNegativeLong(root, "anonymity_pq_selected"),
+                anonymityClassicalSelected = requireNonNegativeLong(root, "anonymity_classical_selected"),
                 anonymityClassicalRatio = requireDouble(root, "anonymity_classical_ratio"),
                 anonymityPqRatio = requireDouble(root, "anonymity_pq_ratio"),
                 anonymityCandidateRatio = requireDouble(root, "anonymity_candidate_ratio"),
@@ -136,6 +136,12 @@ class GatewayFetchSummary private constructor(
             val value = requireLong(map, key)
             if (value < 0 || value > Int.MAX_VALUE) throw SorafsStorageException("Expected int range for `$key`")
             return value.toInt()
+        }
+
+        private fun requireNonNegativeLong(map: Map<String, Any>, key: String): Long {
+            val value = requireLong(map, key)
+            if (value < 0) throw SorafsStorageException("Expected non-negative integer for `$key`")
+            return value
         }
 
         private fun requireDouble(map: Map<String, Any>, key: String): Double {

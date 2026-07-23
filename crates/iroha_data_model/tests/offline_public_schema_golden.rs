@@ -18,7 +18,7 @@ fn structural_schema_hash<T: IntoSchema>() -> String {
 }
 
 #[test]
-fn public_offline_request_structural_schemas_are_frozen_for_abi20_v4() {
+fn public_offline_request_structural_schemas_are_frozen_for_abi21_v4() {
     assert_eq!(
         structural_schema_hash::<KagemushaRecursiveSpendTopUpRequestV4>(),
         "61c0b26a37f66702fec5f6fe3ec0fd7b"

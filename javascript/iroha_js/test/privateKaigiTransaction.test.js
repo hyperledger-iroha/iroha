@@ -168,7 +168,7 @@ test("buildPrivateKaigiFeeSpend delegates to native binding with registry vk byt
   }
 });
 
-test("submitTransactionEntrypoint waits for a terminal status", async () => {
+test("submitTransactionEntrypoint waits through Committed until Applied", async () => {
   const client = new ToriiClient("https://example.test");
   const submitted = [];
   const polled = [];
@@ -178,7 +178,11 @@ test("submitTransactionEntrypoint waits for a terminal status", async () => {
   };
   client.getTransactionStatus = async (hashHex, options = {}) => {
     polled.push({ hashHex, options });
-    return { status: polled.length > 1 ? "Committed" : "Pending" };
+    return authoritativePipelineStatus(
+      hashHex,
+      polled.length > 1 ? "Applied" : "Committed",
+      true,
+    );
   };
 
   const result = await submitTransactionEntrypoint(
@@ -196,7 +200,8 @@ test("submitTransactionEntrypoint waits for a terminal status", async () => {
   assert.equal(polled[0].hashHex, "ab".repeat(32));
   assert.equal(polled[0].options.scope, undefined);
   assert.equal(result.hash, "ab".repeat(32));
-  assert.equal(result.status.status, "Committed");
+  assert.equal(result.status.status.kind, "Applied");
+  assert.equal(polled.length, 2);
 });
 
 test("submitTransactionEntrypoint inherits client transaction status scope", async () => {
@@ -208,10 +213,7 @@ test("submitTransactionEntrypoint inherits client transaction status scope", asy
       seenUrls.push(url);
       return createResponse({
         status: 200,
-        jsonData: {
-          kind: "Transaction",
-          content: { hash: hashHex, status: { kind: "Committed", content: null } },
-        },
+        jsonData: authoritativePipelineStatus(hashHex, "Applied"),
         headers: { "content-type": "application/json" },
       });
     },
@@ -239,10 +241,7 @@ test("submitTransactionEntrypoint explicit scope overrides client configuration"
       seenUrls.push(url);
       return createResponse({
         status: 200,
-        jsonData: {
-          kind: "Transaction",
-          content: { hash: hashHex, status: { kind: "Committed", content: null } },
-        },
+        jsonData: authoritativePipelineStatus(hashHex, "Applied"),
         headers: { "content-type": "application/json" },
       });
     },
@@ -271,10 +270,7 @@ test("submitTransactionEntrypoint null scope inherits client configuration", asy
       seenUrls.push(url);
       return createResponse({
         status: 200,
-        jsonData: {
-          kind: "Transaction",
-          content: { hash: hashHex, status: { kind: "Committed", content: null } },
-        },
+        jsonData: authoritativePipelineStatus(hashHex, "Applied"),
         headers: { "content-type": "application/json" },
       });
     },
@@ -298,4 +294,28 @@ function createResponse({ status, jsonData = {}, textBody, headers }) {
   const body =
     typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {});
   return new Response(body, { status, headers });
+}
+
+function authoritativePipelineStatus(hashHex, kind, normalized = false) {
+  const status =
+    kind === "Applied"
+      ? { kind, block_height: 7 }
+      : { kind };
+  const payload = {
+    kind: "Transaction",
+    hash: hashHex,
+    status,
+    summary: kind,
+    scope: "global",
+    resolved_from: kind === "Applied" ? "state" : "cache",
+  };
+  return normalized
+    ? {
+        ...payload,
+        content: {
+          hash: hashHex,
+          status: { ...status, content: null },
+        },
+      }
+    : payload;
 }

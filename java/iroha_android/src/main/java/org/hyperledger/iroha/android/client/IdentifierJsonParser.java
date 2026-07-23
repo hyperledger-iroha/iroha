@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.nexus.UaidLiteral;
 
 /** Minimal JSON parser for identifier-policy and identifier-resolution payloads. */
@@ -26,26 +27,30 @@ public final class IdentifierJsonParser {
       items.add(
           new IdentifierPolicySummary(
               requiredExactString(item.get("policy_id"), "identifier policy list.items[" + i + "].policy_id"),
-              optionalString(item.get("program_id")) == null
+              optionalString(
+                          item.get("program_id"),
+                          "identifier policy list.items[" + i + "].program_id")
+                      == null
                   ? requiredExactString(item.get("policy_id"), "identifier policy list.items[" + i + "].policy_id")
                       .replace('#', '_')
                   : requiredExactString(
                       item.get("program_id"),
                       "identifier policy list.items[" + i + "].program_id"),
               requiredExactString(item.get("owner"), "identifier policy list.items[" + i + "].owner"),
-              Boolean.TRUE.equals(item.get("active")),
+              asBoolean(
+                  item.get("active"), "identifier policy list.items[" + i + "].active"),
               IdentifierNormalization.fromWireValue(
                   requiredExactLowercaseString(
                       item.get("normalization"),
                       "identifier policy list.items[" + i + "].normalization")),
-              requiredExactString(
+              requiredPublicKeyLiteral(
                   item.get("resolver_public_key"),
                   "identifier policy list.items[" + i + "].resolver_public_key"),
-              optionalString(item.get("output_opening_public_key")) == null
-                  ? requiredExactString(
+              !item.containsKey("output_opening_public_key")
+                  ? requiredPublicKeyLiteral(
                       item.get("resolver_public_key"),
                       "identifier policy list.items[" + i + "].resolver_public_key")
-                  : requiredExactString(
+                  : requiredPublicKeyLiteral(
                       item.get("output_opening_public_key"),
                       "identifier policy list.items[" + i + "].output_opening_public_key"),
               requiredExactLowercaseString(
@@ -147,7 +152,7 @@ public final class IdentifierJsonParser {
   }
 
   private static String requiredString(final Object value, final String path) {
-    final String string = optionalString(value);
+    final String string = optionalString(value, path);
     if (string == null || string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
@@ -155,7 +160,7 @@ public final class IdentifierJsonParser {
   }
 
   private static String requiredExactString(final Object value, final String path) {
-    final String string = optionalString(value);
+    final String string = optionalString(value, path);
     if (string == null || string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
@@ -169,6 +174,14 @@ public final class IdentifierJsonParser {
     final String string = requiredExactString(value, path);
     if (!string.toLowerCase(Locale.ROOT).equals(string)) {
       throw new IllegalStateException(path + " must be an exact lowercase wire value");
+    }
+    return string;
+  }
+
+  private static String requiredPublicKeyLiteral(final Object value, final String path) {
+    final String string = requiredExactString(value, path);
+    if (PublicKeyCodec.decodePublicKeyLiteral(string) == null) {
+      throw new IllegalStateException(path + " must be a valid public key literal");
     }
     return string;
   }
@@ -205,11 +218,14 @@ public final class IdentifierJsonParser {
     return hex;
   }
 
-  private static String optionalString(final Object value) {
+  private static String optionalString(final Object value, final String path) {
     if (value == null) {
       return null;
     }
-    return value instanceof String string ? string : String.valueOf(value);
+    if (!(value instanceof String string)) {
+      throw new IllegalStateException(path + " must be a string");
+    }
+    return string;
   }
 
   private static long asLong(final Object value, final String path) {
@@ -241,6 +257,13 @@ public final class IdentifierJsonParser {
       return null;
     }
     return asLong(value, path);
+  }
+
+  private static boolean asBoolean(final Object value, final String path) {
+    if (!(value instanceof Boolean bool)) {
+      throw new IllegalStateException(path + " must be a boolean");
+    }
+    return bool;
   }
 
   private static long asUnsignedLong(final Object value, final String path) {

@@ -9,6 +9,8 @@ import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.IrohaClient;
+import org.hyperledger.iroha.android.client.TransactionFinality;
+import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
@@ -197,6 +199,16 @@ public final class NexusAppClient {
                             options == null ? null : options.pipelineStatusOptions())
                         .join())
             : null;
+    if (finalStatus != null) {
+      try {
+        TransactionFinality.requireApplied(finalStatus, transactionHashHex);
+      } catch (final IllegalStateException error) {
+        throw new NexusAppError(
+            "status_wait_non_applied",
+            "Torii status waiter returned without authoritative Applied execution finality",
+            error);
+      }
+    }
     return new NexusTransferReceipt(transactionHashHex, signed, submission, finalStatus);
   }
 
@@ -258,9 +270,10 @@ public final class NexusAppClient {
   }
 
   private static void validateEd25519PublicKey(final byte[] publicKey) {
-    if (publicKey == null || publicKey.length != 32) {
+    if (!Ed25519PublicKeyAdmission.isValid(publicKey)) {
       throw new NexusAppError(
-          "invalid_signing_public_key", "Ed25519 signing public key must be 32 bytes");
+          "invalid_signing_public_key",
+          "Ed25519 signing public key must be a canonical point in the prime-order subgroup");
     }
   }
 

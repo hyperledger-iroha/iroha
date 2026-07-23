@@ -43,6 +43,17 @@ function mockResponse(status, body = "", headers = {}) {
   };
 }
 
+function authoritativeAppliedStatus(hash = HASH_HEX, blockHeight = 1) {
+  return {
+    hash,
+    status: { kind: "Applied", block_height: blockHeight },
+    summary: "Applied",
+    diagnostics: [],
+    scope: "global",
+    resolved_from: "state",
+  };
+}
+
 test("browser Nexus runtime does not depend on a global Buffer shim", async () => {
   const originalBuffer = globalThis.Buffer;
   let digest;
@@ -457,6 +468,7 @@ test("browser Nexus Torii polling reaches nested terminal status without Node AP
   const responses = [
     { content: { status: "Pending" } },
     { content: { status: { kind: "Committed" } } },
+    authoritativeAppliedStatus(HASH_HEX, 3),
   ];
   const urls = [];
   const client = new NexusAppClient({
@@ -473,15 +485,15 @@ test("browser Nexus Torii polling reaches nested terminal status without Node AP
   const observed = [];
   const result = await client.toriiClient.waitForTransactionStatus(HASH_HEX, {
     intervalMs: 0,
-    maxAttempts: 2,
+    maxAttempts: 3,
     onStatus(status, _payload, attempt) {
       observed.push([status, attempt]);
     },
   });
 
-  assert.deepEqual(result, { content: { status: { kind: "Committed" } } });
-  assert.deepEqual(observed, [["Pending", 1], ["Committed", 2]]);
-  assert.equal(urls.length, 2);
+  assert.deepEqual(result, authoritativeAppliedStatus(HASH_HEX, 3));
+  assert.deepEqual(observed, [["Pending", 1], ["Committed", 2], ["Applied", 3]]);
+  assert.equal(urls.length, 3);
   for (const url of urls) {
     assert.equal(
       url,
@@ -490,7 +502,7 @@ test("browser Nexus Torii polling reaches nested terminal status without Node AP
   }
 });
 
-test("browser Nexus Torii polling fails closed on rejection and status-set overlap", async () => {
+test("browser Nexus Torii polling fails closed on rejection and success override", async () => {
   const client = new NexusAppClient({
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
@@ -509,9 +521,14 @@ test("browser Nexus Torii polling fails closed on rejection and status-set overl
       intervalMs: 0,
       maxAttempts: 1,
       successStatuses: ["Done"],
-      failureStatuses: ["Done"],
     }),
-    /cannot be both success and failure/u,
+    /unsupported field.*successStatuses/u,
+  );
+  await assert.rejects(
+    client.toriiClient.waitForTransactionStatus(HASH_HEX, {
+      failureStatuses: ["Applied"],
+    }),
+    /Applied cannot be configured as failure/u,
   );
 });
 
@@ -525,7 +542,6 @@ test("browser Nexus counts duplicate raw statuses before any fetch", async () =>
     },
   });
   for (const options of [
-    { successStatuses: new Array(33).fill("Committed") },
     { failureStatuses: new Array(33).fill("Rejected") },
   ]) {
     await assert.rejects(
@@ -544,7 +560,7 @@ test("browser Nexus closes an infinite duplicate status iterator", async () => {
     try {
       while (true) {
         yielded += 1;
-        yield "Committed";
+        yield "Rejected";
       }
     } finally {
       cleanedUp += 1;
@@ -560,7 +576,7 @@ test("browser Nexus closes an infinite duplicate status iterator", async () => {
 
   await assert.rejects(
     client.toriiClient.waitForTransactionStatus(HASH_HEX, {
-      successStatuses: duplicateStatuses(),
+      failureStatuses: duplicateStatuses(),
     }),
     /must not contain more than 32 statuses/u,
   );
@@ -571,27 +587,27 @@ test("browser Nexus closes an infinite duplicate status iterator", async () => {
 
 test("browser Nexus acquires a custom status iterator exactly once", async () => {
   let iteratorReads = 0;
-  const successStatuses = {};
-  Object.defineProperty(successStatuses, Symbol.iterator, {
+  const failureStatuses = {};
+  Object.defineProperty(failureStatuses, Symbol.iterator, {
     get() {
       iteratorReads += 1;
       if (iteratorReads > 1) return undefined;
       return function* statuses() {
-        yield "Committed";
+        yield "Rejected";
       };
     },
   });
   const client = new NexusAppClient({
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
-      return mockResponse(200, JSON.stringify({ status: "Committed" }));
+      return mockResponse(200, JSON.stringify(authoritativeAppliedStatus()));
     },
   });
 
   const result = await client.toriiClient.waitForTransactionStatus(HASH_HEX, {
-    successStatuses,
+    failureStatuses,
   });
-  assert.deepEqual(result, { status: "Committed" });
+  assert.deepEqual(result, authoritativeAppliedStatus());
   assert.equal(iteratorReads, 1);
 });
 

@@ -370,7 +370,7 @@ public final class TransactionFixtureManifestTests {
             optionalLongEquals(payload.timeToLiveMs(), ttl));
         assertTrue(
             name + ": nonce mismatch vs transaction_payloads",
-            optionalIntEquals(payload.nonce(), nonce));
+            optionalLongEquals(payload.nonce(), nonce));
       }
     }
 
@@ -575,7 +575,7 @@ public final class TransactionFixtureManifestTests {
         optionalLongEquals(payload.timeToLiveMs(), ttl));
     assertTrue(
         name + ": nonce mismatch vs decoded payload",
-        optionalIntEquals(payload.nonce(), nonce));
+        optionalLongEquals(payload.nonce(), nonce));
     if (raw.executable().isIvm()) {
       assertTrue(name + ": executable type mismatch", payload.executable().isIvm());
       assertArrayEquals(
@@ -1770,15 +1770,6 @@ public final class TransactionFixtureManifestTests {
       return true;
     }
     return optional.isPresent() && expected != null && Objects.equals(optional.get(), expected);
-  }
-
-  private static boolean optionalIntEquals(final Optional<Integer> optional, final Long expected) {
-    if (!optional.isPresent() && expected == null) {
-      return true;
-    }
-    return optional.isPresent()
-        && expected != null
-        && Objects.equals(optional.get().longValue(), expected.longValue());
   }
 
   private static String normalizeAuthority(final String authority) {

@@ -1,10 +1,10 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::multicore;
-use crate::plonk::{lookup, permutation, Any, ProvingKey};
+use crate::plonk::{Any, ProvingKey, lookup, permutation};
 use crate::poly::Basis;
 use crate::{
-    arithmetic::{parallelize, CurveAffine},
+    arithmetic::{CurveAffine, parallelize},
     poly::{Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation},
 };
 #[cfg(feature = "profile")]

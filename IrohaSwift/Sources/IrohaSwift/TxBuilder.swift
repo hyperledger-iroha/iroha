@@ -954,16 +954,8 @@ public struct PipelineStatusPollOptions: Sendable {
         self.maxAttempts = maxAttempts
     }
 
-    public var successStates: Set<PipelineTransactionState> {
-        [.applied]
-    }
-
     public var failureStates: Set<PipelineTransactionState> {
         [.rejected, .expired]
-    }
-
-    public var successStatuses: Set<String> {
-        [PipelineTransactionState.applied.kind]
     }
 
     public var failureStatuses: Set<String> {
@@ -2537,9 +2529,9 @@ public final class IrohaSDK: @unchecked Sendable {
             }
 
             if delay > 0 {
-                let nanosDouble = delay * 1_000_000_000
-                let clamped = min(max(nanosDouble, 0), Double(UInt64.max))
-                try await Task.sleep(nanoseconds: UInt64(clamped))
+                try await Task.sleep(
+                    nanoseconds: StrictJSONNumber.saturatingNanoseconds(from: delay)
+                )
             } else {
                 await Task.yield()
             }
@@ -3097,7 +3089,7 @@ public final class IrohaSDK: @unchecked Sendable {
             if let status = try await statusClient.getTransactionStatus(hashHex: hashHex,
                                                                          mode: mode) {
                 let kind = status.status.kind
-                if options.successStatuses.contains(kind) {
+                if status.status.state == .applied {
                     return status
                 }
                 if options.failureStatuses.contains(kind) {
@@ -3112,9 +3104,9 @@ public final class IrohaSDK: @unchecked Sendable {
             }
             let interval = max(options.pollInterval, 0)
             if interval > 0 {
-                let nanosDouble = interval * 1_000_000_000
-                let clamped = min(max(nanosDouble, 0), Double(UInt64.max))
-                try await Task.sleep(nanoseconds: UInt64(clamped))
+                try await Task.sleep(
+                    nanoseconds: StrictJSONNumber.saturatingNanoseconds(from: interval)
+                )
             } else {
                 await Task.yield()
             }

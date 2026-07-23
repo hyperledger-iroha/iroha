@@ -4,24 +4,33 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::Hash;
 use iroha_crypto::{Algorithm, PublicKey, SignatureOf};
-use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
     Level,
+    account::AccountId,
+    asset::AssetDefinitionId,
     isi::{InstructionBox, Log},
+    name::Name,
     parameter::{CustomParameter, CustomParameterId},
+    smart_contract::ContractAddress,
 };
 
 /// Schema version for the initial validation-fee policy.
 pub const VALIDATION_FEE_POLICY_SCHEMA_VERSION: u16 = 1;
-/// Decimal scale required for the initial Digital Shekel validation-fee policy.
+/// Decimal scale required for the initial policy fee asset.
 pub const VALIDATION_FEE_DS_SCALE: u8 = 2;
-/// Canonical fee amount required by the initial Digital Shekel validation-fee policy.
+/// Canonical fee amount required by the initial validation-fee policy.
 pub const VALIDATION_FEE_INITIAL_AMOUNT: &str = "0.1";
 /// Only release exemption class implemented by validator admission.
 pub const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: &str = "TREASURY_PAYOUT";
+/// Number of recipients required by the atomic treasury-payout plan.
+pub const VALIDATION_FEE_TREASURY_PAYOUT_RECIPIENT_COUNT: usize = 4;
 /// Domain separator for policy hashing.
 pub const VALIDATION_FEE_POLICY_HASH_DOMAIN: &[u8] = b"iroha.validation_fee.policy.v1";
 /// Domain separator carried in signed validation-fee policy payloads.
@@ -601,6 +610,109 @@ impl ValidationFeePolicyRegistryV1 {
     }
 }
 
+/// One exact recipient and share in the atomic treasury-payout effect plan.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ValidationFeeTreasuryPayoutRecipientV1 {
+    /// Validator account receiving XOR.
+    pub account_id: AccountId,
+    /// Exact positive dimensionless share. All four shares must sum to one.
+    pub share: Numeric,
+}
+
+/// Signed binding for the only opaque treasury payout admitted by the policy.
+///
+/// The binding names one immutable contract image and entrypoint plus the complete
+/// six-transfer effect plan. It is part of policy hashing, signatures, registry
+/// validation, and Norito/JSON serialization.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ValidationFeeTreasuryPayoutBindingV1 {
+    /// Immutable deployed pool contract address.
+    pub contract_address: ContractAddress,
+    /// SHA-256 hash of the exact deployed contract artifact bytes.
+    pub code_hash: [u8; 32],
+    /// Only public entrypoint allowed to consume reserved validation-fee credit.
+    pub entrypoint: Name,
+    /// Immutable non-signable contract subject and policy treasury.
+    pub treasury_account_id: AccountId,
+    /// Exact policy SBD fee asset used by the pool quote leg.
+    pub sbd_asset_id: AssetDefinitionId,
+    /// Exact XOR asset returned by the pool base leg.
+    pub xor_asset_id: AssetDefinitionId,
+    /// Exact pool vault receiving SBD and sourcing XOR.
+    pub pool_vault_account_id: AccountId,
+    /// Exact SBD amount consumed per successful payout tick.
+    pub batch_sbd: Quantity,
+    /// Inclusive minimum XOR output accepted from the pool.
+    pub min_xor_out: Quantity,
+    /// Inclusive maximum XOR output accepted from the pool.
+    pub max_xor_out: Quantity,
+    /// Exactly four ordered validator recipients and deterministic shares.
+    pub recipients: Vec<ValidationFeeTreasuryPayoutRecipientV1>,
+}
+
+impl ValidationFeeTreasuryPayoutBindingV1 {
+    /// Return a stable invariant violation, if any.
+    #[must_use]
+    pub fn invariant_error(&self) -> Option<&'static str> {
+        if self.code_hash == [0; 32] {
+            return Some("validation-fee treasury payout code hash must be non-zero");
+        }
+        if self.entrypoint.as_ref() != "autonomous_validation_fee_tick" {
+            return Some(
+                "validation-fee treasury payout entrypoint must be autonomous_validation_fee_tick",
+            );
+        }
+        if self.treasury_account_id == self.pool_vault_account_id {
+            return Some("validation-fee treasury payout treasury and pool vault must differ");
+        }
+        if self.sbd_asset_id == self.xor_asset_id {
+            return Some("validation-fee treasury payout SBD and XOR assets must differ");
+        }
+        if self.batch_sbd.is_zero() {
+            return Some("validation-fee treasury payout batch must be positive");
+        }
+        if self.min_xor_out.is_zero() || self.min_xor_out > self.max_xor_out {
+            return Some("validation-fee treasury payout XOR output bounds are invalid");
+        }
+        if self.recipients.len() != VALIDATION_FEE_TREASURY_PAYOUT_RECIPIENT_COUNT {
+            return Some("validation-fee treasury payout must bind exactly four recipients");
+        }
+        let mut accounts = BTreeSet::new();
+        let mut share_sum = Numeric::zero();
+        for recipient in &self.recipients {
+            if recipient.account_id == self.treasury_account_id
+                || recipient.account_id == self.pool_vault_account_id
+                || !accounts.insert(recipient.account_id.clone())
+            {
+                return Some(
+                    "validation-fee treasury payout recipients must be unique and differ from treasury and vault",
+                );
+            }
+            if recipient.share <= Numeric::zero() {
+                return Some("validation-fee treasury payout shares must be positive");
+            }
+            let Ok(next) = share_sum.try_decimal_add(&recipient.share) else {
+                return Some(
+                    "validation-fee treasury payout share sum is outside the numeric domain",
+                );
+            };
+            share_sum = next;
+        }
+        if share_sum != Numeric::one() {
+            return Some("validation-fee treasury payout shares must sum exactly to one");
+        }
+        None
+    }
+}
+
 /// Chain-level validation-fee policy.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -619,9 +731,9 @@ pub struct ValidationFeePolicyV1 {
     /// Previous policy hash for policy-chain validation.
     #[norito(default)]
     pub previous_policy_hash: Option<[u8; 32]>,
-    /// Concrete Digital Shekel asset definition charged by this policy.
+    /// Concrete fee-asset definition charged by this policy.
     pub ds_asset_id: String,
-    /// Required decimal precision of the charged Digital Shekel asset.
+    /// Required decimal precision of the charged fee asset.
     pub ds_scale: u8,
     /// Exact non-negative fee charged for each qualifying transfer.
     pub fee: Quantity,
@@ -639,6 +751,8 @@ pub struct ValidationFeePolicyV1 {
     /// Explicit exemption classes recognized by this policy.
     #[norito(default)]
     pub exemption_classes: Vec<String>,
+    /// Exact typed contract and six-transfer plan for `TREASURY_PAYOUT`.
+    pub treasury_payout_binding: Option<ValidationFeeTreasuryPayoutBindingV1>,
 }
 
 impl ValidationFeePolicyV1 {
@@ -711,9 +825,7 @@ impl ValidationFeePolicyV1 {
             return Some("validation-fee policy network id must be a non-empty trimmed string");
         }
         if self.ds_asset_id.trim().is_empty() || self.ds_asset_id.trim() != self.ds_asset_id {
-            return Some(
-                "validation-fee policy Digital Shekel asset id must be a non-empty trimmed string",
-            );
+            return Some("validation-fee policy asset id must be a non-empty trimmed string");
         }
         if self.ds_scale != VALIDATION_FEE_DS_SCALE {
             return Some("validation-fee policy asset scale must be 2");
@@ -742,6 +854,56 @@ impl ValidationFeePolicyV1 {
             {
                 return Some(
                     "validation-fee policy exemption classes must be unique approved release classes: TREASURY_PAYOUT",
+                );
+            }
+        }
+        let treasury_payout_enabled = self
+            .exemption_classes
+            .iter()
+            .any(|class| class == VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS);
+        match (
+            treasury_payout_enabled,
+            self.treasury_payout_binding.as_ref(),
+        ) {
+            (false, None) => {}
+            (true, Some(binding)) => {
+                if let Some(reason) = binding.invariant_error() {
+                    return Some(reason);
+                }
+                let Ok(treasury_account_id) = AccountId::parse_encoded(&self.treasury_account_id)
+                    .map(crate::account::ParsedAccountId::into_account_id)
+                else {
+                    return Some("validation-fee policy treasury account id is invalid");
+                };
+                let Ok(sbd_asset_id) = self.ds_asset_id.parse::<AssetDefinitionId>() else {
+                    return Some("validation-fee policy asset id is invalid");
+                };
+                if binding.treasury_account_id != treasury_account_id
+                    || binding.contract_address.subject_id() != treasury_account_id
+                {
+                    return Some(
+                        "validation-fee treasury payout contract subject must equal the policy treasury",
+                    );
+                }
+                if binding.sbd_asset_id != sbd_asset_id {
+                    return Some(
+                        "validation-fee treasury payout SBD asset must equal the policy fee asset",
+                    );
+                }
+                if binding.batch_sbd.scale() > u32::from(self.ds_scale) {
+                    return Some(
+                        "validation-fee treasury payout SBD batch exceeds the policy asset scale",
+                    );
+                }
+            }
+            (true, None) => {
+                return Some(
+                    "validation-fee TREASURY_PAYOUT exemption requires an exact typed binding",
+                );
+            }
+            (false, Some(_)) => {
+                return Some(
+                    "validation-fee treasury payout binding requires the TREASURY_PAYOUT exemption",
                 );
             }
         }
@@ -918,9 +1080,32 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_primitives::numeric::Numeric;
+    use sha2::Digest as _;
 
     use super::*;
-    use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name};
+    use crate::{
+        account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name,
+        nexus::DataSpaceId, smart_contract::ContractAddress,
+    };
+
+    #[derive(crate::DeriveJsonDeserialize)]
+    struct TreasuryPayoutFixtureEncodingNotes {
+        policy_norito: String,
+        raw_byte_arrays: String,
+        signature_payload: String,
+    }
+
+    #[derive(crate::DeriveJsonDeserialize)]
+    struct TreasuryPayoutFixture {
+        description: String,
+        encoding_notes: TreasuryPayoutFixtureEncodingNotes,
+        policy: ValidationFeePolicyV1,
+        policy_norito_hex: String,
+        policy_norito_sha256: String,
+        policy_hash: String,
+        signature_payload_hash: String,
+        signed_policy: SignedValidationFeePolicyV1,
+    }
 
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 
@@ -962,7 +1147,131 @@ mod tests {
             expires_after_height: Some(100),
             governance_keyset_id: "validation-fee-governance-v1".to_string(),
             exemption_classes: Vec::new(),
+            treasury_payout_binding: None,
         }
+    }
+
+    fn payout_binding() -> ValidationFeeTreasuryPayoutBindingV1 {
+        let contract_address = ContractAddress::derive(
+            crate::account::address::chain_discriminant(),
+            &account(9),
+            42,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let treasury = contract_address.subject_id();
+        let xor_asset = AssetDefinitionId::new(
+            DomainId::try_new("xor", "universal").expect("domain id"),
+            Name::from_str("xor").expect("asset name"),
+        );
+        ValidationFeeTreasuryPayoutBindingV1 {
+            contract_address,
+            code_hash: [9; 32],
+            entrypoint: Name::from_str("autonomous_validation_fee_tick").expect("entrypoint"),
+            treasury_account_id: treasury,
+            sbd_asset_id: fee_asset(),
+            xor_asset_id: xor_asset,
+            pool_vault_account_id: account(2),
+            batch_sbd: "1.00".parse().expect("batch"),
+            min_xor_out: "4".parse().expect("minimum"),
+            max_xor_out: "100".parse().expect("maximum"),
+            recipients: (3..=6)
+                .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
+                    account_id: account(seed),
+                    share: "0.25".parse().expect("share"),
+                })
+                .collect(),
+        }
+    }
+
+    fn policy_with_payout_binding() -> ValidationFeePolicyV1 {
+        let binding = payout_binding();
+        let mut policy = policy();
+        policy.treasury_account_id = binding.treasury_account_id.to_string();
+        policy.exemption_classes = vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_string()];
+        policy.treasury_payout_binding = Some(binding);
+        policy
+    }
+
+    #[test]
+    fn treasury_payout_binding_roundtrips_and_is_signed_and_hashed() {
+        let policy = policy_with_payout_binding();
+        assert_eq!(policy.policy_invariant_error(), None);
+
+        let fixture: TreasuryPayoutFixture = norito::json::from_json(include_str!(
+            "../../../fixtures/validation_fee/treasury_payout_v1.json"
+        ))
+        .expect("decode typed treasury payout fixture");
+        assert_eq!(
+            fixture.description,
+            "Canonical ValidationFeePolicyV1 typed treasury payout cross-SDK vector"
+        );
+        assert!(fixture.encoding_notes.policy_norito.contains("NRT0"));
+        assert!(fixture.encoding_notes.raw_byte_arrays.contains("0x20"));
+        assert!(fixture.encoding_notes.signature_payload.contains("HashOf"));
+        assert_eq!(fixture.policy, policy);
+
+        let bytes = norito::to_bytes(&policy).expect("encode bound policy");
+        assert_eq!(hex::encode(&bytes), fixture.policy_norito_hex);
+        assert_eq!(
+            hex::encode(sha2::Sha256::digest(&bytes)),
+            fixture.policy_norito_sha256
+        );
+        assert_eq!(
+            hex::encode(policy.policy_hash().expect("bound policy hash")),
+            fixture.policy_hash
+        );
+        let decoded: ValidationFeePolicyV1 =
+            norito::decode_from_bytes(&bytes).expect("decode bound policy");
+        assert_eq!(decoded, policy);
+
+        let mut changed = policy.clone();
+        changed
+            .treasury_payout_binding
+            .as_mut()
+            .expect("binding")
+            .max_xor_out = "101".parse().expect("changed maximum");
+        assert_ne!(
+            policy.policy_hash().expect("bound policy hash"),
+            changed.policy_hash().expect("changed policy hash")
+        );
+
+        let signer = key_pair(77);
+        let signing_payload = policy.signing_payload();
+        let signing_hash = iroha_crypto::HashOf::new(&signing_payload);
+        let signing_hash_bytes: &[u8; 32] = signing_hash.as_ref();
+        assert_eq!(
+            hex::encode(signing_hash_bytes),
+            fixture.signature_payload_hash
+        );
+        let signed = signed_policy(policy.clone(), &[&signer]);
+        assert_eq!(fixture.signed_policy, signed);
+        signed
+            .verify_against_keyset(&keyset(&[&signer], 1))
+            .expect("typed binding is covered by the governance signature");
+    }
+
+    #[test]
+    fn treasury_payout_binding_is_mandatory_and_rejects_bad_shares() {
+        let mut missing = policy();
+        missing.exemption_classes =
+            vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_string()];
+        assert_eq!(
+            missing.policy_invariant_error(),
+            Some("validation-fee TREASURY_PAYOUT exemption requires an exact typed binding")
+        );
+
+        let mut bad_shares = policy_with_payout_binding();
+        bad_shares
+            .treasury_payout_binding
+            .as_mut()
+            .expect("binding")
+            .recipients[3]
+            .share = "0.24".parse().expect("bad share");
+        assert_eq!(
+            bad_shares.policy_invariant_error(),
+            Some("validation-fee treasury payout shares must sum exactly to one")
+        );
     }
 
     #[derive(Encode)]
@@ -981,6 +1290,7 @@ mod tests {
         expires_after_height: Option<u64>,
         governance_keyset_id: String,
         exemption_classes: Vec<String>,
+        treasury_payout_binding: Option<ValidationFeeTreasuryPayoutBindingV1>,
     }
 
     #[test]
@@ -1001,6 +1311,7 @@ mod tests {
             expires_after_height: valid.expires_after_height,
             governance_keyset_id: valid.governance_keyset_id,
             exemption_classes: valid.exemption_classes,
+            treasury_payout_binding: valid.treasury_payout_binding,
         };
         let encoded = forged.encode();
         assert!(ValidationFeePolicyV1::decode(&mut encoded.as_slice()).is_err());
